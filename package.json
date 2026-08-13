@@ -3,16 +3,16 @@
   "version": "0.0.2",
   "description": "Persistent image service and language platform for Lagrange",
   "type": "module",
-  "main": "src/index.js",
+  "main": "src/runtime.js",
   "exports": {
-    ".": "./src/index.js",
+    ".": "./src/runtime.js",
     "./backend": "./src/backend/index.js",
     "./object": "./src/object/index.js",
     "./value": "./src/value/index.js"
   },
   "scripts": {
-    "start": "node src/server.js",
-    "demo": "node examples/demo.js",
+    "start": "node src/graph-server.js",
+    "demo": "node examples/graph-demo.js",
     "test": "node --test"
   },
   "engines": {
