@@ -1,78 +1,34 @@
 # Image model
 
-## Not a memory dump
+An image is a logical durable object graph, not a byte-for-byte heap dump.
 
-A classic Smalltalk image is wonderfully direct, but treating the image as an opaque heap file makes distribution, collaboration and partial history awkward. Here an image is a **logical durable object graph**.
+The current graph representation is defined in [value-model.md](value-model.md). Every durable graph record has stable `(imageId, objectId)` identity independent of memory address, backend row location and current version.
 
-The implementation may cache or materialize that graph however it wants. Persistence is semantic, not byte-for-byte process state.
+## Records
 
-## Identity
+The substrate currently has two record kinds:
 
-Every durable object has a stable object id. Identity does not come from a memory address, table row location or source-file path.
+- immutable `shape` records describing physical slot layout
+- `object` records containing a shape ref, optional behavior ref and `slot-id -> Value` state
 
-Current bootstrap record:
+Both share one identity namespace. Generic objects do not contain Smalltalk-specific `classId` or generic `source` fields.
 
-```js
-{
-  id: 'counter',
-  imageId: 'playground',
-  classId: 'Counter',
-  slots: {value: 0},
-  source: '...',
-  metadata: {},
-  _version: 1
-}
-```
+## Shape evolution
 
-References inside `slots` will eventually need an explicit language-neutral encoding instead of relying on arbitrary JSON conventions. A likely representation is a tagged object reference such as `{$ref: objectId}` plus value records for immediates.
+A structural change creates a new shape identity. Stable slot IDs can survive renames and compatible evolution. Migrating an object to another shape changes its state/version, not its object identity.
 
-## Root and reachability
+## References and history
 
-An image has a named root object. Reachability from roots is important for browsing, snapshots, export and eventually garbage collection, but unreachable objects should not be destroyed merely because one traversal cannot see them. History, branches, debugger state or projects may still refer to them.
+Ordinary refs name evolving object identities. `pinned-ref` adds an opaque historical revision. Backend `_version` remains concurrency metadata and is not identity.
 
-## Current state + history
+`referencesOfRecord()` walks explicit shape, behavior and slot edges. Metadata may not hide refs.
 
-Current object state is materialized for fast access. Changes also append events to an image history stream.
-
-This gives two useful views:
-
-- **now**: load an object directly
-- **how did we get here?**: inspect revisions/events
-
-The event stream is not yet a full event-sourced runtime. It is a history spine. We can decide later which transitions need exact replay semantics.
-
-## Versions
-
-Objects carry monotonically increasing versions at the persistence boundary. The mock backend implements compare-and-swap writes through `expectedVersion`.
-
-This is the first building block for safe concurrent editing. It is not yet a branch/merge model.
-
-## Snapshots
-
-A snapshot is a named capture of image metadata plus its currently materialized object set. That is deliberately simple for the mock.
-
-On Lagrange, snapshots should become cheap logical revision markers where possible, not giant duplicated blobs. A future snapshot may be mostly:
-
-```text
-image id + root(s) + revision frontier + metadata
-```
+The mock backend materializes current state and appends a history spine. Its snapshots still copy the materialized records; a Lagrange backend should eventually represent snapshots as logical root/revision frontiers where possible.
 
 ## Projects
 
-A project should be represented *inside* the image model, not in a parallel filesystem-only hierarchy. A project can contain or relate to:
+Projects should be ordinary graph structures containing or relating code, notes, tests, data, work items and other projects. Git/files remain useful interoperability views rather than the canonical model.
 
-- packages/modules
-- classes, methods and other code objects
-- notes and design records
-- examples and tests
-- datasets and generated artifacts
-- quests/epics/work items
-- nested or related projects
+## Language boundary
 
-History belongs to the objects and relationships. A source-tree view can be generated from that model.
-
-## What must stay language-neutral
-
-The image layer may know that something is code, a reference, a project or an object. It should not know how Smalltalk method syntax parses, whether Lisp uses packages, or how a JavaScript closure is represented.
-
-Language personalities own those mappings.
+The image layer knows values, refs, shapes, identity and history. It does not define classes, Lisp packages, `nil`, method syntax, closure calling convention or message lookup. Language personalities own those semantics.
