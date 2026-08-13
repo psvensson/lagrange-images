@@ -1,12 +1,14 @@
 {
   "name": "lagrange-images",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Persistent image service and language platform for Lagrange",
   "type": "module",
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./backend": "./src/backend/index.js"
+    "./backend": "./src/backend/index.js",
+    "./object": "./src/object/index.js",
+    "./value": "./src/value/index.js"
   },
   "scripts": {
     "start": "node src/server.js",
