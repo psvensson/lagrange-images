@@ -11,10 +11,13 @@ Implemented now:
 - ordinary and pinned historical refs
 - immutable shapes with stable slot IDs
 - separate shape and behavior refs
-- reference walking
+- reference walking across graph record kinds
+- immutable code artifacts
+- versioned lexical environments with stable binding IDs
+- immutable blocks pairing code with an optional environment
 - record versions, history and snapshots
 
-Likely later shared concepts include code artifacts, lexical environments, blocks/closures, dispatch, activations/debug metadata, conditions, namespaces/projects, WASM calls and capability contexts.
+Likely later shared concepts include dispatch, activations/debug metadata, conditions, namespaces/projects, WASM calls and capability contexts.
 
 ## The neutral layer does not define language objects
 
@@ -32,17 +35,23 @@ Semantic regularity must not force expensive runtime allocations. A non-escaping
 
 ## Blocks and code
 
-A likely semantic block remains:
+The implemented neutral closure is:
 
 ```text
 Block
-  codeRef --------> CodeArtifact
-  environment ----> LexicalEnvironment
+  code --------> CodeArtifact
+  environment -> LexicalEnvironment | null
 ```
 
-The durable graph representation does not dictate execution layout. WASM/compiler paths may specialize this aggressively.
+A CodeArtifact is immutable and carries an opaque representation plus one tagged content Value and provenance refs. Source can be text, binary code can be bytes, and syntax/IR can be a graph ref.
 
-Generic objects no longer have a `source` property. Source, syntax, IR, WASM artifacts, source maps and provenance should become ordinary linked code-artifact objects.
+A LexicalEnvironment is versioned. Its parent identity and binding-ID set form a stable layout; binding names and Values may change. Several Blocks can therefore share captured state without changing Block identity.
+
+The durable graph representation does not dictate execution layout. WASM/compiler paths may specialize or eliminate Blocks and environments aggressively.
+
+Generic objects have no `source` property. Source, syntax, IR, WASM artifacts and provenance belong in code artifacts or linked graph objects.
+
+See ADR 0003.
 
 ## Compatibility kernels
 
@@ -60,13 +69,11 @@ source
   -> WASM component / interpreter bytecode / host fast path
 ```
 
-The portable object/value format is not the executable IR. Keeping those layers distinct lets storage stay inspectable while runtime representation becomes efficient.
+The portable object/value/code-artifact format is not the executable IR. Keeping those layers distinct lets storage stay inspectable while runtime representation becomes efficient.
 
 ## Next open questions
 
-- minimal block/code-artifact representation
 - whether methods are specialized blocks or distinct semantic objects
-- durable lexical environments vs optimized transient activations
 - cross-personality dispatch contract
 - which sends may cross image/node boundaries
 - debugger activation durability

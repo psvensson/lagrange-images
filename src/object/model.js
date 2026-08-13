@@ -1,4 +1,4 @@
-import {canonicalizeValue, isObjectRef, isReference, referencesOfValue} from '../value/index.js';
+import {canonicalizeValue, isObjectRef, isReference} from '../value/index.js';
 
 function normalizeMetadata(metadata, label = 'metadata') {
   const seen = new Set();
@@ -118,18 +118,6 @@ function assertObjectMatchesShape(record, shape) {
   return record;
 }
 
-function referencesOfRecord(record) {
-  if (record?.kind === 'shape') {
-    assertShapeRecord(record);
-    return [];
-  }
-  assertObjectRecord(record);
-  const refs = [record.shape];
-  if (record.behavior) refs.push(record.behavior);
-  for (const value of Object.values(record.slots)) refs.push(...referencesOfValue(value));
-  return refs;
-}
-
 export {
   assertObjectMatchesShape,
   assertObjectRecord,
@@ -137,6 +125,5 @@ export {
   createObjectRecord,
   createShapeRecord,
   normalizeMetadata,
-  referencesOfRecord,
   shapeSlotIds,
 };
