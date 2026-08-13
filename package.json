@@ -1,12 +1,14 @@
 {
   "name": "lagrange-images",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Persistent image service and language platform for Lagrange",
   "type": "module",
   "main": "src/runtime.js",
   "exports": {
     ".": "./src/runtime.js",
     "./backend": "./src/backend/index.js",
+    "./execution": "./src/execution/model.js",
+    "./graph": "./src/graph/references.js",
     "./object": "./src/object/index.js",
     "./value": "./src/value/index.js"
   },
@@ -15,16 +17,8 @@
     "demo": "node examples/graph-demo.js",
     "test": "node --test"
   },
-  "engines": {
-    "node": ">=22"
-  },
-  "peerDependencies": {
-    "lagrange-server": ">=0.1.0"
-  },
-  "peerDependenciesMeta": {
-    "lagrange-server": {
-      "optional": true
-    }
-  },
+  "engines": {"node": ">=22"},
+  "peerDependencies": {"lagrange-server": ">=0.1.0"},
+  "peerDependenciesMeta": {"lagrange-server": {"optional": true}},
   "license": "GPL-3.0"
 }
