@@ -49,9 +49,11 @@ Success: the same graph survives process/node restarts with no language/image se
 
 ## 4. Language-neutral execution kernel
 
-- [ ] code artifact contract
-- [ ] blocks/closures and lexical environments
-- [ ] message/call dispatch
+- [x] code artifact contract
+- [x] blocks/closures and lexical environments
+- [x] message/call dispatch to transient activation requests
+- [ ] execution of activation requests
+- [ ] parameter/calling conventions
 - [ ] activations and debugger metadata
 - [ ] exception/condition substrate
 - [ ] host/WASM FFI boundary
