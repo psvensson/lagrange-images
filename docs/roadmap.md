@@ -49,8 +49,8 @@ Success: the same graph survives process/node restarts with no language/image se
 
 ## 4. Language-neutral execution kernel
 
-- [ ] code artifact contract
-- [ ] blocks/closures and lexical environments
+- [x] code artifact contract
+- [x] blocks/closures and lexical environments
 - [ ] message/call dispatch
 - [ ] activations and debugger metadata
 - [ ] exception/condition substrate
@@ -62,7 +62,7 @@ Success: a tiny language executes without adding its semantics to image persiste
 
 - [ ] grammar and parser
 - [ ] tiny interpreter
-- [ ] block representation
+- [ ] map language-visible blocks onto the neutral block/environment records
 - [ ] Object/Behavior/Class/Metaclass mapping
 - [ ] compiler to first executable IR
 - [ ] REPL/workspace
