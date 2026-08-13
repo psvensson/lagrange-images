@@ -15,9 +15,11 @@ Implemented now:
 - immutable code artifacts
 - versioned lexical environments with stable binding IDs
 - immutable blocks pairing code with an optional environment
+- language dispatcher registry
+- transient direct-call, message-send and activation-request protocol
 - record versions, history and snapshots
 
-Likely later shared concepts include dispatch, activations/debug metadata, conditions, namespaces/projects, WASM calls and capability contexts.
+Likely later shared concepts include activation execution/debug metadata, conditions, namespaces/projects, WASM calls and capability contexts.
 
 ## The neutral layer does not define language objects
 
@@ -53,6 +55,20 @@ Generic objects have no `source` property. Source, syntax, IR, WASM artifacts an
 
 See ADR 0003.
 
+## Invocation and message dispatch
+
+A direct Block call and a message send now converge on the same transient activation request.
+
+A message send carries a language personality ID plus receiver, message and arguments as tagged Values. The neutral layer does not assume that a message is a Smalltalk selector string. A registered language dispatcher owns lookup semantics and resolves the send to a Block ref; it does not execute the Block.
+
+The activation request identifies the resolved Block, CodeArtifact and optional LexicalEnvironment, together with receiver/arguments and message provenance where applicable. It is not persisted and preparing it does not append image history.
+
+The language that performs message lookup is intentionally separate from the language/representation of the resolved CodeArtifact. This leaves room for compiled neutral IR and cross-personality implementation techniques without changing send semantics.
+
+Refs still grant identity only; authorization and local/remote execution policy remain separate later layers.
+
+See ADR 0004.
+
 ## Compatibility kernels
 
 A Cuis-oriented compatibility kernel can provide dialect conventions, class/library shims, file-in/package readers and primitives above the shared substrate without freezing the core into Cuis semantics.
@@ -74,7 +90,9 @@ The portable object/value/code-artifact format is not the executable IR. Keeping
 ## Next open questions
 
 - whether methods are specialized blocks or distinct semantic objects
-- cross-personality dispatch contract
+- concrete Smalltalk method/selector lookup
+- parameter and calling conventions
+- execution of activation requests
 - which sends may cross image/node boundaries
 - debugger activation durability
 - smallest executable IR preserving live source/object identity
