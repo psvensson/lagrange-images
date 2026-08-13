@@ -1,110 +1,102 @@
 # Roadmap
 
-This is ordered to keep the architecture falsifiable. Each phase should produce something runnable before the next abstraction layer is added.
+Ordered so each phase produces something runnable and can falsify the abstractions above it.
 
-## 0. Mock vertical slice — now
+## 0. Mock vertical slice — complete
 
-- [x] backend contract
-- [x] in-memory mock with optimistic versions
-- [x] image creation and object storage
-- [x] image history
-- [x] snapshots
+- [x] backend contract and in-memory mock
+- [x] image creation, history and snapshots
 - [x] backend auto-detection
-- [x] tiny HTTP service
-- [x] language registry
-- [x] Symmetric Smalltalk design profile
+- [x] HTTP/demo surface
+- [x] language registry and Symmetric Smalltalk profile
 
-Success: we can exercise image semantics without waiting for Lagrange integration.
+## 1. Language-neutral graph foundation — complete
 
-## 1. Durable Lagrange backend
+- [x] ordinary object refs and pinned historical refs
+- [x] tagged scalar Values
+- [x] arbitrary-precision integers and exact float bits
+- [x] immutable shape records
+- [x] stable slot IDs independent of display names
+- [x] separate shape and behavior refs
+- [x] reject arbitrary JSON object state
+- [x] explicit reference walker
+- [x] cycle tests
+- [x] prevent metadata from hiding graph refs
+- [x] graph-aware runtime, HTTP surface and demo
+
+Success: an image is an explicit language-neutral graph rather than language-shaped JSON records.
+
+## 2. Durable Lagrange backend
 
 - [ ] settle the public embedding seam with Lagrange
-- [ ] create image/object/history schema
+- [ ] map Values/refs/shapes/objects/history to durable schema
 - [ ] atomic state + history writes
 - [ ] conformance suite shared with mock
-- [ ] restart tests
-- [ ] multi-node durability tests
-- [ ] measure partitioning choices with large object graphs
+- [ ] restart and multi-node durability tests
+- [ ] logical snapshot/revision frontiers
+- [ ] measure partitioning/index choices on large graphs
 
-Success: the demo survives process/node restarts with no image-layer code changes.
+Success: the same graph survives process/node restarts with no language/image semantic changes.
 
-## 2. Real object graph
+## 3. Graph services
 
-- [ ] explicit object-reference encoding
-- [ ] immediates/value objects
-- [ ] class/object shape records
-- [ ] reachability traversal
-- [ ] indexes by class/project/name
-- [ ] logical snapshots/revision frontiers
-- [ ] garbage-collection rules that respect history
+- [ ] reachability traversal over backend indexes
+- [ ] indexes by shape/project/name where justified
+- [ ] revision-aware reads
+- [ ] export/import graph format
+- [ ] garbage-collection rules respecting history/pinned refs
+- [ ] object migration between immutable shapes
 
-Success: an image can be browsed as a graph rather than a bag of JSON records.
+## 4. Language-neutral execution kernel
 
-## 3. Language-neutral execution kernel
-
-- [ ] code object contract
-- [ ] blocks/closures
-- [ ] lexical environments
+- [ ] code artifact contract
+- [ ] blocks/closures and lexical environments
 - [ ] message/call dispatch
 - [ ] activations and debugger metadata
 - [ ] exception/condition substrate
 - [ ] host/WASM FFI boundary
 
-Success: a tiny language can execute without adding language semantics to the image backend.
+Success: a tiny language executes without adding its semantics to image persistence.
 
-## 4. Symmetric Smalltalk seed
+## 5. Symmetric Smalltalk seed
 
-- [ ] grammar sketch
-- [ ] parser
+- [ ] grammar and parser
 - [ ] tiny interpreter
 - [ ] block representation
-- [ ] objects/classes/metaclasses
+- [ ] Object/Behavior/Class/Metaclass mapping
 - [ ] compiler to first executable IR
 - [ ] REPL/workspace
 - [ ] bootstrap image
 
-Success: build a fresh image, edit code inside it, save it, restart and continue.
-
-## 5. Projects and collaborative history
+## 6. Projects and collaborative history
 
 - [ ] project objects and relationships
-- [ ] code + notes + tests + data + work items in one model
-- [ ] branches/working views
-- [ ] object-level diffs
+- [ ] code + notes + tests + data + work items
+- [ ] branches/working views and object-level diffs
 - [ ] merge semantics
 - [ ] Git import/export projection
 - [ ] multi-author conflict UI/API
 
-Success: day-to-day development does not require files as the canonical workspace, while Git remains a good interoperability surface.
-
-## 6. Compatibility kernels
+## 7. Compatibility kernels
 
 - [ ] Cuis source/package importer
 - [ ] Smalltalk compatibility library layer
 - [ ] prove several useful Cuis libraries
 - [ ] Common Lisp personality spike
-- [ ] identify which runtime pieces truly generalize
 
-Success: compatibility work validates the substrate instead of accreting special cases into it.
-
-## 7. Distributed execution
+## 8. Distributed execution
 
 - [ ] object locator and activation policy
-- [ ] capability-bearing remote references
+- [ ] capability handles separate from object refs
 - [ ] local vs remote send semantics
 - [ ] WASM code placement
-- [ ] use `ctx.call()` for measured compute-near-object wins
+- [ ] measured `ctx.call()` compute-near-object wins
 - [ ] failure/retry/idempotency model
 
-Success: distribution is useful and observable without making ordinary local object code look like RPC plumbing.
-
-## 8. Graphical environment
+## 9. Graphical environment
 
 - [ ] drawing/input substrate
-- [ ] retained UI objects
-- [ ] widgets/layout
+- [ ] retained UI objects, widgets and layout
 - [ ] surfaces/windows
 - [ ] replaceable shell/window-manager policy
 - [ ] inspectors, browsers and debugger as image-resident tools
-
-Success: the graphical environment is built from the same inspectable object model rather than glued on as a separate application framework.

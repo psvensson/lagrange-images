@@ -2,23 +2,29 @@
 
 A persistent image service and language platform built to sit on Lagrange.
 
-The short version: an image is a durable object graph, not a VM memory dump and not a pile of source files. Languages are personalities over that graph. Lagrange eventually provides the distributed persistence, placement, transactions and compute substrate underneath it.
-
-This repository starts before that integration is ready. The same image layer therefore runs against a small in-memory backend today and probes for `lagrange-server` as an optional library. Nothing above the backend boundary should care which one is in use.
+An image is a durable object graph, not a VM memory dump and not a pile of source files. Languages are personalities over that graph. The image substrate now has an explicit language-neutral value/reference/object representation; Lagrange can later provide distributed persistence, placement, transactions and compute underneath it without changing those semantics.
 
 ## What is here now
 
-- a language-neutral image/object model with stable identities
-- optimistic object versions and append-only image history
-- named snapshots
-- a backend contract and useful in-memory mock
-- automatic probing for the side-effect-free `lagrange-server` package
-- a seam for a real Lagrange-backed adapter without changing image code
-- a language registry with the first `symmetric-smalltalk` design profile
-- a tiny HTTP service so the model can be exercised immediately
-- tests and an executable demo
+- stable image and object identities
+- canonical tagged scalar values (`boolean`, arbitrary-precision `integer`, exact-bit `float64`, `text`, `bytes`)
+- ordinary object refs and revision-pinned refs
+- immutable shape records with stable slot IDs
+- generic object records with separate `shape` and optional `behavior` refs
+- slot state restricted to tagged Values; arbitrary nested JSON is not object state
+- reference walking for reachability/dependency work
+- optimistic object versions, image history and snapshots
+- in-memory mock backend plus optional `lagrange-server` probing
+- Symmetric Smalltalk as the first language profile
+- a small HTTP surface, demo and tests
 
-It is intentionally boring at the bottom. That is useful: the interesting object/language work should not be coupled to cluster bootstrapping details.
+Three invariants are deliberate:
+
+```text
+shape     != behavior
+reference != authority
+identity  != revision
+```
 
 ## Run it
 
@@ -32,67 +38,130 @@ npm start
 
 The service listens on port `7331` by default.
 
+## JavaScript example
+
+```js
+import {
+  createRuntime,
+  integerValue,
+  objectRef,
+} from 'lagrange-images';
+
+const runtime = await createRuntime({backend: {mode: 'mock'}});
+const image = await runtime.images.createImage({id: 'playground'});
+
+const shape = await runtime.images.putShape(image.id, {
+  id: 'counter-shape-v1',
+  slots: [{id: 'slot-value', name: 'value'}],
+});
+
+const counter = await runtime.images.putObject(image.id, {
+  id: 'counter',
+  shape: objectRef(image.id, shape.id),
+  slots: {'slot-value': integerValue(0)},
+});
+
+await runtime.images.setRoot(image.id, counter.id);
+```
+
+A structural shape change gets a new shape identity. A rename can preserve the stable slot ID:
+
+```text
+shape-v1: slot-postal -> "postalCode"
+shape-v2: slot-postal -> "postcode"
+```
+
+## HTTP example
+
 ```sh
-curl http://127.0.0.1:7331/health
 curl -X POST http://127.0.0.1:7331/images \
   -H 'content-type: application/json' \
-  -d '{"id":"playground","name":"Playground"}'
+  -d '{"id":"playground"}'
+
+curl -X PUT http://127.0.0.1:7331/images/playground/shapes/workspace-v1 \
+  -H 'content-type: application/json' \
+  -d '{"slots":[{"id":"slot-title","name":"title"}]}'
 
 curl -X PUT http://127.0.0.1:7331/images/playground/objects/root \
   -H 'content-type: application/json' \
-  -d '{"classId":"Workspace","slots":{"title":"hello"}}'
+  -d '{
+    "shape":{"kind":"ref","imageId":"playground","objectId":"workspace-v1"},
+    "slots":{"slot-title":{"kind":"text","value":"hello"}}
+  }'
 ```
+
+`GET /images/playground/records` returns both substrate shape records and ordinary objects.
+
+## Values are deliberately small
+
+The durable Value union is currently:
+
+```text
+boolean | integer | float64 | text | bytes | ref | pinned-ref
+```
+
+There is no generic inline array/map value. Language-level collections, cons cells, closures and similar structures are objects in the graph. There is also deliberately no platform `nil`: a Smalltalk personality can map `nil` to a normal object ref, while Lisp can choose its own semantics.
+
+The durable representation is not the execution representation. A compiler may unbox integers, collapse non-escaping blocks, or use compact runtime handles while preserving the same image semantics.
+
+## Objects are not classes
+
+A generic object contains physical shape separately from language behavior:
+
+```js
+{
+  kind: 'object',
+  id: 'counter',
+  imageId: 'playground',
+  shape: {kind: 'ref', imageId: 'playground', objectId: 'counter-shape-v1'},
+  behavior: null,
+  slots: {
+    'slot-value': {kind: 'integer', value: '0'}
+  },
+  metadata: {}
+}
+```
+
+Smalltalk may use `behavior` as its Class/Behavior hook. Another language may use a prototype/type/dispatch object or leave it null. The image layer does not know what a class is.
+
+Generic objects no longer have `classId` or `source`. Source/code belongs in ordinary referenced code objects once that layer is introduced.
+
+## References are not capabilities
+
+`{kind:'ref', imageId, objectId}` means only "this object identity". It grants no right to read, mutate or invoke that object. Authorization is resolved separately from the reference.
+
+A pinned reference adds a revision for history/debugger use:
+
+```js
+{kind: 'pinned-ref', imageId: 'playground', objectId: 'counter', revision: 'snapshot:one'}
+```
+
+Ordinary refs continue to mean the same object as it evolves.
 
 ## Backend selection
 
 `LAGRANGE_BACKEND` accepts `auto`, `mock`, or `lagrange`.
 
 - `mock`: always use the in-memory backend.
-- `auto` (default): try to import `lagrange-server`; use a Lagrange image backend when a compatible adapter exists, otherwise fall back to the mock and report why in `/health`.
+- `auto` (default): try to import `lagrange-server`; use a compatible adapter when one exists, otherwise fall back to the mock.
 - `lagrange`: require the library and a compatible adapter; fail instead of silently falling back.
 
-For local integration work, clone Lagrange beside this repository and install/link it so Node can resolve its package name:
+For local integration work:
 
 ```sh
 npm install --no-save ../lagrange
 ```
 
-Lagrange currently exposes an embeddable public module, but does not yet expose the small image-store adapter expected here. The first integration task is therefore explicit rather than hidden behind imports from Lagrange internals. See [docs/lagrange-integration.md](docs/lagrange-integration.md).
-
-## Shape
-
-```text
-HTTP / tools / future GUI
-          |
-     ImageService
-          |
-   durable object model  <---- language personalities
-          |
-     backend contract
-       /        \
-    mock      Lagrange
-                 |
-        distributed storage + compute
-```
-
-The important boundary is between image semantics and storage mechanics. Language implementations should depend on image/runtime interfaces, not on Lagrange tables. The Lagrange adapter should know nothing about Smalltalk syntax.
-
-## First language
-
-The first language design is called **Symmetric Smalltalk** for now. The main experiment is to keep Smalltalk's message/object model while making blocks the uniform executable/compositional representation as far up the stack as practical. The goal is Lisp-like regularity without turning the source language into Lisp.
-
-That is a design direction, not a frozen grammar. Parser, evaluator, compiler and bootstrap are deliberately still marked unimplemented.
+Do not import from `lagrange-server/src/...`. The image service should use a public Lagrange seam only.
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
 - [Image model](docs/image-model.md)
+- [Value/reference/object model](docs/value-model.md)
 - [Language platform](docs/language-platform.md)
 - [Lagrange integration](docs/lagrange-integration.md)
 - [Security boundary](docs/security.md)
 - [Roadmap](docs/roadmap.md)
-- [Backend boundary decision](docs/decisions/0001-backend-boundary.md)
-
-## A rule worth keeping
-
-Do not import from `lagrange-server/src/...` here. If the image service needs a capability, either use Lagrange's public package surface or make the missing public seam explicit. That keeps these two projects independently comprehensible and prevents the image model from becoming a second Lagrange daemon implementation.
+- [ADR 0001: backend boundary](docs/decisions/0001-backend-boundary.md)
+- [ADR 0002: language-neutral graph representation](docs/decisions/0002-language-neutral-graph-representation.md)
