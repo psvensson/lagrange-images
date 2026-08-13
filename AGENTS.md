@@ -2,6 +2,27 @@
 
 Keep this repository small and semantic.
 
+## Repository workflow
+
+Use one repository path for every change:
+
+```text
+main -> agent/<task> -> pull request -> GitHub Actions -> squash merge -> main
+```
+
+- Never make feature changes directly on `main`.
+- Start each task from current `main` on a fresh `agent/<task>` branch.
+- Keep one semantic task per branch and pull request.
+- Read this file and the relevant design documents before editing.
+- Connected agents use GitHub `create_file` and `update_file` for ordinary text changes on the feature branch.
+- GitHub Actions on the exact branch/PR head is the merge authority. Local checks are supplementary.
+- Before merge, compare the branch with `main`, verify the PR is mergeable, and verify the current head has a successful `test` workflow.
+- Squash-merge using the expected PR head SHA so `main` receives one semantic commit.
+- After merge, read back the important changed files from `main`.
+- If the normal connector write cannot perform a required change, report the blocker instead of silently changing remote-write mechanisms.
+
+`.github/workflows/test.yml` is the canonical repository validation path. Add repository-wide checks there rather than creating competing CI paths.
+
 ## Code
 
 - JavaScript ES modules only; no TypeScript/build step without a concrete need.
