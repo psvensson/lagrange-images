@@ -2,115 +2,72 @@
 
 ## One image substrate, multiple language personalities
 
-The useful split is not "one VM per language". The platform should provide a small shared substrate for durable objects, references, code artifacts, activations, debugging and capabilities. A language personality maps its own semantics onto that substrate.
+The platform should not be one VM per language. It provides a small shared substrate for durable values, refs, objects, code artifacts, debugging and capabilities. A language personality maps its own semantics onto that substrate.
 
-That makes two kinds of reuse possible:
+Implemented now:
 
-- new languages reuse image/distribution/tooling machinery
-- compatibility layers reuse a language personality while emulating dialect libraries and conventions
+- stable object identity
+- canonical tagged Values
+- ordinary and pinned historical refs
+- immutable shapes with stable slot IDs
+- separate shape and behavior refs
+- reference walking
+- record versions, history and snapshots
 
-## Shared substrate
+Likely later shared concepts include code artifacts, lexical environments, blocks/closures, dispatch, activations/debug metadata, conditions, namespaces/projects, WASM calls and capability contexts.
 
-The language-neutral runtime will probably need concepts along these lines:
+## The neutral layer does not define language objects
 
-- object identity and references
-- object shape / slots
-- code objects
-- lexical environments
-- blocks/closures
-- message or callable dispatch
-- activation records and stack/debug metadata
-- exceptions/conditions
-- modules/namespaces/projects
-- foreign/WASM calls
-- capability-bearing references
+It deliberately does not decide what a class, method, cons cell, symbol, closure, `nil`, boolean or exception means.
 
-These should be semantic objects, not necessarily one-to-one storage records.
+The substrate has a compact boolean Value, but Symmetric Smalltalk may still represent `true` and `false` as ordinary objects. There is no substrate `nil` kind. Likewise `behavior` is only a ref: Smalltalk can point it at a Behavior/Class object while another language can use a different dispatch/type object or leave it null.
 
 ## Symmetric Smalltalk first
 
-The first language experiment is **Symmetric Smalltalk**.
+The first language experiment remains **Symmetric Smalltalk**: Smalltalk's object/message feel with blocks pushed much further toward a universal executable/compositional form.
 
-The design goal is Smalltalk's minimal object/message feel with more structural regularity. In particular, blocks should be pushed much further toward being the universal executable/compositional form, roughly playing the role that S-expressions play for Lisp without copying Lisp syntax.
+A useful test is whether method bodies, conditionals, loops, exception handlers, module initialization, class construction, compiler passes and debugger actions can largely reduce to ordinary objects, messages and blocks.
 
-A useful test is whether traditionally special things can be expressed in terms of ordinary objects, messages and blocks:
+Semantic regularity must not force expensive runtime allocations. A non-escaping block may compile away completely.
 
-- method bodies
-- conditionals
-- loops
-- exception handlers
-- module initialization
-- class construction
-- compiler passes
-- debugger actions
+## Blocks and code
 
-"Everything is a block" should not become a slogan that creates inefficient runtime objects everywhere. The semantic model can be regular while the compiler specializes aggressively.
+A likely semantic block remains:
 
-## Symmetry
+```text
+Block
+  codeRef --------> CodeArtifact
+  environment ----> LexicalEnvironment
+```
 
-Things worth keeping symmetric:
+The durable graph representation does not dictate execution layout. WASM/compiler paths may specialize this aggressively.
 
-- code is inspectable data in the image
-- classes and metaclasses use the ordinary object model
-- methods/blocks have identity and metadata where useful
-- tools manipulate the same objects programs execute
-- compiler/interpreter components can eventually live in the image
-
-Things that do not need fake symmetry:
-
-- immediate values may use compact representations
-- local sends should compile to direct fast paths where safe
-- distributed sends must retain policy and failure semantics
-- host/WASM boundaries are real boundaries
+Generic objects no longer have a `source` property. Source, syntax, IR, WASM artifacts, source maps and provenance should become ordinary linked code-artifact objects.
 
 ## Compatibility kernels
 
-Porting existing ecosystems should happen above the shared substrate.
+A Cuis-oriented compatibility kernel can provide dialect conventions, class/library shims, file-in/package readers and primitives above the shared substrate without freezing the core into Cuis semantics.
 
-### Smalltalk dialects
+Common Lisp can reuse durable data/code identity, lexical environments, conditions, namespaces, history and tooling while remaining Lisp rather than Smalltalk-through-an-adapter.
 
-A Cuis-oriented compatibility kernel could provide:
-
-- selector and collection conventions
-- class/library shims
-- source/file-in readers
-- package/category mapping
-- dialect-specific primitives implemented against the shared runtime
-
-The aim is to port useful libraries incrementally, not to freeze the core into Cuis semantics.
-
-### Common Lisp
-
-Common Lisp is a different semantic fit, but many substrate pieces still carry over: durable code/data objects, lexical environments, conditions, namespaces, compilation artifacts and tooling.
-
-A Lisp personality should be allowed to be Lisp. It should not be forced through Smalltalk message syntax just because Smalltalk came first.
-
-## Compilation strategy
-
-A plausible long-term pipeline is:
+## Compilation direction
 
 ```text
 source
   -> language AST / syntax objects
   -> language-neutral executable IR
   -> optimized IR
-  -> WASM component / interpreter bytecode / native host fast path
+  -> WASM component / interpreter bytecode / host fast path
 ```
 
-The IR boundary is more important than picking a bytecode now. It should preserve enough source/object identity for live tools and history.
+The portable object/value format is not the executable IR. Keeping those layers distinct lets storage stay inspectable while runtime representation becomes efficient.
 
-## Bootstrapping
+## Next open questions
 
-Do not make the first compiler self-hosted. Start with a tiny host implementation that can parse/compile enough language to build the next layer into the image. Then move implementation pieces inward as they become stable.
-
-The endpoint is a system that can explain and modify much of itself. The bootstrap path should remain reproducible from an empty image.
-
-## Open questions
-
-- What is the minimal uniform block representation?
-- Are methods specialized blocks or a distinct object kind?
-- How are lexical variables represented durably without making activation state absurdly heavy?
-- What is the exact reference/value encoding shared across languages?
-- Which sends may cross image/node boundaries, and how explicit must that be semantically?
-- What part of an activation/debug stack is durable?
-- What is the smallest IR that supports both live editing and good WASM generation?
+- minimal block/code-artifact representation
+- whether methods are specialized blocks or distinct semantic objects
+- durable lexical environments vs optimized transient activations
+- cross-personality dispatch contract
+- which sends may cross image/node boundaries
+- debugger activation durability
+- smallest executable IR preserving live source/object identity
