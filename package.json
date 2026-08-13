@@ -1,0 +1,28 @@
+{
+  "name": "lagrange-images",
+  "version": "0.0.1",
+  "description": "Persistent image service and language platform for Lagrange",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./backend": "./src/backend/index.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "demo": "node examples/demo.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "lagrange-server": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "lagrange-server": {
+      "optional": true
+    }
+  },
+  "license": "GPL-3.0"
+}
