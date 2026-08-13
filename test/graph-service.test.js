@@ -1,0 +1,62 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {ImageService, MockBackend, VersionConflictError, objectRef, textValue} from '../src/runtime.js';
+
+test('graph service stores typed records with history and snapshots', async () => {
+  const backend = new MockBackend();
+  await backend.start();
+  const service = new ImageService({backend, clock: () => new Date('2026-08-13T18:00:00.000Z')});
+  const image = await service.createImage({id: 'demo', name: 'Demo'});
+  const shape = await service.putShape(image.id, {
+    id: 'workspace-shape-v1',
+    slots: [{id: 'slot-title', name: 'title'}],
+  });
+  const root = await service.putObject(image.id, {
+    id: 'root',
+    shape: objectRef(image.id, shape.id),
+    slots: {'slot-title': textValue('hello')},
+  });
+  await service.setRoot(image.id, root.id);
+  const snapshot = await service.snapshot(image.id, {id: 's1'});
+  assert.equal(snapshot.records.length, 2);
+  assert.deepEqual((await service.history(image.id)).map(({type}) => type), [
+    'image.created', 'shape.put', 'object.put', 'image.root-set',
+  ]);
+});
+
+test('shape identities are immutable', async () => {
+  const backend = new MockBackend();
+  await backend.start();
+  const service = new ImageService({backend});
+  await service.createImage({id: 'demo'});
+  await service.putShape('demo', {id: 'shape-v1', slots: []});
+  await assert.rejects(service.putShape('demo', {id: 'shape-v1', slots: []}), VersionConflictError);
+});
+
+test('generic objects reject language-specific shortcut fields', async () => {
+  const backend = new MockBackend();
+  await backend.start();
+  const service = new ImageService({backend});
+  await service.createImage({id: 'demo'});
+  await service.putShape('demo', {id: 'shape', slots: []});
+  await assert.rejects(
+    service.putObject('demo', {id: 'bad', classId: 'Thing', shape: objectRef('demo', 'shape'), slots: {}}),
+    /unknown generic object fields: classId/,
+  );
+  await assert.rejects(
+    service.putObject('demo', {id: 'bad2', source: '...', shape: objectRef('demo', 'shape'), slots: {}}),
+    /unknown generic object fields: source/,
+  );
+});
+
+test('cycles use references rather than nested records', async () => {
+  const backend = new MockBackend();
+  await backend.start();
+  const service = new ImageService({backend});
+  await service.createImage({id: 'cycle'});
+  await service.putShape('cycle', {id: 'node-shape', slots: [{id: 'peer', name: 'peer'}]});
+  await service.putObject('cycle', {id: 'a', shape: objectRef('cycle', 'node-shape'), slots: {peer: objectRef('cycle', 'b')}});
+  await service.putObject('cycle', {id: 'b', shape: objectRef('cycle', 'node-shape'), slots: {peer: objectRef('cycle', 'a')}});
+  assert.equal((await service.getObject('cycle', 'a')).slots.peer.objectId, 'b');
+  assert.equal((await service.getObject('cycle', 'b')).slots.peer.objectId, 'a');
+});
