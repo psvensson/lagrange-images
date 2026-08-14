@@ -47,7 +47,7 @@ Success: the same graph survives process/node restarts with no language/image se
 - [ ] garbage-collection rules respecting history/pinned refs
 - [ ] object migration between immutable shapes
 
-## 4. Language-neutral execution kernel
+## 4. Language-neutral execution and compilation kernel
 
 - [x] code artifact contract
 - [x] blocks/closures and lexical environments
@@ -57,30 +57,38 @@ Success: the same graph survives process/node restarts with no language/image se
 - [x] pluggable code executor registry
 - [x] first executable `neutral-expression/v0` representation
 - [x] language-tagged nested message sends from neutral expressions
+- [x] explicit `lagrange-code/v0` semantic representation
+- [x] code compiler registry and immutable derivation service
+- [x] semantic -> neutral-expression lowering
+- [x] executable-artifact rebuildability invariant
+- [x] reserved `wasm-module/v1` and `wasm-function/v1` contracts
+- [ ] first semantic -> WASM compiler and ABI
 - [ ] activations and debugger metadata
 - [ ] exception/condition substrate
 - [ ] host/WASM FFI boundary
 
-Success: a tiny language-neutral expression representation executes through Blocks, lexical captures and nested language dispatch without adding language semantics to image persistence.
+Success: semantic code is independent of execution representation and can be lowered into interchangeable derived artifacts.
 
 ## 5. Symmetric Smalltalk seed
 
 - [x] first grammar/tokenizer/parser
 - [x] unary/binary/keyword message precedence
 - [x] outer Block compilation unit and positional parameters
-- [x] explicit lexical capture mapping to stable binding IDs
-- [x] source -> syntax -> neutral-code artifact provenance
-- [x] compiler to first executable neutral representation
+- [x] source -> syntax -> semantic -> executable artifact provenance
+- [x] compiler to language-neutral semantic representation
 - [x] first image-resident behavior/method lookup convention
 - [x] end-to-end compiled message sends through common dispatch/execution
-- [ ] runtime nested Block creation and automatic capture analysis
+- [x] runtime nested Block creation
+- [x] automatic lexical capture analysis with stable binding IDs
+- [x] lexical `self` capture across Block boundaries
+- [x] ordinary `value*` sends to Blocks through the Smalltalk dispatcher
 - [ ] assignments, temporaries, sequences and cascades
 - [ ] Object/Behavior/Class/Metaclass bootstrap and inheritance
 - [ ] immediate-value objects/primitives
 - [ ] REPL/workspace
 - [ ] bootstrap image
 
-Success for the current seed: source can be parsed, compiled into durable artifacts, installed as a Block and executed; Smalltalk message sends resolve through image objects and the common neutral runtime.
+Success for the current seed: nested Smalltalk closures parse, compile into semantic code, materialize in the bootstrap interpreter and execute through ordinary message dispatch.
 
 ## 6. Projects and collaborative history
 
