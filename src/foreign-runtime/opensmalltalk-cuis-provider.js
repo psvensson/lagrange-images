@@ -97,7 +97,7 @@ readLine := [ | char stream |
     stream contents ].
 decode := [ :token |
     (token beginsWith: 'i:')
-        ifTrue: [ (token copyFrom: 3 to: token size) asInteger ]
+        ifTrue: [ (token copyFrom: 3 to: token size) asNumber ]
         ifFalse: [
             token = 'b:1'
                 ifTrue: [ true ]
