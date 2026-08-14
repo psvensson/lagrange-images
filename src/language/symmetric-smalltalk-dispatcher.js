@@ -1,5 +1,5 @@
 import {VALUE_KIND, isObjectRef} from '../value/index.js';
-import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk-compiler.js';
+import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 function assertImages(images) {
   if (!images || typeof images !== 'object') throw new TypeError('images service is required');
