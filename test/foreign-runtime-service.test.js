@@ -119,7 +119,7 @@ test('invalid provider start results clean up an already-created opaque runtime 
   });
   await assert.rejects(
     service.start({providerId: 'invalid/default'}),
-    /foreign runtime start metadata objects must be plain records/,
+    /foreign runtime start metadata\.bad objects must be plain records/,
   );
   assert.equal(stopped, true);
   assert.equal(handle.stopped, true);
