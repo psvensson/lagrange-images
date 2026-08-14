@@ -98,7 +98,11 @@ Artifact/toolchain generalization:
 - [x] Docker/Podman-style no-shell OCI CLI runner with bind-mounted workspace and explicit network mode
 - [x] first real Cargo/rustc OCI provider over the generic toolchain protocol
 - [x] import validated Cargo-produced raw WASM as `wasm-binary/v1` without claiming the Lagrange WASM ABI
-- [ ] external-toolchain derivation keys include compiler/toolchain identity plus dependency/manifest/lock fingerprints
+- [x] explicit Cargo vendor config/file artifacts for closed third-party directory-source dependencies
+- [x] validate vendored package manifests/checksum file sets and SHA-256 contents before OCI execution
+- [x] support binary as well as text vendored package files
+- [ ] standard `.crate`/registry-package importer that produces explicit vendor artifacts
+- [ ] external-toolchain derivation keys include compiler/toolchain identity plus dependency/manifest/lock/vendor fingerprints
 - [ ] native-process or equivalent trusted external-toolchain provider where useful
 - [ ] remote build provider if a real deployment needs it
 - [ ] callable/interface artifact contract for imported executable libraries/components
@@ -119,7 +123,7 @@ Execution/compiler follow-ups:
 - [ ] exception/condition substrate
 - [ ] capability-aware host/WASM/foreign-call boundary
 
-Success: source is one artifact representation rather than the platform boundary; the explicit artifact graph can now drive both in-process compilers and a real digest-pinned OCI Cargo/rustc toolchain without adding Rust semantics to `ToolchainService`. The next proof is richer explicit dependency materialization plus a callable foreign-WASM interface.
+Success: source is one artifact representation rather than the platform boundary; the explicit artifact graph can drive a digest-pinned Cargo/rustc OCI build with a versioned vendored package dependency, without network fetches or Rust/Cargo semantics in `ToolchainService`. The next substrate questions are reproducible toolchain-result reuse and callable foreign-WASM interfaces.
 
 ## 5. Symmetric Smalltalk seed
 
@@ -178,8 +182,11 @@ Rust — external-toolchain path:
 - [x] require digest-pinned toolchain image and record image/toolchain identity on produced artifacts
 - [x] materialize a closed Cargo project from artifact snapshots and build with Cargo frozen/offline
 - [x] preserve manifest/source/lock provenance on the produced raw WASM artifact
-- [ ] explicit vendored crate/package/config artifact conventions for third-party dependencies
-- [ ] compile one ordinary Cargo project with at least one third-party crate to WASM using only explicit dependency artifacts
+- [x] explicit vendored Cargo config/file artifact conventions for third-party dependencies
+- [x] materialize and validate a versioned third-party package directory with `Cargo.toml`, source/binary files and `.cargo-checksum.json`
+- [x] exercise an application manifest/lock/source graph that depends on the vendored package through the normal provider path
+- [ ] integration environment that runs the vendored dependency fixture through an actual pinned Cargo/rustc OCI image
+- [ ] import crates.io `.crate` packages into explicit vendor artifacts without build-time network access
 - [ ] external-toolchain cache key includes pinned image, target/options and full explicit dependency fingerprints
 - [ ] callable/interface adapter for suitable Rust-produced `wasm-binary/v1`
 - [ ] Lagrange Rust SDK/crate for explicit host/call interfaces
@@ -225,4 +232,4 @@ Success: executable placement can choose image-native/WASM or explicit foreign r
 - [ ] replaceable shell/window-manager policy
 - [ ] inspectors, browsers and debugger as image-resident tools
 
-See ADR 0016 for the broader artifact/toolchain/foreign-runtime direction, ADR 0017 for the generic dependency/provider substrate, and ADR 0018 for the first OCI-backed Cargo/rustc provider.
+See ADR 0016 for the broader artifact/toolchain/foreign-runtime direction, ADR 0017 for the generic dependency/provider substrate, ADR 0018 for the first OCI-backed Cargo/rustc provider, and ADR 0019 for explicit vendored Cargo dependencies.
