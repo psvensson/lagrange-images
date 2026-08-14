@@ -68,12 +68,16 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$VM_PATH" > .integration/opensmalltalk-vm/path
-      - name: Run real OpenSmalltalkVM + Cuis package proof
+      - name: Run real OpenSmalltalkVM + Cuis runtime and toolchain proofs
         shell: bash
         run: |
           set -euo pipefail
           export LAGRANGE_OPENSMALLTALK_INTEGRATION=1
           export LAGRANGE_OPENSMALLTALK_VM_PATH="$(cat .integration/opensmalltalk-vm/path)"
           export LAGRANGE_CUIS_IMAGE_PATH="$PWD/.integration/cuis/Cuis7.9-8090.image"
+          export LAGRANGE_CUIS_CHANGES_PATH="$PWD/.integration/cuis/Cuis7.9-8090.changes"
+          export LAGRANGE_CUIS_SOURCES_PATH="$PWD/.integration/cuis/Cuis7.8.sources"
           export LAGRANGE_CUIS_JSON_PACKAGE_PATH="$PWD/.integration/cuis/JSON.pck.st"
-          node --test test/opensmalltalk-cuis-real.test.js
+          node --test \
+            test/opensmalltalk-cuis-real.test.js \
+            test/opensmalltalk-cuis-toolchain-real.test.js
