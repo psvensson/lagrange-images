@@ -23,7 +23,7 @@ The default code-executor registry creates a fresh WASM executor and cache for e
 
 ## Compile once, instantiate per activation
 
-Execution becomes:
+The initial ADR 0014 execution path was:
 
 ```text
 wasm-module/v1 bytes
@@ -40,16 +40,14 @@ runtime-local WebAssembly.Module cache
        `---- activation C -> fresh instance + imports
 ```
 
-The compiled module is shared. `WebAssembly.Instance` is not shared yet.
-
-Fresh instances remain important because imports close over activation-local state:
+The compiled module is shared. At this decision point `WebAssembly.Instance` was still fresh per activation because imports close over activation-local state:
 
 - `ValueHandleArena`
 - active function/send/closure-site policy
 - pending tail host effect
 - captured runtime request context
 
-Pooling or reusing instances therefore needs a separate explicit contract.
+ADR 0015 subsequently adds instance reuse only behind an explicit `stateless-v0` compiler/module contract and a rebindable host environment. That follow-up does not change the compiled-module cache contract here.
 
 ## Concurrent misses
 
@@ -101,7 +99,7 @@ Sharing the compiled host module does not share:
 - pending effects
 - capability context
 
-Entry-level host-effect isolation from ADR 0013 remains enforced per activation after instantiation.
+Entry-level host-effect isolation from ADR 0013 remains enforced per activation.
 
 ## Multilingual consequence
 
@@ -109,18 +107,21 @@ This cache sits below source-language semantics. A future Java, Rust, Lisp or Sm
 
 The cache key does not contain selectors, class names, crate names or language concepts.
 
+Instance reuse is a separate question: languages/backends with mutable guest state need their own reset/reuse contract rather than inheriting ADR 0015's stateless promise accidentally.
+
 ## Backward/API consequence
 
-`createWasmFunctionV1Executor()` is the public construction path. The package no longer exposes the old singleton executor through `lagrange-images/wasm`, avoiding a public cache object that could accidentally be shared across runtimes.
+`createWasmFunctionV1Executor()` is the public construction path. Default registries create runtime-local execution caches rather than relying on a shared singleton.
 
-Existing single-function and shared multi-function `wasm-module/v1` artifacts use the same cache.
+Existing single-function and shared multi-function `wasm-module/v1` artifacts use the same compiled-module cache.
 
 ## Deferred
 
-- `WebAssembly.Instance` pooling/reuse
 - cache size limits and eviction/LRU policy
 - host compiled-module serialization, if a portable host API becomes appropriate
 - sharing compiled host modules across runtime instances
 - worker/thread ownership semantics
 - distributed node-local compiled-module warming
 - metrics integration beyond the bootstrap stats snapshot
+
+Instance pooling/reuse is addressed separately by ADR 0015.
