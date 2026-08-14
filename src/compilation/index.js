@@ -5,12 +5,34 @@ import {lagrangeCodeV0ToWasmModuleCompiler} from '../wasm/compiler.js';
 import {CompilationService} from './compilation-service.js';
 import {CodeCompilerRegistry} from './compiler-registry.js';
 
+const LAGRANGE_CODE_WASM_COMPILER_ID = 'lagrange-code-v0-to-wasm-module-v1/value-handle-v0/compiler-v1';
+
+const reusableLagrangeCodeV0ToWasmCompiler = Object.freeze({
+  identity: LAGRANGE_CODE_WASM_COMPILER_ID,
+  cacheKey({source}) {
+    return Object.freeze({
+      languageId: source.languageId,
+      representation: source.representation,
+      content: source.content,
+    });
+  },
+  async compile(request, context) {
+    return await lagrangeCodeV0ToWasmModuleCompiler.compile(request, context);
+  },
+});
+
 function createDefaultCodeCompilerRegistry() {
   const registry = new CodeCompilerRegistry();
   registry.register(LAGRANGE_CODE_V0, NEUTRAL_EXPRESSION_V0, lagrangeCodeV0ToNeutralExpressionCompiler);
-  registry.register(LAGRANGE_CODE_V0, WASM_MODULE_V1, lagrangeCodeV0ToWasmModuleCompiler);
+  registry.register(LAGRANGE_CODE_V0, WASM_MODULE_V1, reusableLagrangeCodeV0ToWasmCompiler);
   return registry;
 }
 
-export {CompilationService, createDefaultCodeCompilerRegistry};
+export {
+  CompilationService,
+  LAGRANGE_CODE_WASM_COMPILER_ID,
+  createDefaultCodeCompilerRegistry,
+};
 export * from './compiler-registry.js';
+export * from './derivation-cache.js';
+export * from './group.js';
