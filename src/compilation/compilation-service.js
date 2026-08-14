@@ -66,7 +66,8 @@ class CompilationService {
     const compiler = this.compilers.get(source.representation, target);
     const request = Object.freeze({source, targetRepresentation: target, options});
     const context = Object.freeze({images: this.images});
-    const descriptor = await createDerivationDescriptor(compiler, request, context);
+    const callerMetadata = normalizeMetadata(metadata, 'compiled artifact metadata');
+    const descriptor = await createDerivationDescriptor(compiler, request, context, callerMetadata);
 
     if (reuse && descriptor) {
       const existing = await this.findReusableArtifact(ref.imageId, target, descriptor);
@@ -74,7 +75,6 @@ class CompilationService {
     }
 
     const result = normalizeCompilerResult(await compiler.compile(request, context), source);
-    const callerMetadata = normalizeMetadata(metadata, 'compiled artifact metadata');
     const cacheMetadata = descriptor
       ? {compilerIdentity: descriptor.compilerIdentity, derivationKey: descriptor.derivationKey}
       : {};
