@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, readFile, rm} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
@@ -33,15 +34,16 @@ class FakeCuisSession {
     }
     assert.equal(fields[0], 'CALL');
     const [, id, service, operation, ...args] = fields;
-    assert.equal(service, 'proof');
     const decode = (token) => BigInt(token.slice(2));
-    if (operation === 'add') {
+    if (service === 'proof' && operation === 'add') {
       this.lines.push(`OK\t${id}\ti:${decode(args[0]) + decode(args[1])}`);
-    } else if (operation === 'factorial') {
+    } else if (service === 'proof' && operation === 'factorial') {
       let value = decode(args[0]);
       let result = 1n;
       while (value > 1n) result *= value--;
       this.lines.push(`OK\t${id}\ti:${result}`);
+    } else if (service === 'json' && operation === 'roundTripSum') {
+      this.lines.push(`OK\t${id}\ti:${decode(args[0]) + decode(args[1])}`);
     } else {
       this.lines.push(`ERR\t${id}\tunknown-operation`);
     }
@@ -78,19 +80,25 @@ class FakeCuisRunner {
   }
 }
 
+function createProvider(root, runner = new FakeCuisRunner()) {
+  return {
+    runner,
+    provider: createOpenSmalltalkCuisProvider({
+      vmPath: '/opt/opensmalltalk/squeak',
+      imagePath: '/opt/cuis/Cuis7.9-8090.image',
+      vmIdentity: 'opensmalltalk-vm/202606270913/sha256:dff5',
+      imageIdentity: 'cuis/6bcee3f/Cuis7.9-8090.image/gitblob:523dc5',
+      runner,
+      workspaceRoot: root,
+    }),
+  };
+}
+
 test('OpenSmalltalk Cuis provider materializes a headless bridge and keeps runtime paths out of identity', async () => {
   const root = await mkdtemp(join(tmpdir(), 'lagrange-cuis-provider-test-'));
-  const runner = new FakeCuisRunner();
-  const provider = createOpenSmalltalkCuisProvider({
-    vmPath: '/opt/opensmalltalk/squeak',
-    imagePath: '/opt/cuis/Cuis7.9-8090.image',
-    vmIdentity: 'opensmalltalk-vm/202606270913/sha256:dff5',
-    imageIdentity: 'cuis/6bcee3f/Cuis7.9-8090.image/gitblob:523dc5',
-    runner,
-    workspaceRoot: root,
-  });
+  const {runner, provider} = createProvider(root);
   try {
-    assert.match(provider.identity, /^opensmalltalk-cuis-runtime\/v0\/[0-9a-f]{64}$/);
+    assert.match(provider.identity, /^opensmalltalk-cuis-runtime\/v1\/[0-9a-f]{64}$/);
     assert.equal(provider.identity.includes('/opt/'), false);
     assert.equal(OPENSMALLTALK_CUIS_PROVIDER_ID, 'smalltalk/opensmalltalk-cuis');
 
@@ -101,6 +109,7 @@ test('OpenSmalltalk Cuis provider materializes a headless bridge and keeps runti
       bridgeProtocol: CUIS_STDIO_BRIDGE_V0,
       vmIdentity: 'opensmalltalk-vm/202606270913/sha256:dff5',
       imageIdentity: 'cuis/6bcee3f/Cuis7.9-8090.image/gitblob:523dc5',
+      packages: [],
     });
     assert.equal(runner.starts.length, 1);
     assert.deepEqual(runner.starts[0].args.slice(0, 3), [
@@ -118,6 +127,8 @@ test('OpenSmalltalk Cuis provider materializes a headless bridge and keeps runti
     assert.match(script, /StdIOWriteStream stdout/);
     assert.match(script, /char := input next/);
     assert.equal(script.includes('input upTo:'), false);
+    assert.equal(script.includes('CodePackageFile installPackage:'), false);
+    assert.equal(script.includes('jsonRoundTripSum:'), false);
     assert.match(script, /Smalltalk quitPrimitive: 0/);
     assert.equal(script.includes('perform:'), false);
 
@@ -142,17 +153,52 @@ test('OpenSmalltalk Cuis provider materializes a headless bridge and keeps runti
   }
 });
 
-test('OpenSmalltalk Cuis bridge rejects undeclared interfaces, wrong arity and unsupported Values before transport', async () => {
+test('OpenSmalltalk Cuis provider copies exact package bytes, records content identity and enables a package-backed service', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'lagrange-cuis-package-test-'));
+  const packagePath = join(root, 'upstream-JSON.pck.st');
+  const packageBytes = Buffer.from("'From Cuis'!\n!provides: 'JSON' 1 1!\n", 'utf8');
+  await writeFile(packagePath, packageBytes);
+  const sha256 = createHash('sha256').update(packageBytes).digest('hex');
+  const {runner, provider} = createProvider(root);
+  try {
+    const started = await provider.start({
+      spec: {packages: [{name: 'JSON', path: packagePath}]},
+    });
+    assert.deepEqual(started.metadata.packages, [{
+      name: 'JSON',
+      sha256,
+      size: packageBytes.length,
+    }]);
+    assert.equal(JSON.stringify(started.metadata).includes(packagePath), false);
+    assert.equal(provider.identity.includes(packagePath), false);
+
+    const scriptPath = runner.starts[0].args[4];
+    const script = await readFile(scriptPath, 'utf8');
+    assert.match(script, /CodePackageFile installPackage: DirectoryEntry currentDirectory \/\/ 'packages' \/\/ '01-JSON\.pck\.st'/);
+    assert.match(script, /LagrangeProofService compile: 'jsonRoundTripSum: a with: b/);
+    assert.match(script, /rendered := Json render:/);
+    assert.match(script, /parsed := Json readFrom: rendered readStream/);
+    const materialized = await readFile(join(runner.starts[0].cwd, 'packages', '01-JSON.pck.st'));
+    assert.deepEqual(materialized, packageBytes);
+
+    const result = await provider.call(started.handle, {
+      interface: {service: 'json', operation: 'roundTripSum'},
+      arguments: [integerValue(17), integerValue(25)],
+    });
+    assert.deepEqual(result, integerValue(42));
+    assert.equal(runner.sessions[0].writes.at(-1), 'CALL\t1\tjson\troundTripSum\ti:17\ti:25');
+
+    await provider.stop(started.handle);
+    await assert.rejects(readFile(scriptPath, 'utf8'), /ENOENT/);
+    assert.deepEqual(await readFile(packagePath), packageBytes);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('OpenSmalltalk Cuis bridge rejects undeclared interfaces, absent packages, wrong arity and unsupported Values before transport', async () => {
   const root = await mkdtemp(join(tmpdir(), 'lagrange-cuis-provider-validation-'));
-  const runner = new FakeCuisRunner();
-  const provider = createOpenSmalltalkCuisProvider({
-    vmPath: '/vm',
-    imagePath: '/image',
-    vmIdentity: 'vm/v1',
-    imageIdentity: 'image/v1',
-    runner,
-    workspaceRoot: root,
-  });
+  const {runner, provider} = createProvider(root);
   try {
     const started = await provider.start({spec: {}});
     await assert.rejects(
@@ -161,6 +207,13 @@ test('OpenSmalltalk Cuis bridge rejects undeclared interfaces, wrong arity and u
         arguments: [],
       }),
       /service not exported/,
+    );
+    await assert.rejects(
+      provider.call(started.handle, {
+        interface: {service: 'json', operation: 'roundTripSum'},
+        arguments: [integerValue(1), integerValue(2)],
+      }),
+      /requires Cuis package JSON/,
     );
     await assert.rejects(
       provider.call(started.handle, {
@@ -178,6 +231,29 @@ test('OpenSmalltalk Cuis bridge rejects undeclared interfaces, wrong arity and u
     );
     assert.equal(runner.sessions[0].writes.length, 0);
     await provider.stop(started.handle);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('OpenSmalltalk Cuis package start inputs reject unsafe and duplicate package names before VM launch', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'lagrange-cuis-package-validation-'));
+  const packagePath = join(root, 'package.pck.st');
+  await writeFile(packagePath, 'package');
+  const {runner, provider} = createProvider(root);
+  try {
+    await assert.rejects(
+      provider.start({spec: {packages: [{name: '../JSON', path: packagePath}]}}),
+      /name contains unsafe characters/,
+    );
+    await assert.rejects(
+      provider.start({spec: {packages: [
+        {name: 'JSON', path: packagePath},
+        {name: 'JSON', path: packagePath},
+      ]}}),
+      /duplicate OpenSmalltalk Cuis package name: JSON/,
+    );
+    assert.equal(runner.starts.length, 0);
   } finally {
     await rm(root, {recursive: true, force: true});
   }
