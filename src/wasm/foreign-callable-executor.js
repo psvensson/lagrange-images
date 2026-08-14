@@ -6,6 +6,7 @@ import {
   float64Value,
   integerValue,
 } from '../value/index.js';
+import {assertBlockApplicationReceiver} from '../execution/block-application.js';
 import {
   WASM_CALLABLE_INTERFACE_V1,
   assertWasmBinaryArtifact,
@@ -121,7 +122,7 @@ function createWasmCallableInterfaceV1Executor({moduleCache = new ForeignWasmMod
       if (!code || code.representation !== WASM_CALLABLE_INTERFACE_V1) {
         throw new TypeError(`foreign WASM executor requires ${WASM_CALLABLE_INTERFACE_V1}`);
       }
-      if (activation.receiver !== null) throw new TypeError('wasm-scalar-call/v0 does not accept a receiver');
+      assertBlockApplicationReceiver(activation, 'wasm-scalar-call/v0');
       if (activation.environment !== null) throw new TypeError('wasm-scalar-call/v0 does not accept a lexical environment');
 
       const {descriptor, implementation} = parseWasmCallableInterfaceArtifact(code);

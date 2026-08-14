@@ -72,6 +72,8 @@ snapshot bytes != assumed deterministic output
 exported service != arbitrary perform:
 raw foreign WASM != Lagrange WASM ABI
 callable interface != authority
+Block self receiver != arbitrary foreign receiver
+implementation lane != language-level Block identity
 compiled host module != durable code identity
 pooled instance != activation state
 ```
@@ -164,6 +166,8 @@ Block
 ```
 
 The first ABI, `wasm-scalar-call/v0`, is a no-import synchronous free-function boundary over boolean/i32/i64/f32/f64 Values. Foreign modules are compiled once per runtime but instantiated fresh per activation. Interface identity is not authority.
+
+Callable Blocks accept two activation shapes: direct `invokeBlock()` with no receiver, or a language-level Block application whose receiver is exactly the Block itself. An arbitrary receiver remains invalid; this is Block application, not foreign method dispatch.
 
 ## 9. Cargo/rustc external compiler ecosystem
 
@@ -273,33 +277,62 @@ See ADR 0023.
 
 ## 14. Real foreign runtime: OpenSmalltalkVM + Cuis
 
-`createOpenSmalltalkCuisProvider()` is the first real consumer of that lifecycle:
+`createOpenSmalltalkCuisProvider()` is the first real consumer of that lifecycle. The artifact-backed variant materializes a durable Cuis runtime definition and delegates the actual call/bridge lifecycle to the same provider implementation.
 
 ```text
-ForeignRuntimeService
-   -> smalltalk/opensmalltalk-cuis
+smalltalk/cuis-runtime-definition-v1
+   -> artifact-backed provider
    -> local headless OpenSmalltalkVM process
-   -> pinned Cuis image
+   -> pinned/derived Cuis image
    -> provider bridge
-   -> optional explicit Cuis packages
    -> canonical Value
 ```
 
-The provider launches without a shell using the current headless Cuis convention:
-
-```text
--vm-sound-null -vm-display-null <image> -s <bridge-script>
-```
-
-Its stable identity is derived from explicit upstream VM/image identities rather than local paths. A runtime-private `LineProcessRunner` manages the child process and line-framed stdin/stdout protocol.
-
 The bridge, `lagrange-cuis-stdio/v0`, is deliberately whitelisted. Current proof services include `proof/add`, `proof/factorial` and package-backed `json/package-proof`. It transports only integer/boolean tagged Values and exposes no arbitrary `perform:`, source eval or oop lookup.
 
-A dedicated PR-only CI job downloads a SHA-256-pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur archive, a commit/blob-pinned Cuis 7.9-8090 image and the pinned upstream JSON package. It proves both live package execution and a toolchain-produced derived image containing that package.
+A dedicated PR-only CI job downloads a SHA-256-pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur archive, a commit/blob-pinned Cuis 7.9-8090 image and the pinned upstream JSON package. It proves live package execution, a toolchain-produced derived image containing that package, and mixed invocation through ordinary Blocks.
 
-See ADRs 0024 and 0025.
+See ADRs 0024, 0025 and 0027.
 
-## 15. Build process vs foreign-runtime placement
+## 15. Durable runtime definitions and callable Blocks
+
+A running foreign runtime stays transient, but the definition of what should run is durable:
+
+```text
+runtime-definition CodeArtifact
+        -> explicit artifact dependency closure
+        -> runtime-local provider binding
+        -> transient runtime instance
+```
+
+`ForeignRuntimeDefinitionService` resolves only `dependencies`, not `derivedFrom` provenance. `ForeignRuntimeDefinitionBindingRegistry` keeps provider selection runtime-local.
+
+A service on such a definition can be persisted as `foreign-runtime-callable-interface/v1` and installed as an ordinary environment-free Block. `ForeignRuntimeDefinitionInstanceCache` lazily starts one runtime per provider/definition, coalesces concurrent first use, reuses the live instance, and leaves shutdown ownership with `ForeignRuntimeService`.
+
+See ADRs 0027 and 0028.
+
+## 16. Mixed implementation Block composition
+
+The first mixed program has no coordinator API. Symmetric Smalltalk captures two ordinary Block refs:
+
+```text
+rust Block -> wasm-callable-interface/v1 -> wasm-binary/v1
+cuis Block -> foreign-runtime-callable-interface/v1 -> Cuis runtime definition
+```
+
+and evaluates:
+
+```smalltalk
+[ :x | cuis value: (rust value: x value: x) value: x ]
+```
+
+For `x = 14`, foreign WASM returns 28 and Cuis returns 42. The Smalltalk source does not know either implementation lane.
+
+The orchestrator currently runs through `neutral-expression/v0`. The nested call is a non-tail async send; the Lagrange-WASM backend still needs general non-tail continuation/effect support before this exact composition can run there without a special case.
+
+See ADR 0029.
+
+## 17. Build process vs foreign-runtime placement
 
 ```text
 build/toolchain process
@@ -311,28 +344,31 @@ foreign runtime
 
 Cargo currently uses OCI build execution; Cuis currently uses a local shell-free process for both toolchain and runtime proofs. OCI foreign-runtime/toolchain placement remains provider/deployment work. Physical placement does not become generic runtime/toolchain semantics.
 
-## 16. Distribution and capabilities later
+## 18. Distribution and capabilities later
 
 A future call may route to local image-native activation, Lagrange WASM, foreign/component WASM, OpenSmalltalkVM/JVM/native runtime, or distributed execution. Location, failure/retry policy and authority remain explicit concerns; not every object send becomes RPC.
 
-## 17. Current frontier
+## 19. Current frontier
 
 The substrate has now been pressured by:
 
-- a real external compiler producing WASM (Cargo/rustc);
+- a real external compiler integration seam producing WASM artifacts (Cargo/rustc provider);
 - a real long-lived image runtime (OpenSmalltalkVM/Cuis);
 - an unchanged upstream Cuis package;
-- the real Cuis compiler/package environment producing a fresh runnable image through `ToolchainService`.
+- the real Cuis compiler/package environment producing a fresh runnable image through `ToolchainService`;
+- durable artifact-backed runtime definitions and callable foreign-runtime Blocks;
+- one Symmetric Smalltalk program composing foreign WASM and a live Cuis runtime through ordinary Blocks.
 
 The next high-value steps are:
 
 - a multi-package Cuis dependency graph / larger third-party package;
 - structured class/method/package export from OpenSmalltalkVM/Cuis;
-- a mixed native/compatible Smalltalk project through explicit interfaces;
 - richer Component/WIT-style foreign interfaces;
+- a real pinned-OCI Cargo integration proof;
 - standard Cargo package import;
 - Java/JAR and Common Lisp ecosystem proofs;
 - capability-aware foreign calls;
+- non-tail async continuation/effect support in Lagrange WASM;
 - OCI/distributed foreign-runtime placement;
 - durable Lagrange backend.
 
