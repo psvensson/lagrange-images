@@ -17,25 +17,25 @@ The top-level README is the quick overview. These docs describe the current mode
 
 ## Execution and toolchains at a glance
 
-There are two WASM lanes:
-
 ```text
 image-native semantics
   -> wasm-module/v1 / wasm-function/v1
   -> Lagrange Value-handle ABI
 
-external language/toolchain or runtime port
-  -> wasm-binary/v1
-  -> explicit callable/component/runtime interface
+external compiler ecosystem
+  -> ToolchainService
+  -> imported executable artifacts
+
+long-lived external runtime
+  -> ForeignRuntimeService
+  -> provider-private VM/process
 ```
 
-Toolchains consume explicit artifact dependency graphs and produce immutable derived artifacts. Deterministic providers may opt into result reuse.
-
-The first external ecosystem proof is Rust/Cargo in digest-pinned OCI. The first foreign executable interface is `wasm-scalar-call/v0` over `wasm-callable-interface/v1`.
+The first external compiler proof is Rust/Cargo in digest-pinned OCI. The first foreign WASM interface is `wasm-scalar-call/v0`. The first real long-lived foreign runtime is OpenSmalltalkVM + a pinned Cuis image.
 
 ## Smalltalk direction
 
-Smalltalk intentionally has two complementary paths:
+Smalltalk has two complementary paths:
 
 ```text
 native Symmetric Smalltalk
@@ -47,42 +47,39 @@ OpenSmalltalkVM-backed compatible Smalltalk
 
 Symmetric Smalltalk is the image-native language experiment.
 
-OpenSmalltalkVM is the preferred first compatibility route for mature Cuis/Squeak-style code and is intended to serve as:
+The OpenSmalltalkVM path now has a concrete first provider proof:
 
-- a real foreign compatibility runtime;
-- a host for the real Smalltalk compiler/toolchain;
-- a migration/bootstrap engine that can export structured classes/methods/packages for selective native integration;
-- later, possibly a headless interpreter/Spur runtime compiled to WASM for stronger placement/sandboxing integration.
+```text
+ForeignRuntimeService
+  -> headless OpenSmalltalkVM
+  -> real Cuis 7.9 image
+  -> Cuis compiles a service class
+  -> persistent calls
+  -> canonical Values
+```
 
-The foreign Smalltalk heap remains foreign runtime state. Compatibility does not require every package to migrate to the native image model.
+The bridge is intentionally whitelisted rather than generic `perform:`/eval, and the Spur heap remains foreign runtime state. A PR-only integration job downloads and verifies the pinned upstream VM/image and executes the proof against the real runtime.
 
-See [ADR 0022](decisions/0022-opensmalltalkvm-compatibility-direction.md) and the [Smalltalk section of the language platform](language-platform.md#5-smalltalk-has-two-complementary-paths).
+Still ahead are an existing Cuis package compatibility proof, the OpenSmalltalkVM/Cuis compiler-toolchain role, structured class/method export, OCI/distributed placement and optional later interpreter/Spur-to-WASM hosting.
+
+See [ADR 0022](decisions/0022-opensmalltalkvm-compatibility-direction.md), [ADR 0023](decisions/0023-foreign-runtime-lifecycle-substrate.md) and [ADR 0024](decisions/0024-opensmalltalkvm-cuis-runtime-proof.md).
 
 ## ADRs
 
-Use [decisions/README.md](decisions/README.md) instead of reading the ADR directory in numeric order.
-
-The decision index groups ADRs into:
-
-- foundation and image semantics
-- language/execution model
-- Lagrange WASM backend
-- runtime reuse
-- artifact/toolchain ecosystem integration
-- foreign WASM interfaces
-
-ADRs are append-only design history. If a newer ADR extends an older one, the current README/architecture/language docs should describe the resulting model.
+Use [decisions/README.md](decisions/README.md) instead of reading the ADR directory in numeric order. ADRs are append-only design history; the current README/architecture/language docs describe the resulting model.
 
 ## Current frontier
 
-The current substrate can:
+The current substrate can now show both major ecosystem reuse modes:
 
 ```text
-explicit source/package artifact graph
-   -> deterministic existing toolchain
-   -> reusable raw WASM
-   -> explicit scalar callable interface
-   -> ordinary Block activation
+explicit artifact graph
+   -> real existing compiler
+   -> reusable executable artifact
+
+explicit runtime interface
+   -> real persistent existing VM/image
+   -> canonical Value calls
 ```
 
-The next pressure points are OpenSmalltalkVM/Cuis compatibility, richer component interfaces, Java/JAR and Common Lisp ecosystem proofs, standard package importers, capabilities and distributed placement on the durable Lagrange backend.
+The next pressure points are a useful existing Cuis package, the Cuis compiler/toolchain role, richer Component/WIT interfaces, Java/JAR and Common Lisp proofs, capabilities and distributed placement on the durable Lagrange backend.
