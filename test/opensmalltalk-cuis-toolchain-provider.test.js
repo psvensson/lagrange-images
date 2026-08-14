@@ -23,7 +23,8 @@ class FakeCuisToolchainRunner {
     this.runs.push(request);
     const script = await readFile(request.args[4], 'utf8');
     assert.match(script, /CodePackageFile installPackage: DirectoryEntry currentDirectory \/\/ 'JSON\.pck\.st'/);
-    assert.match(script, /Smalltalk saveAs: 'Derived'/);
+    assert.match(script, /Smalltalk saveAndQuitAs: 'Derived' clearAllClassState: false/);
+    assert.equal(script.includes('Smalltalk saveAs:'), false);
     assert.equal(await readFile(`${request.cwd}/Cuis7.9-8090.image`, 'utf8'), 'base-image');
     assert.equal(await readFile(`${request.cwd}/Cuis7.9-8090.changes`, 'utf8'), 'base-changes');
     assert.equal(await readFile(`${request.cwd}/Cuis7.8.sources`, 'utf8'), 'base-sources');
@@ -114,6 +115,7 @@ test('OpenSmalltalk Cuis toolchain materializes explicit graph and persists runn
     assert.equal(image.metadata.fileName, 'Derived.image');
     assert.equal(image.metadata.companionChangesFileName, 'Derived.changes');
     assert.equal(image.metadata.vmIdentity, provider.vmIdentity);
+    assert.equal(image.metadata.snapshotMethod, 'saveAndQuitAs/v0');
     assert.deepEqual(image.metadata.packageArtifactIds, [json.id]);
     assert.deepEqual(image.metadata.packageFileNames, ['JSON.pck.st']);
     assert.equal(image.metadata.sourcesFileName, 'Cuis7.8.sources');
@@ -144,12 +146,16 @@ test('OpenSmalltalk Cuis toolchain validates roles, filenames and target before 
     const base = await put(runtime, 'base', CUIS_IMAGE_V1, bytesValue(Buffer.from('base')), {
       metadata: {fileName: 'Base.image'},
     });
+    const changes = await put(runtime, 'base-changes-validation', CUIS_CHANGES_V1, bytesValue(Buffer.from('changes')), {
+      metadata: {fileName: 'Base.changes'},
+    });
     const badPackage = await put(runtime, 'bad-package', CUIS_PACKAGE_V1, textValue('bad'), {
       metadata: {fileName: '../Bad.pck.st'},
     });
     const build = await put(runtime, 'bad-build', CUIS_BUILD_V1, textValue(CUIS_BUILD_CONTRACT_V0), {
       dependencies: [
         {role: 'base-image', artifact: objectRef('demo', base.id)},
+        {role: 'base-changes', artifact: objectRef('demo', changes.id)},
         {role: 'package', artifact: objectRef('demo', badPackage.id)},
       ],
     });
@@ -159,6 +165,17 @@ test('OpenSmalltalk Cuis toolchain validates roles, filenames and target before 
       roots: [objectRef('demo', build.id)],
       target: {representation: CUIS_IMAGE_V1, fileName: 'Derived.image'},
     }), /safe \.st basename/);
+    assert.equal(runner.runs.length, 0);
+
+    const noChangesBuild = await put(runtime, 'no-changes-build', CUIS_BUILD_V1, textValue(CUIS_BUILD_CONTRACT_V0), {
+      dependencies: [{role: 'base-image', artifact: objectRef('demo', base.id)}],
+    });
+    await assert.rejects(runtime.toolchains.run({
+      providerId: OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
+      imageId: 'demo',
+      roots: [objectRef('demo', noChangesBuild.id)],
+      target: {representation: CUIS_IMAGE_V1, fileName: 'Derived.image'},
+    }), /requires exactly one base-changes dependency/);
     assert.equal(runner.runs.length, 0);
 
     await assert.rejects(runtime.toolchains.run({
