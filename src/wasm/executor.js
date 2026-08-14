@@ -9,6 +9,10 @@ import {
   WASM_VALUE_HANDLE_ABI_V0,
   ValueHandleArena,
 } from './abi.js';
+import {
+  WASM_INSTANCE_REUSE_STATELESS_V0,
+  WasmInstancePool,
+} from './instance-pool.js';
 import {WasmModuleCache} from './module-cache.js';
 
 function requireNonNegativeInteger(value, label) {
@@ -176,39 +180,44 @@ function recordPending(pending, effect) {
   return 0;
 }
 
-function createHostImports(arena, literals, sendSites, closureSites, descriptor, closurePrototypes, pending) {
-  const activeSendSites = new Set(descriptor.sendSiteIndices);
-  const activeClosureSites = new Set(descriptor.closureSiteIndices);
+function createRebindableHostEnvironment(literals, sendSites, closureSites) {
+  const holder = {current: null};
+  const current = () => {
+    if (!holder.current) throw new TypeError('WASM instance host environment is not bound to an activation');
+    return holder.current;
+  };
   const lagrange = {
     literal(index) {
+      const state = current();
       if (!Number.isInteger(index) || index < 0 || index >= literals.length) throw new TypeError(`WASM literal index out of range: ${index}`);
-      return arena.put(literals[index]);
+      return state.arena.put(literals[index]);
     },
     integer_add(left, right) {
-      return arena.integerAdd(left, right);
+      return current().arena.integerAdd(left, right);
     },
     equals(left, right) {
-      return arena.equals(left, right);
+      return current().arena.equals(left, right);
     },
     is_true(handle) {
-      return arena.isTrue(handle);
+      return current().arena.isTrue(handle);
     },
   };
 
   sendSites.forEach((site, siteIndex) => {
     lagrange[`send_site_${siteIndex}`] = (...handles) => {
-      if (!activeSendSites.has(siteIndex)) throw new TypeError(`inactive WASM send site invoked: ${siteIndex}`);
+      const state = current();
+      if (!state.activeSendSites.has(siteIndex)) throw new TypeError(`inactive WASM send site invoked: ${siteIndex}`);
       if (handles.length !== 1 + site.arity) {
         throw new TypeError(`WASM send site ${siteIndex} expected ${1 + site.arity} handles, received ${handles.length}`);
       }
-      return recordPending(pending, {
+      return recordPending(state.pending, {
         kind: 'send',
         request: Object.freeze({
           languageId: site.languageId,
-          receiver: arena.get(handles[0], `WASM send site ${siteIndex} receiver handle`),
+          receiver: state.arena.get(handles[0], `WASM send site ${siteIndex} receiver handle`),
           message: site.message,
           arguments: Object.freeze(handles.slice(1).map((handle, argumentIndex) =>
-            arena.get(handle, `WASM send site ${siteIndex} argument ${argumentIndex} handle`))),
+            state.arena.get(handle, `WASM send site ${siteIndex} argument ${argumentIndex} handle`))),
         }),
       });
     };
@@ -216,35 +225,90 @@ function createHostImports(arena, literals, sendSites, closureSites, descriptor,
 
   closureSites.forEach((site, siteIndex) => {
     lagrange[`make_block_site_${siteIndex}`] = (...handles) => {
-      if (!activeClosureSites.has(siteIndex)) throw new TypeError(`inactive WASM closure site invoked: ${siteIndex}`);
+      const state = current();
+      if (!state.activeClosureSites.has(siteIndex)) throw new TypeError(`inactive WASM closure site invoked: ${siteIndex}`);
       if (handles.length !== site.captures.length) {
         throw new TypeError(`WASM closure site ${siteIndex} expected ${site.captures.length} handles, received ${handles.length}`);
       }
-      const prototype = closurePrototypes.get(siteIndex);
+      const prototype = state.closurePrototypes.get(siteIndex);
       if (!prototype) throw new TypeError(`WASM closure prototype missing at execution: ${site.blockId}`);
-      return recordPending(pending, {
+      return recordPending(state.pending, {
         kind: 'closure',
         request: Object.freeze({
           prototype,
           captures: Object.freeze(site.captures.map((capture, captureIndex) => Object.freeze({
             id: capture.id,
             name: capture.name,
-            value: arena.get(handles[captureIndex], `WASM closure site ${siteIndex} capture ${captureIndex} handle`),
+            value: state.arena.get(handles[captureIndex], `WASM closure site ${siteIndex} capture ${captureIndex} handle`),
           }))),
         }),
       });
     };
   });
 
-  return {[WASM_IMPORT_MODULE]: lagrange};
+  return Object.freeze({
+    imports: {[WASM_IMPORT_MODULE]: lagrange},
+    bind({arena, descriptor, closurePrototypes, pending}) {
+      if (holder.current) throw new TypeError('WASM instance host environment is already bound');
+      holder.current = {
+        arena,
+        closurePrototypes,
+        pending,
+        activeSendSites: new Set(descriptor.sendSiteIndices),
+        activeClosureSites: new Set(descriptor.closureSiteIndices),
+      };
+    },
+    unbind() {
+      if (!holder.current) throw new TypeError('WASM instance host environment is not bound');
+      holder.current = null;
+    },
+  });
 }
 
-function createWasmFunctionV1Executor({moduleCache = new WasmModuleCache()} = {}) {
+function instanceReuseMode(moduleArtifact) {
+  const mode = moduleArtifact.metadata?.instanceReuse;
+  if (mode === undefined) return null;
+  if (mode !== WASM_INSTANCE_REUSE_STATELESS_V0) throw new TypeError(`unsupported WASM instance reuse contract: ${mode}`);
+  return mode;
+}
+
+async function createInstanceSlot(compiledModule, literals, sendSites, closureSites) {
+  const host = createRebindableHostEnvironment(literals, sendSites, closureSites);
+  const instance = await WebAssembly.instantiate(compiledModule, host.imports);
+  return Object.freeze({instance, host});
+}
+
+async function acquireInstance({moduleArtifact, compiledModule, instancePool, literals, sendSites, closureSites}) {
+  if (instanceReuseMode(moduleArtifact) === WASM_INSTANCE_REUSE_STATELESS_V0) {
+    return await instancePool.acquire(
+      moduleArtifact,
+      async () => await createInstanceSlot(compiledModule, literals, sendSites, closureSites),
+    );
+  }
+  const slot = await createInstanceSlot(compiledModule, literals, sendSites, closureSites);
+  let released = false;
+  return Object.freeze({
+    slot,
+    release() {
+      if (released) throw new TypeError('WASM one-shot instance lease already released');
+      released = true;
+    },
+  });
+}
+
+function createWasmFunctionV1Executor({
+  moduleCache = new WasmModuleCache(),
+  instancePool = new WasmInstancePool(),
+} = {}) {
   if (!moduleCache || typeof moduleCache.get !== 'function' || typeof moduleCache.stats !== 'function') {
     throw new TypeError('moduleCache must be a WasmModuleCache-compatible object');
   }
+  if (!instancePool || typeof instancePool.acquire !== 'function' || typeof instancePool.stats !== 'function') {
+    throw new TypeError('instancePool must be a WasmInstancePool-compatible object');
+  }
   return Object.freeze({
     moduleCache,
+    instancePool,
     async execute({activation, code}, context) {
       assertWasmFunctionArtifact(code);
       if (code.metadata.abi !== WASM_VALUE_HANDLE_ABI_V0) throw new TypeError(`unsupported WASM ABI: ${code.metadata.abi}`);
@@ -270,34 +334,65 @@ function createWasmFunctionV1Executor({moduleCache = new WasmModuleCache()} = {}
       const argumentHandles = activation.arguments.map((value) => arena.put(value));
       const captureHandles = [];
       for (const bindingId of captureIds) captureHandles.push(arena.put(await context.lookupBinding(bindingId)));
-
       const pending = {effect: null};
-      const instance = await WebAssembly.instantiate(
-        compiledModule,
-        createHostImports(arena, literals, sendSites, closureSites, descriptor, closurePrototypes, pending),
-      );
-      const entry = instance.exports[code.metadata.entry];
-      if (typeof entry !== 'function') throw new TypeError(`WASM function entry not found: ${code.metadata.entry}`);
-      const resultHandle = entry(receiverHandle, ...argumentHandles, ...captureHandles);
 
-      if (pending.effect !== null) {
-        if (resultHandle !== 0) throw new TypeError('WASM tail host effect must return reserved handle 0');
-        if (pending.effect.kind === 'send') {
-          if (typeof context.sendMessage !== 'function') throw new TypeError('WASM message send requires a message runtime');
-          return canonicalizeValue(await context.sendMessage(pending.effect.request));
+      const lease = await acquireInstance({
+        moduleArtifact,
+        compiledModule,
+        instancePool,
+        literals,
+        sendSites,
+        closureSites,
+      });
+      let bound = false;
+      let released = false;
+      let result;
+      let tailEffect = null;
+      try {
+        lease.slot.host.bind({arena, descriptor, closurePrototypes, pending});
+        bound = true;
+        const entry = lease.slot.instance.exports[code.metadata.entry];
+        if (typeof entry !== 'function') throw new TypeError(`WASM function entry not found: ${code.metadata.entry}`);
+        const resultHandle = entry(receiverHandle, ...argumentHandles, ...captureHandles);
+
+        if (pending.effect !== null) {
+          if (resultHandle !== 0) throw new TypeError('WASM tail host effect must return reserved handle 0');
+          tailEffect = pending.effect;
+        } else {
+          result = arena.get(resultHandle, 'WASM result handle');
         }
-        if (pending.effect.kind === 'closure') {
-          if (typeof context.createClosure !== 'function') throw new TypeError('WASM closure creation requires a closure runtime');
-          return canonicalizeValue(await context.createClosure(pending.effect.request));
+
+        lease.slot.host.unbind();
+        bound = false;
+        lease.release();
+        released = true;
+      } catch (error) {
+        if (bound) {
+          try { lease.slot.host.unbind(); } catch {}
+          bound = false;
         }
-        throw new TypeError(`unknown WASM host effect kind: ${pending.effect.kind}`);
+        if (!released) {
+          try { lease.release({retire: true}); } catch {}
+          released = true;
+        }
+        throw error;
       }
 
-      return arena.get(resultHandle, 'WASM result handle');
+      if (tailEffect !== null) {
+        if (tailEffect.kind === 'send') {
+          if (typeof context.sendMessage !== 'function') throw new TypeError('WASM message send requires a message runtime');
+          return canonicalizeValue(await context.sendMessage(tailEffect.request));
+        }
+        if (tailEffect.kind === 'closure') {
+          if (typeof context.createClosure !== 'function') throw new TypeError('WASM closure creation requires a closure runtime');
+          return canonicalizeValue(await context.createClosure(tailEffect.request));
+        }
+        throw new TypeError(`unknown WASM host effect kind: ${tailEffect.kind}`);
+      }
+
+      return canonicalizeValue(result);
     },
   });
 }
 
-const wasmFunctionV1Executor = createWasmFunctionV1Executor();
-
-export {createWasmFunctionV1Executor, wasmFunctionV1Executor};
+export {createWasmFunctionV1Executor};
