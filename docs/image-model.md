@@ -10,7 +10,7 @@ The substrate currently has these durable graph record kinds:
 
 - immutable `shape` records describing physical slot layout
 - `object` records containing a shape ref, optional behavior ref and `slot-id -> Value` state
-- immutable `code-artifact` records for source, semantic, executable and imported artifact representations
+- immutable `code-artifact` records for source, semantic, executable, imported and interface representations
 - versioned `lexical-environment` records
 - immutable `block` records pairing code with an optional lexical environment
 
@@ -18,7 +18,7 @@ They share one image object-ID namespace. Generic objects do not contain Smallta
 
 ## CodeArtifact dependencies and provenance
 
-`CodeArtifact` is currently the bootstrap generic artifact carrier. It now has two different explicit relationship kinds:
+`CodeArtifact` is currently the bootstrap generic artifact carrier. It has two different explicit relationship kinds:
 
 ```text
 dependencies:
@@ -54,6 +54,23 @@ Dependency targets are explicit unpinned refs to existing CodeArtifacts. Metadat
 
 Older CodeArtifacts with no stored `dependencies` field are treated as having an empty dependency list.
 
+## Callable interfaces are graph objects too
+
+Executable bytes and callable identity are separate artifacts when they need to be.
+
+The first foreign-WASM shape is:
+
+```text
+Block
+  code -> wasm-callable-interface/v1
+             dependency(role=implementation)
+                -> wasm-binary/v1
+```
+
+The Block points to the interface because the interface is what the runtime knows how to invoke. The implementation edge remains explicit graph state rather than an opaque identifier in metadata.
+
+One implementation may therefore support several interface artifacts/exports without duplicating the binary. Interface identity still grants no authority; capability policy is separate.
+
 ## Shape evolution
 
 A structural change creates a new shape identity. Stable slot IDs can survive renames and compatible evolution. Migrating an object to another shape changes its state/version, not its object identity.
@@ -74,4 +91,4 @@ Git/files remain useful interoperability views rather than the canonical model.
 
 ## Language boundary
 
-The image layer knows values, refs, shapes, identity, artifact relationships and history. It does not define classes, Lisp packages, `nil`, method syntax, closure calling convention, package-manager semantics or message lookup. Language personalities and toolchain providers own those semantics.
+The image layer knows values, refs, shapes, identity, artifact relationships and history. It does not define classes, Lisp packages, `nil`, method syntax, closure calling convention, package-manager semantics or message lookup. Language personalities, interface adapters and toolchain providers own those semantics.
