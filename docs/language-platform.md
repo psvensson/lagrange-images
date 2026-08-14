@@ -4,7 +4,7 @@
 
 The platform should not be one VM per language. It provides a small shared substrate for durable values, refs, objects, code artifacts, compilation, execution, debugging and capabilities. A language personality maps its own semantics onto that substrate.
 
-Implemented now includes the language-neutral graph/Block model, compiler and executor registries, `lagrange-code/v0`, `neutral-expression/v0`, the first Symmetric Smalltalk seed, and a real WASM backend with a Value-handle ABI and tail message effects.
+Implemented now includes the language-neutral graph/Block model, compiler and executor registries, `lagrange-code/v0`, `neutral-expression/v0`, the first Symmetric Smalltalk seed, and a real WASM backend with Value-handle ABI, tail message effects and tail closure materialization.
 
 ## Symmetric Smalltalk first
 
@@ -43,8 +43,9 @@ The current directly executable semantic operations are:
 - canonical Value equality
 - `if`
 - tail-position language message sends
+- tail-position nested Block materialization
 
-Nested closure creation remains unsupported in WASM. Non-tail asynchronous sends are also rejected explicitly rather than falling back or pretending the asynchronous image/runtime path is synchronous.
+General non-tail asynchronous effects are rejected explicitly rather than falling back or pretending the asynchronous image/runtime path is synchronous.
 
 ### Value-handle ABI v0
 
@@ -63,41 +64,71 @@ This lets arbitrary-precision integers, object refs, text and other tagged Value
 
 The base `lagrange` imports are `literal`, `integer_add`, `equals`, and `is_true`.
 
-### Tail message effects
+### Tail host effects
 
-Image-resident language dispatch is asynchronous, while ordinary WASM imports are synchronous. The bootstrap ABI handles that mismatch explicitly with tail effects.
+Image-resident dispatch and closure materialization are asynchronous, while ordinary WASM imports are synchronous. The bootstrap ABI handles that mismatch explicitly by yielding one final host effect after pure WASM execution.
 
-Each semantic tail send becomes a derived send-site descriptor plus a typed import:
+A tail send becomes a derived send-site descriptor plus a typed import:
 
 ```text
-sendSites[N]
-  languageId
-  message : non-ref Value
-  arity
-
 lagrange.send_site_N(receiverHandle, argumentHandles...) -> 0
 ```
 
-The synchronous import validates the handles and records one pending send request. It does **not** perform image lookup. The WASM entry then returns reserved handle `0`; outside WASM the executor awaits the normal `InvocationService`/`ActivationExecutor` path and returns the resulting canonical Value.
+A tail nested Block becomes a derived closure-site descriptor plus a typed import:
+
+```text
+lagrange.make_block_site_N(captureHandles...) -> 0
+```
+
+The synchronous imports validate handles and record one pending request; they do not perform image lookup or writes. The WASM entry returns reserved handle `0`, then the executor resumes asynchronously outside WASM.
 
 ```text
 WASM
-  -> send_site_N
+  -> one tail host effect
   -> return 0
-  -> executor awaits normal language dispatch
-  -> resolved Block may be interpreted or WASM
-  -> Value
+  -> executor awaits normal runtime operation
+       |-> InvocationService/ActivationExecutor for send
+       `-> ActivationExecutor.createClosure for Block creation
+  -> canonical Value / Block ObjectRef
 ```
 
-Tail position propagates through `if`, so pure WASM computation may choose which final send occurs. Sends used as operands, send receivers/arguments, conditions, or other non-tail expressions are rejected by the compiler for now.
+Tail position propagates through `if`, so pure WASM computation may choose a final send, a final closure materialization, or a pure return. Effects needed as intermediate expression results remain rejected for now.
 
-A WASM caller may resolve to another WASM-backed Block because message lookup remains language-owned and execution-representation-neutral. There is no separate WASM method-lookup mechanism.
+### WASM closure sites and graph edges
 
-This is intentionally a first asynchronous-effect contract. General non-tail sends will need an explicit continuation/trampoline or other async WASM design later.
+A closure site stores only semantic data in module metadata:
 
-The interpreter remains the reference implementation. Differential tests require interpreted and WASM callers to produce identical canonical Values.
+```text
+closureSites[N]
+  blockId
+  captures: [{id, name}, ...]
+```
 
-See ADR 0007, ADR 0008 and ADR 0009.
+Prototype Block refs are never hidden there. `compileWasmFunctionArtifact()` requires an explicit prototype for every closure site and appends those refs to the `wasm-function/v1` CodeArtifact's `derivedFrom` edges. Function metadata stores only the corresponding `derivedFromIndex`.
+
+At execution, capture Values cross as handles. Once WASM returns, the ordinary closure runtime creates the same `LexicalEnvironment + Block` representation used by the interpreter.
+
+The prototype may itself be interpreter-backed or WASM-backed. A materialized closure therefore has no WASM-specific invocation semantics: later `value*` sends go through the ordinary Smalltalk dispatcher and common ActivationExecutor.
+
+For example, this can now execute with a WASM-backed outer Block:
+
+```smalltalk
+[ :x | [ :y | x ] ]
+```
+
+The returned closure may then receive `value:` normally.
+
+This remains unsupported inside one WASM activation:
+
+```smalltalk
+[ :x | [ :y | x ] value: 1 ]
+```
+
+because closure materialization is needed before the final send. Lifting that restriction requires an explicit continuation/trampoline or other async-WASM contract.
+
+The interpreter remains the reference implementation. Differential/conformance tests require the same capture IDs, Block semantics and canonical results across execution representations.
+
+See ADR 0007, ADR 0008, ADR 0009 and ADR 0010.
 
 ## Blocks and closures
 
@@ -109,15 +140,15 @@ Block
   environment -> LexicalEnvironment | null
 ```
 
-The bootstrap interpreter currently materializes nested closures as Block + LexicalEnvironment records. This is not a required execution layout: a future WASM backend may inline, flatten, stack-allocate or eliminate nonescaping closures while preserving the same semantic capture identities.
+Both the interpreter and the bootstrap WASM closure effect currently materialize nested closures as Block + LexicalEnvironment records. This is not a required optimized layout: a future backend may inline, flatten, stack-allocate or eliminate nonescaping closures while preserving the same semantic capture identities.
 
 ## Invocation and dispatch
 
 Direct Block calls and language message sends converge on transient activation requests. Language dispatch resolves a message to a Block; execution then depends on the Block's CodeArtifact representation.
 
-This separation allows a Smalltalk send from interpreted code or WASM to resolve to either `neutral-expression/v0` or `wasm-function/v1` without changing method lookup semantics.
+This separation allows a Smalltalk send from interpreted code or WASM to resolve to either `neutral-expression/v0` or `wasm-function/v1` without changing method lookup semantics. The same is true for nested Block prototypes.
 
-References still identify objects rather than granting authority. WASM Value handles likewise do not grant capabilities. Tail-send imports currently request language dispatch only; capability-aware privileged or distributed host operations remain later boundaries.
+References still identify objects rather than granting authority. WASM Value handles likewise do not grant capabilities. Host effects currently request only explicitly compiled language sends or closure materializations; capability-aware privileged or distributed operations remain later boundaries.
 
 ## Compatibility kernels
 
@@ -127,13 +158,14 @@ Common Lisp can reuse durable data/code identity, lexical environments, conditio
 
 ## Next open questions
 
-- general non-tail asynchronous WASM sends/continuations
-- nested closure creation/optimization in the WASM backend
+- general non-tail asynchronous WASM effects/continuations
+- transient/non-materialized optimized closures and possible WASM-GC use
+- automatic WASM installation of complete nested Block trees
 - Object/Behavior/Class/Metaclass bootstrap and inheritance
 - assignment, temporaries, sequences and mutable lexical cells
 - immediate-value Smalltalk objects/primitives
 - capability-aware host imports and distributed/local send policy
 - module grouping and compilation/cache policy
-- optimized/unboxed ABI variants and possible WASM-GC use
+- optimized/unboxed ABI variants
 - distributed placement of WASM execution through Lagrange
 - debugger activation durability and conditions/exceptions

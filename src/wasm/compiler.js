@@ -1,6 +1,6 @@
 import {LAGRANGE_CODE_V0, parseLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
 import {WASM_FUNCTION_V1, WASM_MODULE_V1} from '../code/wasm-artifacts.js';
-import {bytesValue, canonicalizeValue, isReference, objectRef} from '../value/index.js';
+import {bytesValue, canonicalizeValue, isObjectRef, isReference, objectRef} from '../value/index.js';
 import {
   WASM_ENTRY_V0,
   WASM_IMPORT_MODULE,
@@ -69,6 +69,16 @@ function requiredText(value, label) {
   return value;
 }
 
+function exactKeys(value, expected, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
+    throw new TypeError(`${label} must contain exactly ${wanted.join(', ')}`);
+  }
+  return value;
+}
+
 function collectLiteral(literals, value) {
   const normalized = canonicalizeValue(value);
   if (isReference(normalized)) throw new TypeError('WASM backend v0 does not embed reference literals; use arguments/captures instead');
@@ -81,21 +91,81 @@ function collectLiteral(literals, value) {
   return index;
 }
 
-function collectSendSite(sendSites, expression) {
+function collectSendSite(state, expression) {
   const message = canonicalizeValue(expression.message);
   if (isReference(message)) throw new TypeError('WASM backend v0 does not place reference messages in module metadata');
-  const site = Object.freeze({
+  const kindIndex = state.sendSites.length;
+  state.sendSites.push(Object.freeze({
     languageId: requiredText(expression.languageId, 'send languageId'),
     message,
     arity: expression.arguments.length,
-  });
-  const index = sendSites.length;
-  sendSites.push(site);
-  return index;
+  }));
+  const effectIndex = state.effects.length;
+  state.effects.push(Object.freeze({kind: 'send', kindIndex, arity: 1 + expression.arguments.length}));
+  state.effectIndex.set(expression, effectIndex);
 }
 
-function compileExpression(expression, context, {tail = false} = {}) {
+function normalizeClosureCapture(capture, index) {
+  exactKeys(capture, ['id', 'name', 'value'], `WASM closure capture ${index}`);
+  return Object.freeze({
+    id: requiredText(capture.id, `WASM closure capture ${index} id`),
+    name: requiredText(capture.name, `WASM closure capture ${index} name`),
+  });
+}
+
+function collectClosureSite(state, expression) {
+  if (!Array.isArray(expression.captures)) throw new TypeError('WASM nested Block captures must be an array');
+  const captures = Object.freeze(expression.captures.map(normalizeClosureCapture));
+  const kindIndex = state.closureSites.length;
+  state.closureSites.push(Object.freeze({
+    blockId: requiredText(expression.blockId, 'WASM semantic block id'),
+    captures,
+  }));
+  const effectIndex = state.effects.length;
+  state.effects.push(Object.freeze({kind: 'closure', kindIndex, arity: captures.length}));
+  state.effectIndex.set(expression, effectIndex);
+}
+
+function analyzeEffects(expression, state, {tail = false} = {}) {
   if (!expression || typeof expression !== 'object' || Array.isArray(expression)) throw new TypeError('WASM compiler expression must be an object');
+  switch (expression.op) {
+    case 'literal':
+    case 'argument':
+    case 'receiver':
+    case 'binding':
+      return;
+    case 'integer-add':
+    case 'equals':
+      analyzeEffects(expression.left, state);
+      analyzeEffects(expression.right, state);
+      return;
+    case 'if':
+      analyzeEffects(expression.condition, state);
+      analyzeEffects(expression.then, state, {tail});
+      analyzeEffects(expression.else, state, {tail});
+      return;
+    case 'send':
+      if (!tail) throw new TypeError('WASM backend v0 supports message sends only in tail position');
+      if (!Array.isArray(expression.arguments)) throw new TypeError('WASM send arguments must be an array');
+      analyzeEffects(expression.receiver, state);
+      for (const argument of expression.arguments) analyzeEffects(argument, state);
+      collectSendSite(state, expression);
+      return;
+    case 'block':
+      if (!tail) throw new TypeError('WASM backend v0 supports nested Block creation only in tail position');
+      if (!Array.isArray(expression.captures)) throw new TypeError('WASM nested Block captures must be an array');
+      expression.captures.forEach((capture, index) => {
+        normalizeClosureCapture(capture, index);
+        analyzeEffects(capture.value, state);
+      });
+      collectClosureSite(state, expression);
+      return;
+    default:
+      throw new TypeError(`WASM backend v0 does not support semantic op: ${expression.op}`);
+  }
+}
+
+function compileExpression(expression, context) {
   switch (expression.op) {
     case 'literal': {
       const index = collectLiteral(context.literals, expression.value);
@@ -123,23 +193,22 @@ function compileExpression(expression, context, {tail = false} = {}) {
         ...compileExpression(expression.condition, context),
         0x10, ...u32(3),
         0x04, I32,
-        ...compileExpression(expression.then, context, {tail}),
+        ...compileExpression(expression.then, context),
         0x05,
-        ...compileExpression(expression.else, context, {tail}),
+        ...compileExpression(expression.else, context),
         0x0b,
       ];
-    case 'send': {
-      if (!tail) throw new TypeError('WASM backend v0 supports message sends only in tail position');
-      if (!Array.isArray(expression.arguments)) throw new TypeError('WASM send arguments must be an array');
-      const siteIndex = collectSendSite(context.sendSites, expression);
+    case 'send':
       return [
         ...compileExpression(expression.receiver, context),
         ...expression.arguments.flatMap((argument) => compileExpression(argument, context)),
-        0x10, ...u32(BASE_IMPORT_COUNT + siteIndex),
+        0x10, ...u32(BASE_IMPORT_COUNT + context.effectIndex.get(expression)),
       ];
-    }
     case 'block':
-      throw new TypeError('WASM backend v0 does not yet support nested Block creation');
+      return [
+        ...expression.captures.flatMap((capture) => compileExpression(capture.value, context)),
+        0x10, ...u32(BASE_IMPORT_COUNT + context.effectIndex.get(expression)),
+      ];
     default:
       throw new TypeError(`WASM backend v0 does not support semantic op: ${expression.op}`);
   }
@@ -150,27 +219,35 @@ function compileWasmModule(program) {
   const captureIds = program.captures.map(({id}) => id);
   const captureIndex = new Map(captureIds.map((id, index) => [id, index]));
   const literals = {values: [], keys: new Map()};
-  const sendSites = [];
-  const bodyExpression = compileExpression(program.body, {parameterCount, captureIndex, literals, sendSites}, {tail: true});
+  const state = {sendSites: [], closureSites: [], effects: [], effectIndex: new WeakMap()};
+  analyzeEffects(program.body, state, {tail: true});
+  const context = {...state, parameterCount, captureIndex, literals};
+  const bodyExpression = compileExpression(program.body, context);
 
   const entryParameters = 1 + parameterCount + captureIds.length;
-  const sendTypes = sendSites.map(({arity}) => functionType(Array.from({length: 1 + arity}, () => I32), [I32]));
-  const entryTypeIndex = 2 + sendTypes.length;
+  const effectTypes = state.effects.map(({arity}) => functionType(Array.from({length: arity}, () => I32), [I32]));
+  const entryTypeIndex = 2 + effectTypes.length;
   const types = vector([
     functionType([I32], [I32]),
     functionType([I32, I32], [I32]),
-    ...sendTypes,
+    ...effectTypes,
     functionType(Array.from({length: entryParameters}, () => I32), [I32]),
   ]);
+  const effectImports = state.effects.map((effect, effectIndex) => {
+    const name = effect.kind === 'send'
+      ? `send_site_${effect.kindIndex}`
+      : `make_block_site_${effect.kindIndex}`;
+    return functionImport(WASM_IMPORT_MODULE, name, 2 + effectIndex);
+  });
   const imports = vector([
     functionImport(WASM_IMPORT_MODULE, 'literal', 0),
     functionImport(WASM_IMPORT_MODULE, 'integer_add', 1),
     functionImport(WASM_IMPORT_MODULE, 'equals', 1),
     functionImport(WASM_IMPORT_MODULE, 'is_true', 0),
-    ...sendSites.map((_, index) => functionImport(WASM_IMPORT_MODULE, `send_site_${index}`, 2 + index)),
+    ...effectImports,
   ]);
   const functions = vector([[...u32(entryTypeIndex)]]);
-  const exports = vector([functionExport(WASM_ENTRY_V0, BASE_IMPORT_COUNT + sendSites.length)]);
+  const exports = vector([functionExport(WASM_ENTRY_V0, BASE_IMPORT_COUNT + state.effects.length)]);
   const functionBody = [0x00, ...bodyExpression, 0x0b];
   const code = vector([[...u32(functionBody.length), ...functionBody]]);
 
@@ -185,7 +262,8 @@ function compileWasmModule(program) {
       ...section(10, code),
     ]),
     literals: Object.freeze(literals.values),
-    sendSites: Object.freeze(sendSites),
+    sendSites: Object.freeze(state.sendSites),
+    closureSites: Object.freeze(state.closureSites),
     parameterCount,
     captureIds: Object.freeze(captureIds),
   });
@@ -206,27 +284,73 @@ const lagrangeCodeV0ToWasmModuleCompiler = Object.freeze({
         captures: compiled.captureIds,
         literals: compiled.literals,
         sendSites: compiled.sendSites,
+        closureSites: compiled.closureSites,
         semanticRepresentation: LAGRANGE_CODE_V0,
       },
     });
   },
 });
 
-async function compileWasmFunctionArtifact({images, compilation, semanticRef, moduleId, functionId} = {}) {
-  if (!images || typeof images.getCodeArtifact !== 'function' || typeof images.putCodeArtifact !== 'function') throw new TypeError('images service with code artifact access is required');
+function normalizePrototypeMap(blockPrototypes) {
+  if (!blockPrototypes || typeof blockPrototypes !== 'object' || Array.isArray(blockPrototypes)) {
+    throw new TypeError('blockPrototypes must be an object keyed by semantic block id');
+  }
+  const result = new Map();
+  for (const [blockId, value] of Object.entries(blockPrototypes)) {
+    requiredText(blockId, 'block prototype id');
+    const ref = canonicalizeValue(value);
+    if (!isObjectRef(ref)) throw new TypeError(`block prototype ${blockId} must be an unpinned object ref`);
+    result.set(blockId, ref);
+  }
+  return result;
+}
+
+async function compileWasmFunctionArtifact({
+  images,
+  compilation,
+  semanticRef,
+  moduleId,
+  functionId,
+  blockPrototypes = {},
+} = {}) {
+  if (!images || typeof images.getCodeArtifact !== 'function' || typeof images.putCodeArtifact !== 'function' || typeof images.getBlock !== 'function') {
+    throw new TypeError('images service with code artifact and Block access is required');
+  }
   if (!compilation || typeof compilation.compileArtifact !== 'function') throw new TypeError('compilation service is required');
   const semantic = await images.getCodeArtifact(semanticRef.imageId, semanticRef.objectId);
   if (!semantic || semantic.representation !== LAGRANGE_CODE_V0) throw new TypeError(`semanticRef must reference ${LAGRANGE_CODE_V0}`);
   const moduleArtifact = await compilation.compileArtifact(semanticRef, {targetRepresentation: WASM_MODULE_V1, id: moduleId});
   const metadata = moduleArtifact.metadata ?? {};
+  const closureSites = Array.isArray(metadata.closureSites) ? metadata.closureSites : [];
+  const prototypes = normalizePrototypeMap(blockPrototypes);
+  const prototypeRefs = [];
+  const closurePrototypes = [];
+  for (const site of closureSites) {
+    const ref = prototypes.get(site.blockId);
+    if (!ref) throw new TypeError(`missing WASM Block prototype for semantic block: ${site.blockId}`);
+    if (!await images.getBlock(ref.imageId, ref.objectId)) {
+      throw new TypeError(`WASM Block prototype not found: ${ref.imageId}/${ref.objectId}`);
+    }
+    prototypeRefs.push(ref);
+    closurePrototypes.push(Object.freeze({blockId: site.blockId, derivedFromIndex: 2 + prototypeRefs.length - 1}));
+    prototypes.delete(site.blockId);
+  }
+  if (prototypes.size > 0) throw new TypeError(`unused WASM Block prototype: ${prototypes.keys().next().value}`);
+
   const moduleRef = objectRef(moduleArtifact.imageId, moduleArtifact.id);
   const functionArtifact = await images.putCodeArtifact(semanticRef.imageId, {
     id: functionId,
     languageId: semantic.languageId,
     representation: WASM_FUNCTION_V1,
     content: moduleRef,
-    derivedFrom: [semanticRef, moduleRef],
-    metadata: {abi: metadata.abi, entry: metadata.entry, parameters: metadata.parameters, captures: metadata.captures},
+    derivedFrom: [semanticRef, moduleRef, ...prototypeRefs],
+    metadata: {
+      abi: metadata.abi,
+      entry: metadata.entry,
+      parameters: metadata.parameters,
+      captures: metadata.captures,
+      closurePrototypes,
+    },
   });
   return Object.freeze({moduleArtifact, functionArtifact});
 }

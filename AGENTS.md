@@ -65,11 +65,14 @@ WASM handle != image identity
 - Keep `lagrange-value-handle/v0` handles invocation-local. Never persist them, use them as object IDs, or treat them as capabilities.
 - The generic WASM ABI must preserve canonical Value semantics; optimized/unboxed ABIs need explicit new contracts rather than silently narrowing Values.
 - Graph refs may cross the WASM boundary through receiver/argument/capture handles. Do not hide ref literals or ref message descriptors inside artifact metadata.
-- WASM language sends currently use explicit tail effects: `send_site_N` records one pending request, WASM returns reserved handle `0`, then the executor resumes normal asynchronous dispatch outside WASM.
-- Do not compile a non-tail asynchronous WASM send by replaying, blocking, or silently falling back. Add an explicit continuation/async ABI before broadening that contract.
-- Host send effects must still use the normal language dispatcher/ActivationExecutor. Do not create WASM-specific method lookup.
+- WASM language sends use explicit tail effects: `send_site_N` records one pending request, WASM returns reserved handle `0`, then the executor resumes normal asynchronous dispatch outside WASM.
+- WASM nested Block materialization likewise uses `make_block_site_N` as a tail effect. Closure-site metadata contains only semantic block/capture descriptors.
+- Prototype Block refs for WASM closure sites must be explicit `wasm-function/v1.derivedFrom` edges; metadata may contain only the corresponding indices, never hidden refs.
+- WASM-created closures must use the common `ActivationExecutor.createClosure` path and return ordinary Block refs. Do not create a WASM-specific closure identity or invocation path.
+- Do not compile non-tail asynchronous WASM sends or closure materialization by replaying, blocking, or silently falling back. Add an explicit continuation/async ABI before broadening that contract.
+- Host send effects must still use the normal language dispatcher/ActivationExecutor. Closure prototypes may use any registered execution representation.
 - Unsupported WASM semantic operations must fail explicitly; do not silently fall back to another executor when WASM was requested.
-- Keep interpreter/WASM differential tests for every semantic operation added to the WASM backend.
+- Keep interpreter/WASM differential or conformance tests for every semantic operation added to the WASM backend.
 
 ## Symmetric Smalltalk seed
 
