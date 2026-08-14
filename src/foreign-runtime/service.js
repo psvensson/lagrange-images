@@ -110,6 +110,39 @@ function providerContext() {
   return Object.freeze({protocol: FOREIGN_RUNTIME_PROVIDER_PROTOCOL_V0});
 }
 
+function stopRequest({providerId, providerIdentity, runtimeId}) {
+  return Object.freeze({
+    protocol: FOREIGN_RUNTIME_PROVIDER_PROTOCOL_V0,
+    providerId,
+    providerIdentity,
+    runtimeId,
+  });
+}
+
+async function cleanRejectedStart(provider, rawResult, request, error) {
+  if (!rawResult || typeof rawResult !== 'object' || Array.isArray(rawResult)
+    || !Object.hasOwn(rawResult, 'handle') || rawResult.handle === undefined) {
+    throw error;
+  }
+  try {
+    await provider.stop(
+      rawResult.handle,
+      stopRequest({
+        providerId: request.providerId,
+        providerIdentity: request.providerIdentity,
+        runtimeId: request.runtimeId,
+      }),
+      providerContext(),
+    );
+  } catch (stopError) {
+    throw new AggregateError(
+      [error, stopError],
+      'foreign runtime start result was invalid and cleanup failed',
+    );
+  }
+  throw error;
+}
+
 class ForeignRuntimeService {
   constructor({providers = new ForeignRuntimeProviderRegistry()} = {}) {
     if (!providers || typeof providers.get !== 'function') {
@@ -131,7 +164,13 @@ class ForeignRuntimeService {
       runtimeId,
       spec: normalizedSpec,
     });
-    const result = normalizeStartResult(await provider.start(request, providerContext()));
+    const rawResult = await provider.start(request, providerContext());
+    let result;
+    try {
+      result = normalizeStartResult(rawResult);
+    } catch (error) {
+      return await cleanRejectedStart(provider, rawResult, request, error);
+    }
     const state = {
       runtimeId,
       providerId: id,
@@ -194,14 +233,16 @@ class ForeignRuntimeService {
     state.status = 'stopping';
 
     await Promise.allSettled([...state.calls]);
-    const request = Object.freeze({
-      protocol: FOREIGN_RUNTIME_PROVIDER_PROTOCOL_V0,
-      providerId: state.providerId,
-      providerIdentity: state.provider.identity,
-      runtimeId: id,
-    });
     try {
-      await state.provider.stop(state.handle, request, providerContext());
+      await state.provider.stop(
+        state.handle,
+        stopRequest({
+          providerId: state.providerId,
+          providerIdentity: state.provider.identity,
+          runtimeId: id,
+        }),
+        providerContext(),
+      );
     } catch (error) {
       state.status = 'active';
       throw error;
