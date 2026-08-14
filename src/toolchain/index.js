@@ -1,4 +1,8 @@
 export * from './cargo-rustc-oci-provider.js';
+export {
+  CARGO_RUSTC_OCI_CACHE_CONTRACT_V0,
+  createCacheableCargoRustcOciProvider as createCargoRustcOciProvider,
+} from './cacheable-cargo-rustc-oci-provider.js';
 export * from './derivation-cache.js';
 export * from './oci-cli-runner.js';
 export * from './provider-registry.js';
