@@ -41,7 +41,10 @@ test('real OpenSmalltalkVM loads and executes an existing Cuis package through F
       spec: {packages: [{path: jsonPackagePath, identity: CUIS_JSON_IDENTITY}]},
     });
     assert.equal(instance.providerIdentity, provider.identity);
-    assert.deepEqual(instance.metadata.packages, [{identity: CUIS_JSON_IDENTITY}]);
+    assert.deepEqual(instance.metadata.packages, [{
+      identity: CUIS_JSON_IDENTITY,
+      fileName: 'JSON.pck.st',
+    }]);
 
     const sum = await runtime.foreignRuntimes.call({
       runtimeId: instance.runtimeId,
