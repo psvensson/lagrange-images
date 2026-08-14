@@ -65,7 +65,7 @@ class FakeCuisRunner {
   }
 }
 
-test('OpenSmalltalk Cuis provider materializes explicit packages and keeps paths out of stable identity', async () => {
+test('OpenSmalltalk Cuis provider preserves safe package basenames but hides host paths', async () => {
   const root = await mkdtemp(join(tmpdir(), 'lagrange-cuis-provider-test-'));
   const packagePath = join(root, 'JSON.pck.st');
   await writeFile(packagePath, "'fake package fixture'!", 'utf8');
@@ -89,19 +89,19 @@ test('OpenSmalltalk Cuis provider materializes explicit packages and keeps paths
     }]}});
     assert.deepEqual(started.metadata.packages, [{
       identity: 'cuis-package/JSON/gitblob:47fab65d0d9017d706aa07d39ab0451619488ccd',
+      fileName: 'JSON.pck.st',
     }]);
     assert.equal(JSON.stringify(started.metadata).includes(packagePath), false);
 
     const scriptPath = runner.starts[0].args[4];
     const script = await readFile(scriptPath, 'utf8');
-    assert.match(script, /CodePackageFile installPackage: DirectoryEntry currentDirectory \/\/ 'package-0\.pck\.st'/);
+    assert.match(script, /CodePackageFile installPackage: DirectoryEntry currentDirectory \/\/ 'JSON\.pck\.st'/);
     assert.match(script, /jsonPackageProof/);
     assert.match(script, /Smalltalk at: #Json/);
-    assert.match(script, /Json|jsonClass/);
     assert.match(script, /char := input next/);
     assert.equal(script.includes('input upTo:'), false);
     assert.equal(script.includes('perform:'), false);
-    assert.equal(await readFile(join(runner.starts[0].cwd, 'package-0.pck.st'), 'utf8'), "'fake package fixture'!");
+    assert.equal(await readFile(join(runner.starts[0].cwd, 'JSON.pck.st'), 'utf8'), "'fake package fixture'!");
 
     assert.deepEqual(await provider.call(started.handle, {
       interface: {service: 'proof', operation: 'add'},
@@ -127,8 +127,11 @@ test('OpenSmalltalk Cuis package specs and interfaces are explicit', async () =>
   });
   try {
     await assert.rejects(provider.start({spec: {packages: 'JSON'}}), /packages must be an array/);
+    await assert.rejects(provider.start({spec: {packages: [{
+      path: '/tmp/not-a-package.txt', identity: 'bad',
+    }]}}), /safe \.pck\.st basename/);
     await assert.rejects(provider.start({spec: {packages: [
-      {path: '/a', identity: 'same'}, {path: '/b', identity: 'same'},
+      {path: '/tmp/A.pck.st', identity: 'same'}, {path: '/tmp/B.pck.st', identity: 'same'},
     ]}}), /duplicate OpenSmalltalk Cuis package identity/);
 
     const started = await provider.start({spec: {}});
