@@ -15,7 +15,7 @@ function normalizeObjectRef(value, label) {
 
 function assertServices(images, compilation) {
   if (!images || typeof images !== 'object') throw new TypeError('images service is required');
-  for (const method of ['getCodeArtifact', 'putCodeArtifact', 'putBlock']) {
+  for (const method of ['getCodeArtifact', 'putCodeArtifact', 'getBlock', 'putBlock']) {
     if (typeof images[method] !== 'function') throw new TypeError(`images service must implement ${method}`);
   }
   if (!compilation || typeof compilation.compileArtifact !== 'function') {
@@ -102,11 +102,12 @@ async function installNode({
 
   for (const nested of directNestedBlocks(program.body)) {
     const childIds = nodeIds(rootId, nested.blockId);
+    const childProgram = normalizeLagrangeCodeProgram(nested.program);
     const childSemanticArtifact = await images.putCodeArtifact(semanticRef.imageId, {
       id: childIds.semanticId,
       languageId: semanticArtifact.languageId,
       representation: LAGRANGE_CODE_V0,
-      content: textValue(JSON.stringify(normalizeLagrangeCodeProgram(nested.program))),
+      content: textValue(JSON.stringify(childProgram)),
       derivedFrom: [semanticRef],
       metadata: {
         semanticBlockId: nested.blockId,
@@ -119,7 +120,7 @@ async function installNode({
       compilation,
       semanticRef: childSemanticRef,
       semanticArtifact: childSemanticArtifact,
-      program: normalizeLagrangeCodeProgram(nested.program),
+      program: childProgram,
       rootId,
       semanticBlockId: nested.blockId,
       nodes,
