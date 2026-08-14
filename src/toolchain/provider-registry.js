@@ -29,6 +29,9 @@ function assertToolchainProvider(provider) {
   if (typeof provider.run !== 'function') {
     throw new TypeError('toolchain provider must implement run(request, context)');
   }
+  if (provider.cacheKey !== undefined && typeof provider.cacheKey !== 'function') {
+    throw new TypeError('toolchain provider cacheKey must be a function when present');
+  }
   return provider;
 }
 

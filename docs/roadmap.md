@@ -101,8 +101,12 @@ Artifact/toolchain generalization:
 - [x] explicit Cargo vendor config/file artifacts for closed third-party directory-source dependencies
 - [x] validate vendored package manifests/checksum file sets and SHA-256 contents before OCI execution
 - [x] support binary as well as text vendored package files
+- [x] provider-opt-in external-toolchain derivation keys cover provider selection/identity, target/options and complete explicit input snapshots
+- [x] complete multi-output toolchain result sets can be reused without rerunning the provider; partial sets are ignored
+- [x] Cargo/rustc OCI provider opts into result reuse with its full digest-pinned image reference
 - [ ] standard `.crate`/registry-package importer that produces explicit vendor artifacts
-- [ ] external-toolchain derivation keys include compiler/toolchain identity plus dependency/manifest/lock/vendor fingerprints
+- [ ] cross-install/content-addressed toolchain reuse with installation-specific provenance wrappers
+- [ ] indexed durable lookup by toolchain derivation key/result set
 - [ ] native-process or equivalent trusted external-toolchain provider where useful
 - [ ] remote build provider if a real deployment needs it
 - [ ] callable/interface artifact contract for imported executable libraries/components
@@ -123,7 +127,7 @@ Execution/compiler follow-ups:
 - [ ] exception/condition substrate
 - [ ] capability-aware host/WASM/foreign-call boundary
 
-Success: source is one artifact representation rather than the platform boundary; the explicit artifact graph can drive a digest-pinned Cargo/rustc OCI build with a versioned vendored package dependency, without network fetches or Rust/Cargo semantics in `ToolchainService`. The next substrate questions are reproducible toolchain-result reuse and callable foreign-WASM interfaces.
+Success: the explicit artifact graph can drive a digest-pinned Cargo/rustc OCI build with a versioned vendored package dependency and then reuse the complete immutable result for the same graph without rematerializing or rerunning the toolchain. The next major boundary is callable foreign-WASM/component interfaces.
 
 ## 5. Symmetric Smalltalk seed
 
@@ -185,9 +189,10 @@ Rust — external-toolchain path:
 - [x] explicit vendored Cargo config/file artifact conventions for third-party dependencies
 - [x] materialize and validate a versioned third-party package directory with `Cargo.toml`, source/binary files and `.cargo-checksum.json`
 - [x] exercise an application manifest/lock/source graph that depends on the vendored package through the normal provider path
+- [x] external-toolchain cache key includes pinned image, target/options and full explicit dependency snapshots/fingerprints
+- [x] repeated compatible Cargo build reuses the existing raw WASM without invoking the OCI runner
 - [ ] integration environment that runs the vendored dependency fixture through an actual pinned Cargo/rustc OCI image
 - [ ] import crates.io `.crate` packages into explicit vendor artifacts without build-time network access
-- [ ] external-toolchain cache key includes pinned image, target/options and full explicit dependency fingerprints
 - [ ] callable/interface adapter for suitable Rust-produced `wasm-binary/v1`
 - [ ] Lagrange Rust SDK/crate for explicit host/call interfaces
 - [ ] prove reuse of source crates plus at least one portable precompiled WASM/component or stable-ABI dependency
@@ -232,4 +237,4 @@ Success: executable placement can choose image-native/WASM or explicit foreign r
 - [ ] replaceable shell/window-manager policy
 - [ ] inspectors, browsers and debugger as image-resident tools
 
-See ADR 0016 for the broader artifact/toolchain/foreign-runtime direction, ADR 0017 for the generic dependency/provider substrate, ADR 0018 for the first OCI-backed Cargo/rustc provider, and ADR 0019 for explicit vendored Cargo dependencies.
+See ADR 0016 for the broader artifact/toolchain/foreign-runtime direction, ADR 0017 for the generic dependency/provider substrate, ADR 0018 for the first OCI-backed Cargo/rustc provider, ADR 0019 for explicit vendored Cargo dependencies, and ADR 0020 for deterministic external-toolchain result reuse.

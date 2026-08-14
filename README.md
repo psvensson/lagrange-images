@@ -17,10 +17,12 @@ The programming model is also **not source-code-only**: source, bytecode/package
 - generic `ToolchainProviderRegistry` / `ToolchainService`
 - frozen transitive artifact-graph requests for toolchain providers
 - multi-output toolchain results persisted with automatic input provenance and transient diagnostics
+- provider-opt-in deterministic external-toolchain derivation keys and complete result-set reuse
 - digest-pinned Docker/Podman-style OCI build runner
 - Cargo/rustc OCI provider using explicit manifest/lock/source artifacts
 - explicit Cargo vendor config/file artifacts for third-party directory-source dependencies
 - pre-OCI validation of vendored package `Cargo.toml` / `.cargo-checksum.json` file sets and SHA-256 checksums
+- Cargo/rustc result reuse without rematerializing/restarting OCI for the same explicit graph
 - raw Cargo-produced WASM import as `wasm-binary/v1`
 - transient message dispatch and activation requests
 - single-artifact and grouped compiler registries/services
@@ -42,7 +44,7 @@ The programming model is also **not source-code-only**: source, bytecode/package
 - reference walking, optimistic versions, history and snapshots
 - in-memory mock backend plus optional `lagrange-server` probing
 
-Planned, not implemented yet, includes external-toolchain derivation caching, standard `.crate`/git/private-registry dependency importers, callable interfaces for foreign/raw WASM, Java/JAR adapters, WASM Component interfaces and explicit OCI foreign-runtime adapters.
+Planned, not implemented yet, includes standard `.crate`/git/private-registry dependency importers, cross-install/content-addressed toolchain reuse with truthful installation provenance, callable interfaces for foreign/raw WASM, Java/JAR adapters, WASM Component interfaces and explicit OCI foreign-runtime adapters.
 
 Core invariants:
 
@@ -55,6 +57,8 @@ dependency != provenance
 semantic code != executable artifact
 toolchain selection != toolchain identity
 toolchain provider != language semantics
+provider cache opt-in != inferred determinism
+cache hit != replayed diagnostics
 build OCI != foreign-runtime OCI
 raw foreign WASM != Lagrange WASM ABI
 WASM handle != image identity
@@ -93,7 +97,7 @@ The executable forms are derived state. Runtime closures still materialize as or
 
 ## Artifact graph and toolchains
 
-`CodeArtifact` is currently the bootstrap generic artifact carrier. It now has explicit dependency edges:
+`CodeArtifact` is currently the bootstrap generic artifact carrier. It has explicit dependency edges:
 
 ```js
 {
@@ -120,6 +124,10 @@ const runtime = await createRuntime({
   backend: {mode: 'mock'},
   toolchainProviders: [['example/default', {
     identity: 'example-toolchain/v1',
+    cacheKey() {
+      // Presence of cacheKey opts this provider into deterministic result reuse.
+      return {contract: 'example-cache/v1'};
+    },
     async run(request) {
       // request.roots / request.artifacts are frozen artifact snapshots.
       return {
@@ -140,6 +148,7 @@ const result = await runtime.toolchains.run({
   roots: [objectRef(imageId, sourceId)],
   target: {representation: 'example/executable-v1'},
   options: {optimize: true},
+  reuse: true,
 });
 ```
 
@@ -155,6 +164,47 @@ provider.identity   example-toolchain/v1
 ```
 
 The first protocol is `lagrange-toolchain-provider/v0`.
+
+### Deterministic external-toolchain result reuse
+
+External toolchain reuse is explicit rather than inferred. A provider opts in by implementing:
+
+```js
+provider.cacheKey(request, context)
+```
+
+The generic derivation key already covers:
+
+```text
+provider selection ID + stable identity + protocol
+ordered roots
+complete resolved artifact snapshots
+  identity
+  representation
+  content
+  dependencies
+  metadata
+target
+options
+provider-specific cache material
+```
+
+Backend versions, timestamps and old `derivedFrom` history are not build inputs.
+
+For cacheable multi-output calls, each persisted output is stamped with a derivation key, result-set ID, output name/index and total count. Cache lookup only reuses a complete set with the same exact current input provenance; a partial set left by a failed multi-output persistence is ignored.
+
+`ToolchainService.run()` returns:
+
+```text
+reused: boolean
+derivationKey: string | null
+```
+
+A cache hit does not invoke the provider and returns the existing immutable output artifacts. Transient diagnostics are not replayed, so `diagnostics` is `[]` on a hit.
+
+Requested output IDs remain meaningful. A cached result is reused only when explicitly requested IDs match it. Different output IDs or `reuse: false` request another installation and run the provider again; that new deterministic set can itself be reused later.
+
+The v0 key deliberately includes artifact identities as well as contents. That makes reuse exact to the same immutable input graph, so cached output `derivedFrom` provenance stays truthful. Reuse across independently imported equivalent graphs is later work and needs an installation/provenance wrapper rather than silently losing the current graph relationship.
 
 ### OCI Cargo/rustc provider
 
@@ -172,6 +222,8 @@ const runtime = await createRuntime({
   toolchainProviders: [[CARGO_RUSTC_OCI_PROVIDER_ID, cargoProvider]],
 });
 ```
+
+The public Cargo factory opts into the generic result cache. Its extra provider cache material includes the full digest-pinned OCI image reference; target/options and every manifest/source/lock/config/vendor snapshot are already covered by the generic key.
 
 The Cargo manifest is the root artifact. A self-contained build needs exactly one lock artifact and one or more Rust source artifacts:
 
@@ -199,9 +251,11 @@ const result = await runtime.toolchains.run({
 
 The provider materializes a private temporary Cargo workspace, runs Cargo with `--frozen` and the OCI container network disabled, imports the expected `.wasm`, validates its WASM header, and deletes the workspace afterward. The pinned image must already contain Cargo/rustc and the requested target.
 
+On a compatible second call for the same graph/target/options, the result cache can return the existing raw WASM without rematerializing the workspace or invoking Docker/Podman/Cargo again.
+
 ### Explicit vendored Cargo dependencies
 
-The same provider now supports a Cargo directory source without allowing network/cache discovery. A manifest may additionally depend on:
+The same provider supports a Cargo directory source without allowing network/cache discovery. A manifest may additionally depend on:
 
 ```text
 rust/cargo-config-v1
@@ -300,7 +354,7 @@ image callable/interface -> adapter -> live JVM/native/Python/etc. container
 
 These are deliberately separate. Build containers are reproducible toolchain machinery and disappear after the build; foreign-runtime containers remain part of execution and have a stronger compatibility boundary. Objects in a JVM or other foreign heap do not automatically become durable image objects.
 
-See [ADR 0016](docs/decisions/0016-artifacts-external-toolchains-and-foreign-runtimes.md), [ADR 0017](docs/decisions/0017-artifact-dependencies-and-toolchain-providers.md), [ADR 0018](docs/decisions/0018-oci-cargo-rustc-provider.md), [ADR 0019](docs/decisions/0019-explicit-vendored-cargo-dependencies.md) and the [language platform](docs/language-platform.md).
+See [ADR 0016](docs/decisions/0016-artifacts-external-toolchains-and-foreign-runtimes.md), [ADR 0017](docs/decisions/0017-artifact-dependencies-and-toolchain-providers.md), [ADR 0018](docs/decisions/0018-oci-cargo-rustc-provider.md), [ADR 0019](docs/decisions/0019-explicit-vendored-cargo-dependencies.md), [ADR 0020](docs/decisions/0020-toolchain-result-reuse.md) and the [language platform](docs/language-platform.md).
 
 ## WASM backend
 
@@ -449,19 +503,20 @@ The generic compilation layer has separate registries for single-artifact and gr
 
 The substrate does not assume that a group means a Smalltalk Block tree. Java may group classes/packages, Rust codegen units/crates, Lisp compilation units, etc. A logical group may map to one physical module or several according to compiler/toolchain policy.
 
-Compiler-derived artifact reuse is implemented through stable compiler identity + deterministic cache keys. `ToolchainService` does **not** yet cache external-toolchain results; that later contract must include toolchain identity plus target/options and dependency/manifest/lock/vendor fingerprints, and OCI-backed providers must include their pinned build-image identity/digest.
+Compiler-derived artifacts and external-toolchain results both use explicit provider/compiler opt-in for deterministic reuse. Toolchain result reuse is exact to the same explicit input identities in v0; cross-install content-addressed reuse remains separate provenance work.
 
-There are now three implemented WASM reuse layers:
+There are now four implemented reuse layers around execution/toolchains:
 
 ```text
-durable derivation reuse: semantic group -> shared wasm-module/v1 CodeArtifact
-runtime compile reuse:     wasm-module/v1 -> shared compiled WebAssembly.Module
-runtime instance reuse:    stateless module -> rebound pooled WebAssembly.Instance
+durable compiler reuse:   semantic group -> shared wasm-module/v1 CodeArtifact
+external toolchain reuse: explicit artifact graph -> existing complete toolchain output set
+runtime compile reuse:    wasm-module/v1 -> shared compiled WebAssembly.Module
+runtime instance reuse:   stateless module -> rebound pooled WebAssembly.Instance
 ```
 
 None merges language/image identity or invocation-local Value/capability state.
 
-See ADR 0012 through ADR 0019.
+See ADR 0012 through ADR 0020.
 
 ## Values and objects
 
@@ -517,3 +572,4 @@ Do not import `lagrange-server/src/...`; use public package seams only.
 - [ADR 0017: artifact dependencies and toolchain providers](docs/decisions/0017-artifact-dependencies-and-toolchain-providers.md)
 - [ADR 0018: first OCI-backed Cargo/rustc provider](docs/decisions/0018-oci-cargo-rustc-provider.md)
 - [ADR 0019: explicit vendored Cargo dependencies](docs/decisions/0019-explicit-vendored-cargo-dependencies.md)
+- [ADR 0020: deterministic toolchain result reuse](docs/decisions/0020-toolchain-result-reuse.md)

@@ -48,9 +48,13 @@ Languages may skip or specialize parts of the stack. Rust can reuse Cargo/`rustc
 
 **Semantic code is not executable code.** Rebuildable execution artifacts must not become the only surviving program meaning. Binary-only imported dependencies may themselves be canonical artifacts.
 
-**Toolchain selection is not toolchain identity.** A provider ID selects an implementation; `provider.identity` names the stable implementation/toolchain generation for provenance and future cache equivalence.
+**Toolchain selection is not toolchain identity.** A provider ID selects an implementation; `provider.identity` names the stable implementation/toolchain generation for provenance and cache equivalence.
 
 **Toolchain is not language semantics.** Supporting Rust does not mean implementing Rust. Supporting Java does not mean implementing a JVM/compiler.
+
+**Provider cache opt-in is not inferred determinism.** External result reuse exists only when the provider explicitly implements a cache-key contract. Equal output representations/names are not enough.
+
+**Exact input provenance is not cross-install content equivalence.** The first toolchain cache includes artifact identities so reused outputs still derive from exactly the current input graph. Equivalent bytes under different IDs are not reused until a provenance wrapper exists.
 
 **Build OCI is not foreign-runtime OCI.** A compiler container disappears after producing artifacts. A JVM/native/Python compatibility container remains part of execution and lifecycle policy.
 
@@ -108,7 +112,7 @@ provider selection ID
   -> ToolchainService
 ```
 
-The first two feed `CompilationService` and already support compiler-declared derivation reuse.
+The first two feed `CompilationService` and support compiler-declared derivation reuse.
 
 `ToolchainService` resolves explicit transitive artifact dependencies and sends frozen build-relevant snapshots plus target/options to a provider. The generic provider context has no ambient `ImageService`.
 
@@ -124,9 +128,42 @@ resolved input graph
        metadata = provider selection/identity/protocol + output metadata
 ```
 
+### External toolchain derivation reuse
+
+A provider opts in by implementing:
+
+```text
+provider.identity
+provider.cacheKey(request, context)
+```
+
+The generic derivation key includes provider selection/identity/protocol, ordered roots, complete resolved artifact snapshots, target/options and provider-specific cache material.
+
+Build-relevant snapshots include artifact identity, representation, content, dependencies and metadata. Backend versions, timestamps and old provenance history are excluded.
+
+Cacheable outputs additionally record:
+
+```text
+toolchainDerivationKey
+toolchainResultId
+toolchainOutputName
+toolchainOutputIndex
+toolchainOutputCount
+```
+
+This lets lookup reconstruct a complete multi-output result set. Partial sets from an interrupted persistence are ignored.
+
+Requested output IDs remain installation identity. A cached result is reused only when requested IDs match it; different IDs or `reuse:false` produce another result set.
+
+On a cache hit the provider is not executed and transient diagnostics are not replayed.
+
+The first cache deliberately includes artifact identities. That preserves exact `derivedFrom` provenance. Cross-install/content-addressed reuse needs an additional installation/provenance layer rather than merely dropping IDs from the key.
+
+Lookup currently scans CodeArtifacts; durable indexing can replace that implementation without changing semantics.
+
 ## First external provider: Cargo/rustc in OCI
 
-The generic provider contract is now exercised by a real existing compiler ecosystem:
+The generic provider contract is exercised by a real existing compiler ecosystem:
 
 ```text
 rust/cargo-manifest-v1
@@ -158,9 +195,11 @@ The provider:
 
 Unknown artifact representations fail rather than being ignored.
 
+The public Cargo provider factory opts into generic result reuse. Its provider-specific material includes the full pinned OCI image reference; generic request material already includes target/options and every manifest/source/lock/config/vendor snapshot. Repeating a compatible build can therefore skip workspace materialization and OCI/Cargo execution entirely.
+
 ### Explicit Cargo directory-source dependencies
 
-Third-party registry-style dependencies can now be represented without build-time network discovery:
+Third-party registry-style dependencies can be represented without build-time network discovery:
 
 ```text
 rust/cargo-config-v1
@@ -191,7 +230,7 @@ Root-package `rust/source-v1` paths cannot overlap `.cargo/` or `vendor/`; those
 
 The provider still does not run `cargo vendor`, `cargo fetch` or another acquisition step. Import/acquisition of third-party packages remains separate from compilation.
 
-Because this changes the provider input contract, newly created providers identify as:
+Because vendored support changed the provider input contract, providers identify as:
 
 ```text
 cargo-rustc-oci/v1/<image-digest>
@@ -213,7 +252,7 @@ run --rm
 <toolchain command...>
 ```
 
-The runner is injectable; CI substitutes the runner while still testing real workspace materialization and WASM import.
+The runner is injectable; CI substitutes the runner while still testing real workspace materialization and WASM import on cache misses.
 
 ## OCI integration roles
 
@@ -238,7 +277,7 @@ Objects in a foreign heap are not automatically durable image objects. Foreign r
 Precompiled libraries should remain reusable dependencies where their compatibility contract permits it.
 
 - Java should retain JAR/class dependencies rather than decompile them.
-- Rust can now carry explicit vendored source-package files; standard package/archive import can be layered on later.
+- Rust can carry explicit vendored source-package files; standard package/archive import can be layered on later.
 - Rust should still favor stable portable ABIs/components for long-lived binary dependencies.
 - WASM Components are attractive cross-language library boundaries.
 
@@ -248,20 +287,18 @@ The current Cargo provider intentionally stops at `wasm-binary/v1`; it does not 
 
 ## Reuse and provenance
 
-Compiler-derived artifacts already use stable compiler identities and deterministic derivation keys.
-
-External `ToolchainService` calls do not yet cache results. A later cache key must cover:
+There are now several separate reuse layers:
 
 ```text
-provider/toolchain identity
-OCI image digest where applicable
-target / ABI
-options
-resolved artifact representation/content/dependency/metadata fingerprints
-manifest / lock / config / vendor inputs
+compiler derivation reuse
+external toolchain result-set reuse
+runtime compiled WebAssembly.Module reuse
+explicitly stateless WebAssembly.Instance reuse
 ```
 
-Storage timestamps, backend versions and old provenance history should not become cache inputs automatically.
+Each has its own proof obligations. External toolchain reuse is deterministic-provider opt-in and exact to one explicit immutable input graph in v0.
+
+Storage timestamps, backend versions and old provenance history do not become cache inputs automatically.
 
 ## Internal Lagrange WASM execution
 
@@ -304,4 +341,4 @@ Not every object send becomes RPC and not every foreign call becomes an image me
 
 Projects should eventually relate source, binary dependencies, manifests, tests, notes and work items as graph objects/artifacts, with files/Git as interoperability projections.
 
-See ADR 0016 for the broad artifact/toolchain direction, ADR 0017 for the generic dependency/provider substrate, ADR 0018 for the first OCI Cargo/rustc provider, and ADR 0019 for explicit vendored Cargo dependencies.
+See ADR 0016 for the broad artifact/toolchain direction, ADR 0017 for the generic dependency/provider substrate, ADR 0018 for the first OCI Cargo/rustc provider, ADR 0019 for explicit vendored Cargo dependencies, and ADR 0020 for deterministic toolchain result reuse.
