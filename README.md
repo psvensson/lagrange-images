@@ -2,7 +2,7 @@
 
 A persistent image service and language platform built to sit on Lagrange.
 
-An image is a durable object graph, not a VM memory dump and not a pile of source files. Languages are personalities over that graph. The image substrate now has an explicit language-neutral value/reference/object representation; Lagrange can later provide distributed persistence, placement, transactions and compute underneath it without changing those semantics.
+An image is a durable object graph, not a VM memory dump and not a pile of source files. Languages are personalities over that graph. The image substrate has an explicit language-neutral value/reference/object representation plus a first executable Block/code/dispatch layer; Lagrange can later provide distributed persistence, placement, transactions and compute underneath it without changing those semantics.
 
 ## What is here now
 
@@ -12,11 +12,14 @@ An image is a durable object graph, not a VM memory dump and not a pile of sourc
 - immutable shape records with stable slot IDs
 - generic object records with separate `shape` and optional `behavior` refs
 - slot state restricted to tagged Values; arbitrary nested JSON is not object state
+- immutable CodeArtifacts, versioned LexicalEnvironments and durable Blocks
+- transient message dispatch and activation requests
+- pluggable representation executors plus `neutral-expression/v0`
+- first executable Symmetric Smalltalk tokenizer/parser/compiler/dispatcher seed
 - reference walking for reachability/dependency work
 - optimistic object versions, image history and snapshots
 - in-memory mock backend plus optional `lagrange-server` probing
-- Symmetric Smalltalk as the first language profile
-- a small HTTP surface, demo and tests
+- a small HTTP surface, executable demo and tests
 
 Three invariants are deliberate:
 
@@ -71,6 +74,34 @@ shape-v1: slot-postal -> "postalCode"
 shape-v2: slot-postal -> "postcode"
 ```
 
+## First Symmetric Smalltalk seed
+
+The first source language is now executable through the common substrate rather than through a parallel VM. For example:
+
+```js
+import {
+  createRuntime,
+  evaluateSymmetricSmalltalkBlock,
+  textValue,
+} from 'lagrange-images';
+
+const runtime = await createRuntime({backend: {mode: 'mock'}});
+await runtime.images.createImage({id: 'playground'});
+
+const result = await evaluateSymmetricSmalltalkBlock({
+  runtime,
+  imageId: 'playground',
+  source: '[ :value | value ]',
+  arguments: [textValue('hello')],
+});
+```
+
+The seed parses integer/string literals, names, `self`, parentheses, block syntax, and unary/binary/keyword message sends with Smalltalk precedence. The outer source form is a Block compilation unit. Source, parsed syntax and compiled neutral code are persisted as separate CodeArtifacts linked by provenance.
+
+Message sends compile to the language-neutral runtime send operation. The first image-resident lookup convention uses a receiver's `behavior` object as a method table: selector names are the behavior shape's slot names and the corresponding slot Values are Block refs. This is intentionally a bootstrap convention before the Object/Behavior/Class/Metaclass model is designed.
+
+Nested Block syntax is parsed but runtime nested closure creation, assignment, temporaries, sequences, inheritance and immediate-value primitives are still pending.
+
 ## HTTP example
 
 ```sh
@@ -90,7 +121,7 @@ curl -X PUT http://127.0.0.1:7331/images/playground/objects/root \
   }'
 ```
 
-`GET /images/playground/records` returns both substrate shape records and ordinary objects.
+`GET /images/playground/records` returns substrate and language/runtime graph records.
 
 ## Values are deliberately small
 
@@ -122,9 +153,9 @@ A generic object contains physical shape separately from language behavior:
 }
 ```
 
-Smalltalk may use `behavior` as its Class/Behavior hook. Another language may use a prototype/type/dispatch object or leave it null. The image layer does not know what a class is.
+Smalltalk uses `behavior` as its first dispatch hook. Another language may use a prototype/type/dispatch object or leave it null. The image layer does not know what a class is.
 
-Generic objects no longer have `classId` or `source`. Source/code belongs in ordinary referenced code objects once that layer is introduced.
+Generic objects have no `classId` or `source`. Source, syntax, executable IR and provenance live in CodeArtifacts and linked graph objects.
 
 ## References are not capabilities
 
@@ -165,3 +196,7 @@ Do not import from `lagrange-server/src/...`. The image service should use a pub
 - [Roadmap](docs/roadmap.md)
 - [ADR 0001: backend boundary](docs/decisions/0001-backend-boundary.md)
 - [ADR 0002: language-neutral graph representation](docs/decisions/0002-language-neutral-graph-representation.md)
+- [ADR 0003: code artifacts and closures](docs/decisions/0003-code-artifacts-and-closures.md)
+- [ADR 0004: invocation and message dispatch](docs/decisions/0004-invocation-and-message-dispatch.md)
+- [ADR 0005: calling convention and neutral executor](docs/decisions/0005-calling-convention-and-neutral-executor.md)
+- [ADR 0006: Symmetric Smalltalk seed](docs/decisions/0006-symmetric-smalltalk-seed.md)
