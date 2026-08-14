@@ -69,6 +69,10 @@ WASM handle != image identity
 - WASM nested Block materialization likewise uses `make_block_site_N` as a tail effect. Closure-site metadata contains only semantic block/capture descriptors.
 - Prototype Block refs for WASM closure sites must be explicit `wasm-function/v1.derivedFrom` edges; metadata may contain only the corresponding indices, never hidden refs.
 - WASM-created closures must use the common `ActivationExecutor.createClosure` path and return ordinary Block refs. Do not create a WASM-specific closure identity or invocation path.
+- Use `installWasmBlockTree()` for normal complete-tree WASM installation. It must recurse bottom-up through direct semantic children and feed explicit child prototype refs through the existing low-level compiler API.
+- Keep whole-tree preflight ahead of derived writes so unsupported deep semantics do not leave partially assembled WASM trees.
+- Automatically created nested semantic artifacts remain `lagrange-code/v0` derived from their immediate semantic parent; do not make WASM artifacts the only surviving copy of nested meaning.
+- `compileWasmFunctionArtifact()` remains the deliberate low-level seam for mixed/custom prototype assembly; do not duplicate its graph-edge rules in a competing compiler path.
 - Do not compile non-tail asynchronous WASM sends or closure materialization by replaying, blocking, or silently falling back. Add an explicit continuation/async ABI before broadening that contract.
 - Host send effects must still use the normal language dispatcher/ActivationExecutor. Closure prototypes may use any registered execution representation.
 - Unsupported WASM semantic operations must fail explicitly; do not silently fall back to another executor when WASM was requested.
