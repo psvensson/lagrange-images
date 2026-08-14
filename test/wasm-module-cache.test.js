@@ -94,7 +94,8 @@ test('WasmModuleCache evicts failed compilation so a later attempt can retry', a
     compilations: 1,
     failures: 1,
   });
-  assert.ok(await cache.get(artifact) instanceof WebAssembly.Module);
+  const compiled = await cache.get(artifact);
+  assert.ok(compiled instanceof WebAssembly.Module);
   assert.equal(attempts, 2);
   assert.deepEqual(cache.stats(), {
     entries: 1,
