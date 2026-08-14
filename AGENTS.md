@@ -53,6 +53,7 @@ cache hit != replayed diagnostics
 exact input provenance != cross-install content equivalence
 build OCI != foreign-runtime OCI
 raw foreign WASM != Lagrange WASM ABI
+callable interface != authority
 WASM handle != image identity
 compilation group != source-language construct
 shared module != function/Block identity
@@ -130,8 +131,20 @@ pooled instance != activation state
 - OCI runner argv is constructed without a shell. Keep the temporary workspace bind mount, explicit workdir/network and host uid/gid behavior where available.
 - Temporary workspaces are build machinery and must be removed in a `finally` path.
 - Cargo-produced bytes are stored as `wasm-binary/v1`, not `wasm-module/v1`. The latter is reserved for the current Lagrange Value-handle/import/effect ABI.
-- Do not make raw foreign WASM callable merely because its header validates. Add an explicit callable/component/ABI adapter first.
+- Raw `wasm-binary/v1` may only enter ordinary activation through an explicit callable/component interface contract. Never relabel it as `wasm-module/v1` merely because the header validates.
 - Provider identity and output metadata must preserve the digest-pinned OCI toolchain identity.
+
+### Foreign WASM callable interfaces
+
+- `wasm-binary/v1` is implementation bytes. `wasm-callable-interface/v1` is callable identity/ABI. Keep them separate.
+- A callable interface points to its raw implementation through exactly one explicit `dependencies` edge with role `implementation`; do not hide the implementation ref in interface metadata/content.
+- `wasm-scalar-call/v0` is intentionally narrow: free synchronous function, no receiver, no lexical environment, no imports, one scalar result, and only `boolean/i32/i64/f32/f64` parameters/results.
+- Scalar arguments must be canonical Values of the declared kind. Signed i32/i64 inputs are range checked; do not silently coerce unrelated Value kinds.
+- Foreign scalar modules are compiled once per runtime but instantiated fresh per activation. Do not pool arbitrary foreign instances without a separate reset/reuse contract.
+- The no-import rule is an authority boundary. Do not add WASI/host imports, callbacks or `ctx.call` to `wasm-scalar-call/v0`; define a new capability-aware ABI/interface contract.
+- `installWasmScalarCallable()` creates the interface CodeArtifact plus an environment-free Block. Keep invocation on the ordinary InvocationService/ActivationExecutor path; do not create a second foreign-call runtime.
+- Interface description is not capability. A ref to the interface or implementation does not grant permission to invoke it.
+- Do not infer rich source-language semantics from raw WASM. Strings/memory, records, multiple values and Component/WIT interfaces belong in explicit later contracts.
 
 ### Compiler/toolchain derivation
 
@@ -157,7 +170,7 @@ pooled instance != activation state
 - Default executor registries must own separate WASM module caches and instance pools; do not reintroduce public singleton execution caches shared across runtimes.
 - Concurrent requests for one module should share one in-flight compilation. Failed compilation must evict its cache entry so a later activation can retry.
 - Reuse `WebAssembly.Instance` objects only behind an explicit module reset/reuse contract. Absence of a contract means one-shot execution; unknown declared contracts fail explicitly.
-- `stateless-v0` is currently the only supported instance-reuse contract. It promises no activation-persistent guest memory, mutable globals/tables, guest handles or activation-dependent start behavior.
+- `stateless-v0` is currently the only supported internal instance-reuse contract. It promises no activation-persistent guest memory, mutable globals/tables, guest handles or activation-dependent start behavior.
 - Built-in compiler output that starts/stops declaring an instance-reuse contract must advance its compiler identity so durable derivation reuse cannot silently return older artifacts with different metadata/lifetime promises.
 - Pooled instance imports must be rebindable. Every checkout receives a fresh `ValueHandleArena`, active entry/effect-site sets, closure prototype map and pending-effect slot; all of that state must be unbound before the instance becomes idle.
 - Return an instance to the pool only after the synchronous WASM entry and result/tail-effect contract completed successfully. Traps, invalid handles/types, inactive effects or other guest-boundary failures retire the lease.
@@ -165,7 +178,7 @@ pooled instance != activation state
 - Keep pool retention conservative and runtime-local. Pooling is execution machinery, never durable image state or language identity.
 - Keep `lagrange-value-handle/v0` handles invocation-local. Never persist them, use them as object IDs, or treat them as capabilities.
 - The generic WASM ABI must preserve canonical Value semantics; optimized/unboxed ABIs need explicit new contracts rather than silently narrowing Values.
-- Graph refs may cross the WASM boundary through receiver/argument/capture handles. Do not hide ref literals or ref message descriptors inside artifact metadata.
+- Graph refs may cross the internal WASM boundary through receiver/argument/capture handles. Do not hide ref literals or ref message descriptors inside artifact metadata.
 - WASM language sends use explicit tail effects: `send_site_N` records one pending request, WASM returns reserved handle `0`, then the executor resumes normal asynchronous dispatch outside WASM.
 - WASM nested Block materialization likewise uses `make_block_site_N` as a tail effect. Closure-site metadata contains only semantic block/capture descriptors.
 - Prototype Block refs for WASM closure sites must be explicit `wasm-function/v1.derivedFrom` edges; metadata may contain only indices/descriptors, never hidden refs.
@@ -176,7 +189,7 @@ pooled instance != activation state
 - Do not compile non-tail asynchronous WASM sends or closure materialization by replaying, blocking or silently falling back. Add an explicit continuation/async ABI before broadening that contract.
 - Host send effects must still use the normal language dispatcher/ActivationExecutor. Closure prototypes may use any registered execution representation.
 - Unsupported WASM semantic operations must fail explicitly; do not silently fall back to another executor when WASM was requested.
-- Keep interpreter/WASM differential or conformance tests for every semantic operation added to the WASM backend.
+- Keep interpreter/WASM differential or conformance tests for every semantic operation added to the internal WASM backend.
 
 ## Symmetric Smalltalk seed
 
