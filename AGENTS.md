@@ -48,6 +48,9 @@ durable representation != execution representation
 semantic code != executable artifact
 toolchain selection != toolchain identity
 toolchain provider != language semantics
+provider cache opt-in != inferred determinism
+cache hit != replayed diagnostics
+exact input provenance != cross-install content equivalence
 build OCI != foreign-runtime OCI
 raw foreign WASM != Lagrange WASM ABI
 WASM handle != image identity
@@ -93,7 +96,19 @@ pooled instance != activation state
 - Provider-declared output dependencies remain explicit dependency edges and must point at existing artifacts.
 - Toolchain diagnostics are transient v0 results, not durable metadata by default.
 - v0 supports several independent named outputs but not sibling output-to-output dependency refs or whole-invocation transactional persistence. Add those only if a real toolchain proves the need.
-- `ToolchainService` does not yet have derivation-key reuse. Do not claim external-toolchain caching until target/options/toolchain/dependency fingerprints are covered explicitly.
+
+### Toolchain result reuse
+
+- External-toolchain reuse is provider opt-in only. A provider is cacheable only when it implements `cacheKey(request, context)` in addition to a stable `identity`; never infer determinism from provider ID, output representation, filenames or past equal outputs.
+- `lagrange-toolchain-derivation-key/v0` includes provider selection ID, stable identity, protocol, ordered roots, complete resolved artifact snapshots, target/options and provider-specific cache material.
+- Artifact snapshots used by the cache include identity, representation, content, dependencies and metadata. Backend versions, timestamps and old `derivedFrom` history stay out of build equivalence.
+- The first cache intentionally includes artifact/image identities. Reuse is exact to the same immutable input graph so the cached output's `derivedFrom` remains truthful. Do not remove identities for cross-install reuse without first adding an installation/provenance wrapper.
+- Cacheable multi-output artifacts carry non-reference result-set metadata: derivation key, result ID, output name/index/count. Lookup may reuse only a complete set with unique names/indices and exact current provenance.
+- Ignore incomplete cache result sets left by partial multi-output persistence; never fabricate missing outputs or treat a partial set as a hit.
+- `ToolchainService.run({reuse:true})` is the default. `reuse:false` forces execution but still stamps a cacheable result so later compatible calls can reuse it.
+- Requested `outputIds` are part of installation identity, not derivation equivalence. Reuse is allowed only when every explicitly requested ID matches the candidate result; different requested IDs cause a fresh provider run.
+- Cache hits return existing immutable outputs with `reused: true` and the derivation key. Do not replay transient diagnostics; cache hits return an empty diagnostics array.
+- Derivation-key lookup currently scans CodeArtifacts. Durable indexing is an optimization, not a semantic change.
 
 ### OCI Cargo/rustc provider
 
@@ -110,12 +125,13 @@ pooled instance != activation state
 - Every explicit vendor package requires `Cargo.toml` and `.cargo-checksum.json`. The checksum file must describe exactly all explicit package files other than itself, and every listed file SHA-256 must match before OCI execution.
 - Vendor file content may be text or bytes. Do not force package assets into UTF-8 source form.
 - New providers use stable identity `cargo-rustc-oci/v1/<image-digest>` because vendored dependency support changed the input contract. Preserve the older v0 constant only as historical identity.
+- The public Cargo provider factory opts into generic toolchain result reuse. Its provider-specific cache material includes the full digest-pinned image reference because that full reference is also observable output metadata.
 - The pinned image must already contain Cargo/rustc and the requested target. Do not mutate/install the toolchain during a build unless a later explicit toolchain contract requires it.
 - OCI runner argv is constructed without a shell. Keep the temporary workspace bind mount, explicit workdir/network and host uid/gid behavior where available.
 - Temporary workspaces are build machinery and must be removed in a `finally` path.
 - Cargo-produced bytes are stored as `wasm-binary/v1`, not `wasm-module/v1`. The latter is reserved for the current Lagrange Value-handle/import/effect ABI.
 - Do not make raw foreign WASM callable merely because its header validates. Add an explicit callable/component/ABI adapter first.
-- Provider identity and output metadata must preserve the digest-pinned OCI toolchain identity; later toolchain cache keys must include it with target/options and all explicit source/manifest/lock/config/vendor fingerprints.
+- Provider identity and output metadata must preserve the digest-pinned OCI toolchain identity.
 
 ### Compiler/toolchain derivation
 
@@ -126,13 +142,10 @@ pooled instance != activation state
 - Physical module grouping belongs to compiler/toolchain policy. One logical group may produce one module, many modules or another executable representation.
 - `CompilationService.compileGroup()` must keep every semantic/artifact member as an explicit `derivedFrom` edge on the grouped executable artifact.
 - Reuse is allowed only when a compiler/toolchain explicitly declares a stable identity and deterministic cache key. Never infer cache equivalence from filenames, Block IDs, source-language names or target representation alone.
-- External-toolchain derivation keys must cover every declared input that can change output, including toolchain/compiler version, OCI image digest where applicable, target/ABI/options, dependency fingerprints and manifest/lock/vendor artifacts.
-- Changing ABI/compiler semantics or observable derived-artifact contracts requires changing compiler/toolchain identity or key material.
-- A reused immutable executable may be shared by distinct installations, but function/Block/image identity must remain distinct unless language semantics explicitly say otherwise.
-- Keep current-installation provenance explicit in wrapper/function artifacts even when a lower-level module artifact is reused from an earlier equivalent derivation.
+- Changing ABI/compiler/toolchain semantics or observable derived-artifact contracts requires changing compiler/toolchain identity or cache material.
+- A reused immutable executable may be shared by distinct installations only when provenance/identity semantics remain explicit. Current toolchain v0 reuse deliberately stays within one exact input graph.
 - Imported executable libraries/components need explicit callable/interface descriptions before invocation. Interface metadata is not authority; capability checks stay separate.
 - Treat dependency linkage as tooling policy: static/link, dynamic component, foreign runtime, service and build-only dependencies must not become different generic object identities merely because execution differs.
-- Derivation-key lookup is currently a scan; backend indexing is an optimization, not a semantic change.
 
 ## WASM
 
