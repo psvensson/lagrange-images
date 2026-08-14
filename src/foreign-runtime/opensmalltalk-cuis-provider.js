@@ -110,9 +110,6 @@ async function materializePackages(packageInputs, workspace) {
     const bytes = await readFile(packageInput.path);
     if (bytes.length === 0) throw new TypeError(`OpenSmalltalk Cuis package ${packageInput.name} must not be empty`);
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    // Cuis package machinery expects the normal package filename. Package
-    // names are unique in one runtime start spec, so no synthetic prefix is
-    // needed and the guest sees the same logical filename as upstream.
     const filename = `${packageInput.name}.pck.st`;
     await writeFile(join(directory, filename), bytes, {flag: 'wx'});
     materialized.push(Object.freeze({
@@ -126,12 +123,25 @@ async function materializePackages(packageInputs, workspace) {
 }
 
 function packageInstallSource(packages) {
-  return packages.map((packageInput) => `output
+  return packages.map((packageInput) => `| packageRequirement packageEntry |
+output
     nextPutAll: 'BOOT'; nextPut: Character tab;
     nextPutAll: 'package'; nextPut: Character tab;
     nextPutAll: '${packageInput.name}'; nextPut: Character tab;
     nextPutAll: 'install'; newLine; flush.
-CodePackageFile installPackage: DirectoryEntry currentDirectory // 'packages' // '${packageInput.filename}'.
+packageEntry := DirectoryEntry currentDirectory // 'packages' // '${packageInput.filename}'.
+packageRequirement := (FeatureRequirement name: '${packageInput.name}')
+    pathName: packageEntry pathName.
+[
+    packageRequirement satisfyRequirementsAndInstall
+] on: FeatureRequirementUnsatisfied do: [ :error |
+    output
+        nextPutAll: 'BOOT'; nextPut: Character tab;
+        nextPutAll: 'package'; nextPut: Character tab;
+        nextPutAll: '${packageInput.name}'; nextPut: Character tab;
+        nextPutAll: 'unsatisfied'; nextPut: Character tab;
+        nextPutAll: error messageText; newLine; flush.
+    Smalltalk quitPrimitive: 2 ].
 output
     nextPutAll: 'BOOT'; nextPut: Character tab;
     nextPutAll: 'package'; nextPut: Character tab;
