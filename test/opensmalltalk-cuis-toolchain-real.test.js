@@ -1,20 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {readFile} from 'node:fs/promises';
 import {
   CUIS_BUILD_CONTRACT_V0,
   CUIS_BUILD_V1,
   CUIS_CHANGES_V1,
   CUIS_IMAGE_V1,
   CUIS_PACKAGE_V1,
+  CUIS_RUNTIME_DEFINITION_CONTRACT_V0,
+  CUIS_RUNTIME_DEFINITION_V1,
   CUIS_SOURCES_V1,
   OPENSMALLTALK_CUIS_PROVIDER_ID,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
   booleanValue,
   bytesValue,
-  createOpenSmalltalkCuisProvider,
+  createArtifactBackedOpenSmalltalkCuisProvider,
   createOpenSmalltalkCuisToolchainProvider,
   createRuntime,
   objectRef,
@@ -36,7 +36,7 @@ async function put(runtime, id, representation, content, {metadata = {}, depende
   });
 }
 
-test('real Cuis toolchain derives a runnable image containing an upstream package', {skip: !enabled, timeout: 120_000}, async () => {
+test('real Cuis toolchain derives an artifact-backed runnable image containing an upstream package', {skip: !enabled, timeout: 120_000}, async () => {
   const vmPath = process.env.LAGRANGE_OPENSMALLTALK_VM_PATH;
   const imagePath = process.env.LAGRANGE_CUIS_IMAGE_PATH;
   const changesPath = process.env.LAGRANGE_CUIS_CHANGES_PATH;
@@ -51,13 +51,19 @@ test('real Cuis toolchain derives a runnable image containing an upstream packag
     vmIdentity: VM_IDENTITY,
     timeoutMs: 60_000,
   });
+  const runtimeProvider = createArtifactBackedOpenSmalltalkCuisProvider({
+    vmPath,
+    vmIdentity: VM_IDENTITY,
+    startupTimeoutMs: 30_000,
+    callTimeoutMs: 10_000,
+    stopTimeoutMs: 10_000,
+  });
   const runtime = await createRuntime({
     backend: {mode: 'mock'},
     toolchainProviders: [[OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID, toolchainProvider]],
+    foreignRuntimeProviders: [[OPENSMALLTALK_CUIS_PROVIDER_ID, runtimeProvider]],
   });
   await runtime.images.createImage({id: 'build-image'});
-  const verificationDir = await mkdtemp(join(tmpdir(), 'lagrange-cuis-derived-real-'));
-  let verificationRuntime = null;
   try {
     const baseImage = await put(runtime, 'cuis-base-image', CUIS_IMAGE_V1, bytesValue(await readFile(imagePath)), {
       metadata: {fileName: 'Cuis7.9-8090.image'},
@@ -101,38 +107,38 @@ test('real Cuis toolchain derives a runnable image containing an upstream packag
     assert.equal(derivedImage.metadata.sourcesFileName, 'Cuis7.8.sources');
     assert.deepEqual(derivedImage.dependencies, [{role: 'sources', artifact: objectRef('build-image', baseSources.id)}]);
 
-    const derivedImagePath = join(verificationDir, 'LagrangeDerived.image');
-    await writeFile(derivedImagePath, Buffer.from(derivedImage.content.base64, 'base64'));
-    await writeFile(join(verificationDir, 'LagrangeDerived.changes'), Buffer.from(derivedChanges.content.base64, 'base64'));
-    await writeFile(join(verificationDir, 'Cuis7.8.sources'), await readFile(sourcesPath));
+    const runtimeDefinition = await put(
+      runtime,
+      'derived-cuis-runtime',
+      CUIS_RUNTIME_DEFINITION_V1,
+      textValue(CUIS_RUNTIME_DEFINITION_CONTRACT_V0),
+      {
+        dependencies: [
+          {role: 'image', artifact: objectRef('build-image', derivedImage.id)},
+          {role: 'changes', artifact: objectRef('build-image', derivedChanges.id)},
+          {role: 'sources', artifact: objectRef('build-image', baseSources.id)},
+        ],
+      },
+    );
 
-    const runtimeProvider = createOpenSmalltalkCuisProvider({
-      vmPath,
-      imagePath: derivedImagePath,
-      vmIdentity: VM_IDENTITY,
-      imageIdentity: `derived/${derivedImage.id}`,
-      startupTimeoutMs: 30_000,
-      callTimeoutMs: 10_000,
-      stopTimeoutMs: 10_000,
-    });
-    verificationRuntime = await createRuntime({
-      backend: {mode: 'mock'},
-      foreignRuntimeProviders: [[OPENSMALLTALK_CUIS_PROVIDER_ID, runtimeProvider]],
-    });
-    const instance = await verificationRuntime.foreignRuntimes.start({
+    const instance = await runtime.foreignRuntimeDefinitions.start({
       providerId: OPENSMALLTALK_CUIS_PROVIDER_ID,
-      spec: {},
+      definition: objectRef('build-image', runtimeDefinition.id),
     });
-    const packageProof = await verificationRuntime.foreignRuntimes.call({
+    assert.deepEqual(instance.metadata.definition, objectRef('build-image', runtimeDefinition.id));
+    assert.deepEqual(instance.metadata.imageArtifact, objectRef('build-image', derivedImage.id));
+    assert.deepEqual(instance.metadata.changesArtifact, objectRef('build-image', derivedChanges.id));
+    assert.deepEqual(instance.metadata.sourcesArtifact, objectRef('build-image', baseSources.id));
+    assert.deepEqual(instance.metadata.packages, []);
+
+    const packageProof = await runtime.foreignRuntimes.call({
       runtimeId: instance.runtimeId,
       interface: {service: 'json', operation: 'package-proof'},
       arguments: [],
     });
     assert.deepEqual(packageProof, booleanValue(true));
-    await verificationRuntime.foreignRuntimes.stop(instance.runtimeId);
+    await runtime.foreignRuntimes.stop(instance.runtimeId);
   } finally {
-    if (verificationRuntime) await verificationRuntime.close();
     await runtime.close();
-    await rm(verificationDir, {recursive: true, force: true});
   }
 });

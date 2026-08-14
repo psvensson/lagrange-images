@@ -6,7 +6,11 @@ import {
 } from './compilation/index.js';
 import {DispatchRegistry, InvocationService} from './dispatch/invocation-service.js';
 import {ActivationExecutor, createDefaultCodeExecutorRegistry} from './execution/executor.js';
-import {ForeignRuntimeProviderRegistry, ForeignRuntimeService} from './foreign-runtime/index.js';
+import {
+  ForeignRuntimeDefinitionService,
+  ForeignRuntimeProviderRegistry,
+  ForeignRuntimeService,
+} from './foreign-runtime/index.js';
 import {ImageService} from './image/graph-image-service.js';
 import {
   SYMMETRIC_SMALLTALK_ID,
@@ -54,6 +58,7 @@ async function createRuntime(options = {}) {
     foreignRuntimeProviders.register(entry[0], entry[1]);
   }
   const foreignRuntimes = new ForeignRuntimeService({providers: foreignRuntimeProviders});
+  const foreignRuntimeDefinitions = new ForeignRuntimeDefinitionService({images, runtimes: foreignRuntimes});
 
   const dispatchers = new DispatchRegistry();
   for (const [languageId, dispatcher] of Object.entries(options.dispatchers ?? {})) {
@@ -85,6 +90,7 @@ async function createRuntime(options = {}) {
     toolchains,
     foreignRuntimeProviders,
     foreignRuntimes,
+    foreignRuntimeDefinitions,
     dispatchers,
     invocations,
     codeExecutors,
