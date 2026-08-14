@@ -4,23 +4,26 @@
 
 An image is a long-lived graph of objects with stable identity, code, state and history. It may be active on one machine, spread across a cluster, asleep, snapshotted, branched or inspected without changing what an object is.
 
-The architecture separates four concerns:
+The architecture separates five concerns:
 
 1. image semantics — values, identity, refs, shapes, roots, history, snapshots, projects
-2. language semantics — behavior, syntax, compilation/evaluation, debugging, compatibility layers
-3. execution — dispatch, activations, scheduling, local/remote execution, capability context
-4. substrate — durable records, transactions, placement, replication and compute
+2. language semantics — behavior, syntax, language-specific meaning, debugging, compatibility layers
+3. compiler substrate — semantic artifacts, grouping policy, derivation/reuse, executable representations
+4. execution — dispatch, activations, scheduling, local/remote execution, capability context
+5. substrate — durable records, transactions, placement, replication and compute
 
-Only the fourth layer should know it is running on Lagrange.
+Only the fifth layer should know it is running on Lagrange. Compiler grouping and reuse must not assume a particular source language.
 
 ## Layers
 
 ```text
 tools / REPL / browser / graphical shell / HTTP
                     |
-language personalities: Smalltalk | Cuis bridge | Lisp | ...
+language personalities: Smalltalk | Lisp | Java | Rust | ...
                     |
-language-neutral runtime: behavior | blocks | dispatch | debugging
+compiler substrate: semantic CodeArtifacts | groups | derivation cache
+                    |
+language-neutral runtime: callables/Blocks | dispatch | activations
                     |
 image graph: Values | refs | shapes | objects | history | roots
                     |
@@ -28,6 +31,8 @@ backend contract: mock | Lagrange adapter
                     |
 Lagrange: distributed data + WASM compute
 ```
+
+A language may skip or specialize parts of this stack. Rust does not need Smalltalk lookup semantics; Java may have its own class/interface dispatch; Lisp may retain macro-expanded semantic artifacts. They can still share compiler groups, executable-artifact reuse, activation infrastructure and WASM backends where useful.
 
 ## Boundaries worth protecting
 
@@ -37,6 +42,12 @@ Lagrange: distributed data + WASM compute
 
 **Identity is not revision.** Ordinary refs name evolving objects. Pinned refs add historical revision. Backend row versions are concurrency metadata.
 
+**Semantic code is not executable code.** Interpreters, WASM and future optimized executors are derived products. Removing executable artifacts must not erase the program meaning needed to inspect/rebuild them.
+
+**Compilation group is not a language construct.** The compiler/tooling layer decides whether a useful unit is a Smalltalk Block tree, Lisp compilation unit, Java package/class set, Rust codegen unit or something else. The group does not prescribe one physical module.
+
+**Reuse is compiler-declared.** The substrate only reuses an immutable derived artifact when the compiler explicitly provides a stable compiler identity and deterministic cache key. It does not guess equivalence from names or source-language structure.
+
 ## Unified graph identity
 
 Shape and object records share one `(imageId, objectId)` namespace. Refs therefore do not encode backend collection/type routing. Shapes are the bootstrap record kind needed to describe object layout without a meta-shape regress.
@@ -45,9 +56,13 @@ Shape and object records share one `(imageId, objectId)` namespace. Refs therefo
 
 The durable graph format is explicit and inspectable, but does not dictate runtime layout. A compiler/WASM layer may use unboxed values, tagged words, local handles, eliminated closures and direct calls while preserving graph semantics.
 
+Likewise, two language/image installations may share one immutable compiled module without sharing their function, Block or object identity.
+
 ## Backend contract
 
 The mock boundary remains intentionally small: lifecycle, get/put with optimistic version, scan, and append/read history. It exists so image semantics can progress before the Lagrange mapping is settled; it must not grow into a second database API.
+
+Current derivation-cache lookup scans CodeArtifacts. A durable backend can index compiler identity + derivation key later without changing compiler semantics.
 
 ## Active execution later
 
