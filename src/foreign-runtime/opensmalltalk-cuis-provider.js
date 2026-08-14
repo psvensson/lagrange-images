@@ -119,7 +119,6 @@ function bridgeSource(packages = []) {
   return `| input output service done line fields requestId serviceName operation result decode encode readLine |
 output := StdIOWriteStream stdout.
 output nextPutAll: 'BOOT\tBRIDGE\tSTART'; newLine; flush.
-${installPackages}
 output nextPutAll: 'BOOT\tBRIDGE\tCOMPILE'; newLine; flush.
 Object subclass: #LagrangeProofService
     instanceVariableNames: ''
@@ -130,6 +129,8 @@ LagrangeProofService compile: 'add: a to: b\n    ^ a + b'.
 LagrangeProofService compile: 'factorial: n\n    n < 0 ifTrue: [ Error signal: ''factorial requires a non-negative integer'' ].\n    n = 0 ifTrue: [ ^ 1 ].\n    ^ n * (self factorial: n - 1)'.
 LagrangeProofService compile: 'jsonPackageProof\n    | jsonClass parsed rendered reparsed numbers nested |\n    jsonClass := Smalltalk at: #Json.\n    parsed := jsonClass readFrom: ''{"numbers":[3,5,8],"ok":true,"nested":{"name":"cuis"}}'' readStream.\n    rendered := jsonClass render: parsed.\n    reparsed := jsonClass readFrom: rendered readStream.\n    numbers := reparsed at: ''numbers''.\n    nested := reparsed at: ''nested''.\n    ^ (((numbers at: 1) + (numbers at: 2) + (numbers at: 3)) = 16)\n        and: [ (reparsed at: ''ok'') = true\n        and: [ (nested at: ''name'') = ''cuis'' ]]'.
 service := LagrangeProofService new.
+output nextPutAll: 'BOOT\tBRIDGE\tCOMPILED'; newLine; flush.
+${installPackages}
 input := StdIOReadStream stdin.
 readLine := [ | char stream |
     stream := WriteStream on: (String new: 64).
