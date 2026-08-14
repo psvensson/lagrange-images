@@ -77,6 +77,10 @@ function rootDependencies(request) {
   return root.dependencies ?? [];
 }
 
+function imageStem(fileName) {
+  return fileName.slice(0, -'.image'.length);
+}
+
 function validateGraph(request) {
   const dependencies = rootDependencies(request);
   const nodes = nodeMap(request);
@@ -97,31 +101,39 @@ function validateGraph(request) {
   }
 
   if (baseImages.length !== 1) throw new TypeError('OpenSmalltalk Cuis build requires exactly one base-image dependency');
-  if (baseChanges.length > 1) throw new TypeError('OpenSmalltalk Cuis build may contain at most one base-changes dependency');
+  if (baseChanges.length !== 1) throw new TypeError('OpenSmalltalk Cuis build requires exactly one base-changes dependency');
   if (baseSources.length > 1) throw new TypeError('OpenSmalltalk Cuis build may contain at most one base-sources dependency');
 
-  const baseImage = baseImages[0].artifact;
+  const baseImageNode = baseImages[0];
+  const baseImage = baseImageNode.artifact;
   if (baseImage.representation !== CUIS_IMAGE_V1) throw new TypeError(`base-image must be ${CUIS_IMAGE_V1}`);
   bytesArtifact(baseImage, 'OpenSmalltalk Cuis base image');
   const baseImageFileName = safeFileName(baseImage.metadata?.fileName, '.image', 'OpenSmalltalk Cuis base image metadata.fileName');
 
-  const changes = baseChanges.length === 1 ? baseChanges[0].artifact : null;
-  if (changes && changes.representation !== CUIS_CHANGES_V1) throw new TypeError(`base-changes must be ${CUIS_CHANGES_V1}`);
-  const changesFileName = changes ? safeFileName(changes.metadata?.fileName, '.changes', 'OpenSmalltalk Cuis base changes metadata.fileName') : null;
+  const changesNode = baseChanges[0];
+  const changes = changesNode.artifact;
+  if (changes.representation !== CUIS_CHANGES_V1) throw new TypeError(`base-changes must be ${CUIS_CHANGES_V1}`);
+  const changesFileName = safeFileName(changes.metadata?.fileName, '.changes', 'OpenSmalltalk Cuis base changes metadata.fileName');
+  const expectedChangesFileName = `${imageStem(baseImageFileName)}.changes`;
+  if (changesFileName !== expectedChangesFileName) {
+    throw new TypeError(`OpenSmalltalk Cuis base changes filename must be ${expectedChangesFileName}`);
+  }
 
-  const sources = baseSources.length === 1 ? baseSources[0].artifact : null;
+  const sourcesNode = baseSources.length === 1 ? baseSources[0] : null;
+  const sources = sourcesNode?.artifact ?? null;
   if (sources && sources.representation !== CUIS_SOURCES_V1) throw new TypeError(`base-sources must be ${CUIS_SOURCES_V1}`);
   const sourcesFileName = sources ? safeFileName(sources.metadata?.fileName, '.sources', 'OpenSmalltalk Cuis base sources metadata.fileName') : null;
 
   const packageRecords = [];
   const packageNames = new Set();
-  for (const {artifact} of packages) {
+  for (const node of packages) {
+    const {artifact} = node;
     if (artifact.representation !== CUIS_PACKAGE_V1) throw new TypeError(`package dependency must be ${CUIS_PACKAGE_V1}`);
     const fileName = safeFileName(artifact.metadata?.fileName, '.st', `OpenSmalltalk Cuis package ${artifact.id} metadata.fileName`);
     if (!fileName.endsWith('.pck.st')) throw new TypeError(`OpenSmalltalk Cuis package ${artifact.id} filename must end in .pck.st`);
     if (packageNames.has(fileName)) throw new TypeError(`duplicate OpenSmalltalk Cuis package filename: ${fileName}`);
     packageNames.add(fileName);
-    packageRecords.push(Object.freeze({artifact, fileName}));
+    packageRecords.push(Object.freeze({ref: node.ref, artifact, fileName}));
   }
 
   const supported = new Set([CUIS_BUILD_V1, CUIS_IMAGE_V1, CUIS_CHANGES_V1, CUIS_SOURCES_V1, CUIS_PACKAGE_V1]);
@@ -132,10 +144,13 @@ function validateGraph(request) {
   }
 
   return Object.freeze({
+    baseImageRef: baseImageNode.ref,
     baseImage,
     baseImageFileName,
+    changesRef: changesNode.ref,
     changes,
     changesFileName,
+    sourcesRef: sourcesNode?.ref ?? null,
     sources,
     sourcesFileName,
     packages: Object.freeze(packageRecords),
@@ -154,10 +169,6 @@ function normalizeOptions(options) {
   return Object.freeze({});
 }
 
-function imageStem(fileName) {
-  return fileName.slice(0, -'.image'.length);
-}
-
 function buildScript(packages, targetFileName) {
   const installs = packages.map(({fileName}) => [
     `output nextPutAll: 'BUILD\\tPACKAGE\\t${fileName}\\tSTART'; newLine; flush.`,
@@ -165,12 +176,12 @@ function buildScript(packages, targetFileName) {
     `output nextPutAll: 'BUILD\\tPACKAGE\\t${fileName}\\tDONE'; newLine; flush.`,
   ].join('\n')).join('\n');
   const stem = imageStem(targetFileName);
-  return `| output |\noutput := StdIOWriteStream stdout.\noutput nextPutAll: 'BUILD\\tSTART'; newLine; flush.\n${installs}\noutput nextPutAll: 'BUILD\\tSAVE\\tSTART'; newLine; flush.\nSmalltalk saveAs: '${stem}'.\noutput nextPutAll: 'BUILD\\tSAVE\\tDONE'; newLine; flush.\nSmalltalk quitPrimitive: 0.\n`;
+  return `| output |\noutput := StdIOWriteStream stdout.\noutput nextPutAll: 'BUILD\\tSTART'; newLine; flush.\n${installs}\noutput nextPutAll: 'BUILD\\tSAVE-AND-QUIT\\tSTART'; newLine; flush.\nSmalltalk saveAndQuitAs: '${stem}' clearAllClassState: false.\n`;
 }
 
 async function materializeBuild(graph, workspace, target) {
   await writeFile(join(workspace, graph.baseImageFileName), bytesArtifact(graph.baseImage, 'OpenSmalltalk Cuis base image'));
-  if (graph.changes) await writeFile(join(workspace, graph.changesFileName), artifactBytes(graph.changes, 'OpenSmalltalk Cuis base changes'));
+  await writeFile(join(workspace, graph.changesFileName), artifactBytes(graph.changes, 'OpenSmalltalk Cuis base changes'));
   if (graph.sources) await writeFile(join(workspace, graph.sourcesFileName), artifactBytes(graph.sources, 'OpenSmalltalk Cuis base sources'));
   for (const {artifact, fileName} of graph.packages) {
     await writeFile(join(workspace, fileName), artifactBytes(artifact, `OpenSmalltalk Cuis package ${artifact.id}`));
@@ -293,10 +304,7 @@ function createOpenSmalltalkCuisToolchainProvider({
         }
         if (imageBytes.length === 0) throw new OpenSmalltalkToolchainRunError('OpenSmalltalk Cuis derived image is empty');
 
-        const sourceDependencies = graph.sources ? [{
-          role: 'sources',
-          artifact: request.artifacts.find(({artifact}) => artifact.id === graph.sources.id).ref,
-        }] : [];
+        const sourceDependencies = graph.sourcesRef ? [{role: 'sources', artifact: graph.sourcesRef}] : [];
         const packageFileNames = graph.packages.map(({fileName}) => fileName);
         const packageArtifactIds = graph.packages.map(({artifact}) => artifact.id);
         const commonMetadata = {
@@ -305,7 +313,7 @@ function createOpenSmalltalkCuisToolchainProvider({
           packageArtifactIds,
           packageFileNames,
           sourcesFileName: graph.sourcesFileName,
-          snapshotMethod: 'saveAs/v0',
+          snapshotMethod: 'saveAndQuitAs/v0',
         };
         return Object.freeze({
           outputs: Object.freeze([
