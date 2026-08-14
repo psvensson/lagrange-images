@@ -44,7 +44,10 @@ async function createRuntime(options = {}) {
   }
   const invocations = new InvocationService({images, dispatchers});
 
-  const codeExecutors = createDefaultCodeExecutorRegistry();
+  const codeExecutors = createDefaultCodeExecutorRegistry({
+    wasmModuleCache: options.wasmModuleCache,
+    wasmInstancePool: options.wasmInstancePool,
+  });
   for (const [representation, executor] of Object.entries(options.codeExecutors ?? {})) {
     codeExecutors.register(representation, executor);
   }

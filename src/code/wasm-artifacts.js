@@ -16,6 +16,10 @@ function assertWasmModuleArtifact(artifact) {
   if (!Array.isArray(artifact.metadata?.literals)) {
     throw new TypeError(`${WASM_MODULE_V1} metadata.literals must be an array`);
   }
+  if (artifact.metadata?.instanceReuse !== undefined
+      && (typeof artifact.metadata.instanceReuse !== 'string' || artifact.metadata.instanceReuse.length === 0)) {
+    throw new TypeError(`${WASM_MODULE_V1} metadata.instanceReuse must be non-empty text when present`);
+  }
   return artifact;
 }
 

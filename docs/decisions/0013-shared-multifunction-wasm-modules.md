@@ -121,6 +121,8 @@ At execution the WASM executor:
 
 This keeps the previous explicit host-effect boundary intact while allowing one physical module to contain many entries.
 
+ADR 0015 later makes those imports rebindable for explicitly stateless pooled instances; entry-level effect isolation is still selected and enforced anew for every activation.
+
 ## Tree installation
 
 `installWasmBlockTree()` now works in phases:
@@ -150,15 +152,19 @@ The grouped WASM compiler has its own stable compiler/ABI identity and cache key
 
 Two independent equivalent tree installations therefore reuse one immutable multi-function module while retaining separate function/Block identities.
 
-ADR 0014 adds a second, runtime-only reuse layer: once an immutable `wasm-module/v1` is selected for execution, its host `WebAssembly.Module` compilation is cached per runtime. That execution cache does not change this artifact-level derivation contract.
+ADR 0014 adds a second, runtime-only reuse layer: once an immutable `wasm-module/v1` is selected for execution, its host `WebAssembly.Module` compilation is cached per runtime.
+
+ADR 0015 adds a third, stricter runtime layer: only modules explicitly declaring a supported instance-reuse contract may reuse a host `WebAssembly.Instance`. The current built-in compiler declares `stateless-v0`; modules without such a contract remain one-shot.
+
+Neither runtime optimization changes this artifact-level derivation contract.
 
 ## Backward compatibility
 
 The single-artifact `lagrange-code/v0 -> wasm-module/v1` compiler remains supported.
 
-Single-function modules now use the same internal multi-entry emitter with one `run` export. Existing low-level `compileWasmFunctionArtifact()` remains available for custom or mixed assembly.
+Single-function modules use the same internal multi-entry emitter with one `run` export. Existing low-level `compileWasmFunctionArtifact()` remains available for custom or mixed assembly.
 
-The executor also retains compatibility with older single-function module metadata that predates the `functions` descriptor array.
+The executor also retains compatibility with older single-function module metadata that predates the `functions` descriptor array. Older/hand-built modules that do not declare instance reuse continue to execute one-shot.
 
 ## Multilingual consequence
 
@@ -173,13 +179,12 @@ Common Lisp compilation unit             -> one or several modules
 Smalltalk   nested Block tree/package     -> one or several modules
 ```
 
-Each compiler owns member semantics, cache equivalence, ABI and physical layout.
+Each compiler owns member semantics, cache equivalence, ABI, physical layout and any safe instance-lifetime/reset contract.
 
 ## Deferred
 
 - module-size/budget driven splitting of one logical group into several modules
 - direct optimized calls between entries in the same module
-- `WebAssembly.Instance` pooling/reuse policy
 - cross-image grouped compilation and global artifact stores
 - dependency fingerprints beyond explicit group members
 - incremental recompilation of only affected members

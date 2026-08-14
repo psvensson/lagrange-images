@@ -6,12 +6,23 @@ import {
   lagrangeCodeGroupToWasmModuleCompiler,
   lagrangeCodeV0ToWasmModuleCompiler,
 } from '../wasm/compiler.js';
+import {WASM_INSTANCE_REUSE_STATELESS_V0} from '../wasm/instance-pool.js';
 import {CompilationService} from './compilation-service.js';
 import {CodeCompilerRegistry} from './compiler-registry.js';
 import {CompilationGroupCompilerRegistry} from './group-compiler-registry.js';
 
-const LAGRANGE_CODE_WASM_COMPILER_ID = 'lagrange-code-v0-to-wasm-module-v1/value-handle-v0/compiler-v1';
-const LAGRANGE_CODE_WASM_GROUP_COMPILER_ID = 'lagrange-code-group-to-wasm-module-v1/value-handle-v0/compiler-v1';
+const LAGRANGE_CODE_WASM_COMPILER_ID = 'lagrange-code-v0-to-wasm-module-v1/value-handle-v0/compiler-v2';
+const LAGRANGE_CODE_WASM_GROUP_COMPILER_ID = 'lagrange-code-group-to-wasm-module-v1/value-handle-v0/compiler-v2';
+
+function withStatelessInstanceReuse(result) {
+  return Object.freeze({
+    ...result,
+    metadata: {
+      ...(result.metadata ?? {}),
+      instanceReuse: WASM_INSTANCE_REUSE_STATELESS_V0,
+    },
+  });
+}
 
 const reusableLagrangeCodeV0ToWasmCompiler = Object.freeze({
   identity: LAGRANGE_CODE_WASM_COMPILER_ID,
@@ -23,7 +34,7 @@ const reusableLagrangeCodeV0ToWasmCompiler = Object.freeze({
     });
   },
   async compile(request, context) {
-    return await lagrangeCodeV0ToWasmModuleCompiler.compile(request, context);
+    return withStatelessInstanceReuse(await lagrangeCodeV0ToWasmModuleCompiler.compile(request, context));
   },
 });
 
@@ -42,7 +53,7 @@ const reusableLagrangeCodeGroupToWasmCompiler = Object.freeze({
     });
   },
   async compile(request, context) {
-    return await lagrangeCodeGroupToWasmModuleCompiler.compile(request, context);
+    return withStatelessInstanceReuse(await lagrangeCodeGroupToWasmModuleCompiler.compile(request, context));
   },
 });
 

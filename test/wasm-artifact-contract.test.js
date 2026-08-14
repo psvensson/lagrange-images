@@ -18,9 +18,22 @@ test('WASM module artifacts are bytecode plus explicit ABI-derived metadata', as
     id: 'module',
     representation: WASM_MODULE_V1,
     content: bytesValue(new Uint8Array([0x00, 0x61, 0x73, 0x6d])),
-    metadata: {abi: WASM_VALUE_HANDLE_ABI_V0, literals: []},
+    metadata: {abi: WASM_VALUE_HANDLE_ABI_V0, literals: [], instanceReuse: 'example-reset/v0'},
   });
   assert.equal(assertWasmModuleArtifact(module), module);
+  await runtime.close();
+});
+
+test('WASM module instance reuse metadata is optional but must be non-empty text when present', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  await runtime.images.createImage({id: 'demo'});
+  const module = await runtime.images.putCodeArtifact('demo', {
+    id: 'module',
+    representation: WASM_MODULE_V1,
+    content: bytesValue(new Uint8Array([0x00, 0x61, 0x73, 0x6d])),
+    metadata: {abi: WASM_VALUE_HANDLE_ABI_V0, literals: [], instanceReuse: ''},
+  });
+  assert.throws(() => assertWasmModuleArtifact(module), /metadata\.instanceReuse/);
   await runtime.close();
 });
 

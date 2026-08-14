@@ -48,6 +48,7 @@ WASM handle != image identity
 compilation group != source-language construct
 shared module != function/Block identity
 compiled host module != durable module identity
+pooled instance != activation state
 ```
 
 - Object slots contain only tagged Values; do not reintroduce arbitrary nested JSON state.
@@ -68,7 +69,7 @@ compiled host module != durable module identity
 - Physical module grouping belongs to compiler policy. One logical group may produce one module, many modules or another executable representation.
 - `CompilationService.compileGroup()` must keep every semantic member as an explicit `derivedFrom` edge on the grouped executable artifact.
 - Reuse is allowed only when a compiler explicitly declares a stable `identity` and deterministic `cacheKey()`. Never infer cache equivalence from filenames, Block IDs, source-language names or target representation alone.
-- Compiler cache keys must include every input that can change emitted executable meaning. Changing ABI/compiler semantics requires changing compiler identity or key material.
+- Compiler cache keys must include every input that can change emitted executable meaning. Changing ABI/compiler semantics or observable derived-artifact contracts requires changing compiler identity or key material.
 - A reused immutable executable may be shared by distinct installations, but function/Block/image identity must remain distinct unless language semantics explicitly say otherwise.
 - Keep current-installation provenance explicit in wrapper/function artifacts even when a lower-level module artifact is reused from an earlier equivalent derivation.
 - Derivation-key lookup is currently a scan; backend indexing is an optimization, not a semantic change.
@@ -80,9 +81,15 @@ compiled host module != durable module identity
 - Module function descriptors may refer to semantic members by `derivedFrom` index only; do not hide graph refs in module metadata.
 - A shared module's global import table does not grant ambient use of every host-effect site. The executor must select one entry descriptor and enable only that function's declared send/closure sites.
 - Cache compiled host `WebAssembly.Module` objects only as runtime-local execution state keyed by immutable module-artifact identity. Never persist them or treat them as image/code identity.
-- Default executor registries must own separate WASM module caches; do not reintroduce a public singleton cache shared across runtimes.
+- Default executor registries must own separate WASM module caches and instance pools; do not reintroduce public singleton execution caches shared across runtimes.
 - Concurrent requests for one module should share one in-flight compilation. Failed compilation must evict its cache entry so a later activation can retry.
-- Do not pool/reuse `WebAssembly.Instance` objects without a separate contract: current imports close over activation-local Value handles, active effect sites and pending-effect state.
+- Reuse `WebAssembly.Instance` objects only behind an explicit module reset/reuse contract. Absence of a contract means one-shot execution; unknown declared contracts fail explicitly.
+- `stateless-v0` is currently the only supported instance-reuse contract. It promises no activation-persistent guest memory, mutable globals/tables, guest handles or activation-dependent start behavior.
+- Built-in compiler output that starts/stops declaring an instance-reuse contract must advance its compiler identity so durable derivation reuse cannot silently return older artifacts with different metadata/lifetime promises.
+- Pooled instance imports must be rebindable. Every checkout receives a fresh `ValueHandleArena`, active entry/effect-site sets, closure prototype map and pending-effect slot; all of that state must be unbound before the instance becomes idle.
+- Return an instance to the pool only after the synchronous WASM entry and result/tail-effect contract completed successfully. Traps, invalid handles/types, inactive effects or other guest-boundary failures retire the lease.
+- Async language sends/closure materialization happen after the instance is unbound/released under the current tail-effect ABI; later host-operation failures do not imply guest-instance corruption.
+- Keep pool retention conservative and runtime-local. Pooling is execution machinery, never durable image state or language identity.
 - Keep `lagrange-value-handle/v0` handles invocation-local. Never persist them, use them as object IDs, or treat them as capabilities.
 - The generic WASM ABI must preserve canonical Value semantics; optimized/unboxed ABIs need explicit new contracts rather than silently narrowing Values.
 - Graph refs may cross the WASM boundary through receiver/argument/capture handles. Do not hide ref literals or ref message descriptors inside artifact metadata.
