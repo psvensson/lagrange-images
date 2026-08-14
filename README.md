@@ -67,6 +67,20 @@ source / IR / JAR / runtime image / manifest / lock / package / WASM
 - explicit vendored Cargo config/files with checksum validation
 - raw external WASM stored as `wasm-binary/v1`
 
+### Foreign runtime lifecycle
+
+Long-lived external runtimes now have a separate language-neutral lifecycle seam:
+
+```text
+ForeignRuntimeProviderRegistry
+        -> ForeignRuntimeService
+        -> start -> many calls -> stop
+```
+
+`createRuntime()` exposes `foreignRuntimeProviders` and `foreignRuntimes`. Provider handles remain private transient host state; callers receive a runtime-local descriptor rather than an `ObjectRef`. Calls carry frozen provider-specific interface data plus canonical Values and must return one canonical Value. `stop()` closes the call gate, waits for in-flight calls and then shuts the provider down. Normal `runtime.close()` owns active foreign runtimes before backend shutdown.
+
+The protocol deliberately does not yet define OCI/process launch details, durable runtime-definition artifacts, capabilities, retries or foreign-object handles. The next proof is the real OpenSmalltalkVM/Cuis runtime adapter.
+
 ### Foreign WASM callable boundary
 
 Raw external WASM is not automatically treated as Lagrange WASM.
@@ -172,7 +186,7 @@ The long-term goal is coexistence: native Symmetric Smalltalk and OpenSmalltalkV
 
 Compiled libraries and runtime images can remain compiled artifacts when that is the useful canonical form. A JAR does not need to be decompiled; a WASM component does not need to become source; a vendored crate can remain explicit package bytes/files; a compatible Smalltalk runtime image can remain an external runtime artifact.
 
-See [ADR 0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md) for the Smalltalk compatibility end state.
+See [ADR 0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md) for the Smalltalk compatibility end state and [ADR 0023](docs/decisions/0023-foreign-runtime-lifecycle-substrate.md) for the generic runtime lifecycle seam.
 
 ## Deterministic toolchain reuse
 
@@ -196,6 +210,9 @@ semantic code != executable artifact
 toolchain selection != toolchain identity
 provider cache opt-in != inferred determinism
 build OCI != foreign-runtime OCI
+runtime definition != running instance
+provider handle != ObjectRef
+runtime ID != capability
 foreign heap != image graph
 raw foreign WASM != Lagrange WASM ABI
 callable interface != authority
