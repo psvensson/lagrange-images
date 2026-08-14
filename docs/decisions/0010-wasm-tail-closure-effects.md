@@ -100,11 +100,14 @@ Closure-site imports grant no ambient image access. They may only materialize th
 
 Value handles remain invocation-local and are not capabilities.
 
+## Follow-up
+
+Automatic bottom-up WASM compilation/installation of complete nested Block trees is implemented by ADR 0011. The explicit prototype-edge and tail-effect rules above remain unchanged; ADR 0011 automates their assembly.
+
 ## Deferred
 
 - non-tail closure creation and resumed WASM execution
 - transient/non-materialized runtime closure handles
-- automatic WASM compilation of complete nested Block trees
 - mutable lexical cells and assignment
 - optimized closure layouts and WASM-GC representations
 - capability-aware privileged host effects
