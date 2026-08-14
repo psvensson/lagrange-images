@@ -4,13 +4,13 @@
 
 The platform should not be one VM per language. It provides a small shared substrate for durable values, refs, objects, code artifacts, compilation, execution, debugging and capabilities. A language personality maps its own semantics onto that substrate.
 
-Implemented now includes the language-neutral graph/Block model, single-artifact and group compiler registries, `lagrange-code/v0`, `neutral-expression/v0`, transient compilation groups, compiler-declared derivation reuse, the first Symmetric Smalltalk seed, and a real WASM backend with a Value-handle ABI, tail host effects, recursive Block-tree installation, multi-function shared modules and runtime-local host module compilation caching.
+Implemented now includes the language-neutral graph/Block model, single-artifact and group compiler registries, `lagrange-code/v0`, `neutral-expression/v0`, transient compilation groups, compiler-declared derivation reuse, the first Symmetric Smalltalk seed, and a real WASM backend with a Value-handle ABI, tail host effects, recursive Block-tree installation, multi-function shared modules, runtime-local compiled-module caching and explicit stateless instance reuse.
 
 ## Symmetric Smalltalk first, not Smalltalk-only
 
 The first language experiment is **Symmetric Smalltalk**: Smalltalk's object/message feel with Blocks pushed much further toward a universal executable/compositional form.
 
-Smalltalk owns its parser, lexical rules and message lookup. Those choices are not image-, compilation-group- or WASM-level contracts. Later Common Lisp, Java, Rust and other personalities may keep different semantic representations, grouping rules and ABIs while reusing durable identity, CodeArtifacts, derivation caching, activation/execution and WASM where useful.
+Smalltalk owns its parser, lexical rules and message lookup. Those choices are not image-, compilation-group- or WASM-level contracts. Later Common Lisp, Java, Rust and other personalities may keep different semantic representations, grouping rules, ABIs and runtime-state models while reusing durable identity, CodeArtifacts, derivation caching, activation/execution and WASM where useful.
 
 ## Semantic code versus executable code
 
@@ -156,16 +156,18 @@ The shared module keeps the provenance of the first exact artifact that produced
 
 The bootstrap cache lookup scans image CodeArtifacts by compiler identity + derivation key. The durable backend may later index that pair without changing the contract.
 
-## Runtime-local compiled module reuse
+## Runtime-local host reuse
 
-Artifact reuse and host execution reuse are separate layers:
+Durable artifact reuse and host execution reuse are separate layers:
 
 ```text
 semantic group
   -> reusable immutable wasm-module/v1 CodeArtifact
   -> runtime-local compiled WebAssembly.Module
-  -> fresh WebAssembly.Instance per activation
+  -> optionally pooled WebAssembly.Instance
 ```
+
+### Compiled modules
 
 `WasmModuleCache` caches the host engine's compiled `WebAssembly.Module` by immutable module-artifact identity inside one runtime. Different entries in one shared module therefore compile the physical bytes only once.
 
@@ -181,13 +183,59 @@ compilations
 failures
 ```
 
-Default executor registries own separate cache instances. A compiled host module therefore does not leak between image/runtime sessions merely because artifact IDs happen to match.
+### Instance reuse is explicit
 
-Instances are still fresh for every activation because their imports close over invocation-local Value handles, active send/closure sites and pending-effect state. Instance pooling requires a separate design.
+Instances are more stateful than compiled modules, so the executor does not infer that every `wasm-module/v1` is poolable.
 
-This execution cache is language-neutral below the WASM artifact boundary: future Smalltalk, Lisp, Java or Rust compilers that emit `wasm-module/v1` use it without source-language-specific cache rules.
+A module may explicitly declare:
 
-See ADR 0012, ADR 0013 and ADR 0014.
+```text
+metadata.instanceReuse = "stateless-v0"
+```
+
+The built-in Lagrange-code WASM compiler generation `compiler-v2` emits that contract because its modules do not carry activation-persistent guest memory, mutable globals/tables or another guest runtime heap/state model.
+
+A `stateless-v0` activation checks out a `WebAssembly.Instance` from the runtime-local `WasmInstancePool`. The instance was created once with rebindable imports. Each checkout binds a completely fresh host activation:
+
+```text
+ValueHandleArena
+active function descriptor
+active send-site set
+active closure-site set
+closure prototype refs
+pending tail-effect slot
+```
+
+After the synchronous entry returns, the executor validates/copies the result or pending tail-effect request, removes the host binding and returns the instance to the pool. Any asynchronous language send or closure materialization is awaited **after** the instance has been released.
+
+A trap or host/result-boundary violation retires the checked-out instance. It is not reused after an execution whose guest boundary did not complete cleanly.
+
+Modules with no `instanceReuse` marker remain one-shot. Unknown declared contracts are rejected rather than guessed.
+
+The default pool retains at most one idle instance per module and does not serialize concurrent calls. Additional concurrent demand creates additional instances; excess idle instances are discarded on return.
+
+Pool diagnostics are runtime-only:
+
+```text
+modules
+idle
+inUse
+hits
+misses
+created
+retired
+discarded
+```
+
+Default executor registries own separate module-cache and instance-pool objects. Neither leaks automatically between image/runtime sessions.
+
+### Multilingual consequence
+
+Compiled-module caching applies to any language that emits `wasm-module/v1`.
+
+Instance reuse is intentionally stricter. A future Java, Rust, Lisp or other backend with linear-memory heaps, mutable globals, TLS, GC/runtime state or meaningful initialization must not inherit `stateless-v0` just because Symmetric Smalltalk's first compiler can use it. Such a backend may remain one-shot or define a later explicit reset/reuse contract.
+
+See ADR 0012, ADR 0013, ADR 0014 and ADR 0015.
 
 ## WASM backend
 
@@ -235,7 +283,7 @@ Tail position propagates through `if`. Intermediate asynchronous results still r
 
 Closure-site metadata contains only semantic block/capture descriptors. Prototype Block refs remain explicit `wasm-function/v1.derivedFrom` edges.
 
-Runtime closure materialization still creates the ordinary `LexicalEnvironment + Block` image representation. Shared modules and host-module caching do not change that.
+Runtime closure materialization still creates the ordinary `LexicalEnvironment + Block` image representation. Shared modules and host caches/pools do not change that.
 
 ## Automatic complete Block trees
 
@@ -259,7 +307,7 @@ A tree corresponding to:
 [ :x | [ :y | [ :z | x ] ] ]
 ```
 
-uses one physical module with three exported entries, while the three semantic/function/prototype identities remain distinct.
+uses one physical module with three exported entries, while the three semantic/function/prototype identities remain distinct. Sequential activations may also use the same stateless host instance while receiving fresh Value/capture state each time.
 
 The existing whole-tree preflight still rejects unsupported deep non-tail effects before derived installation writes begin.
 
@@ -295,7 +343,7 @@ Java can layer JavaClass/JavaMethod/etc. objects plus Java-specific dispatch/cla
 
 ## Next open questions
 
-- `WebAssembly.Instance` pooling/reuse policy
+- reset/reuse contracts for WASM modules with mutable guest state
 - module-size/budget driven splitting of one logical group into several modules
 - direct optimized calls between entries inside a shared module
 - group policy/planner selection once several policies exist
