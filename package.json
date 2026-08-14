@@ -1,6 +1,6 @@
 {
   "name": "lagrange-images",
-  "version": "0.0.18",
+  "version": "0.0.19",
   "description": "Persistent image service and language platform for Lagrange",
   "type": "module",
   "main": "src/runtime.js",
