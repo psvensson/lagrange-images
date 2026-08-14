@@ -3,12 +3,13 @@ import {
   assertWasmFunctionArtifact,
   assertWasmModuleArtifact,
 } from '../code/wasm-artifacts.js';
-import {bytesFromBase64, canonicalizeValue, isObjectRef, isReference} from '../value/index.js';
+import {canonicalizeValue, isObjectRef, isReference} from '../value/index.js';
 import {
   WASM_IMPORT_MODULE,
   WASM_VALUE_HANDLE_ABI_V0,
   ValueHandleArena,
 } from './abi.js';
+import {WasmModuleCache} from './module-cache.js';
 
 function requireNonNegativeInteger(value, label) {
   if (!Number.isInteger(value) || value < 0) throw new TypeError(`${label} must be a non-negative integer`);
@@ -238,59 +239,65 @@ function createHostImports(arena, literals, sendSites, closureSites, descriptor,
   return {[WASM_IMPORT_MODULE]: lagrange};
 }
 
-const wasmFunctionV1Executor = Object.freeze({
-  async execute({activation, code}, context) {
-    assertWasmFunctionArtifact(code);
-    if (code.metadata.abi !== WASM_VALUE_HANDLE_ABI_V0) throw new TypeError(`unsupported WASM ABI: ${code.metadata.abi}`);
-    const parameterCount = requireNonNegativeInteger(code.metadata.parameters, 'WASM function parameter count');
-    const captureIds = normalizeCaptures(code.metadata.captures ?? []);
-    if (activation.arguments.length !== parameterCount) {
-      throw new TypeError(`WASM activation expected ${parameterCount} arguments, received ${activation.arguments.length}`);
-    }
-
-    const moduleRef = canonicalizeValue(code.content);
-    const moduleArtifact = await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
-    assertWasmModuleArtifact(moduleArtifact);
-    if (moduleArtifact.metadata?.abi !== WASM_VALUE_HANDLE_ABI_V0) throw new TypeError(`WASM module ABI does not match ${WASM_VALUE_HANDLE_ABI_V0}`);
-    const literals = normalizeLiterals(moduleArtifact.metadata?.literals ?? []);
-    const sendSites = normalizeSendSites(moduleArtifact.metadata?.sendSites ?? []);
-    const closureSites = normalizeClosureSites(moduleArtifact.metadata?.closureSites ?? []);
-    const descriptor = activeFunctionDescriptor(code, moduleArtifact, sendSites, closureSites);
-    const closurePrototypes = normalizeClosurePrototypes(code, descriptor, closureSites);
-    const bytesValue = bytesFromBase64(moduleArtifact.content.base64);
-    const bytes = Buffer.from(bytesValue.base64, 'base64');
-    if (!WebAssembly.validate(bytes)) throw new TypeError('WASM module bytes failed validation');
-
-    const arena = new ValueHandleArena();
-    const receiverHandle = activation.receiver === null ? 0 : arena.put(activation.receiver);
-    const argumentHandles = activation.arguments.map((value) => arena.put(value));
-    const captureHandles = [];
-    for (const bindingId of captureIds) captureHandles.push(arena.put(await context.lookupBinding(bindingId)));
-
-    const pending = {effect: null};
-    const {instance} = await WebAssembly.instantiate(
-      bytes,
-      createHostImports(arena, literals, sendSites, closureSites, descriptor, closurePrototypes, pending),
-    );
-    const entry = instance.exports[code.metadata.entry];
-    if (typeof entry !== 'function') throw new TypeError(`WASM function entry not found: ${code.metadata.entry}`);
-    const resultHandle = entry(receiverHandle, ...argumentHandles, ...captureHandles);
-
-    if (pending.effect !== null) {
-      if (resultHandle !== 0) throw new TypeError('WASM tail host effect must return reserved handle 0');
-      if (pending.effect.kind === 'send') {
-        if (typeof context.sendMessage !== 'function') throw new TypeError('WASM message send requires a message runtime');
-        return canonicalizeValue(await context.sendMessage(pending.effect.request));
+function createWasmFunctionV1Executor({moduleCache = new WasmModuleCache()} = {}) {
+  if (!moduleCache || typeof moduleCache.get !== 'function' || typeof moduleCache.stats !== 'function') {
+    throw new TypeError('moduleCache must be a WasmModuleCache-compatible object');
+  }
+  return Object.freeze({
+    moduleCache,
+    async execute({activation, code}, context) {
+      assertWasmFunctionArtifact(code);
+      if (code.metadata.abi !== WASM_VALUE_HANDLE_ABI_V0) throw new TypeError(`unsupported WASM ABI: ${code.metadata.abi}`);
+      const parameterCount = requireNonNegativeInteger(code.metadata.parameters, 'WASM function parameter count');
+      const captureIds = normalizeCaptures(code.metadata.captures ?? []);
+      if (activation.arguments.length !== parameterCount) {
+        throw new TypeError(`WASM activation expected ${parameterCount} arguments, received ${activation.arguments.length}`);
       }
-      if (pending.effect.kind === 'closure') {
-        if (typeof context.createClosure !== 'function') throw new TypeError('WASM closure creation requires a closure runtime');
-        return canonicalizeValue(await context.createClosure(pending.effect.request));
+
+      const moduleRef = canonicalizeValue(code.content);
+      const moduleArtifact = await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
+      assertWasmModuleArtifact(moduleArtifact);
+      if (moduleArtifact.metadata?.abi !== WASM_VALUE_HANDLE_ABI_V0) throw new TypeError(`WASM module ABI does not match ${WASM_VALUE_HANDLE_ABI_V0}`);
+      const literals = normalizeLiterals(moduleArtifact.metadata?.literals ?? []);
+      const sendSites = normalizeSendSites(moduleArtifact.metadata?.sendSites ?? []);
+      const closureSites = normalizeClosureSites(moduleArtifact.metadata?.closureSites ?? []);
+      const descriptor = activeFunctionDescriptor(code, moduleArtifact, sendSites, closureSites);
+      const closurePrototypes = normalizeClosurePrototypes(code, descriptor, closureSites);
+      const compiledModule = await moduleCache.get(moduleArtifact);
+
+      const arena = new ValueHandleArena();
+      const receiverHandle = activation.receiver === null ? 0 : arena.put(activation.receiver);
+      const argumentHandles = activation.arguments.map((value) => arena.put(value));
+      const captureHandles = [];
+      for (const bindingId of captureIds) captureHandles.push(arena.put(await context.lookupBinding(bindingId)));
+
+      const pending = {effect: null};
+      const instance = await WebAssembly.instantiate(
+        compiledModule,
+        createHostImports(arena, literals, sendSites, closureSites, descriptor, closurePrototypes, pending),
+      );
+      const entry = instance.exports[code.metadata.entry];
+      if (typeof entry !== 'function') throw new TypeError(`WASM function entry not found: ${code.metadata.entry}`);
+      const resultHandle = entry(receiverHandle, ...argumentHandles, ...captureHandles);
+
+      if (pending.effect !== null) {
+        if (resultHandle !== 0) throw new TypeError('WASM tail host effect must return reserved handle 0');
+        if (pending.effect.kind === 'send') {
+          if (typeof context.sendMessage !== 'function') throw new TypeError('WASM message send requires a message runtime');
+          return canonicalizeValue(await context.sendMessage(pending.effect.request));
+        }
+        if (pending.effect.kind === 'closure') {
+          if (typeof context.createClosure !== 'function') throw new TypeError('WASM closure creation requires a closure runtime');
+          return canonicalizeValue(await context.createClosure(pending.effect.request));
+        }
+        throw new TypeError(`unknown WASM host effect kind: ${pending.effect.kind}`);
       }
-      throw new TypeError(`unknown WASM host effect kind: ${pending.effect.kind}`);
-    }
 
-    return arena.get(resultHandle, 'WASM result handle');
-  },
-});
+      return arena.get(resultHandle, 'WASM result handle');
+    },
+  });
+}
 
-export {wasmFunctionV1Executor};
+const wasmFunctionV1Executor = createWasmFunctionV1Executor();
+
+export {createWasmFunctionV1Executor, wasmFunctionV1Executor};
