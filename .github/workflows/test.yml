@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts
-      - name: Download pinned OpenSmalltalkVM and Cuis image
+      - name: Download pinned OpenSmalltalkVM, Cuis image and JSON package
         shell: bash
         run: |
           set -euo pipefail
@@ -42,20 +42,24 @@ jobs:
           tar -xzf .integration/opensmalltalk-vm/vm.tar.gz -C .integration/opensmalltalk-vm
 
           CUIS_COMMIT=6bcee3f38ce037c9714b997ccd3b5b3ff62965c8
-          CUIS_RAW="https://raw.githubusercontent.com/Cuis-Smalltalk/Cuis-Smalltalk-Dev/$CUIS_COMMIT/CuisImage"
+          CUIS_ROOT="https://raw.githubusercontent.com/Cuis-Smalltalk/Cuis-Smalltalk-Dev/$CUIS_COMMIT"
+          CUIS_IMAGE_ROOT="$CUIS_ROOT/CuisImage"
           curl --fail --location --retry 3 \
             --output .integration/cuis/Cuis7.9-8090.image \
-            "$CUIS_RAW/Cuis7.9-8090.image"
+            "$CUIS_IMAGE_ROOT/Cuis7.9-8090.image"
           test "$(git hash-object .integration/cuis/Cuis7.9-8090.image)" = '523dc5e74b5b550922b56ff2406415c19700ee8e'
 
-          # Keep the matching changes and sources alongside the image, as the
-          # upstream Cuis CI layout does. The immutable commit URL pins them.
           curl --fail --location --retry 3 \
             --output .integration/cuis/Cuis7.9-8090.changes \
-            "$CUIS_RAW/Cuis7.9-8090.changes"
+            "$CUIS_IMAGE_ROOT/Cuis7.9-8090.changes"
           curl --fail --location --retry 3 \
             --output .integration/cuis/Cuis7.8.sources \
-            "$CUIS_RAW/Cuis7.8.sources"
+            "$CUIS_IMAGE_ROOT/Cuis7.8.sources"
+
+          curl --fail --location --retry 3 \
+            --output .integration/cuis/JSON.pck.st \
+            "$CUIS_ROOT/Packages/Features/JSON.pck.st"
+          test "$(git hash-object .integration/cuis/JSON.pck.st)" = '47fab65d0d9017d706aa07d39ab0451619488ccd'
 
           VM_PATH="$(find .integration/opensmalltalk-vm -type f -name squeak -perm -111 -print -quit)"
           if [ -z "$VM_PATH" ]; then
@@ -64,11 +68,12 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$VM_PATH" > .integration/opensmalltalk-vm/path
-      - name: Run real OpenSmalltalkVM + Cuis proof
+      - name: Run real OpenSmalltalkVM + Cuis package proof
         shell: bash
         run: |
           set -euo pipefail
           export LAGRANGE_OPENSMALLTALK_INTEGRATION=1
           export LAGRANGE_OPENSMALLTALK_VM_PATH="$(cat .integration/opensmalltalk-vm/path)"
           export LAGRANGE_CUIS_IMAGE_PATH="$PWD/.integration/cuis/Cuis7.9-8090.image"
+          export LAGRANGE_CUIS_JSON_PACKAGE_PATH="$PWD/.integration/cuis/JSON.pck.st"
           node --test test/opensmalltalk-cuis-real.test.js
