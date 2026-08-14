@@ -41,16 +41,18 @@ function compilerCacheContract(compiler) {
   return Object.freeze({identity, cacheKey});
 }
 
-async function createDerivationDescriptor(compiler, request, context = {}) {
+async function createDerivationDescriptor(compiler, request, context = {}, artifactMetadata = {}) {
   const contract = compilerCacheContract(compiler);
   if (!contract) return null;
   const material = await contract.cacheKey(request, context);
   const normalized = normalizeKeyMaterial(material);
+  const normalizedMetadata = normalizeKeyMaterial(artifactMetadata, 'compiled artifact metadata');
   const payload = JSON.stringify([
     DERIVATION_KEY_VERSION,
     contract.identity,
     request.targetRepresentation,
     normalized,
+    normalizedMetadata,
   ]);
   const key = createHash('sha256').update(payload).digest('hex');
   return Object.freeze({compilerIdentity: contract.identity, derivationKey: key});
