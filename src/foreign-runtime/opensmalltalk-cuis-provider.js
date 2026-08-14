@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {copyFile, mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {VALUE_KIND, booleanValue, canonicalizeValue, integerValue} from '../value/index.js';
@@ -37,9 +37,31 @@ function providerIdentity(vmIdentity, imageIdentity) {
   return `${OPENSMALLTALK_CUIS_PROVIDER_V0}/${digest}`;
 }
 
+function normalizePackageSpec(value, index) {
+  exactKeys(value, ['identity', 'path'], `OpenSmalltalk Cuis package ${index}`);
+  return Object.freeze({
+    identity: requiredText(value.identity, `OpenSmalltalk Cuis package ${index} identity`),
+    path: resolve(requiredText(value.path, `OpenSmalltalk Cuis package ${index} path`)),
+  });
+}
+
 function normalizeStartSpec(spec) {
-  exactKeys(spec, [], 'OpenSmalltalk Cuis runtime spec');
-  return spec;
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+    throw new TypeError('OpenSmalltalk Cuis runtime spec must be an object');
+  }
+  const keys = Object.keys(spec);
+  if (keys.some((key) => key !== 'packages')) {
+    throw new TypeError('OpenSmalltalk Cuis runtime spec supports only packages');
+  }
+  const packages = spec.packages ?? [];
+  if (!Array.isArray(packages)) throw new TypeError('OpenSmalltalk Cuis packages must be an array');
+  const normalized = packages.map((entry, index) => normalizePackageSpec(entry, index));
+  const identities = new Set();
+  for (const entry of normalized) {
+    if (identities.has(entry.identity)) throw new TypeError(`duplicate OpenSmalltalk Cuis package identity: ${entry.identity}`);
+    identities.add(entry.identity);
+  }
+  return Object.freeze({packages: Object.freeze(normalized)});
 }
 
 function normalizeInterface(value) {
@@ -48,10 +70,9 @@ function normalizeInterface(value) {
   const operation = requiredText(value.operation, 'OpenSmalltalk Cuis interface operation');
   if (!SAFE_NAME.test(service)) throw new TypeError('OpenSmalltalk Cuis interface service contains unsafe characters');
   if (!SAFE_NAME.test(operation)) throw new TypeError('OpenSmalltalk Cuis interface operation contains unsafe characters');
-  if (service !== 'proof') throw new TypeError(`OpenSmalltalk Cuis service not exported: ${service}`);
-  if (!['add', 'factorial'].includes(operation)) {
-    throw new TypeError(`OpenSmalltalk Cuis operation not exported: ${operation}`);
-  }
+  const exported = (service === 'proof' && ['add', 'factorial'].includes(operation))
+    || (service === 'json' && operation === 'package-proof');
+  if (!exported) throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
   return Object.freeze({service, operation});
 }
 
@@ -70,14 +91,23 @@ function decodeBridgeValue(token) {
   throw new TypeError(`invalid OpenSmalltalk Cuis bridge Value: ${token}`);
 }
 
-function expectedArity(operation) {
-  if (operation === 'add') return 2;
-  if (operation === 'factorial') return 1;
-  throw new TypeError(`OpenSmalltalk Cuis operation not exported: ${operation}`);
+function expectedArity(service, operation) {
+  if (service === 'proof' && operation === 'add') return 2;
+  if (service === 'proof' && operation === 'factorial') return 1;
+  if (service === 'json' && operation === 'package-proof') return 0;
+  throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
 }
 
-function bridgeSource() {
-  return `| input output service done line fields requestId operation result decode encode readLine |
+function packageInstallSource(packageCount) {
+  return Array.from({length: packageCount}, (_, index) =>
+    `CodePackageFile installPackage: DirectoryEntry currentDirectory // 'package-${index}.pck.st'.`)
+    .join('\n');
+}
+
+function bridgeSource(packageCount = 0) {
+  const installPackages = packageInstallSource(packageCount);
+  return `| input output service done line fields requestId serviceName operation result decode encode readLine |
+${installPackages}
 Object subclass: #LagrangeProofService
     instanceVariableNames: ''
     classVariableNames: ''
@@ -85,6 +115,7 @@ Object subclass: #LagrangeProofService
     category: 'Lagrange-Bridge'.
 LagrangeProofService compile: 'add: a to: b\n    ^ a + b'.
 LagrangeProofService compile: 'factorial: n\n    n < 0 ifTrue: [ Error signal: ''factorial requires a non-negative integer'' ].\n    n = 0 ifTrue: [ ^ 1 ].\n    ^ n * (self factorial: n - 1)'.
+LagrangeProofService compile: 'jsonPackageProof\n    | jsonClass parsed rendered reparsed numbers nested |\n    jsonClass := Smalltalk at: #Json.\n    parsed := jsonClass readFrom: ''{"numbers":[3,5,8],"ok":true,"nested":{"name":"cuis"}}'' readStream.\n    rendered := jsonClass render: parsed.\n    reparsed := jsonClass readFrom: rendered readStream.\n    numbers := reparsed at: ''numbers''.\n    nested := reparsed at: ''nested''.\n    ^ (((numbers at: 1) + (numbers at: 2) + (numbers at: 3)) = 16)\n        and: [ (reparsed at: ''ok'') = true\n        and: [ (nested at: ''name'') = ''cuis'' ]]'.
 service := LagrangeProofService new.
 input := StdIOReadStream stdin.
 output := StdIOWriteStream stdout.
@@ -136,20 +167,25 @@ done := false.
                     [
                         ((fields at: 1) = 'CALL' and: [ fields size >= 4 ])
                             ifFalse: [ Error signal: 'bad request' ].
-                        (fields at: 3) = 'proof' ifFalse: [ Error signal: 'unknown service' ].
+                        serviceName := fields at: 3.
                         operation := fields at: 4.
-                        operation = 'add'
+                        (serviceName = 'proof' and: [ operation = 'add' ])
                             ifTrue: [
                                 fields size = 6 ifFalse: [ Error signal: 'bad arity' ].
                                 result := service
                                     add: (decode value: (fields at: 5))
                                     to: (decode value: (fields at: 6)) ]
                             ifFalse: [
-                                operation = 'factorial'
+                                (serviceName = 'proof' and: [ operation = 'factorial' ])
                                     ifTrue: [
                                         fields size = 5 ifFalse: [ Error signal: 'bad arity' ].
                                         result := service factorial: (decode value: (fields at: 5)) ]
-                                    ifFalse: [ Error signal: 'unknown operation' ] ].
+                                    ifFalse: [
+                                        (serviceName = 'json' and: [ operation = 'package-proof' ])
+                                            ifTrue: [
+                                                fields size = 4 ifFalse: [ Error signal: 'bad arity' ].
+                                                result := service jsonPackageProof ]
+                                            ifFalse: [ Error signal: 'unknown operation' ] ] ].
                         output
                             nextPutAll: 'OK';
                             nextPut: Character tab;
@@ -231,13 +267,16 @@ function createOpenSmalltalkCuisProvider({
     vmIdentity: stableVmIdentity,
     imageIdentity: stableImageIdentity,
     async start(request) {
-      normalizeStartSpec(request.spec);
+      const spec = normalizeStartSpec(request.spec);
       await mkdir(root, {recursive: true});
       const workspace = await mkdtemp(join(root, 'lagrange-cuis-runtime-'));
       const scriptPath = join(workspace, 'lagrange-bridge.st');
       let session = null;
       try {
-        await writeFile(scriptPath, bridgeSource(), 'utf8');
+        for (let index = 0; index < spec.packages.length; index += 1) {
+          await copyFile(spec.packages[index].path, join(workspace, `package-${index}.pck.st`));
+        }
+        await writeFile(scriptPath, bridgeSource(spec.packages.length), 'utf8');
         session = await runner.start({
           command: executable,
           args: ['-vm-sound-null', '-vm-display-null', image, '-s', scriptPath],
@@ -263,6 +302,7 @@ function createOpenSmalltalkCuisProvider({
             bridgeProtocol: CUIS_STDIO_BRIDGE_V0,
             vmIdentity: stableVmIdentity,
             imageIdentity: stableImageIdentity,
+            packages: spec.packages.map(({identity: packageIdentity}) => Object.freeze({identity: packageIdentity})),
           }),
         });
       } catch (error) {
@@ -273,9 +313,9 @@ function createOpenSmalltalkCuisProvider({
     },
     async call(handle, request) {
       const callable = normalizeInterface(request.interface);
-      const arity = expectedArity(callable.operation);
+      const arity = expectedArity(callable.service, callable.operation);
       if (request.arguments.length !== arity) {
-        throw new TypeError(`OpenSmalltalk Cuis ${callable.operation} expects ${arity} arguments`);
+        throw new TypeError(`OpenSmalltalk Cuis ${callable.service}/${callable.operation} expects ${arity} arguments`);
       }
       const encoded = request.arguments.map(encodeBridgeValue);
       return await queueCall(handle, async () => {
