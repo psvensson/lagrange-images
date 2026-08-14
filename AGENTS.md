@@ -46,6 +46,7 @@ durable representation != execution representation
 semantic code != executable artifact
 WASM handle != image identity
 compilation group != source-language construct
+shared module != function/Block identity
 ```
 
 - Object slots contain only tagged Values; do not reintroduce arbitrary nested JSON state.
@@ -61,27 +62,33 @@ compilation group != source-language construct
 
 - Preserve language source -> syntax -> semantic code -> derived execution artifacts.
 - Executable artifacts are rebuildable state, never the sole surviving meaning of a program.
-- Add lowering backends through `CodeCompilerRegistry`; do not teach language compilers about executor internals.
+- Add single-source lowering backends through `CodeCompilerRegistry` and grouped backends through `CompilationGroupCompilerRegistry`; do not teach language compilers about executor internals.
 - Compilation groups are transient compiler/planner values. The substrate may validate members/target/policy IDs but must not assume that a group is a Smalltalk Block tree, Java class, Rust crate or Lisp file.
 - Physical module grouping belongs to compiler policy. One logical group may produce one module, many modules or another executable representation.
+- `CompilationService.compileGroup()` must keep every semantic member as an explicit `derivedFrom` edge on the grouped executable artifact.
 - Reuse is allowed only when a compiler explicitly declares a stable `identity` and deterministic `cacheKey()`. Never infer cache equivalence from filenames, Block IDs, source-language names or target representation alone.
 - Compiler cache keys must include every input that can change emitted executable meaning. Changing ABI/compiler semantics requires changing compiler identity or key material.
-- A reused immutable executable may be shared by distinct installations, but function/Block/image identity must remain distinct unless the language semantics explicitly say otherwise.
+- A reused immutable executable may be shared by distinct installations, but function/Block/image identity must remain distinct unless language semantics explicitly say otherwise.
 - Keep current-installation provenance explicit in wrapper/function artifacts even when a lower-level module artifact is reused from an earlier equivalent derivation.
 - Derivation-key lookup is currently a scan; backend indexing is an optimization, not a semantic change.
+
+## WASM
+
 - WASM belongs in `wasm-module/v1` / `wasm-function/v1` CodeArtifacts, not in Block/image identity fields.
+- A shared `wasm-module/v1` may contain several exported entries, but each semantic member still gets its own `wasm-function/v1` and Block/prototype identity.
+- Module function descriptors may refer to semantic members by `derivedFrom` index only; do not hide graph refs in module metadata.
+- A shared module's global import table does not grant ambient use of every host-effect site. The executor must select one entry descriptor and enable only that function's declared send/closure sites.
 - Keep `lagrange-value-handle/v0` handles invocation-local. Never persist them, use them as object IDs, or treat them as capabilities.
 - The generic WASM ABI must preserve canonical Value semantics; optimized/unboxed ABIs need explicit new contracts rather than silently narrowing Values.
 - Graph refs may cross the WASM boundary through receiver/argument/capture handles. Do not hide ref literals or ref message descriptors inside artifact metadata.
 - WASM language sends use explicit tail effects: `send_site_N` records one pending request, WASM returns reserved handle `0`, then the executor resumes normal asynchronous dispatch outside WASM.
 - WASM nested Block materialization likewise uses `make_block_site_N` as a tail effect. Closure-site metadata contains only semantic block/capture descriptors.
-- Prototype Block refs for WASM closure sites must be explicit `wasm-function/v1.derivedFrom` edges; metadata may contain only the corresponding indices, never hidden refs.
+- Prototype Block refs for WASM closure sites must be explicit `wasm-function/v1.derivedFrom` edges; metadata may contain only indices/descriptors, never hidden refs.
 - WASM-created closures must use the common `ActivationExecutor.createClosure` path and return ordinary Block refs. Do not create a WASM-specific closure identity or invocation path.
-- Use `installWasmBlockTree()` for normal complete-tree WASM installation. It must recurse bottom-up through direct semantic children and feed explicit child prototype refs through the existing low-level compiler API.
-- Keep whole-tree preflight ahead of derived writes so unsupported deep semantics do not leave partially assembled WASM trees.
+- Use `installWasmBlockTree()` for normal complete-tree WASM installation. It must preflight the semantic tree and multi-entry module before derived writes, compile/reuse one grouped module, then assemble per-entry function/prototype Blocks bottom-up.
 - Automatically created nested semantic artifacts remain `lagrange-code/v0` derived from their immediate semantic parent; do not make WASM artifacts the only surviving copy of nested meaning.
-- `compileWasmFunctionArtifact()` remains the deliberate low-level seam for mixed/custom prototype assembly; do not duplicate its graph-edge rules in a competing compiler path.
-- Do not compile non-tail asynchronous WASM sends or closure materialization by replaying, blocking, or silently falling back. Add an explicit continuation/async ABI before broadening that contract.
+- `compileWasmFunctionArtifact()` remains the low-level single-function/custom assembly seam; `assembleWasmFunctionArtifact()` is the low-level seam for binding a semantic member to an existing module entry.
+- Do not compile non-tail asynchronous WASM sends or closure materialization by replaying, blocking or silently falling back. Add an explicit continuation/async ABI before broadening that contract.
 - Host send effects must still use the normal language dispatcher/ActivationExecutor. Closure prototypes may use any registered execution representation.
 - Unsupported WASM semantic operations must fail explicitly; do not silently fall back to another executor when WASM was requested.
 - Keep interpreter/WASM differential or conformance tests for every semantic operation added to the WASM backend.
