@@ -18,7 +18,9 @@ The programming model is also **not source-code-only**: source, bytecode/package
 - frozen transitive artifact-graph requests for toolchain providers
 - multi-output toolchain results persisted with automatic input provenance and transient diagnostics
 - digest-pinned Docker/Podman-style OCI build runner
-- first real Cargo/rustc OCI provider using explicit manifest/lock/source artifacts
+- Cargo/rustc OCI provider using explicit manifest/lock/source artifacts
+- explicit Cargo vendor config/file artifacts for third-party directory-source dependencies
+- pre-OCI validation of vendored package `Cargo.toml` / `.cargo-checksum.json` file sets and SHA-256 checksums
 - raw Cargo-produced WASM import as `wasm-binary/v1`
 - transient message dispatch and activation requests
 - single-artifact and grouped compiler registries/services
@@ -40,7 +42,7 @@ The programming model is also **not source-code-only**: source, bytecode/package
 - reference walking, optimistic versions, history and snapshots
 - in-memory mock backend plus optional `lagrange-server` probing
 
-Planned, not implemented yet, includes external-toolchain derivation caching, explicit vendored Cargo dependency materialization, callable interfaces for foreign/raw WASM, Java/JAR adapters, WASM Component interfaces and explicit OCI foreign-runtime adapters.
+Planned, not implemented yet, includes external-toolchain derivation caching, standard `.crate`/git/private-registry dependency importers, callable interfaces for foreign/raw WASM, Java/JAR adapters, WASM Component interfaces and explicit OCI foreign-runtime adapters.
 
 Core invariants:
 
@@ -154,7 +156,7 @@ provider.identity   example-toolchain/v1
 
 The first protocol is `lagrange-toolchain-provider/v0`.
 
-### First OCI Cargo/rustc provider
+### OCI Cargo/rustc provider
 
 The first real external provider reuses Cargo and `rustc` inside a digest-pinned OCI build image:
 
@@ -171,7 +173,7 @@ const runtime = await createRuntime({
 });
 ```
 
-The Cargo manifest is the root artifact. Its dependency closure must contain exactly one lock artifact and one or more Rust source artifacts:
+The Cargo manifest is the root artifact. A self-contained build needs exactly one lock artifact and one or more Rust source artifacts:
 
 ```text
 rust/cargo-manifest-v1
@@ -195,11 +197,56 @@ const result = await runtime.toolchains.run({
 });
 ```
 
-The provider materializes a private temporary Cargo workspace, runs Cargo frozen/offline with the OCI container network disabled, imports the expected `.wasm`, validates its WASM header, and deletes the workspace afterward. The pinned image must already contain Cargo/rustc and the requested target.
+The provider materializes a private temporary Cargo workspace, runs Cargo with `--frozen` and the OCI container network disabled, imports the expected `.wasm`, validates its WASM header, and deletes the workspace afterward. The pinned image must already contain Cargo/rustc and the requested target.
 
-Only `rust/cargo-manifest-v1`, `rust/cargo-lock-v1` and `rust/source-v1` inputs are supported in this first slice. Unknown dependency representations fail rather than being silently ignored. Third-party crate support should therefore add explicit vendored/package/config artifacts instead of allowing hidden network fetches.
+### Explicit vendored Cargo dependencies
 
-The output representation is deliberately:
+The same provider now supports a Cargo directory source without allowing network/cache discovery. A manifest may additionally depend on:
+
+```text
+rust/cargo-config-v1
+rust/cargo-vendor-file-v1
+```
+
+The first config contract is intentionally exact and represents only crates.io source replacement with the explicit `vendor/` directory:
+
+```toml
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+```
+
+Vendored files carry their materialized path in metadata:
+
+```js
+{
+  representation: RUST_CARGO_VENDOR_FILE_V1,
+  content: textValue('...'), // or bytesValue(...)
+  metadata: {path: 'vendor/example-1.2.3/src/lib.rs'},
+}
+```
+
+Each immediate package directory under `vendor/` must contain explicit `Cargo.toml` and `.cargo-checksum.json` artifacts. Before OCI execution the provider verifies that the checksum file describes exactly the explicit package files and that every file SHA-256 matches. Binary vendored files are supported as bytes Values.
+
+A vendored graph therefore looks like:
+
+```text
+rust/cargo-manifest-v1
+  -> rust/source-v1
+  -> rust/cargo-lock-v1
+  -> rust/cargo-config-v1
+  -> rust/cargo-vendor-file-v1   vendor/tiny_math/Cargo.toml
+  -> rust/cargo-vendor-file-v1   vendor/tiny_math/src/lib.rs
+  -> rust/cargo-vendor-file-v1   vendor/tiny_math/.cargo-checksum.json
+```
+
+The provider still runs with OCI network `none` and `cargo build --frozen`; it does not call `cargo fetch`, `cargo vendor` or another dependency-discovery step. Acquisition/import of third-party package bytes is separate from compilation.
+
+New providers use stable identity `cargo-rustc-oci/v1/<image-digest>` because the supported input contract changed. Output metadata records whether vendoring was used and how many vendor package directories were validated. All manifest/source/lock/config/vendor inputs remain ordinary `derivedFrom` provenance on the raw WASM output.
+
+The output representation remains deliberately:
 
 ```text
 wasm-binary/v1
@@ -253,7 +300,7 @@ image callable/interface -> adapter -> live JVM/native/Python/etc. container
 
 These are deliberately separate. Build containers are reproducible toolchain machinery and disappear after the build; foreign-runtime containers remain part of execution and have a stronger compatibility boundary. Objects in a JVM or other foreign heap do not automatically become durable image objects.
 
-See [ADR 0016](docs/decisions/0016-artifacts-external-toolchains-and-foreign-runtimes.md), [ADR 0017](docs/decisions/0017-artifact-dependencies-and-toolchain-providers.md), [ADR 0018](docs/decisions/0018-oci-cargo-rustc-provider.md) and the [language platform](docs/language-platform.md).
+See [ADR 0016](docs/decisions/0016-artifacts-external-toolchains-and-foreign-runtimes.md), [ADR 0017](docs/decisions/0017-artifact-dependencies-and-toolchain-providers.md), [ADR 0018](docs/decisions/0018-oci-cargo-rustc-provider.md), [ADR 0019](docs/decisions/0019-explicit-vendored-cargo-dependencies.md) and the [language platform](docs/language-platform.md).
 
 ## WASM backend
 
@@ -402,7 +449,7 @@ The generic compilation layer has separate registries for single-artifact and gr
 
 The substrate does not assume that a group means a Smalltalk Block tree. Java may group classes/packages, Rust codegen units/crates, Lisp compilation units, etc. A logical group may map to one physical module or several according to compiler/toolchain policy.
 
-Compiler-derived artifact reuse is implemented through stable compiler identity + deterministic cache keys. `ToolchainService` does **not** yet cache external-toolchain results; that later contract must include toolchain identity plus target/options and dependency/manifest/lock fingerprints, and OCI-backed providers must include their pinned build-image identity/digest.
+Compiler-derived artifact reuse is implemented through stable compiler identity + deterministic cache keys. `ToolchainService` does **not** yet cache external-toolchain results; that later contract must include toolchain identity plus target/options and dependency/manifest/lock/vendor fingerprints, and OCI-backed providers must include their pinned build-image identity/digest.
 
 There are now three implemented WASM reuse layers:
 
@@ -414,7 +461,7 @@ runtime instance reuse:    stateless module -> rebound pooled WebAssembly.Instan
 
 None merges language/image identity or invocation-local Value/capability state.
 
-See ADR 0012 through ADR 0018.
+See ADR 0012 through ADR 0019.
 
 ## Values and objects
 
@@ -469,3 +516,4 @@ Do not import `lagrange-server/src/...`; use public package seams only.
 - [ADR 0016: artifact graphs, external toolchains and foreign runtimes](docs/decisions/0016-artifacts-external-toolchains-and-foreign-runtimes.md)
 - [ADR 0017: artifact dependencies and toolchain providers](docs/decisions/0017-artifact-dependencies-and-toolchain-providers.md)
 - [ADR 0018: first OCI-backed Cargo/rustc provider](docs/decisions/0018-oci-cargo-rustc-provider.md)
+- [ADR 0019: explicit vendored Cargo dependencies](docs/decisions/0019-explicit-vendored-cargo-dependencies.md)
