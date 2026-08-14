@@ -96,6 +96,36 @@ test('foreign runtime service keeps provider handles private and returns canonic
   assert.throws(() => service.get(instance.runtimeId), ForeignRuntimeInstanceNotFoundError);
 });
 
+test('invalid provider start results clean up an already-created opaque runtime handle', async () => {
+  const handle = {started: true};
+  let stopped = false;
+  const provider = Object.freeze({
+    identity: 'invalid-start/v1',
+    async start() {
+      return {
+        handle,
+        metadata: {bad: new Date()},
+      };
+    },
+    async call() { return integerValue(0); },
+    async stop(observedHandle) {
+      assert.equal(observedHandle, handle);
+      observedHandle.stopped = true;
+      stopped = true;
+    },
+  });
+  const service = new ForeignRuntimeService({
+    providers: new ForeignRuntimeProviderRegistry([['invalid/default', provider]]),
+  });
+  await assert.rejects(
+    service.start({providerId: 'invalid/default'}),
+    /foreign runtime start metadata objects must be plain records/,
+  );
+  assert.equal(stopped, true);
+  assert.equal(handle.stopped, true);
+  assert.deepEqual(service.list(), []);
+});
+
 test('stop closes the call gate and waits for in-flight calls before provider shutdown', async () => {
   let enteredResolve;
   let releaseResolve;
