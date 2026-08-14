@@ -22,6 +22,8 @@ external Rust/Cargo project
 
 The first foreign callable ABI, `wasm-scalar-call/v0`, supports pure synchronous no-import scalar functions.
 
+The next major compatibility proof is to apply the same external-toolchain/foreign-runtime architecture to a real Smalltalk ecosystem through OpenSmalltalkVM.
+
 ## Next
 
 These are the highest-value pressure tests on the current abstractions.
@@ -42,7 +44,75 @@ These are the highest-value pressure tests on the current abstractions.
 
 Success: a nontrivial external library is callable from at least two language personalities through one implementation-independent interface.
 
-### 2. Real package import and toolchain integration
+### 2. OpenSmalltalkVM / Cuis compatibility path
+
+The end goal is two complementary Smalltalk paths rather than one compatibility implementation:
+
+```text
+native Symmetric Smalltalk
+          |
+          | shared projects/artifacts/interfaces/tools
+          |
+OpenSmalltalkVM-backed compatible Smalltalk
+          |
+          +-> native/OCI compatibility runtime
+          +-> optional later WASM-hosted interpreter runtime
+          `-> selective migration into native representations
+```
+
+#### A. Real compatibility runtime
+
+- [ ] define artifact conventions for OpenSmalltalkVM runtime/build identity and compatible Smalltalk image artifacts
+- [ ] define a foreign-runtime adapter contract that keeps the Spur heap separate from the Lagrange image graph
+- [ ] run a headless OpenSmalltalkVM + Cuis-compatible image as a managed foreign runtime, initially native/OCI
+- [ ] install a small bridge package in the Smalltalk image with explicitly exported service/call interfaces
+- [ ] invoke a real Smalltalk service from Lagrange Images through the common foreign-runtime/interface boundary
+- [ ] define lifecycle, restart and image/snapshot persistence behavior explicitly
+- [ ] prove one useful existing Cuis package/library works without source-level reimplementation in Lagrange Images
+
+Guardrails:
+
+```text
+Spur object memory != Lagrange image graph
+Spur oop != durable ObjectRef
+runtime handle != capability
+compatibility != mandatory migration
+```
+
+#### B. Real Smalltalk compiler/toolchain
+
+- [ ] add an OpenSmalltalkVM/Cuis toolchain provider over `ToolchainService`
+- [ ] treat VM/compiler-image version plus source/package artifacts and options as explicit deterministic toolchain inputs
+- [ ] compile/load a real Cuis source/package set using the real Smalltalk compiler rather than a new compatibility compiler
+- [ ] produce a reproducible runnable Smalltalk image artifact as the first useful derived output
+- [ ] opt deterministic builds into toolchain result reuse where the runtime/compiler inputs make that honest
+- [ ] expose compiler diagnostics/source mapping/provenance through the generic toolchain result contract
+
+#### C. Structured export and migration bridge
+
+- [ ] export classes, superclass relationships, methods/selectors and package/source relationships as structured artifacts
+- [ ] export CompiledMethod/bytecode/literal information where stable/useful
+- [ ] import those structures without treating foreign object pointers as durable identity
+- [ ] allow image-native projects/tools to inspect and relate foreign Smalltalk code while it still executes on OpenSmalltalkVM
+- [ ] prove a mixed project where an OpenSmalltalkVM service calls/uses a native Lagrange service or vice versa through explicit interfaces
+- [ ] lower or recompile selected compatible methods/functions into native Lagrange representations when semantics are sufficiently understood
+- [ ] measure which code benefits from native migration and leave the rest on the compatibility runtime
+
+#### D. Longer-term WASM-hosted compatibility runtime
+
+- [ ] identify/build the smallest headless interpreter-style OpenSmalltalk/Spur runtime suitable for a WASM port
+- [ ] compile the interpreter/runtime implementation to `wasm-binary/v1` without requiring a native-code-generating JIT
+- [ ] define a richer runtime/component interface for initialization, image loading, memory/string transport and exported Smalltalk services
+- [ ] add controlled capability-aware host callbacks and async effects only through explicit interface contracts
+- [ ] support runtime snapshot/export semantics without conflating guest heap state with image graph state
+- [ ] compare native/OCI OpenSmalltalkVM against WASM-hosted OpenSmalltalkVM for compatibility, startup, placement, sandboxing and performance
+- [ ] allow Lagrange placement of the WASM-hosted runtime where that produces a concrete benefit
+
+Success: a real compatible Smalltalk application/library can remain on OpenSmalltalkVM, participate in Lagrange image projects/interfaces/history, and selectively move code or the runtime itself toward native/WASM execution without a flag-day port.
+
+See ADR 0022 for the long-term architecture and non-goals.
+
+### 3. Real package import and toolchain integration
 
 - [x] generic artifact dependencies separate from provenance
 - [x] generic external ToolchainProvider/ToolchainService contract
@@ -59,7 +129,7 @@ Success: a nontrivial external library is callable from at least two language pe
 
 Success: import a normal ecosystem package/project, rebuild it without hidden network inputs, and reuse its immutable result across normal development iterations.
 
-### 3. Durable Lagrange backend
+### 4. Durable Lagrange backend
 
 - [ ] settle the public Lagrange embedding seam
 - [ ] map Values/refs/shapes/objects/artifacts/history to durable schema
@@ -95,7 +165,20 @@ Next:
 - [ ] immediate-value objects/primitives
 - [ ] REPL/workspace
 - [ ] bootstrap image
-- [ ] Cuis source/package importer and compatibility layer
+
+Symmetric Smalltalk should continue developing as the native language. Cuis compatibility no longer needs to be blocked on a hand-built native compatibility compiler because OpenSmalltalkVM is the preferred first compatibility path.
+
+### Compatible Smalltalk via OpenSmalltalkVM
+
+- [ ] runtime adapter + explicit service boundary
+- [ ] real Cuis-compatible image/package proof
+- [ ] real Smalltalk compiler/toolchain provider
+- [ ] structured class/method/package export
+- [ ] mixed foreign/native Smalltalk project proof
+- [ ] selective native lowering/compilation where useful
+- [ ] optional headless interpreter/Spur-to-WASM runtime proof
+
+The compatibility goal is to keep mature Smalltalk code useful while progressively exposing image identity/history/projects/capabilities and native Lagrange execution where it pays off.
 
 ### Common Lisp
 
@@ -163,9 +246,11 @@ Next:
 - [ ] capability handles separate from object refs
 - [ ] local vs remote call semantics
 - [ ] Lagrange WASM placement
-- [ ] foreign-runtime adapter contract
+- [ ] generic foreign-runtime adapter contract
 - [ ] OCI foreign-runtime lifecycle/placement
-- [ ] routing between image-native, component/foreign WASM and JVM/native runtimes
+- [ ] OpenSmalltalkVM foreign-runtime implementation using the generic contract
+- [ ] JVM foreign-runtime implementation using the generic contract
+- [ ] routing between image-native, component/foreign WASM and live foreign runtimes
 - [ ] explicit failure/retry/idempotency semantics
 - [ ] measured `ctx.call()` compute-near-object wins
 
@@ -185,14 +270,15 @@ Success: execution placement changes without changing object/artifact identity o
 
 - [ ] project objects and relationships
 - [ ] code + notes + tests + data + work items
-- [ ] first-class package/binary/component dependency relationships
-- [ ] manifest/lock artifacts as project members
+- [ ] first-class package/binary/component/runtime dependency relationships
+- [ ] manifest/lock/runtime-image artifacts as project members where applicable
+- [ ] projects that mix native code and OpenSmalltalkVM-backed code through explicit relationships/interfaces
 - [ ] branches/working views and object-level diffs
 - [ ] merge semantics
 - [ ] Git import/export as projection rather than canonical storage
 - [ ] multi-author conflict UI/API
 
-Success: an image project can mix editable source, compiled dependencies, data and work/history without reducing itself to files.
+Success: an image project can mix editable source, compiled dependencies, foreign runtime artifacts, data and work/history without reducing itself to files or pretending every runtime heap is native image state.
 
 ## Graphical environment
 
@@ -201,6 +287,7 @@ Success: an image project can mix editable source, compiled dependencies, data a
 - [ ] surfaces/windows
 - [ ] replaceable shell/window-manager policy
 - [ ] inspectors, browsers and debugger as image-resident tools
+- [ ] inspect/browse OpenSmalltalkVM-backed classes/methods/objects through explicit adapter handles without conflating their heap with the image graph
 
 ## Completed foundation
 
@@ -217,5 +304,7 @@ The following substrate is considered established enough to build on:
 - Cargo/rustc OCI integration with explicit package inputs
 - deterministic external-toolchain result reuse
 - first explicit foreign-WASM callable interface
+
+The OpenSmalltalkVM direction deliberately builds on these generic boundaries rather than adding a Smalltalk-specific storage/execution substrate.
 
 See [decisions/README.md](decisions/README.md) for the ADRs grouped by topic.

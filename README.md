@@ -15,7 +15,7 @@ Smalltalk | Lisp | Java | Rust | ...
 objects + Blocks + artifact graph
               |
 execution
-interpreter | Lagrange WASM | foreign WASM | later foreign runtimes
+interpreter | Lagrange WASM | foreign WASM | foreign runtimes
               |
 image backend
 mock now | Lagrange durable/distributed backend
@@ -24,13 +24,13 @@ mock now | Lagrange durable/distributed backend
 Programs are also artifact graphs, not source-only pipelines:
 
 ```text
-source / IR / JAR / manifest / lock / vendored package / WASM
-                         |
-                         v
-                compiler / toolchain
-                         |
-                         v
-                  derived artifacts
+source / IR / JAR / runtime image / manifest / lock / package / WASM
+                               |
+                               v
+                      compiler / toolchain
+                               |
+                               v
+                        derived artifacts
 ```
 
 `dependencies` says what an artifact uses. `derivedFrom` says how an immutable artifact was produced. They are deliberately different graph edges.
@@ -69,7 +69,7 @@ source / IR / JAR / manifest / lock / vendored package / WASM
 
 ### Foreign WASM callable boundary
 
-Raw external WASM is no longer automatically treated as Lagrange WASM.
+Raw external WASM is not automatically treated as Lagrange WASM.
 
 The first callable path is explicit:
 
@@ -132,10 +132,10 @@ language semantics
 ### External/foreign WASM
 
 ```text
-Rust/Java/etc. source or binary ecosystem
-      -> existing external toolchain
+existing source/binary ecosystem or runtime port
+      -> external toolchain
       -> wasm-binary/v1
-      -> explicit callable/component interface
+      -> explicit callable/component/runtime interface
       -> ActivationExecutor / later placement
 ```
 
@@ -143,7 +143,7 @@ Rust/Java/etc. source or binary ecosystem
 
 ## Existing language ecosystems
 
-Lagrange Images should not grow replacement compilers for mature languages just to support them.
+Lagrange Images should not grow replacement compilers or runtimes for mature languages merely to support them.
 
 ```text
 Rust source + Cargo graph
@@ -155,9 +155,24 @@ Java source + JARs
   -> bytecode/WASM/foreign runtime
 ```
 
-Symmetric Smalltalk is different because the language itself is being designed here.
+Smalltalk deliberately has two complementary paths:
 
-Compiled libraries can remain compiled artifacts when that is the useful canonical form. A JAR does not need to be decompiled; a WASM component does not need to become source; a vendored crate can remain explicit package bytes/files.
+```text
+Symmetric Smalltalk
+  -> image-native language designed here
+
+Cuis/Squeak-style compatible Smalltalk
+  -> OpenSmalltalkVM foreign runtime / toolchain
+  -> later optional structured migration or WASM-hosted runtime
+```
+
+OpenSmalltalkVM is the preferred first compatibility path because it lets established Smalltalk code keep using its real runtime/compiler semantics. Its Spur heap remains foreign runtime state rather than becoming the Lagrange image graph.
+
+The long-term goal is coexistence: native Symmetric Smalltalk and OpenSmalltalkVM-backed compatible Smalltalk should share projects, artifacts, interfaces and tools, with selective native migration only where useful.
+
+Compiled libraries and runtime images can remain compiled artifacts when that is the useful canonical form. A JAR does not need to be decompiled; a WASM component does not need to become source; a vendored crate can remain explicit package bytes/files; a compatible Smalltalk runtime image can remain an external runtime artifact.
+
+See [ADR 0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md) for the Smalltalk compatibility end state.
 
 ## Deterministic toolchain reuse
 
@@ -181,6 +196,7 @@ semantic code != executable artifact
 toolchain selection != toolchain identity
 provider cache opt-in != inferred determinism
 build OCI != foreign-runtime OCI
+foreign heap != image graph
 raw foreign WASM != Lagrange WASM ABI
 callable interface != authority
 compiled host module != durable code identity
