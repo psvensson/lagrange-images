@@ -69,13 +69,15 @@ Success: the same graph survives process/node restarts with no language/image se
 - [x] tail-position WASM message-send host effects through normal dispatch
 - [x] tail-position WASM closure materialization through normal Block/LexicalEnvironment semantics
 - [x] explicit closure prototype graph edges on `wasm-function/v1`
+- [x] automatic recursive WASM compilation/installation of complete nested Block trees
+- [x] whole-tree WASM preflight before derived installation writes
 - [ ] general non-tail asynchronous WASM effects/continuations
 - [ ] transient/non-materialized optimized closure representation
 - [ ] activations and debugger metadata
 - [ ] exception/condition substrate
 - [ ] capability-aware host/WASM FFI boundary
 
-Success: semantic code is independent of execution representation; pure code, tail language sends and returned nested closures can execute through real WASM while preserving the interpreter's Value/Block semantics.
+Success: one root semantic artifact can now produce a complete WASM-backed nested Block tree while preserving the same Value, capture, dispatch and image-level Block semantics as the interpreter.
 
 ## 5. Symmetric Smalltalk seed
 
@@ -92,6 +94,7 @@ Success: semantic code is independent of execution representation; pure code, ta
 - [x] ordinary `value*` sends to Blocks through the Smalltalk dispatcher
 - [x] tail Smalltalk sends from WASM back into ordinary language dispatch
 - [x] returned nested Smalltalk Blocks materialized from WASM with ordinary lexical captures
+- [x] complete nested Smalltalk semantic Block trees installable as WASM without manual prototype maps
 - [ ] create/use a nested Block inside one WASM activation
 - [ ] assignments, temporaries, sequences and cascades
 - [ ] Object/Behavior/Class/Metaclass bootstrap and inheritance
@@ -99,7 +102,7 @@ Success: semantic code is independent of execution representation; pure code, ta
 - [ ] REPL/workspace
 - [ ] bootstrap image
 
-Success for the current seed: nested Smalltalk closures execute in the interpreter and may be returned/materialized from WASM; ordinary tail sends also cross from WASM through unchanged Smalltalk lookup semantics.
+Success for the current seed: a Smalltalk semantic Block tree can be installed recursively as WASM, with returned closures and tail sends still using ordinary Smalltalk lookup and lexical capture semantics.
 
 ## 6. Projects and collaborative history
 
