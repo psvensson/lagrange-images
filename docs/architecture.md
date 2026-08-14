@@ -32,7 +32,7 @@ compiler/tooling
 artifact graph | toolchain providers | derivation reuse
                     |
 execution
-Blocks | dispatch | activations | executable interfaces | foreign-runtime adapters
+Blocks | dispatch | activations | executable interfaces | foreign-runtime service
                     |
 image graph
 Values | refs | objects | artifacts | history
@@ -57,6 +57,9 @@ dependency != provenance
 semantic code != executable artifact
 toolchain selection != toolchain identity
 build OCI != foreign-runtime OCI
+runtime definition != running instance
+provider handle != ObjectRef
+runtime ID != capability
 foreign heap != image graph
 raw foreign WASM != Lagrange WASM ABI
 callable interface != authority
@@ -271,7 +274,7 @@ OCI network = none
 
 Vendored registry-style packages are explicit graph artifacts. The provider validates package file sets and SHA-256 checksums before starting OCI.
 
-The build container is compiler machinery and disappears afterward. That is separate from a future live OCI foreign runtime.
+The build container is compiler machinery and disappears afterward. That is separate from a live foreign runtime.
 
 ## 10. Language personalities
 
@@ -335,7 +338,41 @@ A longer-term target is a headless interpreter-style OpenSmalltalk/Spur runtime 
 
 See ADR 0022 for the full direction and guardrails.
 
-## 12. Build OCI vs foreign-runtime OCI
+## 12. Foreign runtime lifecycle
+
+Long-lived external runtimes use a separate transient execution seam from toolchains:
+
+```text
+ForeignRuntimeProviderRegistry
+          |
+          v
+ForeignRuntimeService
+          |
+          +-> start(spec)
+          +-> call(runtimeId, interface, Values)
+          `-> stop(runtimeId)
+```
+
+The first provider protocol is `lagrange-foreign-runtime-provider/v0`.
+
+Provider selection ID and stable provider identity are separate. `ForeignRuntimeService` owns a runtime-local UUID and keeps the provider's opaque process/transport/VM handle private.
+
+```text
+runtime definition != running instance
+running instance != image object
+provider handle != ObjectRef
+runtime ID != capability
+```
+
+Provider-specific start/interface data is frozen plain data. Call arguments and results use canonical Values. The generic provider context intentionally exposes no ambient ImageService or capability minting API.
+
+`stop()` changes an instance to `stopping`, rejects new calls, waits for already accepted calls to settle, then invokes provider shutdown. `createRuntime.close()` owns normal shutdown of active foreign runtimes before backend shutdown.
+
+The v0 seam does not yet define process/OCI launch mechanics, durable runtime definitions, restart/reconciliation, distributed placement, foreign object handles, retries/idempotency or capability context. OpenSmalltalkVM is the next intended real provider and should pressure those missing parts.
+
+See ADR 0023 for the lifecycle contract.
+
+## 13. Build OCI vs foreign-runtime OCI
 
 The same external ecosystem may use OCI in two completely different roles:
 
@@ -349,7 +386,9 @@ foreign-runtime OCI
 
 This matters for both Java/JVM and OpenSmalltalkVM. Build reproducibility, runtime lifecycle, authority, failure semantics and placement belong to different contracts.
 
-## 13. Distribution and capabilities later
+The generic start/call/stop lifecycle is implemented; OCI process/container launching and placement are provider/deployment work still to come.
+
+## 14. Distribution and capabilities later
 
 The future execution decision can look like:
 
@@ -368,13 +407,13 @@ runtime placement policy
 
 Not every object send becomes RPC. Not every foreign call becomes an object message. Location, failure/retry policy and authority remain explicit runtime concerns.
 
-## 14. Current frontier
+## 15. Current frontier
 
-Implemented substrate now reaches from durable source/package artifacts through existing Cargo/rustc tooling to reusable raw WASM and a first explicit callable interface.
+Implemented substrate now reaches from durable source/package artifacts through existing Cargo/rustc tooling to reusable raw WASM and a first explicit callable interface, and it now has a language-neutral lifecycle for long-lived foreign runtimes.
 
 The next architectural pressure points are:
 
-- OpenSmalltalkVM/Cuis foreign-runtime + toolchain proof
+- real OpenSmalltalkVM/Cuis provider + headless compatibility runtime proof
 - richer foreign-WASM/component ABIs: strings, memory, records and WASI-like capabilities
 - WASM Component/WIT-style interfaces
 - standard Cargo `.crate` importer
