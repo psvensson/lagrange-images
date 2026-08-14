@@ -48,11 +48,16 @@ class WasmInstancePool {
       this.hits += 1;
     } else {
       this.misses += 1;
-      slot = await create();
-      if (!slot || typeof slot !== 'object' || !(slot.instance instanceof WebAssembly.Instance)) {
-        throw new TypeError('WASM instance pool factory must return a slot containing a WebAssembly.Instance');
+      try {
+        slot = await create();
+        if (!slot || typeof slot !== 'object' || !(slot.instance instanceof WebAssembly.Instance)) {
+          throw new TypeError('WASM instance pool factory must return a slot containing a WebAssembly.Instance');
+        }
+        this.created += 1;
+      } catch (error) {
+        if (state.inUse === 0 && state.idle.length === 0) this.modules.delete(key);
+        throw error;
       }
-      this.created += 1;
     }
     state.inUse += 1;
     let released = false;
