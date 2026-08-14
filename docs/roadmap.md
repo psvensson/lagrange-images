@@ -52,13 +52,15 @@ Success: the same graph survives process/node restarts with no language/image se
 - [x] code artifact contract
 - [x] blocks/closures and lexical environments
 - [x] message/call dispatch to transient activation requests
-- [ ] execution of activation requests
-- [ ] parameter/calling conventions
+- [x] execution of activation requests
+- [x] positional receiver/argument/captured-binding calling convention
+- [x] pluggable code executor registry
+- [x] first executable `neutral-expression/v0` representation
 - [ ] activations and debugger metadata
 - [ ] exception/condition substrate
 - [ ] host/WASM FFI boundary
 
-Success: a tiny language executes without adding its semantics to image persistence.
+Success: a tiny language-neutral expression representation executes through Blocks and lexical captures without adding language semantics to image persistence.
 
 ## 5. Symmetric Smalltalk seed
 

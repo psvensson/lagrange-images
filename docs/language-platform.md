@@ -17,9 +17,11 @@ Implemented now:
 - immutable blocks pairing code with an optional environment
 - language dispatcher registry
 - transient direct-call, message-send and activation-request protocol
+- representation executor registry and activation execution
+- built-in `neutral-expression/v0` interpreter
 - record versions, history and snapshots
 
-Likely later shared concepts include activation execution/debug metadata, conditions, namespaces/projects, WASM calls and capability contexts.
+Likely later shared concepts include activation/debug metadata, conditions, namespaces/projects, WASM calls and capability contexts.
 
 ## The neutral layer does not define language objects
 
@@ -57,7 +59,7 @@ See ADR 0003.
 
 ## Invocation and message dispatch
 
-A direct Block call and a message send now converge on the same transient activation request.
+A direct Block call and a message send converge on the same transient activation request.
 
 A message send carries a language personality ID plus receiver, message and arguments as tagged Values. The neutral layer does not assume that a message is a Smalltalk selector string. A registered language dispatcher owns lookup semantics and resolves the send to a Block ref; it does not execute the Block.
 
@@ -68,6 +70,18 @@ The language that performs message lookup is intentionally separate from the lan
 Refs still grant identity only; authorization and local/remote execution policy remain separate later layers.
 
 See ADR 0004.
+
+## Calling convention and execution
+
+The common execution frame has a receiver Value or null, a positional array of argument Values, and the Block's optional captured LexicalEnvironment. Receiver is separate rather than being an implicit argument. Captured variables are looked up by stable binding ID through the lexical parent chain.
+
+Arity and parameter naming are deliberately representation-specific rather than Block fields. `ActivationExecutor` revalidates Block/code/environment relationships, chooses an executor by CodeArtifact `representation`, and requires the executor to return one canonical tagged Value.
+
+The first built-in executable representation is `neutral-expression/v0`. Its CodeArtifact content is a JSON expression program stored inside a text Value. It supports literals, positional arguments, receiver, captured bindings, integer addition, equality and `if`. This is a small executable contract used to prove the common calling convention, not a source language or final bytecode.
+
+Custom code representations register executors against the same activation path, so later interpreters, neutral IR and WASM can coexist without changing dispatch.
+
+See ADR 0005.
 
 ## Compatibility kernels
 
@@ -91,8 +105,8 @@ The portable object/value/code-artifact format is not the executable IR. Keeping
 
 - whether methods are specialized blocks or distinct semantic objects
 - concrete Smalltalk method/selector lookup
-- parameter and calling conventions
-- execution of activation requests
+- mutation/assignment semantics
 - which sends may cross image/node boundaries
 - debugger activation durability
+- condition/exception propagation
 - smallest executable IR preserving live source/object identity
