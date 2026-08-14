@@ -18,11 +18,16 @@ external Rust/Cargo project
         -> wasm-binary/v1
         -> wasm-callable-interface/v1
         -> ordinary Block activation
+
+long-lived foreign runtime
+        -> ForeignRuntimeProviderRegistry
+        -> ForeignRuntimeService
+        -> start -> canonical-Value calls -> stop
 ```
 
 The first foreign callable ABI, `wasm-scalar-call/v0`, supports pure synchronous no-import scalar functions.
 
-The next major compatibility proof is to apply the same external-toolchain/foreign-runtime architecture to a real Smalltalk ecosystem through OpenSmalltalkVM.
+The generic long-lived foreign-runtime lifecycle is now implemented. The next major compatibility proof is to put it under real pressure with OpenSmalltalkVM + a Cuis-compatible image rather than extending the abstraction in isolation.
 
 ## Next
 
@@ -62,12 +67,15 @@ OpenSmalltalkVM-backed compatible Smalltalk
 
 #### A. Real compatibility runtime
 
+- [x] language-neutral foreign-runtime provider registry/service with explicit start/call/stop lifecycle
+- [x] runtime-local instance IDs and private provider handles kept separate from durable ObjectRefs/capabilities
+- [x] service shutdown closes the call gate, waits for accepted calls and owns normal runtime shutdown
 - [ ] define artifact conventions for OpenSmalltalkVM runtime/build identity and compatible Smalltalk image artifacts
-- [ ] define a foreign-runtime adapter contract that keeps the Spur heap separate from the Lagrange image graph
+- [ ] implement an OpenSmalltalkVM provider over the generic foreign-runtime contract
 - [ ] run a headless OpenSmalltalkVM + Cuis-compatible image as a managed foreign runtime, initially native/OCI
 - [ ] install a small bridge package in the Smalltalk image with explicitly exported service/call interfaces
 - [ ] invoke a real Smalltalk service from Lagrange Images through the common foreign-runtime/interface boundary
-- [ ] define lifecycle, restart and image/snapshot persistence behavior explicitly
+- [ ] define provider-specific lifecycle, restart and image/snapshot persistence behavior explicitly
 - [ ] prove one useful existing Cuis package/library works without source-level reimplementation in Lagrange Images
 
 Guardrails:
@@ -75,7 +83,9 @@ Guardrails:
 ```text
 Spur object memory != Lagrange image graph
 Spur oop != durable ObjectRef
-runtime handle != capability
+runtime instance != image object
+provider handle != ObjectRef
+runtime ID != capability
 compatibility != mandatory migration
 ```
 
@@ -110,7 +120,7 @@ compatibility != mandatory migration
 
 Success: a real compatible Smalltalk application/library can remain on OpenSmalltalkVM, participate in Lagrange image projects/interfaces/history, and selectively move code or the runtime itself toward native/WASM execution without a flag-day port.
 
-See ADR 0022 for the long-term architecture and non-goals.
+See ADR 0022 for the long-term Smalltalk architecture and ADR 0023 for the implemented generic foreign-runtime lifecycle.
 
 ### 3. Real package import and toolchain integration
 
@@ -170,7 +180,8 @@ Symmetric Smalltalk should continue developing as the native language. Cuis comp
 
 ### Compatible Smalltalk via OpenSmalltalkVM
 
-- [ ] runtime adapter + explicit service boundary
+- [x] generic runtime registry/service + lifecycle contract
+- [ ] OpenSmalltalkVM runtime adapter + explicit Smalltalk service boundary
 - [ ] real Cuis-compatible image/package proof
 - [ ] real Smalltalk compiler/toolchain provider
 - [ ] structured class/method/package export
@@ -213,7 +224,7 @@ Next:
 - [ ] Java source/class/JAR artifact conventions
 - [ ] JAR/class importer and dependency reuse
 - [ ] existing javac/JVM/AOT/Java-to-WASM toolchain spike
-- [ ] JVM/OCI foreign-runtime compatibility spike
+- [ ] JVM/OCI foreign-runtime compatibility spike over the generic lifecycle contract
 - [ ] compare JVM compatibility vs deeper WASM/image integration on one realistic application
 
 ## Execution/runtime work
@@ -242,16 +253,29 @@ Next:
 
 ### Distributed and foreign-runtime execution
 
+Implemented:
+
+- language-neutral `ForeignRuntimeProviderRegistry` / `ForeignRuntimeService`
+- stable provider identity separate from provider selection ID
+- transient runtime IDs separate from image object identity
+- provider-private opaque runtime handles
+- explicit start/call/stop protocol with canonical Value results
+- stop gating/waiting for in-flight calls
+- normal top-level runtime shutdown ownership
+
+Next:
+
 - [ ] object locator and placement policy
 - [ ] capability handles separate from object refs
+- [ ] capability/principal context on foreign calls
 - [ ] local vs remote call semantics
 - [ ] Lagrange WASM placement
-- [ ] generic foreign-runtime adapter contract
-- [ ] OCI foreign-runtime lifecycle/placement
+- [ ] OCI foreign-runtime lifecycle/placement implementation
 - [ ] OpenSmalltalkVM foreign-runtime implementation using the generic contract
 - [ ] JVM foreign-runtime implementation using the generic contract
 - [ ] routing between image-native, component/foreign WASM and live foreign runtimes
 - [ ] explicit failure/retry/idempotency semantics
+- [ ] durable runtime-definition/reconciliation contract where deployment requires it
 - [ ] measured `ctx.call()` compute-near-object wins
 
 Success: execution placement changes without changing object/artifact identity or pretending a foreign process heap is image state.
@@ -304,6 +328,7 @@ The following substrate is considered established enough to build on:
 - Cargo/rustc OCI integration with explicit package inputs
 - deterministic external-toolchain result reuse
 - first explicit foreign-WASM callable interface
+- generic long-lived foreign-runtime lifecycle substrate
 
 The OpenSmalltalkVM direction deliberately builds on these generic boundaries rather than adding a Smalltalk-specific storage/execution substrate.
 

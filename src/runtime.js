@@ -6,6 +6,7 @@ import {
 } from './compilation/index.js';
 import {DispatchRegistry, InvocationService} from './dispatch/invocation-service.js';
 import {ActivationExecutor, createDefaultCodeExecutorRegistry} from './execution/executor.js';
+import {ForeignRuntimeProviderRegistry, ForeignRuntimeService} from './foreign-runtime/index.js';
 import {ImageService} from './image/graph-image-service.js';
 import {
   SYMMETRIC_SMALLTALK_ID,
@@ -45,6 +46,15 @@ async function createRuntime(options = {}) {
   }
   const toolchains = new ToolchainService({images, providers: toolchainProviders});
 
+  const foreignRuntimeProviders = new ForeignRuntimeProviderRegistry();
+  for (const entry of options.foreignRuntimeProviders ?? []) {
+    if (!Array.isArray(entry) || entry.length !== 2) {
+      throw new TypeError('foreignRuntimeProviders entries must be [providerId, provider]');
+    }
+    foreignRuntimeProviders.register(entry[0], entry[1]);
+  }
+  const foreignRuntimes = new ForeignRuntimeService({providers: foreignRuntimeProviders});
+
   const dispatchers = new DispatchRegistry();
   for (const [languageId, dispatcher] of Object.entries(options.dispatchers ?? {})) {
     dispatchers.register(languageId, dispatcher);
@@ -73,11 +83,27 @@ async function createRuntime(options = {}) {
     compilation,
     toolchainProviders,
     toolchains,
+    foreignRuntimeProviders,
+    foreignRuntimes,
     dispatchers,
     invocations,
     codeExecutors,
     executor,
-    async close() { await backend.stop(); },
+    async close() {
+      let runtimeError = null;
+      try {
+        await foreignRuntimes.close();
+      } catch (error) {
+        runtimeError = error;
+      }
+      try {
+        await backend.stop();
+      } catch (backendError) {
+        if (runtimeError) throw new AggregateError([runtimeError, backendError], 'runtime shutdown failed');
+        throw backendError;
+      }
+      if (runtimeError) throw runtimeError;
+    },
   };
 }
 
@@ -85,6 +111,7 @@ export * from './backend/index.js';
 export * from './code/index.js';
 export * from './compilation/index.js';
 export * from './dispatch/invocation-service.js';
+export * from './foreign-runtime/index.js';
 export {ImageService};
 export * from './execution/executor.js';
 export * from './execution/model.js';
