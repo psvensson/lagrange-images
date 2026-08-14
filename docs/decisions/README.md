@@ -23,6 +23,7 @@ ADRs are the detailed design history. Read them by topic rather than as a prereq
 - [0011 — automatic WASM Block tree installation](0011-automatic-wasm-block-tree-installation.md): recursively install complete nested semantic trees.
 - [0012 — language-neutral compilation groups and reuse](0012-language-neutral-compilation-groups-and-reuse.md): compiler-owned grouping and deterministic derivation reuse.
 - [0013 — shared multi-function WASM modules](0013-shared-multifunction-wasm-modules.md): several semantic entries may share one physical module.
+- [0030 — resumable non-tail WASM effects](0030-resumable-non-tail-wasm-effects.md): compiler-generated resume entries preserve one activation across non-tail message/closure host effects without making continuations durable objects.
 
 ## Runtime-only WASM reuse
 

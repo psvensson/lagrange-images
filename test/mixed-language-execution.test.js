@@ -12,7 +12,9 @@ import {
   RUST_CARGO_MANIFEST_V1,
   RUST_SOURCE_V1,
   WASM_BINARY_V1,
+  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
   bytesValue,
+  compileWasmFunctionArtifact,
   createArtifactBackedOpenSmalltalkCuisProvider,
   createCargoRustcOciProvider,
   createRuntime,
@@ -99,7 +101,12 @@ async function putRustCargoProject(runtime) {
   return {source, lock, manifest};
 }
 
-test('Symmetric Smalltalk composes Cargo-derived WASM and Cuis runtime Blocks without implementation-specific calls', async () => {
+async function execute(runtime, block, value) {
+  const activation = await runtime.invocations.invokeBlock(block, [integerValue(value)]);
+  return await runtime.executor.execute(activation);
+}
+
+test('Symmetric Smalltalk composes Cargo-derived WASM and Cuis Blocks identically through neutral and resumable Lagrange-WASM execution', async () => {
   let cargoInvocation = null;
   const cargoRunner = Object.freeze({
     async run(request) {
@@ -193,6 +200,7 @@ test('Symmetric Smalltalk composes Cargo-derived WASM and Cuis runtime Blocks wi
         'mixed:rust': {name: 'rust', value: objectRef('mixed', rustBlock.id)},
       },
     });
+    const environmentRef = objectRef('mixed', environment.id);
     const orchestrator = await installSymmetricSmalltalkBlock({
       images: runtime.images,
       compilation: runtime.compilation,
@@ -200,23 +208,37 @@ test('Symmetric Smalltalk composes Cargo-derived WASM and Cuis runtime Blocks wi
       id: 'mixed-orchestrator',
       source: '[ :x | cuis value: (rust value: x value: x) value: x ]',
       captures: {cuis: 'mixed:cuis', rust: 'mixed:rust'},
-      environment: objectRef('mixed', environment.id),
+      environment: environmentRef,
+    });
+    const wasm = await compileWasmFunctionArtifact({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      semanticRef: objectRef('mixed', orchestrator.semanticArtifact.id),
+      moduleId: 'mixed-orchestrator:wasm-module',
+      functionId: 'mixed-orchestrator:wasm-function',
+    });
+    const wasmBlock = await runtime.images.putBlock('mixed', {
+      id: 'mixed-orchestrator:wasm-block',
+      code: objectRef('mixed', wasm.functionArtifact.id),
+      environment: environmentRef,
     });
 
+    assert.equal(wasm.moduleArtifact.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+    assert.equal(wasm.functionArtifact.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+    assert.deepEqual(wasm.moduleArtifact.metadata.effectSites.map(({kind}) => kind), ['send', 'send']);
+    assert.match(wasm.moduleArtifact.metadata.effectSites[0].resumeEntry, /\$resume_/);
+    assert.equal(wasm.moduleArtifact.metadata.effectSites[1].resumeEntry, null);
     assert.equal(runtime.foreignRuntimes.list().length, 0);
-    const first = await runtime.invocations.invokeBlock(
-      objectRef('mixed', orchestrator.block.id),
-      [integerValue(14)],
-    );
-    assert.deepEqual(await runtime.executor.execute(first), integerValue(42));
+
+    const wasmRef = objectRef('mixed', wasmBlock.id);
+    const neutralRef = objectRef('mixed', orchestrator.block.id);
+    assert.deepEqual(await execute(runtime, wasmRef, 14), integerValue(42));
     assert.equal(runtime.foreignRuntimes.list().length, 1);
     assert.equal(cuisRunner.starts.length, 1);
 
-    const second = await runtime.invocations.invokeBlock(
-      objectRef('mixed', orchestrator.block.id),
-      [integerValue(10)],
-    );
-    assert.deepEqual(await runtime.executor.execute(second), integerValue(30));
+    assert.deepEqual(await execute(runtime, neutralRef, 14), integerValue(42));
+    assert.deepEqual(await execute(runtime, wasmRef, 10), integerValue(30));
+    assert.deepEqual(await execute(runtime, neutralRef, 10), integerValue(30));
     assert.equal(runtime.foreignRuntimes.list().length, 1);
     assert.equal(cuisRunner.starts.length, 1);
   } finally {

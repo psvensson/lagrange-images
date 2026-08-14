@@ -13,8 +13,10 @@ import {
   OPENSMALLTALK_CUIS_PROVIDER_ID,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
   WASM_BINARY_V1,
+  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
   booleanValue,
   bytesValue,
+  compileWasmFunctionArtifact,
   createArtifactBackedOpenSmalltalkCuisProvider,
   createOpenSmalltalkCuisToolchainProvider,
   createRuntime,
@@ -48,7 +50,7 @@ async function put(runtime, id, representation, content, {metadata = {}, depende
   });
 }
 
-test('real Cuis toolchain participates in a mixed Symmetric Smalltalk and foreign-WASM Block program', {skip: !enabled, timeout: 120_000}, async () => {
+test('real Cuis toolchain participates in a resumable Lagrange-WASM mixed Block program', {skip: !enabled, timeout: 120_000}, async () => {
   const vmPath = process.env.LAGRANGE_OPENSMALLTALK_VM_PATH;
   const imagePath = process.env.LAGRANGE_CUIS_IMAGE_PATH;
   const changesPath = process.env.LAGRANGE_CUIS_CHANGES_PATH;
@@ -191,6 +193,7 @@ test('real Cuis toolchain participates in a mixed Symmetric Smalltalk and foreig
         'mixed:rust': {name: 'rust', value: objectRef('build-image', rustAddBlock.id)},
       },
     });
+    const environmentRef = objectRef('build-image', environment.id);
     const orchestrator = await installSymmetricSmalltalkBlock({
       images: runtime.images,
       compilation: runtime.compilation,
@@ -198,11 +201,25 @@ test('real Cuis toolchain participates in a mixed Symmetric Smalltalk and foreig
       id: 'mixed-orchestrator',
       source: '[ :x | cuis value: (rust value: x value: x) value: x ]',
       captures: {cuis: 'mixed:cuis', rust: 'mixed:rust'},
-      environment: objectRef('build-image', environment.id),
+      environment: environmentRef,
     });
+    const wasm = await compileWasmFunctionArtifact({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      semanticRef: objectRef('build-image', orchestrator.semanticArtifact.id),
+      moduleId: 'mixed-orchestrator:wasm-module',
+      functionId: 'mixed-orchestrator:wasm-function',
+    });
+    const wasmBlock = await runtime.images.putBlock('build-image', {
+      id: 'mixed-orchestrator:wasm-block',
+      code: objectRef('build-image', wasm.functionArtifact.id),
+      environment: environmentRef,
+    });
+    assert.equal(wasm.moduleArtifact.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+    assert.match(wasm.moduleArtifact.metadata.effectSites[0].resumeEntry, /\$resume_/);
 
     const mixedActivation = await runtime.invocations.invokeBlock(
-      objectRef('build-image', orchestrator.block.id),
+      objectRef('build-image', wasmBlock.id),
       [integerValue(14)],
     );
     assert.deepEqual(await runtime.executor.execute(mixedActivation), integerValue(42));

@@ -7,12 +7,17 @@ import {
   lagrangeCodeV0ToWasmModuleCompiler,
 } from '../wasm/compiler.js';
 import {WASM_INSTANCE_REUSE_STATELESS_V0} from '../wasm/instance-pool.js';
+import {
+  isWasmTailEffectRestrictionError,
+  lagrangeCodeGroupToResumableWasmModuleCompiler,
+  lagrangeCodeV0ToResumableWasmModuleCompiler,
+} from '../wasm/resumable-compiler.js';
 import {CompilationService} from './compilation-service.js';
 import {CodeCompilerRegistry} from './compiler-registry.js';
 import {CompilationGroupCompilerRegistry} from './group-compiler-registry.js';
 
-const LAGRANGE_CODE_WASM_COMPILER_ID = 'lagrange-code-v0-to-wasm-module-v1/value-handle-v0/compiler-v2';
-const LAGRANGE_CODE_WASM_GROUP_COMPILER_ID = 'lagrange-code-group-to-wasm-module-v1/value-handle-v0/compiler-v2';
+const LAGRANGE_CODE_WASM_COMPILER_ID = 'lagrange-code-v0-to-wasm-module-v1/value-handle-hybrid/compiler-v3';
+const LAGRANGE_CODE_WASM_GROUP_COMPILER_ID = 'lagrange-code-group-to-wasm-module-v1/value-handle-hybrid/compiler-v3';
 
 function withStatelessInstanceReuse(result) {
   return Object.freeze({
@@ -22,6 +27,15 @@ function withStatelessInstanceReuse(result) {
       instanceReuse: WASM_INSTANCE_REUSE_STATELESS_V0,
     },
   });
+}
+
+async function compileWithResumableFallback(request, context, tailCompiler, resumableCompiler) {
+  try {
+    return await tailCompiler.compile(request, context);
+  } catch (error) {
+    if (!isWasmTailEffectRestrictionError(error)) throw error;
+    return await resumableCompiler.compile(request, context);
+  }
 }
 
 const reusableLagrangeCodeV0ToWasmCompiler = Object.freeze({
@@ -34,7 +48,12 @@ const reusableLagrangeCodeV0ToWasmCompiler = Object.freeze({
     });
   },
   async compile(request, context) {
-    return withStatelessInstanceReuse(await lagrangeCodeV0ToWasmModuleCompiler.compile(request, context));
+    return withStatelessInstanceReuse(await compileWithResumableFallback(
+      request,
+      context,
+      lagrangeCodeV0ToWasmModuleCompiler,
+      lagrangeCodeV0ToResumableWasmModuleCompiler,
+    ));
   },
 });
 
@@ -53,7 +72,12 @@ const reusableLagrangeCodeGroupToWasmCompiler = Object.freeze({
     });
   },
   async compile(request, context) {
-    return withStatelessInstanceReuse(await lagrangeCodeGroupToWasmModuleCompiler.compile(request, context));
+    return withStatelessInstanceReuse(await compileWithResumableFallback(
+      request,
+      context,
+      lagrangeCodeGroupToWasmModuleCompiler,
+      lagrangeCodeGroupToResumableWasmModuleCompiler,
+    ));
   },
 });
 
