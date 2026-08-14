@@ -12,11 +12,12 @@ Implemented now includes:
 - generic `ToolchainProviderRegistry` / `ToolchainService`
 - frozen explicit artifact-graph requests for toolchain providers
 - a real digest-pinned OCI Cargo/rustc provider
+- explicit Cargo vendor config/file artifacts with package checksum validation
 - `lagrange-code/v0` plus the neutral-expression interpreter
 - Symmetric Smalltalk as the first image-native language experiment
 - the Lagrange WASM backend, shared modules and runtime caches/pools
 
-Java/JAR adapters, vendored third-party Cargo dependency artifacts, callable foreign-WASM/component interfaces and foreign-runtime adapters remain future work.
+Java/JAR adapters, standard Cargo package importers, callable foreign-WASM/component interfaces and foreign-runtime adapters remain future work.
 
 ## Language personality does not mean compiler ownership
 
@@ -60,6 +61,8 @@ symmetric-smalltalk/source-v0
 rust/source-v1
 rust/cargo-manifest-v1
 rust/cargo-lock-v1
+rust/cargo-config-v1
+rust/cargo-vendor-file-v1
 java/jar-v1
 wasm-binary/v1
 wasm-module/v1
@@ -114,7 +117,7 @@ A provider is selected by configuration/runtime ID and declares a separate stabl
 
 ```text
 providerId          rust/cargo-oci
-provider.identity   cargo-rustc-oci/v0/sha256:...
+provider.identity   cargo-rustc-oci/v1/sha256:...
 ```
 
 `ToolchainService.run()` receives:
@@ -144,7 +147,7 @@ The generic provider context deliberately exposes no ambient `ImageService`. Pro
 
 A provider returns named output descriptions plus transient diagnostics. `ToolchainService` owns persistence and `derivedFrom` provenance; provider-declared runtime/library dependencies remain separate dependency edges.
 
-## First real provider: Cargo/rustc in OCI
+## Cargo/rustc in OCI
 
 The first provider physically executes an existing compiler ecosystem rather than an in-process proof compiler:
 
@@ -152,7 +155,9 @@ The first provider physically executes an existing compiler ecosystem rather tha
 rust/cargo-manifest-v1  <-- root
     |
     +-- source --> rust/source-v1
-    `-- lock   --> rust/cargo-lock-v1
+    +-- lock   --> rust/cargo-lock-v1
+    +-- config --> rust/cargo-config-v1          # when vendoring
+    `-- vendor --> rust/cargo-vendor-file-v1...  # when vendoring
             |
             v
      digest-pinned OCI image
@@ -194,7 +199,7 @@ The target triple is caller policy. The pinned image must already contain Cargo/
 
 ### Closed input graph
 
-The first Cargo provider requires:
+Every Cargo provider invocation requires:
 
 - exactly one manifest root
 - exactly one lock artifact
@@ -203,9 +208,63 @@ The first Cargo provider requires:
 
 Each `rust/source-v1` declares a safe portable relative path in `metadata.path`.
 
-The provider materializes a private temporary workspace, runs Cargo frozen with OCI network `none`, imports the expected output, validates the WASM header and deletes the workspace afterward.
+The provider materializes a private temporary workspace, runs Cargo with `--frozen` and OCI network `none`, imports the expected output, validates the WASM header and deletes the workspace afterward.
 
-This is deliberately stricter than ordinary interactive Cargo use. Third-party crate support should add explicit vendored/package/config artifacts instead of enabling hidden network resolution.
+Root-package source paths may not overlap `Cargo.toml`, `Cargo.lock`, `.cargo/` or `vendor/`; those locations are reserved for their explicit artifact representations.
+
+### Explicit vendored dependencies
+
+A Cargo directory source is now expressible as ordinary artifact dependencies rather than as ambient Cargo cache/network state.
+
+Vendored builds add exactly one:
+
+```text
+rust/cargo-config-v1
+```
+
+plus one or more:
+
+```text
+rust/cargo-vendor-file-v1
+```
+
+The current config contract is intentionally exact and represents only crates.io source replacement by the explicit `vendor/` directory:
+
+```toml
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+```
+
+A vendor-file artifact may contain text or bytes and carries its workspace path:
+
+```js
+{
+  representation: RUST_CARGO_VENDOR_FILE_V1,
+  content: textValue('...'), // or bytesValue(...)
+  metadata: {path: 'vendor/example-1.2.3/src/lib.rs'},
+}
+```
+
+The package directory is an immediate non-hidden child of `vendor/`. Every package must provide explicit `Cargo.toml` and `.cargo-checksum.json` artifacts.
+
+Before OCI execution the provider:
+
+1. groups the explicit vendor files by package directory
+2. parses each `.cargo-checksum.json`
+3. requires its file list to exactly match the explicit package files other than the checksum file itself
+4. computes SHA-256 over every text/byte artifact
+5. rejects any mismatch before launching the container
+
+This means missing/extra/changed vendored files cannot silently enter a build.
+
+The provider does not run `cargo vendor`, `cargo fetch`, `cargo update` or another dependency acquisition step. Acquisition/import is separate from compilation; a later standard `.crate` importer can turn registry package archives into explicit vendor artifacts.
+
+The provider identity advanced to `cargo-rustc-oci/v1/<image-digest>` because the supported input contract changed. Output metadata records whether vendoring was used and how many vendor package directories were validated.
+
+CI exercises a versioned third-party library dependency through the complete graph/materialization/checksum/provider path using an injected OCI runner. A dedicated integration environment that invokes a real pinned Rust OCI image remains a separate operational proof.
 
 ### OCI runner
 
@@ -239,18 +298,18 @@ This separation keeps external-language integration honest and leaves room for W
 
 ## Rust direction
 
-Rust now has its first concrete artifact/toolchain path without a Rust compiler in this project:
+Rust now has a concrete package-aware artifact/toolchain path without a Rust compiler in this project:
 
 ```text
-image artifacts
+root Rust artifacts
+  + explicit vendored package artifacts
   -> Cargo/rustc in OCI
   -> raw WASM artifact
 ```
 
 Next Rust work should focus on:
 
-- explicit vendored crate/package/config artifacts
-- one real third-party dependency build with no hidden network input
+- standard `.crate`/registry-package import into explicit artifacts
 - toolchain result caching keyed by image digest + target/options + complete input fingerprints
 - a callable/component boundary for suitable Rust-produced WASM
 - Lagrange Rust SDK/crate for explicit host calls
@@ -300,7 +359,8 @@ Do not conflate the two. Build containers disappear after compilation; foreign-r
 Compiled libraries should remain first-class dependencies whenever their format/runtime/ABI permits it.
 
 - Java JAR/class artifacts can remain byte dependencies.
-- Rust should favor source crates or explicitly stable portable ABIs/components for long-lived reuse.
+- Rust can already carry explicit vendored source-package files as build dependencies.
+- Rust should favor explicitly stable portable ABIs/components for long-lived binary reuse.
 - WASM Components are attractive cross-language library boundaries.
 
 A future callable/interface artifact should describe exported calls, argument/result representation, ABI/component contract, required capabilities and version/provenance. Interface description remains separate from authority.
@@ -319,7 +379,7 @@ OCI image digest when applicable
 target / ABI
 options
 resolved source/binary dependency fingerprints
-manifest / lock/config artifacts
+manifest / lock / config / vendor artifacts
 ```
 
 Backend versions, timestamps and old provenance history should not become cache inputs merely because they exist in storage.
@@ -358,7 +418,8 @@ Sharing the artifact/toolchain substrate does not make different language dispat
 
 ## Next open questions
 
-- vendored/package/config artifact conventions for third-party Cargo dependencies
+- standard Cargo `.crate`/registry package importer into explicit vendor artifacts
+- real pinned-OCI integration job for the vendored Cargo fixture
 - external-toolchain derivation cache/fingerprint contract
 - callable/interface artifact contract for `wasm-binary/v1`
 - WASM Component artifact/interface boundary
@@ -371,4 +432,4 @@ Sharing the artifact/toolchain substrate does not make different language dispat
 - distributed placement of compiled artifacts and foreign runtimes
 - debugger activation durability and conditions/exceptions
 
-See ADR 0016 for the broad artifact/toolchain direction, ADR 0017 for the generic dependency/provider contract, and ADR 0018 for the first OCI Cargo/rustc provider.
+See ADR 0016 for the broad artifact/toolchain direction, ADR 0017 for the generic dependency/provider contract, ADR 0018 for the first OCI Cargo/rustc provider, and ADR 0019 for explicit vendored Cargo dependencies.
