@@ -116,6 +116,8 @@ test('OpenSmalltalk Cuis provider materializes a headless bridge and keeps runti
     assert.match(script, /LagrangeProofService compile: 'factorial: n/);
     assert.match(script, /StdIOReadStream stdin/);
     assert.match(script, /StdIOWriteStream stdout/);
+    assert.match(script, /char := input next/);
+    assert.equal(script.includes('input upTo:'), false);
     assert.match(script, /Smalltalk quitPrimitive: 0/);
     assert.equal(script.includes('perform:'), false);
 
