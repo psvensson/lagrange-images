@@ -51,7 +51,7 @@ The first policy is:
 wasm-nested-block-tree/v0
 ```
 
-`installWasmBlockTree()` returns this group for the semantic artifacts in the installed tree. Its current physical layout remains `one-module-per-member`. Shared-module code generation is a later compiler optimization, not part of the group contract.
+`installWasmBlockTree()` returns this group for the semantic artifacts in the installed tree. ADR 0013 later changed this policy's physical layout from the bootstrap `one-module-per-member` implementation to one shared multi-function module. The `CompilationGroup` contract itself did not change, which is exactly the separation intended here.
 
 ## Compiler-declared reuse
 
@@ -82,9 +82,9 @@ The resulting `derivationKey` and `compilerIdentity` are stored as non-reference
 
 The compiler owns executable cache-key meaning. The platform does not assume that source IDs, filenames, Blocks, classes, packages or any other language concept determine equivalence.
 
-## Built-in WASM cache contract
+## Built-in WASM cache contracts
 
-The first reusable compiler is the built-in:
+The first reusable single-source compiler is:
 
 ```text
 lagrange-code/v0 -> wasm-module/v1
@@ -92,30 +92,36 @@ lagrange-code/v0 -> wasm-module/v1
 
 Its identity includes the current Value-handle ABI/compiler generation. Its safe key material is the source language ID, semantic representation and semantic CodeArtifact content.
 
-The current WASM module compiler ignores source metadata and external prototype refs; prototype refs belong to `wasm-function/v1`, not module bytes. Therefore equivalent semantic artifacts from two independent Block-tree installations may safely share one immutable `wasm-module/v1`.
-
-## Shared module, distinct installation identity
-
-Reusing a module does not merge language/image identities.
-
-Two installations may have:
+ADR 0013 adds a separate reusable group compiler for:
 
 ```text
-semantic artifact A ----\
-                         -> shared wasm-module/v1
-semantic artifact B ----/
-
-function A -> shared module -> Block A
-function B -> shared module -> Block B
+wasm-nested-block-tree/v0 -> wasm-module/v1
 ```
 
-`wasm-function/v1` artifacts remain installation-specific because they carry the current semantic provenance and explicit closure-prototype graph edges. Blocks and runtime closures remain distinct image objects.
+whose key includes the ordered semantic member contents and group policy/options. Group and single-source compiler identities remain distinct.
 
-The shared module retains the provenance of the semantic artifact from which that exact cached artifact was first built. A later installation's function artifact links its current semantic artifact and the shared module, preserving the current installation path without duplicating module bytes.
+## Shared executable, distinct installation identity
+
+Reusing executable material does not merge language/image identities.
+
+A later installation's wrapper/function artifact links its current semantic artifact and the reused module, preserving current provenance without duplicating executable bytes.
+
+With grouped compilation this becomes:
+
+```text
+semantic group A ----\
+                     -> shared multi-function wasm-module/v1
+semantic group B ----/
+
+A function wrappers -> A Blocks
+B function wrappers -> B Blocks
+```
+
+`wasm-function/v1` artifacts remain installation-specific because they carry current semantic provenance and explicit closure-prototype graph edges. Blocks and runtime closures remain distinct image objects.
 
 ## Reuse API semantics
 
-`CompilationService.compileArtifact()` now reuses by default **only for compilers that opted into the cache contract**.
+`CompilationService.compileArtifact()` and `CompilationService.compileGroup()` reuse by default **only for compilers that opted into the cache contract**.
 
 A caller may request `reuse: false` to force a new immutable artifact. A forced duplicate receives the same derivation key because it represents the same declared derivation and caller metadata.
 
@@ -155,10 +161,10 @@ and reuse the same grouping/cache substrate while choosing different semantic IR
 
 ## Deferred
 
-- compiling several group members into one shared WASM module
-- group-policy registries/planners when more than one policy needs runtime selection
+- group-policy/planner selection when more than one policy needs runtime choice
+- splitting one logical group into several physical modules by size/budget
 - indexed derivation-key lookup in the durable backend
-- dependency fingerprints across multiple source artifacts
+- dependency fingerprints beyond explicit group members
 - cache eviction/lifetime policy
 - cross-image/global compiled-artifact stores
 - optimized/unboxed ABI-specific caches
