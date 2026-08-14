@@ -19,6 +19,7 @@ An image is a durable object graph, not a VM memory dump and not a pile of sourc
 - real `lagrange-code/v0 -> wasm-module/v1` backend
 - multi-function shared WASM modules for compilation groups
 - runtime-local compiled `WebAssembly.Module` cache
+- explicit `stateless-v0` WASM instance-reuse contract and runtime-local instance pool
 - `lagrange-value-handle/v0` WASM calling ABI
 - WASM tail message sends through normal language dispatch
 - WASM tail nested-Block materialization with ordinary lexical captures
@@ -40,6 +41,7 @@ WASM handle != image identity
 compilation group != source-language construct
 shared module != function/Block identity
 compiled host module != durable module identity
+pooled instance != activation state
 ```
 
 ## Run it
@@ -142,30 +144,64 @@ All three function/Block identities remain separate. Sharing a module is only ph
 
 ### Compiled host-module cache
 
-The executor now compiles an immutable `wasm-module/v1` to a host `WebAssembly.Module` once per runtime and reuses that compiled module for later activations, including activations of different entries in one shared module:
+The executor compiles an immutable `wasm-module/v1` to a host `WebAssembly.Module` once per runtime and reuses that compiled module for later activations, including activations of different entries in one shared module:
 
 ```text
 wasm-module/v1 bytes
       -> WebAssembly.compile() once
       -> runtime-local WasmModuleCache
-           |-> fresh instance for activation A
-           |-> fresh instance for activation B
-           `-> fresh instance for activation C
 ```
-
-Instances are deliberately still fresh. Their imports close over the activation's Value-handle arena, active host-effect sites and pending-effect state.
 
 Concurrent misses for the same module share one in-flight compilation promise. Failed compilation is evicted so a later activation can retry.
 
-The default WASM executor exposes runtime-only cache diagnostics through:
+### Stateless instance pool
+
+Compiled-module reuse no longer implies that every activation must instantiate from scratch. Modules may opt into a separate execution contract:
+
+```text
+metadata.instanceReuse = "stateless-v0"
+```
+
+The built-in Lagrange-code WASM compilers emit that marker because their generated modules have no activation-persistent guest memory, mutable globals/tables or other guest runtime state.
+
+For those modules execution is now:
+
+```text
+compiled WebAssembly.Module
+      -> checkout pooled WebAssembly.Instance
+      -> bind fresh activation state
+           ValueHandleArena
+           active entry/effect sites
+           closure prototypes
+           pending tail effect
+      -> execute entry
+      -> validate/copy result or tail-effect request
+      -> unbind activation state
+      -> return instance to pool
+      -> perform asynchronous send/closure effect, if any
+```
+
+The same instance can therefore execute different entries and different lexical captures on later calls without retaining the old handles or permissions.
+
+The default pool keeps at most one idle instance per module and does not queue concurrent activations: extra concurrent demand creates extra instances, of which only the configured idle budget is retained afterward.
+
+A guest trap or host-boundary contract failure retires the checked-out instance instead of returning it. Modules without `instanceReuse` remain valid and execute one-shot. Unknown reuse contracts fail explicitly.
+
+Future Java/Rust/Lisp/etc. backends with mutable linear memory, heaps, TLS or runtime globals must **not** inherit `stateless-v0`; they can stay one-shot or define a later reset contract.
+
+Runtime-only diagnostics are available through the default WASM executor:
 
 ```js
 const wasmExecutor = runtime.codeExecutors.get(WASM_FUNCTION_V1);
+
 wasmExecutor.moduleCache.stats();
 // {entries, hits, misses, compilations, failures}
+
+wasmExecutor.instancePool.stats();
+// {modules, idle, inUse, hits, misses, created, retired, discarded}
 ```
 
-These host cache objects/counters are not image state and are never persisted.
+These host cache/pool objects and counters are not image state and are never persisted.
 
 ## Compilation groups and reuse
 
@@ -199,16 +235,17 @@ At execution, only the active entry's host-effect sites are enabled. Being coloc
 
 Derived-artifact reuse is compiler-owned. A compiler must opt in with a stable identity plus deterministic `cacheKey()`. Equivalent independent tree installations therefore reuse one immutable multi-function module while keeping separate semantic artifacts, `wasm-function/v1` wrappers, Blocks and runtime closures.
 
-There are therefore two distinct reuse layers:
+There are now three distinct reuse layers:
 
 ```text
 durable derivation reuse: semantic group -> shared wasm-module/v1 CodeArtifact
-runtime execution reuse:  wasm-module/v1 -> shared compiled WebAssembly.Module
+runtime compile reuse:     wasm-module/v1 -> shared compiled WebAssembly.Module
+runtime instance reuse:    stateless module -> rebound pooled WebAssembly.Instance
 ```
 
-Neither merges language/image identity.
+None merges language/image identity or invocation-local Value/capability state.
 
-See ADR 0012, ADR 0013 and ADR 0014.
+See ADR 0012, ADR 0013, ADR 0014 and ADR 0015.
 
 ## Values and objects
 
@@ -259,3 +296,4 @@ Do not import `lagrange-server/src/...`; use public package seams only.
 - [ADR 0012: language-neutral compilation groups and reuse](docs/decisions/0012-language-neutral-compilation-groups-and-reuse.md)
 - [ADR 0013: shared multi-function WASM modules](docs/decisions/0013-shared-multifunction-wasm-modules.md)
 - [ADR 0014: runtime-local compiled WASM module cache](docs/decisions/0014-runtime-wasm-module-cache.md)
+- [ADR 0015: runtime-local WASM instance pooling](docs/decisions/0015-runtime-wasm-instance-pooling.md)
