@@ -7,6 +7,8 @@ import {
 import {DispatchRegistry, InvocationService} from './dispatch/invocation-service.js';
 import {ActivationExecutor, createDefaultCodeExecutorRegistry} from './execution/executor.js';
 import {
+  ForeignRuntimeDefinitionBindingRegistry,
+  ForeignRuntimeDefinitionInstanceCache,
   ForeignRuntimeDefinitionService,
   ForeignRuntimeProviderRegistry,
   ForeignRuntimeService,
@@ -59,6 +61,19 @@ async function createRuntime(options = {}) {
   }
   const foreignRuntimes = new ForeignRuntimeService({providers: foreignRuntimeProviders});
   const foreignRuntimeDefinitions = new ForeignRuntimeDefinitionService({images, runtimes: foreignRuntimes});
+  const foreignRuntimeDefinitionBindings = new ForeignRuntimeDefinitionBindingRegistry();
+  for (const entry of options.foreignRuntimeDefinitionBindings ?? []) {
+    if (!Array.isArray(entry) || entry.length !== 2) {
+      throw new TypeError(
+        'foreignRuntimeDefinitionBindings entries must be [definitionRepresentation, providerId]',
+      );
+    }
+    foreignRuntimeDefinitionBindings.register(entry[0], entry[1]);
+  }
+  const foreignRuntimeInstanceCache = new ForeignRuntimeDefinitionInstanceCache({
+    definitions: foreignRuntimeDefinitions,
+    bindings: foreignRuntimeDefinitionBindings,
+  });
 
   const dispatchers = new DispatchRegistry();
   for (const [languageId, dispatcher] of Object.entries(options.dispatchers ?? {})) {
@@ -73,6 +88,10 @@ async function createRuntime(options = {}) {
     wasmModuleCache: options.wasmModuleCache,
     wasmInstancePool: options.wasmInstancePool,
     foreignWasmModuleCache: options.foreignWasmModuleCache,
+    foreignRuntimeDefinitions,
+    foreignRuntimes,
+    foreignRuntimeDefinitionBindings,
+    foreignRuntimeInstanceCache,
   });
   for (const [representation, executor] of Object.entries(options.codeExecutors ?? {})) {
     codeExecutors.register(representation, executor);
@@ -91,6 +110,8 @@ async function createRuntime(options = {}) {
     foreignRuntimeProviders,
     foreignRuntimes,
     foreignRuntimeDefinitions,
+    foreignRuntimeDefinitionBindings,
+    foreignRuntimeInstanceCache,
     dispatchers,
     invocations,
     codeExecutors,
@@ -101,6 +122,8 @@ async function createRuntime(options = {}) {
         await foreignRuntimes.close();
       } catch (error) {
         runtimeError = error;
+      } finally {
+        foreignRuntimeInstanceCache.clear();
       }
       try {
         await backend.stop();
