@@ -50,14 +50,17 @@ async function resolveArtifactGraph(images, roots) {
 
   const visit = async (ref) => {
     const key = refKey(ref);
+    if (visiting.has(key)) throw new TypeError(`artifact dependency cycle detected at ${ref.imageId}/${ref.objectId}`);
     const existing = byKey.get(key);
     if (existing) return existing;
-    if (visiting.has(key)) throw new TypeError(`artifact dependency cycle detected at ${ref.imageId}/${ref.objectId}`);
     visiting.add(key);
     try {
       const artifact = await images.getCodeArtifact(ref.imageId, ref.objectId);
       if (!artifact) throw new TypeError(`toolchain artifact not found: ${ref.imageId}/${ref.objectId}`);
-      const snapshot = deepFreeze(structuredClone(artifact));
+      const snapshot = deepFreeze({
+        ...structuredClone(artifact),
+        dependencies: structuredClone(artifact.dependencies ?? []),
+      });
       const node = Object.freeze({ref, artifact: snapshot});
       byKey.set(key, node);
       nodes.push(node);
