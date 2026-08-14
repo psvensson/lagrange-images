@@ -97,18 +97,25 @@ pooled instance != activation state
 
 ### OCI Cargo/rustc provider
 
-- Keep Rust/Cargo semantics inside `cargo-rustc-oci-provider.js`; do not teach generic `ToolchainService` about Cargo, source paths, Rust targets or containers.
+- Keep Rust/Cargo semantics inside `cargo-rustc-oci-provider.js`; do not teach generic `ToolchainService` about Cargo, source paths, Rust targets, vendor layouts or containers.
 - OCI build images must be digest-pinned (`@sha256:...`). Tags alone are not reproducible provider identity.
-- The first Cargo provider accepts exactly one `rust/cargo-manifest-v1` root, exactly one `rust/cargo-lock-v1`, and one or more `rust/source-v1` artifacts in the explicit dependency closure.
+- A Cargo invocation has exactly one `rust/cargo-manifest-v1` root, exactly one `rust/cargo-lock-v1`, and one or more `rust/source-v1` artifacts in the explicit dependency closure.
 - `rust/source-v1` uses `metadata.path` only as a non-reference portable project path. Reject absolute paths, backslashes, empty segments and `.`/`..` traversal.
+- Root-package source paths must not overlap `Cargo.toml`, `Cargo.lock`, `.cargo/...` or `vendor/...`; those paths belong to their explicit representations.
 - Unknown dependency representations fail explicitly. Do not silently ignore imported crates/libraries the provider cannot materialize.
-- The first Cargo build is closed-input: `cargo build --frozen` plus OCI network `none`. Do not enable network fetches to make third-party crates convenient; add explicit vendored/package/config artifacts instead.
+- Cargo builds stay closed-input: `cargo build --frozen` plus OCI network `none`. Do not enable registry/network fetches to make dependencies convenient.
+- Vendored registry dependencies use explicit `rust/cargo-config-v1` plus `rust/cargo-vendor-file-v1` artifacts. Do not run `cargo vendor`, `cargo fetch` or another dependency acquisition step during compilation.
+- The current Cargo config representation is intentionally exact: crates.io is replaced by the explicit `vendor/` directory source. Do not broaden it to arbitrary Cargo config that can redirect builds to hidden toolchain-image files without a separate contract.
+- Vendor files must live under `vendor/<package-directory>/...`; package directories are immediate non-hidden children of `vendor/`.
+- Every explicit vendor package requires `Cargo.toml` and `.cargo-checksum.json`. The checksum file must describe exactly all explicit package files other than itself, and every listed file SHA-256 must match before OCI execution.
+- Vendor file content may be text or bytes. Do not force package assets into UTF-8 source form.
+- New providers use stable identity `cargo-rustc-oci/v1/<image-digest>` because vendored dependency support changed the input contract. Preserve the older v0 constant only as historical identity.
 - The pinned image must already contain Cargo/rustc and the requested target. Do not mutate/install the toolchain during a build unless a later explicit toolchain contract requires it.
 - OCI runner argv is constructed without a shell. Keep the temporary workspace bind mount, explicit workdir/network and host uid/gid behavior where available.
 - Temporary workspaces are build machinery and must be removed in a `finally` path.
 - Cargo-produced bytes are stored as `wasm-binary/v1`, not `wasm-module/v1`. The latter is reserved for the current Lagrange Value-handle/import/effect ABI.
 - Do not make raw foreign WASM callable merely because its header validates. Add an explicit callable/component/ABI adapter first.
-- Provider identity and output metadata must preserve the digest-pinned OCI toolchain identity; later toolchain cache keys must include it with target/options and all explicit dependency fingerprints.
+- Provider identity and output metadata must preserve the digest-pinned OCI toolchain identity; later toolchain cache keys must include it with target/options and all explicit source/manifest/lock/config/vendor fingerprints.
 
 ### Compiler/toolchain derivation
 
@@ -119,7 +126,7 @@ pooled instance != activation state
 - Physical module grouping belongs to compiler/toolchain policy. One logical group may produce one module, many modules or another executable representation.
 - `CompilationService.compileGroup()` must keep every semantic/artifact member as an explicit `derivedFrom` edge on the grouped executable artifact.
 - Reuse is allowed only when a compiler/toolchain explicitly declares a stable identity and deterministic cache key. Never infer cache equivalence from filenames, Block IDs, source-language names or target representation alone.
-- External-toolchain derivation keys must cover every declared input that can change output, including toolchain/compiler version, OCI image digest where applicable, target/ABI/options, dependency fingerprints and manifest/lock artifacts.
+- External-toolchain derivation keys must cover every declared input that can change output, including toolchain/compiler version, OCI image digest where applicable, target/ABI/options, dependency fingerprints and manifest/lock/vendor artifacts.
 - Changing ABI/compiler semantics or observable derived-artifact contracts requires changing compiler/toolchain identity or key material.
 - A reused immutable executable may be shared by distinct installations, but function/Block/image identity must remain distinct unless language semantics explicitly say otherwise.
 - Keep current-installation provenance explicit in wrapper/function artifacts even when a lower-level module artifact is reused from an earlier equivalent derivation.
