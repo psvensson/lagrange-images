@@ -47,6 +47,7 @@ semantic code != executable artifact
 WASM handle != image identity
 compilation group != source-language construct
 shared module != function/Block identity
+compiled host module != durable module identity
 ```
 
 - Object slots contain only tagged Values; do not reintroduce arbitrary nested JSON state.
@@ -78,6 +79,10 @@ shared module != function/Block identity
 - A shared `wasm-module/v1` may contain several exported entries, but each semantic member still gets its own `wasm-function/v1` and Block/prototype identity.
 - Module function descriptors may refer to semantic members by `derivedFrom` index only; do not hide graph refs in module metadata.
 - A shared module's global import table does not grant ambient use of every host-effect site. The executor must select one entry descriptor and enable only that function's declared send/closure sites.
+- Cache compiled host `WebAssembly.Module` objects only as runtime-local execution state keyed by immutable module-artifact identity. Never persist them or treat them as image/code identity.
+- Default executor registries must own separate WASM module caches; do not reintroduce a public singleton cache shared across runtimes.
+- Concurrent requests for one module should share one in-flight compilation. Failed compilation must evict its cache entry so a later activation can retry.
+- Do not pool/reuse `WebAssembly.Instance` objects without a separate contract: current imports close over activation-local Value handles, active effect sites and pending-effect state.
 - Keep `lagrange-value-handle/v0` handles invocation-local. Never persist them, use them as object IDs, or treat them as capabilities.
 - The generic WASM ABI must preserve canonical Value semantics; optimized/unboxed ABIs need explicit new contracts rather than silently narrowing Values.
 - Graph refs may cross the WASM boundary through receiver/argument/capture handles. Do not hide ref literals or ref message descriptors inside artifact metadata.

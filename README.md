@@ -18,6 +18,7 @@ An image is a durable object graph, not a VM memory dump and not a pile of sourc
 - `neutral-expression/v0` reference interpreter
 - real `lagrange-code/v0 -> wasm-module/v1` backend
 - multi-function shared WASM modules for compilation groups
+- runtime-local compiled `WebAssembly.Module` cache
 - `lagrange-value-handle/v0` WASM calling ABI
 - WASM tail message sends through normal language dispatch
 - WASM tail nested-Block materialization with ordinary lexical captures
@@ -38,6 +39,7 @@ semantic code != executable artifact
 WASM handle != image identity
 compilation group != source-language construct
 shared module != function/Block identity
+compiled host module != durable module identity
 ```
 
 ## Run it
@@ -105,7 +107,7 @@ WASM -> make_block_site_N -> return 0 -> create environment+Block -> ObjectRef
 
 A closure site's metadata contains only semantic block/capture descriptors. Prototype Block refs remain explicit `derivedFrom` edges on `wasm-function/v1`.
 
-### Complete trees now use one module
+### Complete trees use one physical module
 
 `installWasmBlockTree()` takes one root semantic artifact, preflights the full tree, persists nested semantic artifacts, compiles/reuses one grouped module, then assembles separate function/prototype Blocks bottom-up:
 
@@ -124,19 +126,46 @@ For:
 [ :x | [ :y | [ :z | x ] ] ]
 ```
 
-the executable shape is now:
+the executable shape is:
 
 ```text
 semantic root  ----\
 semantic child -----+--> one wasm-module/v1
 semantic grandchild/
 
-run_0 -> root wasm-function/v1      -> root Block
-run_1 -> child wasm-function/v1     -> child prototype Block
+run_0 -> root wasm-function/v1       -> root Block
+run_1 -> child wasm-function/v1      -> child prototype Block
 run_2 -> grandchild wasm-function/v1 -> grandchild prototype Block
 ```
 
 All three function/Block identities remain separate. Sharing a module is only physical executable grouping.
+
+### Compiled host-module cache
+
+The executor now compiles an immutable `wasm-module/v1` to a host `WebAssembly.Module` once per runtime and reuses that compiled module for later activations, including activations of different entries in one shared module:
+
+```text
+wasm-module/v1 bytes
+      -> WebAssembly.compile() once
+      -> runtime-local WasmModuleCache
+           |-> fresh instance for activation A
+           |-> fresh instance for activation B
+           `-> fresh instance for activation C
+```
+
+Instances are deliberately still fresh. Their imports close over the activation's Value-handle arena, active host-effect sites and pending-effect state.
+
+Concurrent misses for the same module share one in-flight compilation promise. Failed compilation is evicted so a later activation can retry.
+
+The default WASM executor exposes runtime-only cache diagnostics through:
+
+```js
+const wasmExecutor = runtime.codeExecutors.get(WASM_FUNCTION_V1);
+wasmExecutor.moduleCache.stats();
+// {entries, hits, misses, compilations, failures}
+```
+
+These host cache objects/counters are not image state and are never persisted.
 
 ## Compilation groups and reuse
 
@@ -170,7 +199,16 @@ At execution, only the active entry's host-effect sites are enabled. Being coloc
 
 Derived-artifact reuse is compiler-owned. A compiler must opt in with a stable identity plus deterministic `cacheKey()`. Equivalent independent tree installations therefore reuse one immutable multi-function module while keeping separate semantic artifacts, `wasm-function/v1` wrappers, Blocks and runtime closures.
 
-See ADR 0012 and ADR 0013.
+There are therefore two distinct reuse layers:
+
+```text
+durable derivation reuse: semantic group -> shared wasm-module/v1 CodeArtifact
+runtime execution reuse:  wasm-module/v1 -> shared compiled WebAssembly.Module
+```
+
+Neither merges language/image identity.
+
+See ADR 0012, ADR 0013 and ADR 0014.
 
 ## Values and objects
 
@@ -220,3 +258,4 @@ Do not import `lagrange-server/src/...`; use public package seams only.
 - [ADR 0011: automatic WASM Block tree installation](docs/decisions/0011-automatic-wasm-block-tree-installation.md)
 - [ADR 0012: language-neutral compilation groups and reuse](docs/decisions/0012-language-neutral-compilation-groups-and-reuse.md)
 - [ADR 0013: shared multi-function WASM modules](docs/decisions/0013-shared-multifunction-wasm-modules.md)
+- [ADR 0014: runtime-local compiled WASM module cache](docs/decisions/0014-runtime-wasm-module-cache.md)
