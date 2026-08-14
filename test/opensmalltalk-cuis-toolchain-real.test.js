@@ -17,6 +17,7 @@ import {
   createArtifactBackedOpenSmalltalkCuisProvider,
   createOpenSmalltalkCuisToolchainProvider,
   createRuntime,
+  installForeignRuntimeCallable,
   objectRef,
   textValue,
 } from '../src/runtime.js';
@@ -36,7 +37,7 @@ async function put(runtime, id, representation, content, {metadata = {}, depende
   });
 }
 
-test('real Cuis toolchain derives an artifact-backed runnable image containing an upstream package', {skip: !enabled, timeout: 120_000}, async () => {
+test('real Cuis toolchain derives an artifact-backed runtime callable through an ordinary Block', {skip: !enabled, timeout: 120_000}, async () => {
   const vmPath = process.env.LAGRANGE_OPENSMALLTALK_VM_PATH;
   const imagePath = process.env.LAGRANGE_CUIS_IMAGE_PATH;
   const changesPath = process.env.LAGRANGE_CUIS_CHANGES_PATH;
@@ -62,6 +63,7 @@ test('real Cuis toolchain derives an artifact-backed runnable image containing a
     backend: {mode: 'mock'},
     toolchainProviders: [[OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID, toolchainProvider]],
     foreignRuntimeProviders: [[OPENSMALLTALK_CUIS_PROVIDER_ID, runtimeProvider]],
+    foreignRuntimeDefinitionBindings: [[CUIS_RUNTIME_DEFINITION_V1, OPENSMALLTALK_CUIS_PROVIDER_ID]],
   });
   await runtime.images.createImage({id: 'build-image'});
   try {
@@ -121,23 +123,36 @@ test('real Cuis toolchain derives an artifact-backed runnable image containing a
       },
     );
 
-    const instance = await runtime.foreignRuntimeDefinitions.start({
-      providerId: OPENSMALLTALK_CUIS_PROVIDER_ID,
-      definition: objectRef('build-image', runtimeDefinition.id),
+    const {interfaceArtifact, block} = await installForeignRuntimeCallable({
+      images: runtime.images,
+      runtimeDefinition: objectRef('build-image', runtimeDefinition.id),
+      interface: {service: 'json', operation: 'package-proof'},
+      argumentCount: 0,
+      interfaceId: 'cuis-json-package-proof-interface',
+      blockId: 'cuis-json-package-proof-block',
     });
+    assert.deepEqual(interfaceArtifact.dependencies, [{
+      role: 'runtime-definition',
+      artifact: objectRef('build-image', runtimeDefinition.id),
+    }]);
+    assert.equal(JSON.stringify(interfaceArtifact).includes(OPENSMALLTALK_CUIS_PROVIDER_ID), false);
+    assert.equal(runtime.foreignRuntimes.list().length, 0);
+
+    const activation = await runtime.invocations.invokeBlock(objectRef('build-image', block.id), []);
+    const packageProof = await runtime.executor.execute(activation);
+    assert.deepEqual(packageProof, booleanValue(true));
+    assert.equal(runtime.foreignRuntimes.list().length, 1);
+    const [instance] = runtime.foreignRuntimes.list();
     assert.deepEqual(instance.metadata.definition, objectRef('build-image', runtimeDefinition.id));
     assert.deepEqual(instance.metadata.imageArtifact, objectRef('build-image', derivedImage.id));
     assert.deepEqual(instance.metadata.changesArtifact, objectRef('build-image', derivedChanges.id));
     assert.deepEqual(instance.metadata.sourcesArtifact, objectRef('build-image', baseSources.id));
     assert.deepEqual(instance.metadata.packages, []);
 
-    const packageProof = await runtime.foreignRuntimes.call({
-      runtimeId: instance.runtimeId,
-      interface: {service: 'json', operation: 'package-proof'},
-      arguments: [],
-    });
-    assert.deepEqual(packageProof, booleanValue(true));
-    await runtime.foreignRuntimes.stop(instance.runtimeId);
+    const secondActivation = await runtime.invocations.invokeBlock(objectRef('build-image', block.id), []);
+    assert.deepEqual(await runtime.executor.execute(secondActivation), booleanValue(true));
+    assert.equal(runtime.foreignRuntimes.list().length, 1);
+    assert.equal(runtime.foreignRuntimes.list()[0].runtimeId, instance.runtimeId);
   } finally {
     await runtime.close();
   }
