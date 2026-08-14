@@ -61,13 +61,18 @@ Success: the same graph survives process/node restarts with no language/image se
 - [x] code compiler registry and immutable derivation service
 - [x] semantic -> neutral-expression lowering
 - [x] executable-artifact rebuildability invariant
-- [x] reserved `wasm-module/v1` and `wasm-function/v1` contracts
-- [ ] first semantic -> WASM compiler and ABI
+- [x] `wasm-module/v1` and `wasm-function/v1` artifact contracts
+- [x] first `lagrange-code/v0` -> WASM compiler
+- [x] `lagrange-value-handle/v0` calling ABI
+- [x] Node WebAssembly execution through the normal ActivationExecutor
+- [x] interpreter/WASM differential tests
+- [ ] WASM message-send host import
+- [ ] WASM nested closure creation
 - [ ] activations and debugger metadata
 - [ ] exception/condition substrate
-- [ ] host/WASM FFI boundary
+- [ ] capability-aware host/WASM FFI boundary
 
-Success: semantic code is independent of execution representation and can be lowered into interchangeable derived artifacts.
+Success: semantic code is independent of execution representation and a useful pure subset executes interchangeably through the interpreter or real WASM.
 
 ## 5. Symmetric Smalltalk seed
 
