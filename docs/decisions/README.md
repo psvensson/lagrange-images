@@ -38,9 +38,10 @@ ADRs are the detailed design history. Read them by topic rather than as a prereq
 - [0020 — deterministic toolchain result reuse](0020-toolchain-result-reuse.md): provider-opt-in external build cache over the explicit artifact graph.
 - [0022 — OpenSmalltalkVM compatibility direction](0022-opensmalltalkvm-compatibility-direction.md): native Symmetric Smalltalk plus real OpenSmalltalkVM compatibility/runtime/toolchain/migration paths.
 
-## Foreign executable interfaces
+## Foreign executable and runtime interfaces
 
 - [0021 — foreign WASM callable interface](0021-foreign-wasm-callable-interface.md): separate raw WASM implementation identity from an explicit scalar callable ABI.
+- [0023 — foreign runtime lifecycle substrate](0023-foreign-runtime-lifecycle-substrate.md): language-neutral start/call/stop lifecycle with transient runtime IDs and provider-private handles.
 
 ## Reading rule
 
