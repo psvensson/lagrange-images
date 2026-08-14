@@ -75,9 +75,10 @@ Success: the same graph survives process/node restarts with no language/image se
 - [x] shared physical WASM module containing several compilation-group members
 - [x] per-entry signature/effect metadata and separate `wasm-function/v1` identities
 - [x] immutable shared-module reuse across independent tree installations
+- [x] runtime-local compiled `WebAssembly.Module` cache with concurrent-miss coalescing
+- [ ] WebAssembly instance pooling/reuse policy
 - [ ] module-size/budget driven splitting of one logical group
 - [ ] direct optimized calls between entries in one shared module
-- [ ] compiled WebAssembly.Module / instance cache
 - [ ] indexed derivation-key lookup in the durable backend
 - [ ] general non-tail asynchronous WASM effects/continuations
 - [ ] transient/non-materialized optimized closure representation
@@ -85,7 +86,7 @@ Success: the same graph survives process/node restarts with no language/image se
 - [ ] exception/condition substrate
 - [ ] capability-aware host/WASM FFI boundary
 
-Success: grouping, physical module layout and executable reuse are compiler-owned policies; one logical group may now become one multi-function WASM module without merging semantic, function or Block identity.
+Success: grouping, physical module layout and executable reuse are compiler-owned policies; one logical group may become one multi-function WASM module, and repeated activations reuse its compiled host module without merging semantic, function or Block identity.
 
 ## 5. Symmetric Smalltalk seed
 
