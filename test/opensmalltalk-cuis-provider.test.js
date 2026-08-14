@@ -174,7 +174,10 @@ test('OpenSmalltalk Cuis provider copies exact package bytes, records content id
 
     const scriptPath = runner.starts[0].args[4];
     const script = await readFile(scriptPath, 'utf8');
-    assert.match(script, /CodePackageFile installPackage: DirectoryEntry currentDirectory \/\/ 'packages' \/\/ 'JSON\.pck\.st'/);
+    assert.match(script, /FeatureRequirement name: 'JSON'/);
+    assert.match(script, /pathName: packageEntry pathName/);
+    assert.match(script, /packageRequirement satisfyRequirementsAndInstall/);
+    assert.equal(script.includes('CodePackageFile installPackage:'), false);
     assert.match(script, /nextPutAll: 'JSON'; nextPut: Character tab;\n    nextPutAll: 'install'/);
     assert.match(script, /nextPutAll: 'JSON'; nextPut: Character tab;\n    nextPutAll: 'installed'/);
     assert.match(script, /LagrangeProofService compile: 'jsonRoundTripSum: a with: b/);
