@@ -6,12 +6,53 @@ The current graph representation is defined in [value-model.md](value-model.md).
 
 ## Records
 
-The substrate currently has two record kinds:
+The substrate currently has these durable graph record kinds:
 
 - immutable `shape` records describing physical slot layout
 - `object` records containing a shape ref, optional behavior ref and `slot-id -> Value` state
+- immutable `code-artifact` records for source, semantic, executable and imported artifact representations
+- versioned `lexical-environment` records
+- immutable `block` records pairing code with an optional lexical environment
 
-Both share one identity namespace. Generic objects do not contain Smalltalk-specific `classId` or generic `source` fields.
+They share one image object-ID namespace. Generic objects do not contain Smalltalk-specific `classId` or generic `source` fields.
+
+## CodeArtifact dependencies and provenance
+
+`CodeArtifact` is currently the bootstrap generic artifact carrier. It now has two different explicit relationship kinds:
+
+```text
+dependencies:
+  role
+  artifact ref
+
+derivedFrom:
+  reference
+```
+
+They are intentionally not interchangeable.
+
+A dependency says an artifact needs or relates to another artifact for a role chosen by language/tooling policy:
+
+```text
+application source
+  dependency(role=manifest) -> Cargo.toml artifact
+  dependency(role=library)  -> imported component/JAR/etc.
+```
+
+`derivedFrom` records provenance for an immutable result:
+
+```text
+compiled module
+  derivedFrom -> application source
+  derivedFrom -> manifest
+  derivedFrom -> library
+```
+
+Dependency roles are not a platform enum. The generic image layer does not know what `library`, `manifest`, `lock`, `runtime` or another role means.
+
+Dependency targets are explicit unpinned refs to existing CodeArtifacts. Metadata may not hide these refs. The graph reference walker includes them, so reachability and later GC/export logic see them naturally.
+
+Older CodeArtifacts with no stored `dependencies` field are treated as having an empty dependency list.
 
 ## Shape evolution
 
@@ -21,14 +62,16 @@ A structural change creates a new shape identity. Stable slot IDs can survive re
 
 Ordinary refs name evolving object identities. `pinned-ref` adds an opaque historical revision. Backend `_version` remains concurrency metadata and is not identity.
 
-`referencesOfRecord()` walks explicit shape, behavior and slot edges. Metadata may not hide refs.
+`referencesOfRecord()` walks explicit shape, behavior, slot, artifact dependency/provenance, lexical-environment and Block edges. Metadata may not hide refs.
 
 The mock backend materializes current state and appends a history spine. Its snapshots still copy the materialized records; a Lagrange backend should eventually represent snapshots as logical root/revision frontiers where possible.
 
 ## Projects
 
-Projects should be ordinary graph structures containing or relating code, notes, tests, data, work items and other projects. Git/files remain useful interoperability views rather than the canonical model.
+Projects should be ordinary graph structures containing or relating code, notes, tests, data, work items and other projects. They should also be able to refer to source, manifests, lock data, imported binary libraries/components and other artifact dependencies without pretending that every dependency is editable source.
+
+Git/files remain useful interoperability views rather than the canonical model.
 
 ## Language boundary
 
-The image layer knows values, refs, shapes, identity and history. It does not define classes, Lisp packages, `nil`, method syntax, closure calling convention or message lookup. Language personalities own those semantics.
+The image layer knows values, refs, shapes, identity, artifact relationships and history. It does not define classes, Lisp packages, `nil`, method syntax, closure calling convention, package-manager semantics or message lookup. Language personalities and toolchain providers own those semantics.

@@ -113,7 +113,7 @@ class ImageService {
 
   async putCodeArtifact(imageId, input) {
     await this.getImage(imageId);
-    assertAllowedFields(input, new Set(['id', 'languageId', 'representation', 'content', 'derivedFrom', 'metadata']), 'code artifact');
+    assertAllowedFields(input, new Set(['id', 'languageId', 'representation', 'content', 'dependencies', 'derivedFrom', 'metadata']), 'code artifact');
     const id = input.id ?? randomUUID();
     const at = this.now();
     const artifact = createCodeArtifactRecord({
@@ -122,10 +122,14 @@ class ImageService {
       languageId: input.languageId ?? null,
       representation: input.representation,
       content: input.content,
+      dependencies: input.dependencies ?? [],
       derivedFrom: input.derivedFrom ?? [],
       metadata: input.metadata ?? {},
       updatedAt: at,
     });
+    for (const dependency of artifact.dependencies) {
+      await this.requireRecordKind(dependency.artifact, 'code-artifact', `code artifact dependency ${dependency.role}`);
+    }
     const stored = await this.backend.put(records(imageId), id, artifact, {expectedVersion: 0});
     await this.backend.append(history(imageId), {type: 'code-artifact.put', at, artifactId: id, artifactVersion: stored._version, artifact: structuredClone(stored)});
     return stored;

@@ -31,9 +31,43 @@ test('executable artifacts can be deterministically rebuilt from semantic code',
   });
 
   assert.deepEqual(first.content, rebuilt.content);
+  assert.deepEqual(first.dependencies, []);
   assert.deepEqual(first.derivedFrom, [objectRef('demo', 'semantic')]);
   assert.deepEqual(rebuilt.derivedFrom, [objectRef('demo', 'semantic')]);
   assert.equal(JSON.parse(first.content.value).parameters, 1);
+  await runtime.close();
+});
+
+test('in-process compilers may declare output artifact dependencies explicitly', async () => {
+  const runtime = await createRuntime({
+    backend: {mode: 'mock'},
+    codeCompilers: [['example/source-v1', 'example/output-v1', {
+      async compile() {
+        return {
+          content: textValue('compiled'),
+          dependencies: [{role: 'runtime', artifact: objectRef('demo', 'runtime-library')}],
+        };
+      },
+    }]],
+  });
+  await runtime.images.createImage({id: 'demo'});
+  const library = await runtime.images.putCodeArtifact('demo', {
+    id: 'runtime-library',
+    representation: 'example/library-v1',
+    content: textValue('library'),
+  });
+  const source = await runtime.images.putCodeArtifact('demo', {
+    id: 'source',
+    representation: 'example/source-v1',
+    content: textValue('source'),
+  });
+
+  const compiled = await runtime.compilation.compileArtifact(objectRef('demo', source.id), {
+    id: 'compiled',
+    targetRepresentation: 'example/output-v1',
+  });
+  assert.deepEqual(compiled.dependencies, [{role: 'runtime', artifact: objectRef('demo', library.id)}]);
+  assert.deepEqual(compiled.derivedFrom, [objectRef('demo', source.id)]);
   await runtime.close();
 });
 

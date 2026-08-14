@@ -83,17 +83,26 @@ Implemented execution/compiler foundation:
 
 Artifact/toolchain generalization:
 
-- [ ] generic artifact dependency model that can relate source, semantic IR, bytecode/package archives, precompiled libraries, WASM components/modules and manifest/lock artifacts
-- [ ] keep canonical imported binary dependencies as binary artifacts instead of requiring source reconstruction
-- [ ] toolchain/provider contract independent of physical execution mechanism
-- [ ] provider inputs/outputs include explicit artifact refs, target/ABI/options, diagnostics, interface descriptions and provenance
+- [x] bootstrap generic artifact dependency model on immutable CodeArtifacts
+- [x] explicit role-tagged artifact dependency refs separate from `derivedFrom` provenance
+- [x] graph traversal sees artifact dependencies; old artifacts without the field read as dependency-free
+- [x] imported binary/package artifacts can remain canonical binary dependencies instead of requiring source reconstruction
+- [x] language-neutral `ToolchainProviderRegistry` and `ToolchainService`
+- [x] stable provider identity separate from runtime/configuration provider selection ID
+- [x] provider receives frozen explicit root/transitive artifact graph plus target/options, not ambient `ImageService`
+- [x] provider may return multiple named output artifacts plus transient diagnostics
+- [x] toolchain service owns output provenance and persists every resolved input as `derivedFrom`
+- [x] provider-declared runtime/library output dependencies remain separate graph edges
+- [x] provider result/dependency preflight before output writes
 - [ ] external-toolchain derivation keys include compiler/toolchain identity plus dependency/manifest/lock fingerprints
 - [ ] OCI-backed build/toolchain provider using pinned image digest/version
 - [ ] native-process or equivalent trusted external-toolchain provider where useful
+- [ ] remote build provider if a real deployment needs it
 - [ ] callable/interface artifact contract for imported executable libraries/components
 - [ ] interface contract keeps exported calls/ABI/capabilities/version separate from authority
 - [ ] WASM Component-style imported library/callable boundary
 - [ ] dependency-role policy for static/link, dynamic component, foreign runtime, service and build-only dependencies
+- [ ] transactional/multi-output artifact installation if real toolchains require sibling output dependencies or atomicity
 
 Execution/compiler follow-ups:
 
@@ -107,7 +116,7 @@ Execution/compiler follow-ups:
 - [ ] exception/condition substrate
 - [ ] capability-aware host/WASM/foreign-call boundary
 
-Success: source is one artifact representation rather than the platform boundary; built-in and external toolchains can derive executable artifacts with explicit provenance/cache inputs, and imported compiled libraries can participate without being rewritten as source.
+Success: source is one artifact representation rather than the platform boundary; the explicit artifact graph can already be handed to a language-neutral provider and turned into derived artifacts with preserved provenance. The next proof is to run a real existing toolchain through this contract rather than changing the image model again.
 
 ## 5. Symmetric Smalltalk seed
 
@@ -159,6 +168,17 @@ Smalltalk/Lisp:
 - [ ] prove several useful Cuis libraries
 - [ ] Common Lisp personality spike
 
+Rust — next external-toolchain proof:
+
+- [ ] Rust source/manifest/lock artifact conventions using the generic dependency edges
+- [ ] OCI-backed Cargo/`rustc` provider over `ToolchainService`, not a new Rust compiler
+- [ ] pin toolchain/container identity and include it in reproducible derivation/cache inputs
+- [ ] compile one ordinary Cargo project with at least one third-party crate to WASM
+- [ ] preserve source/manifest/lock/dependency provenance on the produced WASM artifact
+- [ ] Lagrange Rust SDK/crate for explicit host/call interfaces
+- [ ] prove reuse of source crates plus at least one portable precompiled WASM/component or stable-ABI dependency
+- [ ] document/compiler-test which Rust intermediate/binary formats are only build caches versus stable imported dependencies
+
 Java:
 
 - [ ] Java artifact conventions for source/class/JAR without teaching generic graph storage what Java means
@@ -166,14 +186,6 @@ Java:
 - [ ] Java personality/toolchain spike using existing `javac`/JVM/AOT/Java-to-WASM tooling rather than a new compiler
 - [ ] JVM/OCI foreign-runtime compatibility spike
 - [ ] compare JVM/OCI compatibility path with deeper Java-to-WASM/image integration on one realistic library/application
-
-Rust:
-
-- [ ] Rust source/manifest/lock artifact conventions
-- [ ] Cargo/`rustc` external-toolchain spike rather than a new Rust compiler
-- [ ] Lagrange Rust SDK/crate for explicit host/call interfaces
-- [ ] prove reuse of source crates plus at least one portable precompiled WASM/component or stable-ABI dependency
-- [ ] document/compiler-test which Rust intermediate/binary formats are only build caches versus stable imported dependencies
 
 Cross-language libraries:
 
@@ -206,4 +218,4 @@ Success: executable placement can choose image-native/WASM or explicit foreign r
 - [ ] replaceable shell/window-manager policy
 - [ ] inspectors, browsers and debugger as image-resident tools
 
-See ADR 0016 for the artifact graph, external toolchain, compiled-library and foreign-runtime direction.
+See ADR 0016 for the broader artifact/toolchain/foreign-runtime direction and ADR 0017 for the implemented dependency/provider substrate.

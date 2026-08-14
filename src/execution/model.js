@@ -12,6 +12,18 @@ function requiredText(value, label) {
   return value;
 }
 
+function exactKeys(value, expected, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
+    throw new TypeError(`${label} must contain exactly ${wanted.join(', ')}`);
+  }
+  return value;
+}
+
 function normalizeObjectRef(value, label) {
   const normalized = canonicalizeValue(value);
   if (!isObjectRef(normalized)) {
@@ -29,23 +41,44 @@ function normalizeReferenceList(values, label) {
   }));
 }
 
+function normalizeArtifactDependencies(values, {imageId = null, artifactId = null} = {}) {
+  if (!Array.isArray(values)) throw new TypeError('code artifact dependencies must be an array');
+  const seen = new Set();
+  return Object.freeze(values.map((dependency, index) => {
+    exactKeys(dependency, ['artifact', 'role'], `code artifact dependency ${index}`);
+    const role = requiredText(dependency.role, `code artifact dependency ${index} role`);
+    const artifact = normalizeObjectRef(dependency.artifact, `code artifact dependency ${index} artifact`);
+    if (imageId !== null && artifactId !== null && artifact.imageId === imageId && artifact.objectId === artifactId) {
+      throw new TypeError('code artifact cannot depend on itself');
+    }
+    const key = `${role}\u0000${artifact.imageId}\u0000${artifact.objectId}`;
+    if (seen.has(key)) throw new TypeError(`duplicate code artifact dependency: ${role} ${artifact.imageId}/${artifact.objectId}`);
+    seen.add(key);
+    return Object.freeze({role, artifact});
+  }));
+}
+
 function createCodeArtifactRecord({
   id,
   imageId,
   languageId = null,
   representation,
   content,
+  dependencies = [],
   derivedFrom = [],
   metadata = {},
   updatedAt = null,
 }) {
+  const recordId = requiredText(id, 'code artifact id');
+  const recordImageId = requiredText(imageId, 'code artifact imageId');
   return Object.freeze({
     kind: 'code-artifact',
-    id: requiredText(id, 'code artifact id'),
-    imageId: requiredText(imageId, 'code artifact imageId'),
+    id: recordId,
+    imageId: recordImageId,
     languageId: languageId === null ? null : requiredText(languageId, 'code artifact languageId'),
     representation: requiredText(representation, 'code artifact representation'),
     content: canonicalizeValue(content),
+    dependencies: normalizeArtifactDependencies(dependencies, {imageId: recordImageId, artifactId: recordId}),
     derivedFrom: normalizeReferenceList(derivedFrom, 'code artifact derivedFrom'),
     metadata: normalizeMetadata(metadata, 'code artifact metadata'),
     updatedAt,
@@ -166,4 +199,5 @@ export {
   createBlockRecord,
   createCodeArtifactRecord,
   createLexicalEnvironmentRecord,
+  normalizeArtifactDependencies,
 };
