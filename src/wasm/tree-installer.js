@@ -195,21 +195,22 @@ async function installWasmBlockTree({
     metadata: rootMetadata,
     nodes,
   });
-  const orderedNodes = Object.freeze([
+  const frozenNodes = Object.freeze([...nodes]);
+  const groupNodes = [
     root,
     ...nodes.filter((node) => node !== root).sort((left, right) =>
       String(left.semanticBlockId).localeCompare(String(right.semanticBlockId))),
-  ]);
+  ];
   const group = createCompilationGroup({
     policyId: WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
     targetRepresentation: WASM_MODULE_V1,
-    members: orderedNodes.map((node) => objectRef(node.semanticArtifact.imageId, node.semanticArtifact.id)),
+    members: groupNodes.map((node) => objectRef(node.semanticArtifact.imageId, node.semanticArtifact.id)),
     options: {physicalLayout: 'one-module-per-member'},
   });
 
   return Object.freeze({
     ...root,
-    nodes: orderedNodes,
+    nodes: frozenNodes,
     group,
   });
 }
