@@ -43,9 +43,11 @@ shape != behavior
 reference != authority
 identity != revision
 source != artifact boundary
+dependency != provenance
 durable representation != execution representation
 semantic code != executable artifact
-toolchain != language semantics
+toolchain selection != toolchain identity
+toolchain provider != language semantics
 build OCI != foreign-runtime OCI
 WASM handle != image identity
 compilation group != source-language construct
@@ -55,7 +57,7 @@ pooled instance != activation state
 ```
 
 - Object slots contain only tagged Values; do not reintroduce arbitrary nested JSON state.
-- Graph edges are refs in slots, shape or behavior. Metadata must not hide refs.
+- Graph edges are refs in slots, shape, behavior, CodeArtifact dependencies/provenance and other explicit record fields. Metadata must not hide refs.
 - Keep `(imageId, objectId)` as stable identity independent of backend row/version/location.
 - Use `pinned-ref` when a historical state is meant.
 - Shape records are immutable; structural change gets a new shape identity.
@@ -70,8 +72,33 @@ pooled instance != activation state
 - Do not reconstruct or decompile a third-party binary dependency merely to make it look source-native. Preserve the artifact we actually possess plus its provenance/interface contract.
 - Executable artifacts are rebuildable state when their semantic/source inputs exist, never the sole surviving meaning of such a program. Binary-only imported dependencies are not rebuildable merely because other code is.
 - Language personality does not imply compiler ownership. Do not implement a new Rust/Java/etc. compiler just to integrate the language when an existing mature toolchain can be adapted cleanly.
-- Add single-source lowering backends through `CodeCompilerRegistry` and grouped backends through `CompilationGroupCompilerRegistry`; future external toolchain/provider work must preserve the same explicit-input/provenance/cache principles rather than create an opaque second build path.
-- A future toolchain/provider may run in-process, as WASM, in OCI, as a native process or remotely. Generic compilation semantics should describe artifact inputs/outputs, toolchain identity/options, diagnostics, interfaces and provenance rather than process location.
+
+### Artifact dependency edges
+
+- `CodeArtifact.dependencies` is the bootstrap generic artifact-dependency relation. Each entry is exactly `{role, artifact}`.
+- Dependency `artifact` is an explicit unpinned ref to an existing CodeArtifact. Never hide artifact dependencies in metadata.
+- Dependency roles are language/toolchain policy, not a platform enum. Do not teach the generic graph what `library`, `manifest`, `lock`, `runtime`, etc. mean.
+- `dependencies` and `derivedFrom` are not interchangeable. Dependencies describe artifact relationships; `derivedFrom` describes immutable provenance.
+- The graph walker must include dependency refs. Older stored CodeArtifacts without a `dependencies` field are treated as dependency-free.
+- Do not add a second universal Artifact hierarchy until real Rust/Java/component integrations demonstrate that CodeArtifact is genuinely too narrow.
+
+### Toolchain provider contract
+
+- `ToolchainProviderRegistry` selection IDs are runtime/configuration policy. `provider.identity` is the stable implementation/version identity. Do not conflate them.
+- `ToolchainService` must resolve only explicit CodeArtifact dependency edges from the supplied roots. Do not make `derivedFrom` history an implicit build input.
+- Providers receive frozen root/transitive artifact snapshots plus target/options. The generic v0 provider context deliberately does not expose `ImageService` or another ambient artifact reader.
+- Do not add ambient provider reads merely for convenience. External builds should declare the artifact graph they consume so provenance/cache keys can remain complete.
+- `ToolchainService` owns output `derivedFrom` provenance; providers return output descriptions, not arbitrary provenance edges.
+- Provider-declared output dependencies remain explicit dependency edges and must point at existing artifacts.
+- Toolchain diagnostics are transient v0 results, not durable metadata by default.
+- v0 supports several independent named outputs but not sibling output-to-output dependency refs or whole-invocation transactional persistence. Add those only if a real toolchain proves the need.
+- `ToolchainService` does not yet have derivation-key reuse. Do not claim external-toolchain caching until target/options/toolchain/dependency fingerprints are covered explicitly.
+- The next intended provider is OCI-backed Cargo/rustc. Implement that as a provider over this contract rather than teaching the image graph about containers, filesystems or Cargo internals.
+
+### Compiler/toolchain derivation
+
+- Add single-source lowering backends through `CodeCompilerRegistry` and grouped backends through `CompilationGroupCompilerRegistry`; external providers use `ToolchainProviderRegistry` / `ToolchainService`.
+- A toolchain provider may later run in-process, as WASM, in OCI, as a native process or remotely. Generic semantics describe artifact inputs/outputs, toolchain identity/options, diagnostics, interfaces and provenance rather than process location.
 - OCI build/toolchain containers are reproducible compilation machinery. OCI foreign-runtime containers remain part of execution. Never conflate those lifecycles or imply that a foreign JVM/native/Python heap is automatically image object state.
 - Compilation groups are transient compiler/planner values. The substrate may validate members/target/policy IDs but must not assume that a group is a Smalltalk Block tree, Java class, Rust crate or Lisp file.
 - Physical module grouping belongs to compiler/toolchain policy. One logical group may produce one module, many modules or another executable representation.
