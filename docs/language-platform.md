@@ -4,7 +4,7 @@
 
 The platform should not be one VM per language. It provides a small shared substrate for durable values, refs, objects, code artifacts, compilation, execution, debugging and capabilities. A language personality maps its own semantics onto that substrate.
 
-Implemented now includes the language-neutral graph/Block model, compiler and executor registries, `lagrange-code/v0`, `neutral-expression/v0`, the first Symmetric Smalltalk seed, and a first real WASM backend.
+Implemented now includes the language-neutral graph/Block model, compiler and executor registries, `lagrange-code/v0`, `neutral-expression/v0`, the first Symmetric Smalltalk seed, and a real WASM backend with a Value-handle ABI and tail message effects.
 
 ## Symmetric Smalltalk first
 
@@ -29,11 +29,11 @@ language source
 
 Executable artifacts remain rebuildable state under ADR 0007. Blocks point at CodeArtifacts; they do not contain WASM-specific identity or layout.
 
-## First WASM backend
+## WASM backend
 
-The first backend compiles a pure subset of `lagrange-code/v0` into validated WebAssembly bytes and executes `wasm-function/v1` through the same `ActivationExecutor` used by the interpreter.
+The WASM backend compiles `lagrange-code/v0` into validated WebAssembly bytes and executes `wasm-function/v1` through the same `ActivationExecutor` used by the interpreter.
 
-The current supported semantic operations are:
+The current directly executable semantic operations are:
 
 - scalar literals
 - positional arguments
@@ -42,12 +42,13 @@ The current supported semantic operations are:
 - arbitrary-precision integer addition through a host import
 - canonical Value equality
 - `if`
+- tail-position language message sends
 
-Message sends and nested closure creation are intentionally rejected by the WASM compiler for now rather than falling back implicitly.
+Nested closure creation remains unsupported in WASM. Non-tail asynchronous sends are also rejected explicitly rather than falling back or pretending the asynchronous image/runtime path is synchronous.
 
 ### Value-handle ABI v0
 
-The first ABI is `lagrange-value-handle/v0`. WASM receives invocation-local `i32` handles to host-owned canonical tagged Values:
+The ABI is `lagrange-value-handle/v0`. WASM receives invocation-local `i32` handles to host-owned canonical tagged Values:
 
 ```text
 run(receiverHandle,
@@ -56,15 +57,47 @@ run(receiverHandle,
   -> resultHandle
 ```
 
-Handle `0` means no receiver/ABI value. Positive handles live only for one activation; they are not image object IDs, addresses, capabilities or persistent references.
+Handle `0` is reserved. Positive handles live only for one activation; they are not image object IDs, addresses, capabilities or persistent references.
 
-This lets arbitrary-precision integers, object refs, text and other tagged Values cross the boundary without making WASM linear-memory or scalar layout part of image semantics. For example, an object-ref receiver can enter and leave a WASM-backed `yourself` method unchanged while WASM sees only a temporary integer handle.
+This lets arbitrary-precision integers, object refs, text and other tagged Values cross the boundary without making WASM linear-memory or scalar layout part of image semantics. An object-ref receiver can enter and leave a WASM-backed method unchanged while WASM sees only a temporary integer handle.
 
-The initial `lagrange` imports are `literal`, `integer_add`, `equals`, and `is_true`. Host imports validate handles and operate on canonical Values. Later sends/object/Lagrange operations must be added as explicit capability-aware imports.
+The base `lagrange` imports are `literal`, `integer_add`, `equals`, and `is_true`.
 
-The interpreter remains the reference implementation. Differential tests lower the same semantic artifact to interpreter and WASM representations and require identical canonical Value results.
+### Tail message effects
 
-See ADR 0007 and ADR 0008.
+Image-resident language dispatch is asynchronous, while ordinary WASM imports are synchronous. The bootstrap ABI handles that mismatch explicitly with tail effects.
+
+Each semantic tail send becomes a derived send-site descriptor plus a typed import:
+
+```text
+sendSites[N]
+  languageId
+  message : non-ref Value
+  arity
+
+lagrange.send_site_N(receiverHandle, argumentHandles...) -> 0
+```
+
+The synchronous import validates the handles and records one pending send request. It does **not** perform image lookup. The WASM entry then returns reserved handle `0`; outside WASM the executor awaits the normal `InvocationService`/`ActivationExecutor` path and returns the resulting canonical Value.
+
+```text
+WASM
+  -> send_site_N
+  -> return 0
+  -> executor awaits normal language dispatch
+  -> resolved Block may be interpreted or WASM
+  -> Value
+```
+
+Tail position propagates through `if`, so pure WASM computation may choose which final send occurs. Sends used as operands, send receivers/arguments, conditions, or other non-tail expressions are rejected by the compiler for now.
+
+A WASM caller may resolve to another WASM-backed Block because message lookup remains language-owned and execution-representation-neutral. There is no separate WASM method-lookup mechanism.
+
+This is intentionally a first asynchronous-effect contract. General non-tail sends will need an explicit continuation/trampoline or other async WASM design later.
+
+The interpreter remains the reference implementation. Differential tests require interpreted and WASM callers to produce identical canonical Values.
+
+See ADR 0007, ADR 0008 and ADR 0009.
 
 ## Blocks and closures
 
@@ -82,9 +115,9 @@ The bootstrap interpreter currently materializes nested closures as Block + Lexi
 
 Direct Block calls and language message sends converge on transient activation requests. Language dispatch resolves a message to a Block; execution then depends on the Block's CodeArtifact representation.
 
-This separation already allows the same neutral activation machinery to execute `neutral-expression/v0` and `wasm-function/v1`. A future Smalltalk send can therefore resolve to WASM without changing method lookup semantics.
+This separation allows a Smalltalk send from interpreted code or WASM to resolve to either `neutral-expression/v0` or `wasm-function/v1` without changing method lookup semantics.
 
-References still identify objects rather than granting authority. WASM Value handles likewise do not grant capabilities.
+References still identify objects rather than granting authority. WASM Value handles likewise do not grant capabilities. Tail-send imports currently request language dispatch only; capability-aware privileged or distributed host operations remain later boundaries.
 
 ## Compatibility kernels
 
@@ -94,11 +127,12 @@ Common Lisp can reuse durable data/code identity, lexical environments, conditio
 
 ## Next open questions
 
-- WASM message-send import and capability context
+- general non-tail asynchronous WASM sends/continuations
 - nested closure creation/optimization in the WASM backend
 - Object/Behavior/Class/Metaclass bootstrap and inheritance
 - assignment, temporaries, sequences and mutable lexical cells
 - immediate-value Smalltalk objects/primitives
+- capability-aware host imports and distributed/local send policy
 - module grouping and compilation/cache policy
 - optimized/unboxed ABI variants and possible WASM-GC use
 - distributed placement of WASM execution through Lagrange

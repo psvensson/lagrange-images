@@ -17,22 +17,26 @@ async function semantic(runtime, id, body) {
   });
 }
 
-test('WASM backend v0 rejects message sends instead of falling back', async () => {
+test('WASM backend v0 rejects non-tail message sends instead of falling back', async () => {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   await runtime.images.createImage({id: 'demo'});
   const source = await semantic(runtime, 'send-semantic', {
-    op: 'send',
-    languageId: 'symmetric-smalltalk',
-    receiver: {op: 'literal', value: integerValue(1)},
-    message: textValue('yourself'),
-    arguments: [],
+    op: 'integer-add',
+    left: {
+      op: 'send',
+      languageId: 'symmetric-smalltalk',
+      receiver: {op: 'literal', value: integerValue(1)},
+      message: textValue('yourself'),
+      arguments: [],
+    },
+    right: {op: 'literal', value: integerValue(1)},
   });
   await assert.rejects(
     runtime.compilation.compileArtifact(objectRef('demo', source.id), {
       id: 'send-wasm',
       targetRepresentation: WASM_MODULE_V1,
     }),
-    /does not yet support message sends/,
+    /only in tail position/,
   );
   await runtime.close();
 });

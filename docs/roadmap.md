@@ -66,13 +66,14 @@ Success: the same graph survives process/node restarts with no language/image se
 - [x] `lagrange-value-handle/v0` calling ABI
 - [x] Node WebAssembly execution through the normal ActivationExecutor
 - [x] interpreter/WASM differential tests
-- [ ] WASM message-send host import
+- [x] tail-position WASM message-send host effects through normal dispatch
+- [ ] general non-tail asynchronous WASM sends/continuations
 - [ ] WASM nested closure creation
 - [ ] activations and debugger metadata
 - [ ] exception/condition substrate
 - [ ] capability-aware host/WASM FFI boundary
 
-Success: semantic code is independent of execution representation and a useful pure subset executes interchangeably through the interpreter or real WASM.
+Success: semantic code is independent of execution representation; pure code and tail language sends can execute through real WASM while preserving the same dispatch and Value semantics as the interpreter.
 
 ## 5. Symmetric Smalltalk seed
 
@@ -87,13 +88,14 @@ Success: semantic code is independent of execution representation and a useful p
 - [x] automatic lexical capture analysis with stable binding IDs
 - [x] lexical `self` capture across Block boundaries
 - [x] ordinary `value*` sends to Blocks through the Smalltalk dispatcher
+- [x] tail Smalltalk sends from WASM back into ordinary language dispatch
 - [ ] assignments, temporaries, sequences and cascades
 - [ ] Object/Behavior/Class/Metaclass bootstrap and inheritance
 - [ ] immediate-value objects/primitives
 - [ ] REPL/workspace
 - [ ] bootstrap image
 
-Success for the current seed: nested Smalltalk closures parse, compile into semantic code, materialize in the bootstrap interpreter and execute through ordinary message dispatch.
+Success for the current seed: nested Smalltalk closures execute in the interpreter, while ordinary tail message sends can also execute from WASM without changing lookup semantics.
 
 ## 6. Projects and collaborative history
 

@@ -14,8 +14,9 @@ An image is a durable object graph, not a VM memory dump and not a pile of sourc
 - `CodeCompilerRegistry` / `CompilationService`
 - language-neutral `lagrange-code/v0` semantic code
 - `neutral-expression/v0` reference interpreter
-- first real `lagrange-code/v0 -> wasm-module/v1` backend
+- real `lagrange-code/v0 -> wasm-module/v1` backend
 - `lagrange-value-handle/v0` WASM calling ABI
+- WASM tail message sends through normal language dispatch
 - `wasm-function/v1` execution through the normal ActivationExecutor
 - interpreter/WASM differential tests
 - executable Symmetric Smalltalk parser/compiler/dispatcher with nested lexical Blocks
@@ -59,11 +60,11 @@ Smalltalk source
 
 The executable forms are derived state. The bootstrap interpreter currently materializes nested closures as Block + LexicalEnvironment records, while future optimized/WASM paths may stack-allocate, inline or eliminate nonescaping closures.
 
-## First WASM backend
+## WASM backend
 
-The first backend compiles a useful pure subset of `lagrange-code/v0` to real WebAssembly bytes and executes it with Node's built-in `WebAssembly` runtime.
+The backend compiles a useful subset of `lagrange-code/v0` to real WebAssembly bytes and executes it with Node's built-in `WebAssembly` runtime.
 
-Supported now:
+Supported directly in WASM now:
 
 ```text
 literal
@@ -73,9 +74,10 @@ captured binding
 integer-add
 equals
 if
+tail message send
 ```
 
-Message sends and nested Block creation are deliberately rejected by the WASM compiler for now. Requesting WASM never silently falls back to the interpreter.
+Nested Block creation and non-tail asynchronous sends remain unsupported. Requesting WASM never silently falls back to the interpreter.
 
 The calling ABI is `lagrange-value-handle/v0`. WASM sees invocation-local `i32` handles rather than image Values or object addresses:
 
@@ -86,24 +88,36 @@ run(receiverHandle,
   -> resultHandle
 ```
 
-Handle `0` means no receiver/value in an ABI slot. Positive handles exist only for the current activation. They are not object IDs, capabilities or persistent references.
+Handle `0` is reserved. Positive handles exist only for the current activation. They are not object IDs, capabilities or persistent references.
 
-Host imports currently provide `literal`, `integer_add`, `equals`, and `is_true`. Operations resolve handles back to canonical tagged Values on the host, so arbitrary-precision image integers remain arbitrary precision instead of being narrowed to WASM `i64`.
+Host imports resolve handles back to canonical tagged Values, so arbitrary-precision image integers remain arbitrary precision instead of being narrowed to WASM `i64`. Object refs can cross as receiver/argument/capture handles without putting graph identities in WASM memory or metadata.
 
-Object refs can cross as receiver/argument/capture handles without putting graph identities in WASM memory or metadata. Reference literals are intentionally not embedded in module metadata because graph edges must remain explicit.
+### Tail message sends
 
-The artifact chain is:
+Language dispatch may require asynchronous image work, but ordinary WASM imports are synchronous. The first bridge therefore treats a message send as a tail host effect.
+
+For a source block such as:
+
+```smalltalk
+[ :target | target echo: 42 ]
+```
+
+the generated module contains a typed `lagrange.send_site_N` import. Calling it records the receiver/arguments from their Value handles and returns reserved handle `0`. The WASM entry returns immediately; the executor then asynchronously performs the ordinary language send through `InvocationService` and executes the resolved Block.
 
 ```text
-lagrange-code/v0
-      -> wasm-module/v1   # bytes + ABI/literal metadata
-      -> wasm-function/v1 # module ref + entry/signature metadata
-      -> Block
+WASM caller
+  -> send_site_N
+  -> return 0
+  -> normal Smalltalk dispatch
+  -> interpreted or WASM callee
+  -> canonical Value
 ```
+
+Pure WASM control flow may choose a final send, so tail sends in `if` branches work. Sends needed as intermediate expression results are rejected until an explicit continuation/async WASM design exists.
 
 The interpreter remains the reference oracle. Differential tests compile the same semantic artifact to interpreter and WASM forms and require the same canonical Value result.
 
-See ADR 0008.
+See ADR 0008 and ADR 0009.
 
 ## Values and objects
 
@@ -150,3 +164,4 @@ Do not import `lagrange-server/src/...`; use public package seams only.
 - [ADR 0006: Symmetric Smalltalk seed](docs/decisions/0006-symmetric-smalltalk-seed.md)
 - [ADR 0007: semantic code and derived execution](docs/decisions/0007-semantic-code-and-derived-execution.md)
 - [ADR 0008: first WASM backend and Value-handle ABI](docs/decisions/0008-wasm-backend-and-value-handle-abi.md)
+- [ADR 0009: WASM tail message effects](docs/decisions/0009-wasm-tail-message-effects.md)

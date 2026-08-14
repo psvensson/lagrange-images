@@ -15,7 +15,8 @@ main -> agent/<task> -> pull request -> GitHub Actions -> squash merge -> main
 - Keep one semantic task per branch and pull request.
 - Read this file and the relevant design documents before editing.
 - Connected agents use GitHub `create_file` and `update_file` for ordinary text changes on the feature branch.
-- GitHub Actions on the exact branch/PR head is the merge authority. Local checks are supplementary.
+- GitHub Actions on the exact PR head is the merge authority. Local checks are supplementary.
+- CI runs for pull requests to `main`, not for each intermediate `agent/**` contents commit; do not add a second noisy push validation path.
 - Before merge, compare the branch with `main`, verify the PR is mergeable, and verify the current head has a successful `test` workflow.
 - Squash-merge using the expected PR head SHA so `main` receives one semantic commit.
 - After merge, read back the important changed files from `main`.
@@ -63,7 +64,10 @@ WASM handle != image identity
 - WASM belongs in `wasm-module/v1` / `wasm-function/v1` CodeArtifacts, not in Block/image identity fields.
 - Keep `lagrange-value-handle/v0` handles invocation-local. Never persist them, use them as object IDs, or treat them as capabilities.
 - The generic WASM ABI must preserve canonical Value semantics; optimized/unboxed ABIs need explicit new contracts rather than silently narrowing Values.
-- Graph refs may cross the WASM boundary through receiver/argument/capture handles. Do not hide ref literals inside artifact metadata.
+- Graph refs may cross the WASM boundary through receiver/argument/capture handles. Do not hide ref literals or ref message descriptors inside artifact metadata.
+- WASM language sends currently use explicit tail effects: `send_site_N` records one pending request, WASM returns reserved handle `0`, then the executor resumes normal asynchronous dispatch outside WASM.
+- Do not compile a non-tail asynchronous WASM send by replaying, blocking, or silently falling back. Add an explicit continuation/async ABI before broadening that contract.
+- Host send effects must still use the normal language dispatcher/ActivationExecutor. Do not create WASM-specific method lookup.
 - Unsupported WASM semantic operations must fail explicitly; do not silently fall back to another executor when WASM was requested.
 - Keep interpreter/WASM differential tests for every semantic operation added to the WASM backend.
 
