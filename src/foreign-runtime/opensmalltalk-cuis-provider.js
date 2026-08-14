@@ -133,7 +133,10 @@ packageEntry := DirectoryEntry currentDirectory // 'packages' // '${packageInput
 packageRequirement := (FeatureRequirement name: '${packageInput.name}')
     pathName: packageEntry pathName.
 [
-    packageRequirement satisfyRequirementsAndInstall
+    [
+        packageRequirement satisfyRequirementsAndInstall
+    ] on: ProgressInitiationException do: [ :progress |
+        progress sendNotificationsTo: [ :minimum :maximum :current | ] ]
 ] on: FeatureRequirementUnsatisfied do: [ :error |
     output
         nextPutAll: 'BOOT'; nextPut: Character tab;
