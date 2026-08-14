@@ -12,12 +12,16 @@ import {
   CUIS_SOURCES_V1,
   OPENSMALLTALK_CUIS_PROVIDER_ID,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
+  WASM_BINARY_V1,
   booleanValue,
   bytesValue,
   createArtifactBackedOpenSmalltalkCuisProvider,
   createOpenSmalltalkCuisToolchainProvider,
   createRuntime,
   installForeignRuntimeCallable,
+  installSymmetricSmalltalkBlock,
+  installWasmScalarCallable,
+  integerValue,
   objectRef,
   textValue,
 } from '../src/runtime.js';
@@ -25,6 +29,13 @@ import {
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';
 const CUIS_JSON_IDENTITY = 'cuis-package/JSON/6bcee3f38ce037c9714b997ccd3b5b3ff62965c8/gitblob:47fab65d0d9017d706aa07d39ab0451619488ccd';
+const I32_ADD_WASM = Buffer.from([
+  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+  0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,
+  0x03, 0x02, 0x01, 0x00,
+  0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00,
+  0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
+]);
 
 async function put(runtime, id, representation, content, {metadata = {}, dependencies = []} = {}) {
   return await runtime.images.putCodeArtifact('build-image', {
@@ -37,7 +48,7 @@ async function put(runtime, id, representation, content, {metadata = {}, depende
   });
 }
 
-test('real Cuis toolchain derives an artifact-backed runtime callable through an ordinary Block', {skip: !enabled, timeout: 120_000}, async () => {
+test('real Cuis toolchain participates in a mixed Symmetric Smalltalk and foreign-WASM Block program', {skip: !enabled, timeout: 120_000}, async () => {
   const vmPath = process.env.LAGRANGE_OPENSMALLTALK_VM_PATH;
   const imagePath = process.env.LAGRANGE_CUIS_IMAGE_PATH;
   const changesPath = process.env.LAGRANGE_CUIS_CHANGES_PATH;
@@ -123,7 +134,7 @@ test('real Cuis toolchain derives an artifact-backed runtime callable through an
       },
     );
 
-    const {interfaceArtifact, block} = await installForeignRuntimeCallable({
+    const {interfaceArtifact: jsonInterface, block: jsonBlock} = await installForeignRuntimeCallable({
       images: runtime.images,
       runtimeDefinition: objectRef('build-image', runtimeDefinition.id),
       interface: {service: 'json', operation: 'package-proof'},
@@ -131,16 +142,15 @@ test('real Cuis toolchain derives an artifact-backed runtime callable through an
       interfaceId: 'cuis-json-package-proof-interface',
       blockId: 'cuis-json-package-proof-block',
     });
-    assert.deepEqual(interfaceArtifact.dependencies, [{
+    assert.deepEqual(jsonInterface.dependencies, [{
       role: 'runtime-definition',
       artifact: objectRef('build-image', runtimeDefinition.id),
     }]);
-    assert.equal(JSON.stringify(interfaceArtifact).includes(OPENSMALLTALK_CUIS_PROVIDER_ID), false);
+    assert.equal(JSON.stringify(jsonInterface).includes(OPENSMALLTALK_CUIS_PROVIDER_ID), false);
     assert.equal(runtime.foreignRuntimes.list().length, 0);
 
-    const activation = await runtime.invocations.invokeBlock(objectRef('build-image', block.id), []);
-    const packageProof = await runtime.executor.execute(activation);
-    assert.deepEqual(packageProof, booleanValue(true));
+    const jsonActivation = await runtime.invocations.invokeBlock(objectRef('build-image', jsonBlock.id), []);
+    assert.deepEqual(await runtime.executor.execute(jsonActivation), booleanValue(true));
     assert.equal(runtime.foreignRuntimes.list().length, 1);
     const [instance] = runtime.foreignRuntimes.list();
     assert.deepEqual(instance.metadata.definition, objectRef('build-image', runtimeDefinition.id));
@@ -149,8 +159,53 @@ test('real Cuis toolchain derives an artifact-backed runtime callable through an
     assert.deepEqual(instance.metadata.sourcesArtifact, objectRef('build-image', baseSources.id));
     assert.deepEqual(instance.metadata.packages, []);
 
-    const secondActivation = await runtime.invocations.invokeBlock(objectRef('build-image', block.id), []);
-    assert.deepEqual(await runtime.executor.execute(secondActivation), booleanValue(true));
+    const {block: cuisAddBlock} = await installForeignRuntimeCallable({
+      images: runtime.images,
+      runtimeDefinition: objectRef('build-image', runtimeDefinition.id),
+      interface: {service: 'proof', operation: 'add'},
+      argumentCount: 2,
+      interfaceId: 'cuis-add-interface',
+      blockId: 'cuis-add-block',
+    });
+    const rustWasm = await runtime.images.putCodeArtifact('build-image', {
+      id: 'rust-add-wasm',
+      languageId: 'rust',
+      representation: WASM_BINARY_V1,
+      content: bytesValue(I32_ADD_WASM),
+      metadata: {purpose: 'mixed-language-callable-proof'},
+    });
+    const {block: rustAddBlock} = await installWasmScalarCallable({
+      images: runtime.images,
+      wasm: objectRef('build-image', rustWasm.id),
+      interfaceId: 'rust-add-interface',
+      blockId: 'rust-add-block',
+      exportName: 'add',
+      parameters: ['i32', 'i32'],
+      result: 'i32',
+    });
+
+    const environment = await runtime.images.putLexicalEnvironment('build-image', {
+      id: 'mixed-environment',
+      bindings: {
+        'mixed:cuis': {name: 'cuis', value: objectRef('build-image', cuisAddBlock.id)},
+        'mixed:rust': {name: 'rust', value: objectRef('build-image', rustAddBlock.id)},
+      },
+    });
+    const orchestrator = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'build-image',
+      id: 'mixed-orchestrator',
+      source: '[ :x | cuis value: (rust value: x value: x) value: x ]',
+      captures: {cuis: 'mixed:cuis', rust: 'mixed:rust'},
+      environment: objectRef('build-image', environment.id),
+    });
+
+    const mixedActivation = await runtime.invocations.invokeBlock(
+      objectRef('build-image', orchestrator.block.id),
+      [integerValue(14)],
+    );
+    assert.deepEqual(await runtime.executor.execute(mixedActivation), integerValue(42));
     assert.equal(runtime.foreignRuntimes.list().length, 1);
     assert.equal(runtime.foreignRuntimes.list()[0].runtimeId, instance.runtimeId);
   } finally {

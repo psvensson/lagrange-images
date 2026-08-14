@@ -46,7 +46,8 @@ ADRs are the detailed design history. Read them by topic rather than as a prereq
 - [0024 — OpenSmalltalkVM + Cuis runtime proof](0024-opensmalltalkvm-cuis-runtime-proof.md): first real long-lived foreign runtime using a pinned headless Cuis image and whitelisted stdio service bridge.
 - [0025 — existing Cuis package proof](0025-existing-cuis-package-proof.md): load and exercise an unchanged upstream Cuis package with explicit package identity through the real runtime.
 - [0027 — artifact-backed foreign runtime definitions](0027-artifact-backed-foreign-runtime-definitions.md): keep runtime definitions durable in the artifact graph while provider choice and running instances remain transient.
-- [0028 — foreign-runtime callable Blocks](0028-foreign-runtime-callable-blocks.md): put durable foreign-runtime services behind ordinary Blocks while provider binding and live runtime reuse remain runtime-local.
+- [0028 — foreign runtime callable Blocks](0028-foreign-runtime-callable-blocks.md): place durable foreign-runtime services behind ordinary Block/ActivationExecutor invocation with runtime-local provider binding and lazy instance reuse.
+- [0029 — mixed implementation Block composition](0029-mixed-implementation-block-composition.md): compose foreign WASM and live foreign-runtime Blocks from Symmetric Smalltalk without implementation-specific calls.
 
 ## Reading rule
 

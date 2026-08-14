@@ -58,5 +58,6 @@ function createDefaultCodeExecutorRegistry({
 }
 
 export {ActivationExecutor, createDefaultCodeExecutorRegistry};
+export * from './block-application.js';
 export * from './executor-registry.js';
 export * from './neutral-expression-v0.js';

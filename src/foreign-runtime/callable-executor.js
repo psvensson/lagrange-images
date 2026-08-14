@@ -1,3 +1,4 @@
+import {assertBlockApplicationReceiver} from '../execution/block-application.js';
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
 import {
   FOREIGN_RUNTIME_CALLABLE_INTERFACE_V1,
@@ -94,9 +95,7 @@ function createForeignRuntimeCallableInterfaceV1Executor({
       if (!code || code.representation !== FOREIGN_RUNTIME_CALLABLE_INTERFACE_V1) {
         throw new TypeError(`foreign runtime callable executor requires ${FOREIGN_RUNTIME_CALLABLE_INTERFACE_V1}`);
       }
-      if (activation.receiver !== null) {
-        throw new TypeError('foreign-runtime-value-call/v0 does not accept a receiver');
-      }
+      assertBlockApplicationReceiver(activation, 'foreign-runtime-value-call/v0');
       if (activation.environment !== null) {
         throw new TypeError('foreign-runtime-value-call/v0 does not accept a lexical environment');
       }
