@@ -18,7 +18,7 @@ function referencesOfRecord(record) {
     assertCodeArtifactRecord(record);
     return [
       ...referencesOfValue(record.content),
-      ...record.dependencies.map(({artifact}) => artifact),
+      ...(record.dependencies ?? []).map(({artifact}) => artifact),
       ...record.derivedFrom,
     ];
   }
