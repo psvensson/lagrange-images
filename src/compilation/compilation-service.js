@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {normalizeArtifactDependencies} from '../execution/model.js';
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
 import {normalizeMetadata} from '../object/model.js';
 import {createDerivationDescriptor} from './derivation-cache.js';
@@ -27,6 +28,7 @@ function normalizeCompilerResult(result, fallbackLanguageId = null) {
   return Object.freeze({
     languageId: result.languageId === undefined ? fallbackLanguageId : result.languageId,
     content: canonicalizeValue(result.content),
+    dependencies: normalizeArtifactDependencies(result.dependencies ?? []),
     metadata: normalizeMetadata(result.metadata ?? {}, 'compiler result metadata'),
   });
 }
@@ -100,6 +102,7 @@ class CompilationService {
       languageId: result.languageId,
       representation: target,
       content: result.content,
+      dependencies: result.dependencies,
       derivedFrom: [objectRef(ref.imageId, ref.objectId)],
       metadata: {...result.metadata, ...callerMetadata, ...cacheMetadata},
     });
@@ -158,6 +161,7 @@ class CompilationService {
       languageId: result.languageId,
       representation: target,
       content: result.content,
+      dependencies: result.dependencies,
       derivedFrom: refs.map((ref) => objectRef(ref.imageId, ref.objectId)),
       metadata: {...result.metadata, ...callerMetadata, ...cacheMetadata},
     });
