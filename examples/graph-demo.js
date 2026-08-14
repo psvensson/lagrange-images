@@ -1,6 +1,7 @@
 import {
   NEUTRAL_EXPRESSION_V0,
   createRuntime,
+  evaluateSymmetricSmalltalkBlock,
   integerValue,
   objectRef,
   textValue,
@@ -41,11 +42,20 @@ const activation = await runtime.invocations.invokeBlock(
 );
 const executionResult = await runtime.executor.execute(activation);
 
+const smalltalkResult = await evaluateSymmetricSmalltalkBlock({
+  runtime,
+  imageId: image.id,
+  id: 'smalltalk-identity',
+  source: '[ :value | value ]',
+  arguments: [textValue('hello from Symmetric Smalltalk')],
+});
+
 console.log(JSON.stringify({
   image: await runtime.images.getImage(image.id),
   shapes: await runtime.images.listShapes(image.id),
   objects: await runtime.images.listObjects(image.id),
   executionResult,
+  smalltalkResult,
   history: await runtime.images.history(image.id),
 }, null, 2));
 await runtime.close();
