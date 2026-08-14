@@ -21,7 +21,7 @@ main -> agent/<task> -> pull request -> GitHub Actions -> squash merge -> main
 - After merge, read back the important changed files from `main`.
 - If the normal connector write cannot perform a required change, report the blocker instead of silently changing remote-write mechanisms.
 
-`.github/workflows/test.yml` is the canonical repository validation path. Add repository-wide checks there rather than creating competing CI paths.
+`.github/workflows/test.yml` is the canonical repository validation path.
 
 ## Code
 
@@ -38,11 +38,12 @@ main -> agent/<task> -> pull request -> GitHub Actions -> squash merge -> main
 Protect these invariants:
 
 ```text
-shape     != behavior
+shape != behavior
 reference != authority
-identity  != revision
+identity != revision
 durable representation != execution representation
 semantic code != executable artifact
+WASM handle != image identity
 ```
 
 - Object slots contain only tagged Values; do not reintroduce arbitrary nested JSON state.
@@ -57,10 +58,14 @@ semantic code != executable artifact
 ## Code derivation
 
 - Preserve language source -> syntax -> `lagrange-code/v0` semantic code -> derived execution artifacts.
-- Executable artifacts such as `neutral-expression/v0` or future WASM are rebuildable state, never the sole surviving meaning of a program.
-- Add new lowering backends through `CodeCompilerRegistry`; do not teach language compilers about executor internals.
-- WASM belongs in CodeArtifacts (`wasm-module/v1`, `wasm-function/v1`), not in Block/image identity fields.
-- A bootstrap interpreter may materialize a closure as Block + LexicalEnvironment; optimized executors may elide that allocation while preserving semantics.
+- Executable artifacts are rebuildable state, never the sole surviving meaning of a program.
+- Add lowering backends through `CodeCompilerRegistry`; do not teach language compilers about executor internals.
+- WASM belongs in `wasm-module/v1` / `wasm-function/v1` CodeArtifacts, not in Block/image identity fields.
+- Keep `lagrange-value-handle/v0` handles invocation-local. Never persist them, use them as object IDs, or treat them as capabilities.
+- The generic WASM ABI must preserve canonical Value semantics; optimized/unboxed ABIs need explicit new contracts rather than silently narrowing Values.
+- Graph refs may cross the WASM boundary through receiver/argument/capture handles. Do not hide ref literals inside artifact metadata.
+- Unsupported WASM semantic operations must fail explicitly; do not silently fall back to another executor when WASM was requested.
+- Keep interpreter/WASM differential tests for every semantic operation added to the WASM backend.
 
 ## Symmetric Smalltalk seed
 

@@ -63,4 +63,5 @@ export * from './execution/model.js';
 export * from './language/index.js';
 export * from './object/index.js';
 export * from './value/index.js';
+export * from './wasm/index.js';
 export {createRuntime};

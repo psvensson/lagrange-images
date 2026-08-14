@@ -1,6 +1,6 @@
 {
   "name": "lagrange-images",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "Persistent image service and language platform for Lagrange",
   "type": "module",
   "main": "src/runtime.js",
@@ -15,7 +15,8 @@
     "./graph": "./src/graph/references.js",
     "./language": "./src/language/index.js",
     "./object": "./src/object/index.js",
-    "./value": "./src/value/index.js"
+    "./value": "./src/value/index.js",
+    "./wasm": "./src/wasm/index.js"
   },
   "scripts": {
     "start": "node src/graph-server.js",
