@@ -131,9 +131,9 @@ Smalltalk owns parser, lexical capture and message lookup semantics. Nested Bloc
 
 This remains the image-native language experiment. It does not need to become byte-for-byte compatible with OpenSmalltalkVM.
 
-## 7. OpenSmalltalkVM compatibility
+## 7. OpenSmalltalkVM compatibility and tooling
 
-The compatibility runtime now proves both a real VM/image and real upstream package code:
+The compatibility runtime now proves a real VM/image and real upstream package code:
 
 ```text
 ForeignRuntimeService
@@ -176,7 +176,7 @@ capability hidden in a runtime handle
 
 This proves the real VM/compiler/object model/package ecosystem and persistent runtime lifecycle without defining a generic remote Smalltalk protocol.
 
-### Package loading
+### Runtime package loading
 
 Runtime start may include explicit package inputs:
 
@@ -214,7 +214,49 @@ parse nested JSON
 
 Normal bridge calls are exercised before and after the package call, proving that package installation participates in the same persistent managed runtime rather than replacing its lifecycle.
 
-This is still not evidence that every Cuis package will load unchanged. The next useful package test should involve several package dependencies or a larger third-party package, so dependency ordering and artifact conventions are driven by real pressure.
+### Real Smalltalk toolchain
+
+The same mature environment now also implements a real `ToolchainService` provider:
+
+```text
+smalltalk/cuis-build-v1
+  +-> smalltalk/cuis-image-v1
+  +-> smalltalk/cuis-changes-v1
+  +-> smalltalk/cuis-sources-v1
+  `-> smalltalk/cuis-package-v1 ...
+          |
+          v
+smalltalk/opensmalltalk-cuis-toolchain
+          |
+          v
+OpenSmalltalkVM + real Cuis package/compiler machinery
+          |
+          +-> derived smalltalk/cuis-image-v1
+          `-> derived smalltalk/cuis-changes-v1
+```
+
+The VM executable path is local deployment state; stable `vmIdentity` is provider identity material. The compiler-bearing base Cuis image is an explicit artifact input, so changing the Cuis compiler/environment changes the build graph rather than hiding behind the provider.
+
+The base `.changes`/`.sources` files and every package are explicit graph inputs as well. Package dependency order on the build root is the install order for this first provider contract.
+
+The derived image keeps the unchanged base sources artifact as an explicit dependency. Generic `ToolchainService` provenance records the whole build graph on both derived outputs.
+
+The authoritative integration proof does not stop after saving bytes. It launches the derived image in a fresh OpenSmalltalkVM runtime **without passing JSON as a runtime package**, then requires `json/package-proof` to succeed. So package compilation/loading is genuinely captured in the toolchain-produced image.
+
+The toolchain provider does not implement `cacheKey()` yet. Closed inputs are established, but Cuis snapshot byte determinism has not. Reuse will be enabled only after reproducible snapshot bytes or a safe normalization contract are demonstrated.
+
+### What package/toolchain work comes next
+
+The next useful compatibility pressure is no longer another single-file package. It should be a multi-package or larger third-party Cuis project so we learn real dependency ordering, Feature requirements, package support files and failure diagnostics.
+
+After that, the same environment can start exporting structured semantic information:
+
+```text
+classes / inheritance
+methods / selectors
+CompiledMethods / bytecodes / literals
+package/source relationships
+```
 
 ### Heap boundary
 
@@ -225,33 +267,9 @@ Spur oop != durable ObjectRef
 
 If arbitrary runtime objects later need stable cross-boundary identities, explicit foreign-object handles must mediate them. Prefer explicitly exported services before making every object remotely addressable.
 
-### Existing Smalltalk toolchain
-
-The same environment should next be used as a real compiler/toolchain host:
-
-```text
-Cuis source/package artifacts
-  -> OpenSmalltalkVM + compiler image
-  -> real Smalltalk compiler/tooling
-  -> runnable image and/or structured compiled artifacts
-```
-
-This is analogous to using Cargo/rustc rather than writing a Rust compiler. VM/compiler-image version, package/source inputs, package ordering and options must be explicit toolchain/provenance material.
-
-The runtime package proof now gives this toolchain work observed package materialization/loading rules rather than a speculative package model.
-
 ### Migration/bootstrap engine
 
-Later, the real Smalltalk environment can export structured semantic information:
-
-```text
-classes / inheritance
-methods / selectors
-CompiledMethods / bytecodes / literals
-package/source relationships
-```
-
-That supports gradual integration:
+The real Smalltalk environment can eventually export structured semantic information so compatible code remains runnable while selected parts become image-visible or natively compiled:
 
 ```text
 foreign Cuis runtime
@@ -273,9 +291,9 @@ OpenSmalltalk interpreter + Spur runtime
   -> Lagrange placement/sandboxing
 ```
 
-The current native proof uses Cog/Spur because compatibility with the current Cuis image is the goal. A native-code-generating JIT is not required for the later WASM proof.
+The current native proofs use Cog/Spur because compatibility with the current Cuis image is the goal. A native-code-generating JIT is not required for the later WASM proof.
 
-See ADR 0022 for the end state, ADR 0023 for the generic lifecycle, ADR 0024 for the real Cuis runtime proof and ADR 0025 for the first unchanged upstream-package proof.
+See ADR 0022 for the end state, ADR 0023 for the generic lifecycle, ADR 0024 for the real Cuis runtime proof, ADR 0025 for the first unchanged upstream-package proof and ADR 0026 for the real Cuis toolchain provider.
 
 ## 8. Rust
 
@@ -366,12 +384,14 @@ raw + callable foreign WASM
 language-neutral foreign-runtime lifecycle
 real persistent OpenSmalltalkVM/Cuis runtime
 unchanged upstream Cuis package loading + execution
+real Cuis ToolchainService build -> fresh runnable package-bearing image
 ```
 
 The next multilingual proofs should be concrete rather than generic:
 
-- a larger/multi-package Cuis compatibility proof;
-- OpenSmalltalkVM/Cuis as a real ToolchainService compiler host;
+- a larger/multi-package Cuis project;
+- structured OpenSmalltalkVM class/method/package export;
+- a mixed native/compatible Smalltalk project;
 - richer Component/WIT-style interfaces;
 - Java/JAR integration;
 - Common Lisp compiler/runtime spike;

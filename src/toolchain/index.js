@@ -20,6 +20,22 @@ export {
   CARGO_RUSTC_OCI_CACHE_CONTRACT_V0,
   createCacheableCargoRustcOciProvider as createCargoRustcOciProvider,
 } from './cacheable-cargo-rustc-oci-provider.js';
+export {
+  CUIS_BUILD_CONTRACT_V0,
+  CUIS_BUILD_V1,
+  CUIS_CHANGES_V1,
+  CUIS_IMAGE_V1,
+  CUIS_PACKAGE_V1,
+  CUIS_SOURCES_V1,
+  OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
+  OPENSMALLTALK_CUIS_TOOLCHAIN_V0,
+  OpenSmalltalkToolchainRunError,
+  OpenSmalltalkToolchainRunner,
+  createCuisToolchainBuildScript,
+  createOpenSmalltalkCuisToolchainProvider,
+  materializeCuisToolchainBuild,
+  validateCuisToolchainGraph,
+} from './opensmalltalk-cuis-toolchain-provider.js';
 export {WASM_BINARY_V1} from '../wasm/foreign-artifacts.js';
 export * from './derivation-cache.js';
 export * from './oci-cli-runner.js';

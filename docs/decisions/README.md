@@ -37,6 +37,7 @@ ADRs are the detailed design history. Read them by topic rather than as a prereq
 - [0019 — explicit vendored Cargo dependencies](0019-explicit-vendored-cargo-dependencies.md): closed third-party package inputs without network discovery.
 - [0020 — deterministic toolchain result reuse](0020-toolchain-result-reuse.md): provider-opt-in external build cache over the explicit artifact graph.
 - [0022 — OpenSmalltalkVM compatibility direction](0022-opensmalltalkvm-compatibility-direction.md): native Symmetric Smalltalk plus real OpenSmalltalkVM compatibility/runtime/toolchain/migration paths.
+- [0026 — OpenSmalltalkVM + Cuis toolchain provider](0026-opensmalltalkvm-cuis-toolchain-provider.md): compile explicit Cuis image/package graphs with the real Smalltalk environment into derived runnable image artifacts.
 
 ## Foreign executable and runtime interfaces
 

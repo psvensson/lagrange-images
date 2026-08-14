@@ -65,7 +65,26 @@ source / IR / JAR / runtime image / manifest / lock / package / WASM
 - Cargo/rustc provider without implementing a Rust compiler
 - explicit Cargo manifest/lock/source artifacts
 - explicit vendored Cargo config/files with checksum validation
+- OpenSmalltalkVM/Cuis toolchain provider using the real Smalltalk compiler/package loader
+- explicit Cuis build/image/changes/sources/package artifact conventions
 - raw external WASM stored as `wasm-binary/v1`
+
+The Cuis toolchain path is intentionally artifact-first:
+
+```text
+smalltalk/cuis-build-v1
+   +-> base .image
+   +-> base .changes / .sources
+   `-> ordered .pck.st packages
+          |
+          v
+OpenSmalltalkVM + real Cuis tooling
+          |
+          +-> derived .image
+          `-> derived .changes
+```
+
+The VM executable path is deployment machinery. Its stable version is provider identity; the compiler-bearing base Cuis image is an explicit build input. The first provider does **not** opt into deterministic result reuse yet because closed inputs do not prove byte-identical Smalltalk snapshots.
 
 ### Foreign runtime lifecycle
 
@@ -97,11 +116,13 @@ The provider start spec can also carry explicit Cuis package inputs as `{path, i
 
 The first unchanged-package proof uses Cuis' upstream `JSON.pck.st`. Cuis installs it with its own `CodePackageFile` loader, and the real integration test exercises the package's parser and renderer by parsing a nested document, rendering it, reparsing it and validating the reconstructed structure.
 
+The same pinned environment is also used by the toolchain proof. That proof derives a new Cuis image from explicit artifacts, launches the **derived image without reinstalling JSON**, and requires the already-installed package to execute through the ordinary foreign-runtime path. Runtime lifecycle and toolchain lifecycle therefore remain separate contracts even though they reuse the same mature ecosystem.
+
 The bridge protocol, `lagrange-cuis-stdio/v0`, remains deliberately narrow. It exports named proof services including `proof/add`, recursive `proof/factorial` and the package-backed `json/package-proof`; it is **not** remote Smalltalk eval or arbitrary `perform:`.
 
-Normal tests inject the process transport. A separate PR-only CI job downloads and verifies the pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur runtime, Cuis 7.9-8090 image and pinned upstream JSON package, then runs the same provider against the real VM.
+Normal tests inject process/toolchain runners. A separate PR-only CI job downloads and verifies the pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur runtime, Cuis 7.9-8090 image and pinned upstream JSON package, then runs both the real runtime and derived-image toolchain proofs.
 
-OCI foreign-runtime placement, durable runtime/package artifacts, package dependency resolution, capabilities, restart/reconciliation and foreign-object handles remain later work.
+OCI foreign-runtime/toolchain placement, durable runtime-definition artifacts, package dependency resolution, capabilities, restart/reconciliation and foreign-object handles remain later work.
 
 ### Foreign WASM callable boundary
 
@@ -204,13 +225,13 @@ Cuis/Squeak-style compatible Smalltalk
 
 OpenSmalltalkVM is the preferred first compatibility path because it lets established Smalltalk code keep using its real runtime/compiler/package semantics. Its Spur heap remains foreign runtime state rather than becoming the Lagrange image graph.
 
-The compatibility path has now proved both a real pinned Cuis runtime and unchanged upstream package loading/execution. The next package pressure test should involve several dependencies or a larger third-party Cuis package rather than more generic runtime abstraction.
+The compatibility path has now proved a real pinned Cuis runtime, unchanged upstream package loading/execution, and a real `ToolchainService` build that produces a runnable package-bearing Cuis image. The next useful pressure test is a larger multi-package dependency graph and then structured export/migration from a toolchain-produced image.
 
 The long-term goal is coexistence: native Symmetric Smalltalk and OpenSmalltalkVM-backed compatible Smalltalk should share projects, artifacts, interfaces and tools, with selective native migration only where useful.
 
 Compiled libraries and runtime images can remain compiled artifacts when that is the useful canonical form. A JAR does not need to be decompiled; a WASM component does not need to become source; a vendored crate can remain explicit package bytes/files; a compatible Smalltalk runtime image can remain an external runtime artifact.
 
-See [ADR 0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md) for the Smalltalk compatibility end state, [ADR 0023](docs/decisions/0023-foreign-runtime-lifecycle-substrate.md) for the generic runtime lifecycle seam, [ADR 0024](docs/decisions/0024-opensmalltalkvm-cuis-runtime-proof.md) for the first real runtime proof, and [ADR 0025](docs/decisions/0025-existing-cuis-package-proof.md) for the first unchanged upstream-package proof.
+See [ADR 0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md) for the Smalltalk compatibility end state, [ADR 0023](docs/decisions/0023-foreign-runtime-lifecycle-substrate.md) for the generic runtime lifecycle seam, [ADR 0024](docs/decisions/0024-opensmalltalkvm-cuis-runtime-proof.md) for the first real runtime proof, [ADR 0025](docs/decisions/0025-existing-cuis-package-proof.md) for the first unchanged upstream-package proof, and [ADR 0026](docs/decisions/0026-opensmalltalkvm-cuis-toolchain-provider.md) for the real Smalltalk toolchain path.
 
 ## Deterministic toolchain reuse
 
@@ -220,7 +241,7 @@ The derivation key covers the provider identity, target/options and the complete
 
 Repeated compatible builds can therefore return the existing immutable output without rematerializing a workspace or running Docker/Podman/Cargo again.
 
-The current cache is conservative: it reuses against the same explicit artifact identities so `derivedFrom` provenance remains truthful. Cross-install content-addressed reuse needs a later installation/provenance wrapper.
+The current cache is conservative: it reuses against the same explicit artifact identities so `derivedFrom` provenance remains truthful. Cross-install content-addressed reuse needs a later installation/provenance wrapper. The Cuis snapshot provider deliberately does not opt in until reproducible snapshot bytes or a safe normalization contract have been demonstrated.
 
 ## Core invariants
 
@@ -234,6 +255,9 @@ semantic code != executable artifact
 toolchain selection != toolchain identity
 provider cache opt-in != inferred determinism
 build OCI != foreign-runtime OCI
+foreign runtime lifecycle != toolchain lifecycle
+VM path != VM/provider identity
+VM identity != compiler-bearing base image
 runtime definition != running instance
 provider handle != ObjectRef
 runtime ID != capability
@@ -242,6 +266,7 @@ Spur oop != ObjectRef
 package host path != package identity
 package basename != package identity
 provider control plane != guest package state
+snapshot bytes != assumed deterministic output
 exported service != arbitrary perform:
 raw foreign WASM != Lagrange WASM ABI
 callable interface != authority
