@@ -45,6 +45,7 @@ identity != revision
 durable representation != execution representation
 semantic code != executable artifact
 WASM handle != image identity
+compilation group != source-language construct
 ```
 
 - Object slots contain only tagged Values; do not reintroduce arbitrary nested JSON state.
@@ -56,11 +57,18 @@ WASM handle != image identity
 - Do not add `classId`, `source` or another language-specific shortcut to generic objects.
 - A ref grants no access rights. Capability/authorization state stays separate.
 
-## Code derivation
+## Compilation and code derivation
 
-- Preserve language source -> syntax -> `lagrange-code/v0` semantic code -> derived execution artifacts.
+- Preserve language source -> syntax -> semantic code -> derived execution artifacts.
 - Executable artifacts are rebuildable state, never the sole surviving meaning of a program.
 - Add lowering backends through `CodeCompilerRegistry`; do not teach language compilers about executor internals.
+- Compilation groups are transient compiler/planner values. The substrate may validate members/target/policy IDs but must not assume that a group is a Smalltalk Block tree, Java class, Rust crate or Lisp file.
+- Physical module grouping belongs to compiler policy. One logical group may produce one module, many modules or another executable representation.
+- Reuse is allowed only when a compiler explicitly declares a stable `identity` and deterministic `cacheKey()`. Never infer cache equivalence from filenames, Block IDs, source-language names or target representation alone.
+- Compiler cache keys must include every input that can change emitted executable meaning. Changing ABI/compiler semantics requires changing compiler identity or key material.
+- A reused immutable executable may be shared by distinct installations, but function/Block/image identity must remain distinct unless the language semantics explicitly say otherwise.
+- Keep current-installation provenance explicit in wrapper/function artifacts even when a lower-level module artifact is reused from an earlier equivalent derivation.
+- Derivation-key lookup is currently a scan; backend indexing is an optimization, not a semantic change.
 - WASM belongs in `wasm-module/v1` / `wasm-function/v1` CodeArtifacts, not in Block/image identity fields.
 - Keep `lagrange-value-handle/v0` handles invocation-local. Never persist them, use them as object IDs, or treat them as capabilities.
 - The generic WASM ABI must preserve canonical Value semantics; optimized/unboxed ABIs need explicit new contracts rather than silently narrowing Values.

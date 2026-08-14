@@ -15,12 +15,10 @@ Ordered so each phase produces something runnable and can falsify the abstractio
 - [x] ordinary object refs and pinned historical refs
 - [x] tagged scalar Values
 - [x] arbitrary-precision integers and exact float bits
-- [x] immutable shape records
-- [x] stable slot IDs independent of display names
+- [x] immutable shapes with stable slot IDs
 - [x] separate shape and behavior refs
 - [x] reject arbitrary JSON object state
-- [x] explicit reference walker
-- [x] cycle tests
+- [x] explicit reference walker and cycle tests
 - [x] prevent metadata from hiding graph refs
 - [x] graph-aware runtime, HTTP surface and demo
 
@@ -71,13 +69,18 @@ Success: the same graph survives process/node restarts with no language/image se
 - [x] explicit closure prototype graph edges on `wasm-function/v1`
 - [x] automatic recursive WASM compilation/installation of complete nested Block trees
 - [x] whole-tree WASM preflight before derived installation writes
+- [x] language-neutral transient compilation groups
+- [x] compiler-declared derivation identities/cache keys
+- [x] immutable WASM module reuse across independent tree installations
+- [ ] shared physical WASM modules for several compilation-group members
+- [ ] indexed derivation-key lookup in the durable backend
 - [ ] general non-tail asynchronous WASM effects/continuations
 - [ ] transient/non-materialized optimized closure representation
 - [ ] activations and debugger metadata
 - [ ] exception/condition substrate
 - [ ] capability-aware host/WASM FFI boundary
 
-Success: one root semantic artifact can now produce a complete WASM-backed nested Block tree while preserving the same Value, capture, dispatch and image-level Block semantics as the interpreter.
+Success: grouping and executable reuse are compiler-owned policies rather than source-language assumptions; the current WASM tree policy already shares equivalent immutable modules without merging function or Block identity.
 
 ## 5. Symmetric Smalltalk seed
 
@@ -102,7 +105,7 @@ Success: one root semantic artifact can now produce a complete WASM-backed neste
 - [ ] REPL/workspace
 - [ ] bootstrap image
 
-Success for the current seed: a Smalltalk semantic Block tree can be installed recursively as WASM, with returned closures and tail sends still using ordinary Smalltalk lookup and lexical capture semantics.
+Success for the current seed: Smalltalk is the first grouping policy consumer, not a constraint on the compilation/cache substrate.
 
 ## 6. Projects and collaborative history
 
@@ -119,6 +122,8 @@ Success for the current seed: a Smalltalk semantic Block tree can be installed r
 - [ ] Smalltalk compatibility library layer
 - [ ] prove several useful Cuis libraries
 - [ ] Common Lisp personality spike
+- [ ] Java language-personality/compiler spike
+- [ ] Rust language-personality/compiler spike
 
 ## 8. Distributed execution
 

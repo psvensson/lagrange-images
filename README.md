@@ -12,6 +12,8 @@ An image is a durable object graph, not a VM memory dump and not a pile of sourc
 - immutable CodeArtifacts, versioned LexicalEnvironments and durable Blocks
 - transient message dispatch and activation requests
 - `CodeCompilerRegistry` / `CompilationService`
+- language-neutral transient compilation groups
+- compiler-declared derivation keys and immutable executable reuse
 - language-neutral `lagrange-code/v0` semantic code
 - `neutral-expression/v0` reference interpreter
 - real `lagrange-code/v0 -> wasm-module/v1` backend
@@ -19,8 +21,8 @@ An image is a durable object graph, not a VM memory dump and not a pile of sourc
 - WASM tail message sends through normal language dispatch
 - WASM tail nested-Block materialization with ordinary lexical captures
 - automatic recursive WASM compilation/installation of complete nested Block trees
+- reusable WASM modules across equivalent independent tree installations
 - `wasm-function/v1` execution through the normal ActivationExecutor
-- interpreter/WASM differential and closure conformance tests
 - executable Symmetric Smalltalk parser/compiler/dispatcher with nested lexical Blocks
 - reference walking, optimistic versions, history and snapshots
 - in-memory mock backend plus optional `lagrange-server` probing
@@ -33,6 +35,7 @@ reference != authority
 identity != revision
 semantic code != executable artifact
 WASM handle != image identity
+compilation group != source-language construct
 ```
 
 ## Run it
@@ -99,65 +102,73 @@ Host imports resolve handles back to canonical tagged Values, so arbitrary-preci
 
 Language dispatch and closure materialization may require asynchronous image work, but ordinary WASM imports are synchronous. The bootstrap bridge therefore lets WASM record one final host effect and return before the runtime performs it.
 
-For a tail send:
-
 ```text
-WASM -> send_site_N -> return 0 -> normal language dispatch -> Value
+WASM -> send_site_N       -> return 0 -> normal language dispatch -> Value
+WASM -> make_block_site_N -> return 0 -> create environment+Block -> ObjectRef
 ```
 
-For a returned nested Block:
-
-```text
-WASM -> make_block_site_N -> return 0 -> create LexicalEnvironment + Block -> ObjectRef
-```
-
-A closure site's module metadata contains only its semantic block ID and capture IDs/names. Prototype Block refs are explicit `derivedFrom` graph edges on `wasm-function/v1`; metadata only records their indices. No prototype ref is hidden in module metadata.
+A closure site's module metadata contains only its semantic block ID and capture IDs/names. Prototype Block refs are explicit `derivedFrom` graph edges on `wasm-function/v1`; metadata only records their indices.
 
 The prototype may be interpreted or WASM-backed. Once materialized, the closure is an ordinary Block and receives `value`, `value:`, etc. through the normal Symmetric Smalltalk dispatcher.
 
 ### Compile a complete nested tree
 
-`installWasmBlockTree()` takes one root semantic artifact and recursively builds all nested WASM functions and prototype Blocks for you:
+`installWasmBlockTree()` takes one root semantic artifact and recursively builds all nested WASM functions and prototype Blocks:
 
 ```js
-import {
-  installWasmBlockTree,
-  objectRef,
-} from 'lagrange-images';
-
 const installed = await installWasmBlockTree({
   images: runtime.images,
   compilation: runtime.compilation,
   semanticRef: objectRef(imageId, semanticArtifact.id),
   id: 'compiled-service',
 });
-
-// installed.block is the root WASM-backed Block.
 ```
 
-For a semantic tree corresponding to:
+The installer compiles children bottom-up, keeps nested semantic artifacts inspectable, wires prototype graph edges through the existing low-level compiler API, and preflights the entire tree before derived tree writes begin.
+
+For:
 
 ```smalltalk
 [ :x | [ :y | [ :z | x ] ] ]
 ```
 
-the installer compiles the deepest Block first, creates its WASM prototype, wires that prototype into its parent function, and continues upward until the root Block is complete. No caller-supplied `blockPrototypes` map is needed.
+the complete executable definition tree can therefore be WASM-backed without caller-supplied prototype maps.
 
-The whole semantic tree is preflighted before derived tree writes begin. If a deep descendant uses unsupported WASM semantics, installation fails without leaving a partially assembled executable tree.
+## Compilation groups and reuse
 
-The low-level `compileWasmFunctionArtifact()` API remains available when mixed interpreter/WASM prototypes or custom assembly are useful.
+Grouping and caching sit below source languages.
 
-This is still rejected inside one WASM activation:
+A transient compilation group says only:
 
-```smalltalk
-[ :x | [ :y | x ] value: 1 ]
+```text
+policyId
+targetRepresentation
+semantic member refs
+compiler-policy options
 ```
 
-because closure materialization is an intermediate asynchronous effect. A future continuation/trampoline or other async-WASM contract can lift that restriction explicitly.
+The substrate does not assume that a group means a Smalltalk Block tree. A future Java compiler may group classes/packages, Rust may group codegen units/crates, and Lisp may group compilation units. A logical group may also map to one physical module or several; that is compiler policy.
 
-The interpreter remains the reference oracle. Tests exercise identical stable capture IDs and results across interpreter-backed and WASM-backed closure prototypes and complete recursively compiled WASM trees.
+The current WASM tree policy is `wasm-nested-block-tree/v0`. Its physical layout is still one module per semantic member, but `installWasmBlockTree()` returns the logical group explicitly so later grouped code generation can change that layout without changing image semantics.
 
-See ADR 0008, ADR 0009, ADR 0010 and ADR 0011.
+Derived-artifact reuse is similarly compiler-owned. A compiler must opt in with a stable identity plus deterministic `cacheKey()`. The platform never guesses equivalence from Block IDs, filenames or source-language structure.
+
+The built-in WASM compiler is cacheable. Two equivalent independent tree installations can therefore share immutable `wasm-module/v1` artifacts while keeping separate semantic artifacts, `wasm-function/v1` wrappers, prototype Blocks and runtime closure identities:
+
+```text
+semantic A ---\
+               -> shared WASM module
+semantic B ---/
+
+function A -> Block A
+function B -> Block B
+```
+
+A reused module keeps the provenance of the semantic artifact from which that cached module was first produced. Each installation-specific function artifact still links its current semantic source plus the shared module and its explicit prototype edges.
+
+The bootstrap cache lookup currently scans CodeArtifacts by compiler identity + derivation key. A durable backend may index those fields later without changing the contract.
+
+See ADR 0012.
 
 ## Values and objects
 
@@ -207,3 +218,4 @@ Do not import `lagrange-server/src/...`; use public package seams only.
 - [ADR 0009: WASM tail message effects](docs/decisions/0009-wasm-tail-message-effects.md)
 - [ADR 0010: WASM tail closure effects](docs/decisions/0010-wasm-tail-closure-effects.md)
 - [ADR 0011: automatic WASM Block tree installation](docs/decisions/0011-automatic-wasm-block-tree-installation.md)
+- [ADR 0012: language-neutral compilation groups and reuse](docs/decisions/0012-language-neutral-compilation-groups-and-reuse.md)

@@ -4,9 +4,13 @@ import {
   normalizeLagrangeCodeProgram,
   parseLagrangeCodeProgram,
 } from '../code/lagrange-code-v0.js';
+import {WASM_MODULE_V1} from '../code/wasm-artifacts.js';
+import {createCompilationGroup} from '../compilation/group.js';
 import {normalizeMetadata} from '../object/model.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {compileWasmFunctionArtifact, compileWasmModule} from './compiler.js';
+
+const WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0 = 'wasm-nested-block-tree/v0';
 
 function normalizeObjectRef(value, label) {
   const ref = canonicalizeValue(value);
@@ -191,11 +195,27 @@ async function installWasmBlockTree({
     metadata: rootMetadata,
     nodes,
   });
+  const frozenNodes = Object.freeze([...nodes]);
+  const groupNodes = [
+    root,
+    ...nodes.filter((node) => node !== root).sort((left, right) =>
+      String(left.semanticBlockId).localeCompare(String(right.semanticBlockId))),
+  ];
+  const group = createCompilationGroup({
+    policyId: WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
+    targetRepresentation: WASM_MODULE_V1,
+    members: groupNodes.map((node) => objectRef(node.semanticArtifact.imageId, node.semanticArtifact.id)),
+    options: {physicalLayout: 'one-module-per-member'},
+  });
 
   return Object.freeze({
     ...root,
-    nodes: Object.freeze(nodes),
+    nodes: frozenNodes,
+    group,
   });
 }
 
-export {installWasmBlockTree};
+export {
+  WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
+  installWasmBlockTree,
+};
