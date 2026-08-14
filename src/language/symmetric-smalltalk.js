@@ -1,5 +1,7 @@
+const SYMMETRIC_SMALLTALK_ID = 'symmetric-smalltalk';
+
 const SYMMETRIC_SMALLTALK = Object.freeze({
-  id: 'symmetric-smalltalk',
+  id: SYMMETRIC_SMALLTALK_ID,
   name: 'Symmetric Smalltalk',
   status: 'seed',
   executionModel: 'image-resident',
@@ -18,4 +20,4 @@ const SYMMETRIC_SMALLTALK = Object.freeze({
   }),
 });
 
-export {SYMMETRIC_SMALLTALK};
+export {SYMMETRIC_SMALLTALK, SYMMETRIC_SMALLTALK_ID};
