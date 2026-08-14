@@ -4,6 +4,7 @@ import {
   normalizeLagrangeCodeProgram,
   parseLagrangeCodeProgram,
 } from '../code/lagrange-code-v0.js';
+import {normalizeMetadata} from '../object/model.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {compileWasmFunctionArtifact, compileWasmModule} from './compiler.js';
 
@@ -169,6 +170,8 @@ async function installWasmBlockTree({
 } = {}) {
   assertServices(images, compilation);
   if (typeof id !== 'string' || id.length === 0) throw new TypeError('WASM Block tree id must be non-empty text');
+  const rootEnvironment = environment === null ? null : normalizeObjectRef(environment, 'root WASM Block environment');
+  const rootMetadata = normalizeMetadata(metadata, 'WASM Block tree metadata');
   const rootRef = normalizeObjectRef(semanticRef, 'root semantic code artifact');
   const semanticArtifact = await images.getCodeArtifact(rootRef.imageId, rootRef.objectId);
   if (!semanticArtifact || semanticArtifact.representation !== LAGRANGE_CODE_V0) {
@@ -184,8 +187,8 @@ async function installWasmBlockTree({
     semanticArtifact,
     program,
     rootId: id,
-    environment,
-    metadata,
+    environment: rootEnvironment,
+    metadata: rootMetadata,
     nodes,
   });
 
