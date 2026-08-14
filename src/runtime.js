@@ -57,6 +57,7 @@ async function createRuntime(options = {}) {
   const codeExecutors = createDefaultCodeExecutorRegistry({
     wasmModuleCache: options.wasmModuleCache,
     wasmInstancePool: options.wasmInstancePool,
+    foreignWasmModuleCache: options.foreignWasmModuleCache,
   });
   for (const [representation, executor] of Object.entries(options.codeExecutors ?? {})) {
     codeExecutors.register(representation, executor);

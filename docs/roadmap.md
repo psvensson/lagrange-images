@@ -1,235 +1,200 @@
 # Roadmap
 
-Ordered so each phase produces something runnable and can falsify the abstractions above it.
+The roadmap is ordered by architectural pressure, not by language popularity. Completed implementation detail lives in the ADRs; this file should make the current frontier obvious.
 
-## 0. Mock vertical slice — complete
+## Current frontier
 
-- [x] backend contract and in-memory mock
-- [x] image creation, history and snapshots
-- [x] backend auto-detection
-- [x] HTTP/demo surface
-- [x] language registry and Symmetric Smalltalk profile
+The substrate can now do this end to end:
 
-## 1. Language-neutral graph foundation — complete
+```text
+image-native Smalltalk
+        |
+        +-> semantic code -> Lagrange WASM -> ordinary activation
 
-- [x] ordinary object refs and pinned historical refs
-- [x] tagged scalar Values
-- [x] arbitrary-precision integers and exact float bits
-- [x] immutable shapes with stable slot IDs
-- [x] separate shape and behavior refs
-- [x] reject arbitrary JSON object state
-- [x] explicit reference walker and cycle tests
-- [x] prevent metadata from hiding graph refs
-- [x] graph-aware runtime, HTTP surface and demo
+external Rust/Cargo project
+        -> explicit source/lock/vendor artifact graph
+        -> digest-pinned OCI Cargo/rustc
+        -> deterministic toolchain-result reuse
+        -> wasm-binary/v1
+        -> wasm-callable-interface/v1
+        -> ordinary Block activation
+```
 
-Success: an image is an explicit language-neutral graph rather than language-shaped JSON records.
+The first foreign callable ABI, `wasm-scalar-call/v0`, supports pure synchronous no-import scalar functions.
 
-## 2. Durable Lagrange backend
+## Next
 
-- [ ] settle the public embedding seam with Lagrange
-- [ ] map Values/refs/shapes/objects/history to durable schema
+These are the highest-value pressure tests on the current abstractions.
+
+### 1. Richer foreign/component interfaces
+
+- [x] separate raw `wasm-binary/v1` from callable interface identity
+- [x] first `wasm-callable-interface/v1`
+- [x] first `wasm-scalar-call/v0` for boolean/i32/i64/f32/f64
+- [x] ordinary Block/ActivationExecutor invocation of foreign scalar WASM
+- [x] runtime-local compiled foreign module cache with fresh instance per activation
+- [ ] explicit string/bytes memory ABI or skip directly to Component/WIT values
+- [ ] records/arrays and multiple results
+- [ ] WASM Component/WIT-style callable artifact contract
+- [ ] capability-aware imported host functions
+- [ ] async foreign effects/callbacks without blocking/replay hacks
+- [ ] reusable foreign instance/reset contracts where a toolchain can prove safety
+
+Success: a nontrivial external library is callable from at least two language personalities through one implementation-independent interface.
+
+### 2. Real package import and toolchain integration
+
+- [x] generic artifact dependencies separate from provenance
+- [x] generic external ToolchainProvider/ToolchainService contract
+- [x] digest-pinned OCI runner
+- [x] Cargo/rustc provider using existing compiler ecosystem
+- [x] explicit Cargo manifest/lock/source artifacts
+- [x] explicit vendored package config/files and SHA-256 validation
+- [x] deterministic provider-opt-in result reuse
+- [ ] crates.io `.crate` importer -> explicit vendor/package artifacts
+- [ ] git/private-registry dependency import conventions
+- [ ] real pinned-OCI integration job for the vendored Cargo fixture
+- [ ] indexed durable lookup for toolchain result keys
+- [ ] cross-install content-addressed reuse with truthful installation provenance
+
+Success: import a normal ecosystem package/project, rebuild it without hidden network inputs, and reuse its immutable result across normal development iterations.
+
+### 3. Durable Lagrange backend
+
+- [ ] settle the public Lagrange embedding seam
+- [ ] map Values/refs/shapes/objects/artifacts/history to durable schema
 - [ ] atomic state + history writes
-- [ ] conformance suite shared with mock
+- [ ] backend conformance suite shared with mock
 - [ ] restart and multi-node durability tests
 - [ ] logical snapshot/revision frontiers
-- [ ] measure partitioning/index choices on large graphs
+- [ ] indexes for graph reachability and derivation lookup
+- [ ] measure partitioning/index choices on large images
 
-Success: the same graph survives process/node restarts with no language/image semantic changes.
+Success: the same image and artifact graph survives process/node failure with no semantic changes.
 
-## 3. Graph services
+## Language work
 
-- [ ] reachability traversal over backend indexes
-- [ ] indexes by shape/project/name where justified
-- [ ] revision-aware reads
-- [ ] export/import graph format
-- [ ] garbage-collection rules respecting history/pinned refs
-- [ ] object migration between immutable shapes
+### Symmetric Smalltalk
 
-## 4. Language-neutral execution, artifacts and compilation kernel
+Implemented:
 
-Implemented execution/compiler foundation:
+- parser/tokenizer with unary/binary/keyword precedence
+- source -> syntax -> `lagrange-code/v0`
+- image-resident bootstrap dispatch
+- nested lexical Blocks and stable binding IDs
+- lexical `self` capture
+- neutral interpreter + Lagrange WASM execution
+- automatic nested Block-tree WASM installation
+- shared physical modules with separate Block/function identity
 
-- [x] code artifact contract
-- [x] blocks/closures and lexical environments
-- [x] message/call dispatch to transient activation requests
-- [x] execution of activation requests
-- [x] positional receiver/argument/captured-binding calling convention
-- [x] pluggable code executor registry
-- [x] first executable `neutral-expression/v0` representation
-- [x] language-tagged nested message sends from neutral expressions
-- [x] explicit `lagrange-code/v0` semantic representation
-- [x] code compiler registry and immutable derivation service
-- [x] semantic -> neutral-expression lowering
-- [x] executable-artifact rebuildability invariant
-- [x] `wasm-module/v1` and `wasm-function/v1` artifact contracts
-- [x] first `lagrange-code/v0` -> WASM compiler
-- [x] `lagrange-value-handle/v0` calling ABI
-- [x] Node WebAssembly execution through the normal ActivationExecutor
-- [x] interpreter/WASM differential tests
-- [x] tail-position WASM message-send host effects through normal dispatch
-- [x] tail-position WASM closure materialization through normal Block/LexicalEnvironment semantics
-- [x] explicit closure prototype graph edges on `wasm-function/v1`
-- [x] automatic recursive WASM compilation/installation of complete nested Block trees
-- [x] whole-tree WASM preflight before derived installation writes
-- [x] language-neutral transient compilation groups
-- [x] compiler-declared derivation identities/cache keys
-- [x] language-neutral compilation-group compiler registry/service
-- [x] shared physical WASM module containing several compilation-group members
-- [x] per-entry signature/effect metadata and separate `wasm-function/v1` identities
-- [x] immutable shared-module reuse across independent tree installations
-- [x] runtime-local compiled `WebAssembly.Module` cache with concurrent-miss coalescing
-- [x] explicit `stateless-v0` WASM instance-reuse contract
-- [x] runtime-local stateless instance pool with activation rebinding and failure retirement
+Next:
 
-Artifact/toolchain generalization:
-
-- [x] bootstrap generic artifact dependency model on immutable CodeArtifacts
-- [x] explicit role-tagged artifact dependency refs separate from `derivedFrom` provenance
-- [x] graph traversal sees artifact dependencies; old artifacts without the field read as dependency-free
-- [x] imported binary/package artifacts can remain canonical binary dependencies instead of requiring source reconstruction
-- [x] language-neutral `ToolchainProviderRegistry` and `ToolchainService`
-- [x] stable provider identity separate from runtime/configuration provider selection ID
-- [x] provider receives frozen explicit root/transitive artifact graph plus target/options, not ambient `ImageService`
-- [x] provider may return multiple named output artifacts plus transient diagnostics
-- [x] toolchain service owns output provenance and persists every resolved input as `derivedFrom`
-- [x] provider-declared runtime/library output dependencies remain separate graph edges
-- [x] provider result/dependency preflight before output writes
-- [x] OCI-backed build/toolchain execution adapter using digest-pinned images
-- [x] Docker/Podman-style no-shell OCI CLI runner with bind-mounted workspace and explicit network mode
-- [x] first real Cargo/rustc OCI provider over the generic toolchain protocol
-- [x] import validated Cargo-produced raw WASM as `wasm-binary/v1` without claiming the Lagrange WASM ABI
-- [x] explicit Cargo vendor config/file artifacts for closed third-party directory-source dependencies
-- [x] validate vendored package manifests/checksum file sets and SHA-256 contents before OCI execution
-- [x] support binary as well as text vendored package files
-- [x] provider-opt-in external-toolchain derivation keys cover provider selection/identity, target/options and complete explicit input snapshots
-- [x] complete multi-output toolchain result sets can be reused without rerunning the provider; partial sets are ignored
-- [x] Cargo/rustc OCI provider opts into result reuse with its full digest-pinned image reference
-- [ ] standard `.crate`/registry-package importer that produces explicit vendor artifacts
-- [ ] cross-install/content-addressed toolchain reuse with installation-specific provenance wrappers
-- [ ] indexed durable lookup by toolchain derivation key/result set
-- [ ] native-process or equivalent trusted external-toolchain provider where useful
-- [ ] remote build provider if a real deployment needs it
-- [ ] callable/interface artifact contract for imported executable libraries/components
-- [ ] interface contract keeps exported calls/ABI/capabilities/version separate from authority
-- [ ] WASM Component-style imported library/callable boundary
-- [ ] dependency-role policy for static/link, dynamic component, foreign runtime, service and build-only dependencies
-- [ ] transactional/multi-output artifact installation if real toolchains require sibling output dependencies or atomicity
-
-Execution/compiler follow-ups:
-
-- [ ] reset/reuse contracts for WASM modules with mutable guest state
-- [ ] module-size/budget driven splitting of one logical group
-- [ ] direct optimized calls between entries in one shared module
-- [ ] indexed derivation-key lookup in the durable backend
-- [ ] general non-tail asynchronous WASM effects/continuations
-- [ ] transient/non-materialized optimized closure representation
-- [ ] activations and debugger metadata
-- [ ] exception/condition substrate
-- [ ] capability-aware host/WASM/foreign-call boundary
-
-Success: the explicit artifact graph can drive a digest-pinned Cargo/rustc OCI build with a versioned vendored package dependency and then reuse the complete immutable result for the same graph without rematerializing or rerunning the toolchain. The next major boundary is callable foreign-WASM/component interfaces.
-
-## 5. Symmetric Smalltalk seed
-
-- [x] first grammar/tokenizer/parser
-- [x] unary/binary/keyword message precedence
-- [x] outer Block compilation unit and positional parameters
-- [x] source -> syntax -> semantic -> executable artifact provenance
-- [x] compiler to language-neutral semantic representation
-- [x] first image-resident behavior/method lookup convention
-- [x] end-to-end compiled message sends through common dispatch/execution
-- [x] runtime nested Block creation
-- [x] automatic lexical capture analysis with stable binding IDs
-- [x] lexical `self` capture across Block boundaries
-- [x] ordinary `value*` sends to Blocks through the Smalltalk dispatcher
-- [x] tail Smalltalk sends from WASM back into ordinary language dispatch
-- [x] returned nested Smalltalk Blocks materialized from WASM with ordinary lexical captures
-- [x] complete nested Smalltalk semantic Block trees installable as WASM without manual prototype maps
-- [x] nested Block tree functions share one physical WASM module while retaining ordinary Block identity
-- [x] sequential nested-Block activations reuse a stateless WASM instance with fresh lexical/Value state
-- [ ] create/use a nested Block inside one WASM activation
+- [ ] create/use nested Block inside one WASM activation
 - [ ] assignments, temporaries, sequences and cascades
 - [ ] Object/Behavior/Class/Metaclass bootstrap and inheritance
 - [ ] immediate-value objects/primitives
 - [ ] REPL/workspace
 - [ ] bootstrap image
+- [ ] Cuis source/package importer and compatibility layer
 
-Success for the current seed: Smalltalk is the first group/reuse-policy consumer and the first in-process compiler, not a constraint on the artifact/toolchain/runtime substrate.
+### Common Lisp
 
-## 6. Projects and collaborative history
+- [ ] personality spike using common artifact/closure/toolchain substrate
+- [ ] reader/macroexpansion representation
+- [ ] dynamic bindings
+- [ ] multiple values
+- [ ] conditions/restarts
+- [ ] integrate an existing Lisp compiler/runtime where useful rather than forcing Smalltalk semantics
+
+### Rust
+
+Implemented:
+
+- explicit Cargo project/package graph
+- existing Cargo/rustc compiler in OCI
+- closed vendored third-party dependencies
+- toolchain cache
+- raw WASM import
+- first callable scalar interface
+
+Next:
+
+- [ ] standard package importer
+- [ ] Lagrange Rust SDK/crate for explicit host calls
+- [ ] Component/WIT-style rich interface proof
+- [ ] prove portable precompiled WASM/component dependency reuse
+- [ ] document stable library artifacts vs compiler-private build caches
+
+### Java
+
+- [ ] Java source/class/JAR artifact conventions
+- [ ] JAR/class importer and dependency reuse
+- [ ] existing javac/JVM/AOT/Java-to-WASM toolchain spike
+- [ ] JVM/OCI foreign-runtime compatibility spike
+- [ ] compare JVM compatibility vs deeper WASM/image integration on one realistic application
+
+## Execution/runtime work
+
+### Image-native Lagrange WASM
+
+Implemented:
+
+- `lagrange-value-handle/v0`
+- tail language-send effects
+- tail nested-Block effects
+- language-neutral compilation groups
+- shared multi-entry modules
+- deterministic durable compiler reuse
+- runtime-local compiled-module cache
+- explicit `stateless-v0` instance pooling/rebinding
+
+Next:
+
+- [ ] module-size/budget splitting of logical groups
+- [ ] direct optimized calls between entries in one shared module
+- [ ] general non-tail async effects/continuations
+- [ ] optimized/non-materialized closure representations
+- [ ] exception/condition substrate
+- [ ] debugger activation metadata
+
+### Distributed and foreign-runtime execution
+
+- [ ] object locator and placement policy
+- [ ] capability handles separate from object refs
+- [ ] local vs remote call semantics
+- [ ] Lagrange WASM placement
+- [ ] foreign-runtime adapter contract
+- [ ] OCI foreign-runtime lifecycle/placement
+- [ ] routing between image-native, component/foreign WASM and JVM/native runtimes
+- [ ] explicit failure/retry/idempotency semantics
+- [ ] measured `ctx.call()` compute-near-object wins
+
+Success: execution placement changes without changing object/artifact identity or pretending a foreign process heap is image state.
+
+## Graph and project work
+
+### Graph services
+
+- [ ] indexed reachability traversal
+- [ ] revision-aware reads
+- [ ] export/import graph format
+- [ ] garbage-collection rules respecting history/pinned refs
+- [ ] object migration between immutable shapes
+
+### Projects and collaborative history
 
 - [ ] project objects and relationships
 - [ ] code + notes + tests + data + work items
-- [ ] first-class project relationships to binary/package/component dependencies
-- [ ] manifest and lock artifacts as project members/inputs where applicable
+- [ ] first-class package/binary/component dependency relationships
+- [ ] manifest/lock artifacts as project members
 - [ ] branches/working views and object-level diffs
 - [ ] merge semantics
-- [ ] Git import/export projection for source-oriented views
-- [ ] binary/artifact dependency import/export without pretending Git text files are canonical
+- [ ] Git import/export as projection rather than canonical storage
 - [ ] multi-author conflict UI/API
 
-Success: a project can own/edit source where appropriate while also referring explicitly to imported binary libraries, components and reproducible toolchain inputs.
+Success: an image project can mix editable source, compiled dependencies, data and work/history without reducing itself to files.
 
-## 7. Languages and compatibility kernels
-
-Smalltalk/Lisp:
-
-- [ ] Cuis source/package importer
-- [ ] Smalltalk compatibility library layer
-- [ ] prove several useful Cuis libraries
-- [ ] Common Lisp personality spike
-
-Rust — external-toolchain path:
-
-- [x] Rust source/manifest/lock artifact conventions using the generic dependency edges
-- [x] OCI-backed Cargo/`rustc` provider over `ToolchainService`, not a new Rust compiler
-- [x] require digest-pinned toolchain image and record image/toolchain identity on produced artifacts
-- [x] materialize a closed Cargo project from artifact snapshots and build with Cargo frozen/offline
-- [x] preserve manifest/source/lock provenance on the produced raw WASM artifact
-- [x] explicit vendored Cargo config/file artifact conventions for third-party dependencies
-- [x] materialize and validate a versioned third-party package directory with `Cargo.toml`, source/binary files and `.cargo-checksum.json`
-- [x] exercise an application manifest/lock/source graph that depends on the vendored package through the normal provider path
-- [x] external-toolchain cache key includes pinned image, target/options and full explicit dependency snapshots/fingerprints
-- [x] repeated compatible Cargo build reuses the existing raw WASM without invoking the OCI runner
-- [ ] integration environment that runs the vendored dependency fixture through an actual pinned Cargo/rustc OCI image
-- [ ] import crates.io `.crate` packages into explicit vendor artifacts without build-time network access
-- [ ] callable/interface adapter for suitable Rust-produced `wasm-binary/v1`
-- [ ] Lagrange Rust SDK/crate for explicit host/call interfaces
-- [ ] prove reuse of source crates plus at least one portable precompiled WASM/component or stable-ABI dependency
-- [ ] document/compiler-test which Rust intermediate/binary formats are only build caches versus stable imported dependencies
-
-Java:
-
-- [ ] Java artifact conventions for source/class/JAR without teaching generic graph storage what Java means
-- [ ] Java JAR/class importer and dependency reuse spike
-- [ ] Java personality/toolchain spike using existing `javac`/JVM/AOT/Java-to-WASM tooling rather than a new compiler
-- [ ] JVM/OCI foreign-runtime compatibility spike
-- [ ] compare JVM/OCI compatibility path with deeper Java-to-WASM/image integration on one realistic library/application
-
-Cross-language libraries:
-
-- [ ] WASM Component-style library interface spike callable from two language personalities
-- [ ] prove the same imported component can be depended on without exposing implementation-language semantics
-
-Success: mature languages reuse their existing compiler/runtime ecosystems and compiled libraries while gaining image identity/history, project relationships, capabilities and Lagrange execution where useful.
-
-## 8. Distributed and foreign-runtime execution
-
-- [ ] object locator and activation policy
-- [ ] capability handles separate from object refs
-- [ ] local vs remote send semantics
-- [ ] WASM code placement
-- [ ] foreign-runtime adapter contract separate from image object identity
-- [ ] OCI foreign-runtime lifecycle/placement policy
-- [ ] callable routing between image/WASM execution and JVM/native/etc. foreign runtimes
-- [ ] explicit failure/retry/idempotency semantics across foreign runtime boundaries
-- [ ] capability checks for foreign/runtime/component calls
-- [ ] measured `ctx.call()` compute-near-object wins
-- [ ] measured tradeoff between foreign-runtime compatibility and WASM/image integration
-
-Success: executable placement can choose image-native/WASM or explicit foreign runtimes without pretending that foreign heaps/processes are automatically image objects.
-
-## 9. Graphical environment
+## Graphical environment
 
 - [ ] drawing/input substrate
 - [ ] retained UI objects, widgets and layout
@@ -237,4 +202,20 @@ Success: executable placement can choose image-native/WASM or explicit foreign r
 - [ ] replaceable shell/window-manager policy
 - [ ] inspectors, browsers and debugger as image-resident tools
 
-See ADR 0016 for the broader artifact/toolchain/foreign-runtime direction, ADR 0017 for the generic dependency/provider substrate, ADR 0018 for the first OCI-backed Cargo/rustc provider, ADR 0019 for explicit vendored Cargo dependencies, and ADR 0020 for deterministic external-toolchain result reuse.
+## Completed foundation
+
+The following substrate is considered established enough to build on:
+
+- language-neutral Value/ref/shape/object graph
+- stable identity vs revision
+- Block + LexicalEnvironment closure model
+- language-owned dispatch + common activation execution
+- semantic vs executable code separation
+- internal Lagrange WASM backend
+- artifact dependency/provenance graph
+- generic external toolchain providers
+- Cargo/rustc OCI integration with explicit package inputs
+- deterministic external-toolchain result reuse
+- first explicit foreign-WASM callable interface
+
+See [decisions/README.md](decisions/README.md) for the ADRs grouped by topic.
