@@ -7,19 +7,20 @@ An image is a durable object graph, not a VM memory dump and not a pile of sourc
 ## What is here now
 
 - stable image and object identities
-- canonical tagged scalar values (`boolean`, arbitrary-precision `integer`, exact-bit `float64`, `text`, `bytes`)
-- ordinary object refs and revision-pinned refs
+- canonical tagged scalar Values and ordinary/pinned refs
 - immutable shapes plus generic objects with separate physical shape and language behavior
 - immutable CodeArtifacts, versioned LexicalEnvironments and durable Blocks
 - transient message dispatch and activation requests
-- `CodeCompilerRegistry` / `CompilationService` for immutable code derivation
+- `CodeCompilerRegistry` / `CompilationService`
 - language-neutral `lagrange-code/v0` semantic code
-- pluggable representation executors plus `neutral-expression/v0`
-- reserved `wasm-module/v1` and `wasm-function/v1` artifact contracts
+- `neutral-expression/v0` reference interpreter
+- first real `lagrange-code/v0 -> wasm-module/v1` backend
+- `lagrange-value-handle/v0` WASM calling ABI
+- `wasm-function/v1` execution through the normal ActivationExecutor
+- interpreter/WASM differential tests
 - executable Symmetric Smalltalk parser/compiler/dispatcher with nested lexical Blocks
 - reference walking, optimistic versions, history and snapshots
 - in-memory mock backend plus optional `lagrange-server` probing
-- executable demo and tests
 
 Core invariants:
 
@@ -28,6 +29,7 @@ shape != behavior
 reference != authority
 identity != revision
 semantic code != executable artifact
+WASM handle != image identity
 ```
 
 ## Run it
@@ -40,29 +42,9 @@ npm run demo
 npm start
 ```
 
-## First Symmetric Smalltalk seed
+## Symmetric Smalltalk seed
 
-The language runs through the common image/dispatch/execution substrate rather than a separate Smalltalk VM:
-
-```js
-import {
-  createRuntime,
-  evaluateSymmetricSmalltalkBlock,
-  integerValue,
-} from 'lagrange-images';
-
-const runtime = await createRuntime({backend: {mode: 'mock'}});
-await runtime.images.createImage({id: 'playground'});
-
-const result = await evaluateSymmetricSmalltalkBlock({
-  runtime,
-  imageId: 'playground',
-  source: '[ :x | [ :y | x ] value: 99 ]',
-  arguments: [integerValue(7)],
-});
-```
-
-The seed supports integer/string literals, names, `self`, parentheses, Blocks, and unary/binary/keyword message sends with Smalltalk precedence. Nested Blocks automatically capture free lexical bindings by stable binding ID; `self` is captured lexically when it crosses a Block boundary.
+The language runs through the common image/dispatch/execution substrate rather than a separate Smalltalk VM. Nested Blocks automatically capture free lexical bindings by stable binding ID; `self` is captured lexically when it crosses a Block boundary.
 
 Compilation preserves separate immutable artifacts:
 
@@ -70,44 +52,58 @@ Compilation preserves separate immutable artifacts:
 Smalltalk source
   -> Smalltalk syntax
   -> lagrange-code/v0 semantic code
-  -> neutral-expression/v0 executable artifact
+       |-> neutral-expression/v0
+       `-> WASM derived execution
   -> Block
 ```
 
-The final executable artifact is derived state. Recompiling the semantic artifact produces the same executable meaning, and a future WASM backend can derive a different executable artifact from the same semantic code.
+The executable forms are derived state. The bootstrap interpreter currently materializes nested closures as Block + LexicalEnvironment records, while future optimized/WASM paths may stack-allocate, inline or eliminate nonescaping closures.
 
-The bootstrap interpreter currently materializes nested closures as Block + LexicalEnvironment records. That is not a language requirement: an optimized/WASM executor may stack-allocate, inline or eliminate a nonescaping closure.
+## First WASM backend
 
-The first image-resident lookup convention uses a receiver's `behavior` object as a method table: selector names are behavior-shape slot names and corresponding slot Values are Block refs. Block refs themselves receive ordinary `value`, `value:`, `value:value:`, ... sends through the same dispatcher. This is intentionally a bootstrap convention before Object/Behavior/Class/Metaclass is designed.
+The first backend compiles a useful pure subset of `lagrange-code/v0` to real WebAssembly bytes and executes it with Node's built-in `WebAssembly` runtime.
 
-## Code artifacts and WASM
-
-`CodeArtifact.representation` identifies what the content means. The compiler registry currently knows:
+Supported now:
 
 ```text
-lagrange-code/v0 -> neutral-expression/v0
+literal
+argument
+receiver
+captured binding
+integer-add
+equals
+if
 ```
 
-The next backend can add:
+Message sends and nested Block creation are deliberately rejected by the WASM compiler for now. Requesting WASM never silently falls back to the interpreter.
+
+The calling ABI is `lagrange-value-handle/v0`. WASM sees invocation-local `i32` handles rather than image Values or object addresses:
 
 ```text
-lagrange-code/v0 -> wasm-module/v1 / wasm-function/v1
+run(receiverHandle,
+    argumentHandle0, ...,
+    captureHandle0, ...)
+  -> resultHandle
 ```
 
-without changing Smalltalk source, semantic code, Blocks, dispatch, or image identity.
+Handle `0` means no receiver/value in an ABI slot. Positive handles exist only for the current activation. They are not object IDs, capabilities or persistent references.
 
-The reserved WASM contracts are:
+Host imports currently provide `literal`, `integer_add`, `equals`, and `is_true`. Operations resolve handles back to canonical tagged Values on the host, so arbitrary-precision image integers remain arbitrary precision instead of being narrowed to WASM `i64`.
+
+Object refs can cross as receiver/argument/capture handles without putting graph identities in WASM memory or metadata. Reference literals are intentionally not embedded in module metadata because graph edges must remain explicit.
+
+The artifact chain is:
 
 ```text
-wasm-module/v1
-  content: bytes
-
-wasm-function/v1
-  content: ref -> wasm module CodeArtifact
-  metadata.entry: entry name
+lagrange-code/v0
+      -> wasm-module/v1   # bytes + ABI/literal metadata
+      -> wasm-function/v1 # module ref + entry/signature metadata
+      -> Block
 ```
 
-WASM is therefore an execution product, not the canonical program representation.
+The interpreter remains the reference oracle. Differential tests compile the same semantic artifact to interpreter and WASM forms and require the same canonical Value result.
+
+See ADR 0008.
 
 ## Values and objects
 
@@ -125,9 +121,7 @@ Generic objects have no `classId` or `source`. Source, syntax, semantic code, ex
 
 ## References are not capabilities
 
-`{kind:'ref', imageId, objectId}` means only "this object identity". It grants no right to read, mutate or invoke that object. Authorization is resolved separately.
-
-A pinned reference adds a historical revision; ordinary refs continue to mean the same evolving identity.
+`{kind:'ref', imageId, objectId}` means only "this object identity". It grants no right to read, mutate or invoke that object. Authorization is resolved separately. WASM Value handles similarly grant no ambient authority.
 
 ## Backend selection
 
@@ -155,3 +149,4 @@ Do not import `lagrange-server/src/...`; use public package seams only.
 - [ADR 0005: calling convention and neutral executor](docs/decisions/0005-calling-convention-and-neutral-executor.md)
 - [ADR 0006: Symmetric Smalltalk seed](docs/decisions/0006-symmetric-smalltalk-seed.md)
 - [ADR 0007: semantic code and derived execution](docs/decisions/0007-semantic-code-and-derived-execution.md)
+- [ADR 0008: first WASM backend and Value-handle ABI](docs/decisions/0008-wasm-backend-and-value-handle-abi.md)
