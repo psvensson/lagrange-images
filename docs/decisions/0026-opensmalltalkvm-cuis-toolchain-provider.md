@@ -75,11 +75,13 @@ and explicit dependency roles:
 
 ```text
 build
-  dependency(base-image)   -> one smalltalk/cuis-image-v1
-  dependency(base-changes) -> zero or one smalltalk/cuis-changes-v1
+  dependency(base-image)   -> exactly one smalltalk/cuis-image-v1
+  dependency(base-changes) -> exactly one matching smalltalk/cuis-changes-v1
   dependency(base-sources) -> zero or one smalltalk/cuis-sources-v1
   dependency(package)      -> zero or more smalltalk/cuis-package-v1
 ```
+
+The base changes basename must match the base image stem. It is required because the finite Cuis snapshot operation copies the current changes file to the derived image name.
 
 Package dependency order is the installation order for this provider version.
 
@@ -114,7 +116,15 @@ CodePackageFile installPackage:
     DirectoryEntry currentDirectory // 'JSON.pck.st'.
 ```
 
-and asks Cuis to save a new image.
+and finishes the finite toolchain process with Cuis' explicit snapshot-and-exit API:
+
+```smalltalk
+Smalltalk
+    saveAndQuitAs: 'LagrangeDerived'
+    clearAllClassState: false.
+```
+
+The current Cuis implementation copies the current changes file to the new image name, changes image identity and snapshots with `andQuit: true`. A plain `saveAs:` followed by a separate quit was rejected by the real integration proof because the build process remained alive until timeout.
 
 The temporary workspace is build machinery only and is always removed after the provider returns or fails.
 
@@ -140,7 +150,7 @@ The unchanged base `.sources` artifact is retained as an explicit dependency of 
 
 `ToolchainService` owns normal provenance, so both derived outputs point through `derivedFrom` to the complete resolved build graph.
 
-The derived image metadata records only stable/build-relevant facts such as VM identity, base image artifact ID, package artifact IDs, package filenames and companion file names. Host paths are absent.
+The derived image metadata records stable/build-relevant facts such as VM identity, base image artifact ID, package artifact IDs, package filenames, companion file names and the `saveAndQuitAs/v0` snapshot contract. Host paths are absent.
 
 ## Runtime verification is separate
 
@@ -202,6 +212,7 @@ foreign runtime lifecycle != toolchain lifecycle
 VM path != provider identity
 VM identity != base Cuis image identity
 base image != hidden provider input
+base image name != arbitrary changes filename
 package path != package artifact identity
 build dependency order != generic dependency semantics outside this provider
 snapshot bytes != assumed deterministic output
