@@ -69,7 +69,7 @@ source / IR / JAR / runtime image / manifest / lock / package / WASM
 
 ### Foreign runtime lifecycle
 
-Long-lived external runtimes now have a separate language-neutral lifecycle seam:
+Long-lived external runtimes have a separate language-neutral lifecycle seam:
 
 ```text
 ForeignRuntimeProviderRegistry
@@ -79,7 +79,22 @@ ForeignRuntimeProviderRegistry
 
 `createRuntime()` exposes `foreignRuntimeProviders` and `foreignRuntimes`. Provider handles remain private transient host state; callers receive a runtime-local descriptor rather than an `ObjectRef`. Calls carry frozen provider-specific interface data plus canonical Values and must return one canonical Value. `stop()` closes the call gate, waits for in-flight calls and then shuts the provider down. Normal `runtime.close()` owns active foreign runtimes before backend shutdown.
 
-The protocol deliberately does not yet define OCI/process launch details, durable runtime-definition artifacts, capabilities, retries or foreign-object handles. The next proof is the real OpenSmalltalkVM/Cuis runtime adapter.
+The first real provider is OpenSmalltalkVM + Cuis:
+
+```text
+ForeignRuntimeService
+        -> smalltalk/opensmalltalk-cuis
+        -> headless OpenSmalltalkVM
+        -> real Cuis image
+        -> compiled LagrangeProofService
+        -> canonical Value result
+```
+
+`createOpenSmalltalkCuisProvider()` launches a configured VM/image pair without a shell and keeps the child process/stdin/stdout transport private. The first bridge protocol, `lagrange-cuis-stdio/v0`, deliberately exports only `proof/add` and recursive `proof/factorial`; it is **not** remote Smalltalk eval or arbitrary `perform:`. Provider identity uses explicit VM/image identities rather than local paths.
+
+Normal tests inject the process transport. A separate PR-only CI job downloads and verifies the pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur runtime and Cuis 7.9-8090 image and runs the same provider against the real VM.
+
+OCI foreign-runtime placement, durable runtime-definition artifacts, capabilities, restart/reconciliation and foreign-object handles remain later work.
 
 ### Foreign WASM callable boundary
 
@@ -186,7 +201,7 @@ The long-term goal is coexistence: native Symmetric Smalltalk and OpenSmalltalkV
 
 Compiled libraries and runtime images can remain compiled artifacts when that is the useful canonical form. A JAR does not need to be decompiled; a WASM component does not need to become source; a vendored crate can remain explicit package bytes/files; a compatible Smalltalk runtime image can remain an external runtime artifact.
 
-See [ADR 0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md) for the Smalltalk compatibility end state and [ADR 0023](docs/decisions/0023-foreign-runtime-lifecycle-substrate.md) for the generic runtime lifecycle seam.
+See [ADR 0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md) for the Smalltalk compatibility end state, [ADR 0023](docs/decisions/0023-foreign-runtime-lifecycle-substrate.md) for the generic runtime lifecycle seam, and [ADR 0024](docs/decisions/0024-opensmalltalkvm-cuis-runtime-proof.md) for the first real runtime proof.
 
 ## Deterministic toolchain reuse
 
@@ -214,6 +229,8 @@ runtime definition != running instance
 provider handle != ObjectRef
 runtime ID != capability
 foreign heap != image graph
+Spur oop != ObjectRef
+exported service != arbitrary perform:
 raw foreign WASM != Lagrange WASM ABI
 callable interface != authority
 compiled host module != durable code identity

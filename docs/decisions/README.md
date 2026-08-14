@@ -42,6 +42,7 @@ ADRs are the detailed design history. Read them by topic rather than as a prereq
 
 - [0021 — foreign WASM callable interface](0021-foreign-wasm-callable-interface.md): separate raw WASM implementation identity from an explicit scalar callable ABI.
 - [0023 — foreign runtime lifecycle substrate](0023-foreign-runtime-lifecycle-substrate.md): language-neutral start/call/stop lifecycle with transient runtime IDs and provider-private handles.
+- [0024 — OpenSmalltalkVM + Cuis runtime proof](0024-opensmalltalkvm-cuis-runtime-proof.md): first real long-lived foreign runtime using a pinned headless Cuis image and whitelisted stdio service bridge.
 
 ## Reading rule
 
