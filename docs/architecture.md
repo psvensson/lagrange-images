@@ -132,6 +132,7 @@ The generic provider contract is now exercised by a real existing compiler ecosy
 rust/cargo-manifest-v1
   -> rust/source-v1
   -> rust/cargo-lock-v1
+  -> optional explicit Cargo vendor artifacts
         |
         v
  digest-pinned OCI image
@@ -144,7 +145,7 @@ rust/cargo-manifest-v1
 
 The Rust/Cargo conventions live in `cargo-rustc-oci-provider.js`, not in `ToolchainService` or the image graph.
 
-The first provider:
+The provider:
 
 - requires a digest-pinned OCI image
 - requires one manifest root, one lock artifact and one or more Rust source artifacts
@@ -155,7 +156,48 @@ The first provider:
 - validates and imports the resulting raw WASM
 - removes the temporary workspace in a `finally` path
 
-Unknown artifact representations fail rather than being ignored. Third-party crate support should add explicit vendored/package/config artifacts instead of hidden network resolution.
+Unknown artifact representations fail rather than being ignored.
+
+### Explicit Cargo directory-source dependencies
+
+Third-party registry-style dependencies can now be represented without build-time network discovery:
+
+```text
+rust/cargo-config-v1
+rust/cargo-vendor-file-v1
+```
+
+The v1 Cargo config contract is intentionally narrow and materializes only:
+
+```toml
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+```
+
+A vendor file may contain text or bytes and carries a safe explicit path such as:
+
+```text
+vendor/example-1.2.3/Cargo.toml
+vendor/example-1.2.3/src/lib.rs
+vendor/example-1.2.3/.cargo-checksum.json
+```
+
+Package directories are immediate non-hidden children of `vendor/`. Before OCI execution the provider groups every explicit vendor file by package directory, requires `Cargo.toml` and `.cargo-checksum.json`, requires the checksum file to describe exactly all other explicit package files, and verifies every SHA-256 over the actual text/byte artifact content.
+
+Root-package `rust/source-v1` paths cannot overlap `.cargo/` or `vendor/`; those locations belong to the explicit Cargo config/vendor representations.
+
+The provider still does not run `cargo vendor`, `cargo fetch` or another acquisition step. Import/acquisition of third-party packages remains separate from compilation.
+
+Because this changes the provider input contract, newly created providers identify as:
+
+```text
+cargo-rustc-oci/v1/<image-digest>
+```
+
+The output remains `wasm-binary/v1`, with all manifest/source/lock/config/vendor inputs preserved as normal `derivedFrom` provenance.
 
 ### OCI host runner
 
@@ -196,7 +238,8 @@ Objects in a foreign heap are not automatically durable image objects. Foreign r
 Precompiled libraries should remain reusable dependencies where their compatibility contract permits it.
 
 - Java should retain JAR/class dependencies rather than decompile them.
-- Rust should favor source crates or stable portable ABIs/components for long-lived dependencies.
+- Rust can now carry explicit vendored source-package files; standard package/archive import can be layered on later.
+- Rust should still favor stable portable ABIs/components for long-lived binary dependencies.
 - WASM Components are attractive cross-language library boundaries.
 
 Imported executable artifacts need an explicit callable/interface description before image code invokes them. Interface description remains separate from authority.
@@ -215,7 +258,7 @@ OCI image digest where applicable
 target / ABI
 options
 resolved artifact representation/content/dependency/metadata fingerprints
-manifest / lock/config inputs
+manifest / lock / config / vendor inputs
 ```
 
 Storage timestamps, backend versions and old provenance history should not become cache inputs automatically.
@@ -261,4 +304,4 @@ Not every object send becomes RPC and not every foreign call becomes an image me
 
 Projects should eventually relate source, binary dependencies, manifests, tests, notes and work items as graph objects/artifacts, with files/Git as interoperability projections.
 
-See ADR 0016 for the broad artifact/toolchain direction, ADR 0017 for the generic dependency/provider substrate, and ADR 0018 for the first OCI Cargo/rustc provider.
+See ADR 0016 for the broad artifact/toolchain direction, ADR 0017 for the generic dependency/provider substrate, ADR 0018 for the first OCI Cargo/rustc provider, and ADR 0019 for explicit vendored Cargo dependencies.
