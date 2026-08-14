@@ -1,5 +1,9 @@
 import {createBackend} from './backend/create-backend.js';
-import {CompilationService, createDefaultCodeCompilerRegistry} from './compilation/index.js';
+import {
+  CompilationService,
+  createDefaultCodeCompilerRegistry,
+  createDefaultCompilationGroupCompilerRegistry,
+} from './compilation/index.js';
 import {DispatchRegistry, InvocationService} from './dispatch/invocation-service.js';
 import {ActivationExecutor, createDefaultCodeExecutorRegistry} from './execution/executor.js';
 import {ImageService} from './image/graph-image-service.js';
@@ -22,7 +26,14 @@ async function createRuntime(options = {}) {
     }
     codeCompilers.register(entry[0], entry[1], entry[2]);
   }
-  const compilation = new CompilationService({images, compilers: codeCompilers});
+  const groupCompilers = createDefaultCompilationGroupCompilerRegistry();
+  for (const entry of options.groupCompilers ?? []) {
+    if (!Array.isArray(entry) || entry.length !== 3) {
+      throw new TypeError('groupCompilers entries must be [policyId, targetRepresentation, compiler]');
+    }
+    groupCompilers.register(entry[0], entry[1], entry[2]);
+  }
+  const compilation = new CompilationService({images, compilers: codeCompilers, groupCompilers});
 
   const dispatchers = new DispatchRegistry();
   for (const [languageId, dispatcher] of Object.entries(options.dispatchers ?? {})) {
@@ -44,6 +55,7 @@ async function createRuntime(options = {}) {
     images,
     languages,
     codeCompilers,
+    groupCompilers,
     compilation,
     dispatchers,
     invocations,

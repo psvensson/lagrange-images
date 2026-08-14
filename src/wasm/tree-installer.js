@@ -8,9 +8,12 @@ import {WASM_MODULE_V1} from '../code/wasm-artifacts.js';
 import {createCompilationGroup} from '../compilation/group.js';
 import {normalizeMetadata} from '../object/model.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
-import {compileWasmFunctionArtifact, compileWasmModule} from './compiler.js';
-
-const WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0 = 'wasm-nested-block-tree/v0';
+import {
+  WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
+  assembleWasmFunctionArtifact,
+  compileWasmModule,
+  compileWasmModuleEntries,
+} from './compiler.js';
 
 function normalizeObjectRef(value, label) {
   const ref = canonicalizeValue(value);
@@ -23,8 +26,8 @@ function assertServices(images, compilation) {
   for (const method of ['getCodeArtifact', 'putCodeArtifact', 'getBlock', 'putBlock']) {
     if (typeof images[method] !== 'function') throw new TypeError(`images service must implement ${method}`);
   }
-  if (!compilation || typeof compilation.compileArtifact !== 'function') {
-    throw new TypeError('compilation service is required');
+  if (!compilation || typeof compilation.compileGroup !== 'function') {
+    throw new TypeError('compilation service with compileGroup is required');
   }
 }
 
@@ -84,84 +87,133 @@ function nodeIds(rootId, semanticBlockId = null) {
   const key = blockKey(semanticBlockId);
   return Object.freeze({
     semanticId: `${rootId}:wasm:semantic:${key}`,
-    moduleId: `${rootId}:wasm:module:${key}`,
+    moduleId: `${rootId}:wasm:module`,
     functionId: `${rootId}:wasm:function:${key}`,
     blockId: `${rootId}:wasm:prototype:${key}`,
   });
 }
 
-async function installNode({
-  images,
-  compilation,
-  semanticRef,
-  semanticArtifact,
-  program,
-  rootId,
-  semanticBlockId = null,
-  environment = null,
-  metadata = {},
-  nodes,
-}) {
-  const ids = nodeIds(rootId, semanticBlockId);
-  const blockPrototypes = {};
-
-  for (const nested of directNestedBlocks(program.body)) {
-    const childIds = nodeIds(rootId, nested.blockId);
-    const childProgram = normalizeLagrangeCodeProgram(nested.program);
-    const childSemanticArtifact = await images.putCodeArtifact(semanticRef.imageId, {
-      id: childIds.semanticId,
-      languageId: semanticArtifact.languageId,
-      representation: LAGRANGE_CODE_V0,
-      content: textValue(JSON.stringify(childProgram)),
-      derivedFrom: [semanticRef],
-      metadata: {
-        semanticBlockId: nested.blockId,
-        wasmTreeRootId: rootId,
-      },
-    });
-    const childSemanticRef = objectRef(childSemanticArtifact.imageId, childSemanticArtifact.id);
-    const child = await installNode({
-      images,
-      compilation,
-      semanticRef: childSemanticRef,
-      semanticArtifact: childSemanticArtifact,
-      program: childProgram,
-      rootId,
-      semanticBlockId: nested.blockId,
-      nodes,
-    });
-    blockPrototypes[nested.blockId] = objectRef(child.block.imageId, child.block.id);
-  }
-
-  const {moduleArtifact, functionArtifact} = await compileWasmFunctionArtifact({
-    images,
-    compilation,
-    semanticRef,
-    moduleId: ids.moduleId,
-    functionId: ids.functionId,
-    blockPrototypes,
-  });
-
-  const isRoot = semanticBlockId === null;
-  const block = await images.putBlock(semanticRef.imageId, {
-    id: ids.blockId,
-    code: objectRef(functionArtifact.imageId, functionArtifact.id),
-    environment: isRoot ? environment : null,
-    metadata: isRoot
-      ? metadata
-      : {prototype: true, semanticBlockId, wasmTreeRootId: rootId},
-  });
-
-  const node = Object.freeze({
+function planTree(program, rootId, semanticBlockId = null) {
+  const plan = {
     semanticBlockId,
-    semanticArtifact,
-    moduleArtifact,
-    functionArtifact,
-    block,
-    blockPrototypes: Object.freeze({...blockPrototypes}),
-  });
-  nodes.push(node);
-  return node;
+    program: normalizeLagrangeCodeProgram(program),
+    ids: nodeIds(rootId, semanticBlockId),
+    children: [],
+  };
+  for (const nested of directNestedBlocks(plan.program.body)) {
+    plan.children.push(planTree(nested.program, rootId, nested.blockId));
+  }
+  return plan;
+}
+
+function flattenPlans(root) {
+  const all = [];
+  const visit = (plan) => {
+    all.push(plan);
+    for (const child of plan.children) visit(child);
+  };
+  visit(root);
+  return [
+    root,
+    ...all.filter((plan) => plan !== root).sort((left, right) =>
+      String(left.semanticBlockId).localeCompare(String(right.semanticBlockId))),
+  ];
+}
+
+function preflightSharedModule(groupPlans) {
+  compileWasmModuleEntries(groupPlans.map((plan, memberIndex) => ({
+    entry: `run_${memberIndex}`,
+    memberIndex,
+    program: plan.program,
+  })));
+}
+
+async function persistSemanticTree({images, rootRef, rootArtifact, rootPlan, rootId}) {
+  rootPlan.semanticRef = rootRef;
+  rootPlan.semanticArtifact = rootArtifact;
+
+  const persistChildren = async (parentPlan) => {
+    for (const child of parentPlan.children) {
+      const childArtifact = await images.putCodeArtifact(parentPlan.semanticRef.imageId, {
+        id: child.ids.semanticId,
+        languageId: parentPlan.semanticArtifact.languageId,
+        representation: LAGRANGE_CODE_V0,
+        content: textValue(JSON.stringify(child.program)),
+        derivedFrom: [parentPlan.semanticRef],
+        metadata: {
+          semanticBlockId: child.semanticBlockId,
+          wasmTreeRootId: rootId,
+        },
+      });
+      child.semanticArtifact = childArtifact;
+      child.semanticRef = objectRef(childArtifact.imageId, childArtifact.id);
+      await persistChildren(child);
+    }
+  };
+
+  await persistChildren(rootPlan);
+}
+
+function descriptorForMember(moduleArtifact, memberIndex) {
+  const functions = moduleArtifact.metadata?.functions;
+  if (!Array.isArray(functions)) throw new TypeError('shared WASM module must describe exported functions');
+  const descriptor = functions.find((entry) => entry?.memberIndex === memberIndex);
+  if (!descriptor) throw new TypeError(`shared WASM module has no entry for group member ${memberIndex}`);
+  return descriptor;
+}
+
+async function installExecutableTree({
+  images,
+  moduleArtifact,
+  groupPlans,
+  rootPlan,
+  rootId,
+  rootEnvironment,
+  rootMetadata,
+}) {
+  const memberIndex = new Map(groupPlans.map((plan, index) => [plan, index]));
+  const nodes = [];
+  const moduleRef = objectRef(moduleArtifact.imageId, moduleArtifact.id);
+
+  const install = async (plan) => {
+    const blockPrototypes = {};
+    for (const childPlan of plan.children) {
+      const child = await install(childPlan);
+      blockPrototypes[childPlan.semanticBlockId] = objectRef(child.block.imageId, child.block.id);
+    }
+
+    const descriptor = descriptorForMember(moduleArtifact, memberIndex.get(plan));
+    const {functionArtifact} = await assembleWasmFunctionArtifact({
+      images,
+      semanticRef: plan.semanticRef,
+      moduleRef,
+      functionId: plan.ids.functionId,
+      entry: descriptor.entry,
+      blockPrototypes,
+    });
+    const isRoot = plan === rootPlan;
+    const block = await images.putBlock(plan.semanticRef.imageId, {
+      id: plan.ids.blockId,
+      code: objectRef(functionArtifact.imageId, functionArtifact.id),
+      environment: isRoot ? rootEnvironment : null,
+      metadata: isRoot
+        ? rootMetadata
+        : {prototype: true, semanticBlockId: plan.semanticBlockId, wasmTreeRootId: rootId},
+    });
+    const node = Object.freeze({
+      semanticBlockId: plan.semanticBlockId,
+      semanticArtifact: plan.semanticArtifact,
+      moduleArtifact,
+      functionArtifact,
+      block,
+      blockPrototypes: Object.freeze({...blockPrototypes}),
+    });
+    nodes.push(node);
+    return node;
+  };
+
+  const root = await install(rootPlan);
+  return Object.freeze({root, nodes: Object.freeze(nodes)});
 }
 
 async function installWasmBlockTree({
@@ -183,34 +235,31 @@ async function installWasmBlockTree({
   }
 
   const program = validateTree(parseLagrangeCodeProgram(semanticArtifact));
-  const nodes = [];
-  const root = await installNode({
-    images,
-    compilation,
-    semanticRef: rootRef,
-    semanticArtifact,
-    program,
-    rootId: id,
-    environment: rootEnvironment,
-    metadata: rootMetadata,
-    nodes,
-  });
-  const frozenNodes = Object.freeze([...nodes]);
-  const groupNodes = [
-    root,
-    ...nodes.filter((node) => node !== root).sort((left, right) =>
-      String(left.semanticBlockId).localeCompare(String(right.semanticBlockId))),
-  ];
+  const rootPlan = planTree(program, id);
+  const groupPlans = flattenPlans(rootPlan);
+  preflightSharedModule(groupPlans);
+  await persistSemanticTree({images, rootRef, rootArtifact: semanticArtifact, rootPlan, rootId: id});
+
   const group = createCompilationGroup({
     policyId: WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
     targetRepresentation: WASM_MODULE_V1,
-    members: groupNodes.map((node) => objectRef(node.semanticArtifact.imageId, node.semanticArtifact.id)),
-    options: {physicalLayout: 'one-module-per-member'},
+    members: groupPlans.map((plan) => plan.semanticRef),
+    options: {physicalLayout: 'shared-module'},
+  });
+  const moduleArtifact = await compilation.compileGroup(group, {id: nodeIds(id).moduleId});
+  const installed = await installExecutableTree({
+    images,
+    moduleArtifact,
+    groupPlans,
+    rootPlan,
+    rootId: id,
+    rootEnvironment,
+    rootMetadata,
   });
 
   return Object.freeze({
-    ...root,
-    nodes: frozenNodes,
+    ...installed.root,
+    nodes: installed.nodes,
     group,
   });
 }

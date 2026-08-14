@@ -10,6 +10,7 @@ import {
 const I32 = 0x7f;
 const FUNC = 0x60;
 const BASE_IMPORT_COUNT = 4;
+const WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0 = 'wasm-nested-block-tree/v0';
 
 function u32(value) {
   if (!Number.isInteger(value) || value < 0) throw new TypeError('u32 LEB value must be a non-negative integer');
@@ -214,24 +215,69 @@ function compileExpression(expression, context) {
   }
 }
 
-function compileWasmModule(program) {
-  const parameterCount = program.parameters.length;
-  const captureIds = program.captures.map(({id}) => id);
-  const captureIndex = new Map(captureIds.map((id, index) => [id, index]));
+function normalizeModuleEntry(value, index) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`WASM module entry ${index} must be an object`);
+  const entry = requiredText(value.entry, `WASM module entry ${index} name`);
+  if (!Number.isInteger(value.memberIndex) || value.memberIndex < 0) {
+    throw new TypeError(`WASM module entry ${index} memberIndex must be a non-negative integer`);
+  }
+  return Object.freeze({entry, memberIndex: value.memberIndex, program: value.program});
+}
+
+function compileWasmModuleEntries(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) throw new TypeError('WASM module entries must be a non-empty array');
+  const normalizedEntries = entries.map(normalizeModuleEntry);
+  const entryNames = new Set();
+  const memberIndices = new Set();
+  for (const entry of normalizedEntries) {
+    if (entryNames.has(entry.entry)) throw new TypeError(`duplicate WASM export entry: ${entry.entry}`);
+    if (memberIndices.has(entry.memberIndex)) throw new TypeError(`duplicate WASM member index: ${entry.memberIndex}`);
+    entryNames.add(entry.entry);
+    memberIndices.add(entry.memberIndex);
+  }
+
   const literals = {values: [], keys: new Map()};
   const state = {sendSites: [], closureSites: [], effects: [], effectIndex: new WeakMap()};
-  analyzeEffects(program.body, state, {tail: true});
-  const context = {...state, parameterCount, captureIndex, literals};
-  const bodyExpression = compileExpression(program.body, context);
+  const plans = [];
 
-  const entryParameters = 1 + parameterCount + captureIds.length;
+  for (const entry of normalizedEntries) {
+    const program = entry.program;
+    if (!program || !Array.isArray(program.parameters) || !Array.isArray(program.captures)) {
+      throw new TypeError(`WASM module entry ${entry.entry} program must contain parameters and captures arrays`);
+    }
+    const sendStart = state.sendSites.length;
+    const closureStart = state.closureSites.length;
+    analyzeEffects(program.body, state, {tail: true});
+    const parameterCount = program.parameters.length;
+    const captureIds = program.captures.map(({id}) => id);
+    const captureIndex = new Map(captureIds.map((id, captureIndexValue) => [id, captureIndexValue]));
+    plans.push({
+      entry: entry.entry,
+      memberIndex: entry.memberIndex,
+      program,
+      parameterCount,
+      captureIds,
+      captureIndex,
+      sendSiteIndices: Array.from({length: state.sendSites.length - sendStart}, (_, offset) => sendStart + offset),
+      closureSiteIndices: Array.from({length: state.closureSites.length - closureStart}, (_, offset) => closureStart + offset),
+    });
+  }
+
+  const bodies = plans.map((plan) => compileExpression(plan.program.body, {
+    ...state,
+    parameterCount: plan.parameterCount,
+    captureIndex: plan.captureIndex,
+    literals,
+  }));
+
   const effectTypes = state.effects.map(({arity}) => functionType(Array.from({length: arity}, () => I32), [I32]));
-  const entryTypeIndex = 2 + effectTypes.length;
+  const functionTypes = plans.map((plan) =>
+    functionType(Array.from({length: 1 + plan.parameterCount + plan.captureIds.length}, () => I32), [I32]));
   const types = vector([
     functionType([I32], [I32]),
     functionType([I32, I32], [I32]),
     ...effectTypes,
-    functionType(Array.from({length: entryParameters}, () => I32), [I32]),
+    ...functionTypes,
   ]);
   const effectImports = state.effects.map((effect, effectIndex) => {
     const name = effect.kind === 'send'
@@ -246,10 +292,23 @@ function compileWasmModule(program) {
     functionImport(WASM_IMPORT_MODULE, 'is_true', 0),
     ...effectImports,
   ]);
-  const functions = vector([[...u32(entryTypeIndex)]]);
-  const exports = vector([functionExport(WASM_ENTRY_V0, BASE_IMPORT_COUNT + state.effects.length)]);
-  const functionBody = [0x00, ...bodyExpression, 0x0b];
-  const code = vector([[...u32(functionBody.length), ...functionBody]]);
+  const firstFunctionTypeIndex = 2 + state.effects.length;
+  const functions = vector(plans.map((_, index) => [...u32(firstFunctionTypeIndex + index)]));
+  const firstFunctionIndex = BASE_IMPORT_COUNT + state.effects.length;
+  const exports = vector(plans.map((plan, index) => functionExport(plan.entry, firstFunctionIndex + index)));
+  const code = vector(bodies.map((bodyExpression) => {
+    const functionBody = [0x00, ...bodyExpression, 0x0b];
+    return [...u32(functionBody.length), ...functionBody];
+  }));
+
+  const functionDescriptors = Object.freeze(plans.map((plan) => Object.freeze({
+    entry: plan.entry,
+    memberIndex: plan.memberIndex,
+    parameters: plan.parameterCount,
+    captures: Object.freeze(plan.captureIds),
+    sendSiteIndices: Object.freeze(plan.sendSiteIndices),
+    closureSiteIndices: Object.freeze(plan.closureSiteIndices),
+  })));
 
   return Object.freeze({
     bytes: new Uint8Array([
@@ -264,8 +323,17 @@ function compileWasmModule(program) {
     literals: Object.freeze(literals.values),
     sendSites: Object.freeze(state.sendSites),
     closureSites: Object.freeze(state.closureSites),
-    parameterCount,
-    captureIds: Object.freeze(captureIds),
+    functions: functionDescriptors,
+  });
+}
+
+function compileWasmModule(program) {
+  const compiled = compileWasmModuleEntries([{entry: WASM_ENTRY_V0, memberIndex: 0, program}]);
+  const descriptor = compiled.functions[0];
+  return Object.freeze({
+    ...compiled,
+    parameterCount: descriptor.parameters,
+    captureIds: descriptor.captures,
   });
 }
 
@@ -285,7 +353,43 @@ const lagrangeCodeV0ToWasmModuleCompiler = Object.freeze({
         literals: compiled.literals,
         sendSites: compiled.sendSites,
         closureSites: compiled.closureSites,
+        functions: compiled.functions,
         semanticRepresentation: LAGRANGE_CODE_V0,
+      },
+    });
+  },
+});
+
+const lagrangeCodeGroupToWasmModuleCompiler = Object.freeze({
+  async compile({group, members}) {
+    if (group.policyId !== WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0) {
+      throw new TypeError(`unsupported WASM compilation group policy: ${group.policyId}`);
+    }
+    if (group.options?.physicalLayout !== 'shared-module') {
+      throw new TypeError('WASM shared-module compiler requires physicalLayout=shared-module');
+    }
+    const entries = members.map((source, memberIndex) => {
+      if (source.representation !== LAGRANGE_CODE_V0) {
+        throw new TypeError(`WASM group member ${memberIndex} must be ${LAGRANGE_CODE_V0}`);
+      }
+      return {
+        entry: `run_${memberIndex}`,
+        memberIndex,
+        program: parseLagrangeCodeProgram(source),
+      };
+    });
+    const compiled = compileWasmModuleEntries(entries);
+    return Object.freeze({
+      content: bytesValue(compiled.bytes),
+      metadata: {
+        abi: WASM_VALUE_HANDLE_ABI_V0,
+        literals: compiled.literals,
+        sendSites: compiled.sendSites,
+        closureSites: compiled.closureSites,
+        functions: compiled.functions,
+        semanticRepresentation: LAGRANGE_CODE_V0,
+        groupPolicyId: group.policyId,
+        physicalLayout: 'shared-module',
       },
     });
   },
@@ -305,6 +409,89 @@ function normalizePrototypeMap(blockPrototypes) {
   return result;
 }
 
+function moduleFunctionDescriptor(moduleArtifact, entry) {
+  const functions = moduleArtifact.metadata?.functions;
+  if (Array.isArray(functions)) {
+    const descriptor = functions.find((candidate) => candidate?.entry === entry);
+    if (!descriptor) throw new TypeError(`WASM module function entry not found in metadata: ${entry}`);
+    return descriptor;
+  }
+  if (moduleArtifact.metadata?.entry !== entry) {
+    throw new TypeError(`WASM module entry does not match requested function: ${entry}`);
+  }
+  return {
+    entry,
+    memberIndex: 0,
+    parameters: moduleArtifact.metadata.parameters,
+    captures: moduleArtifact.metadata.captures ?? [],
+    sendSiteIndices: (moduleArtifact.metadata.sendSites ?? []).map((_, index) => index),
+    closureSiteIndices: (moduleArtifact.metadata.closureSites ?? []).map((_, index) => index),
+  };
+}
+
+async function assembleWasmFunctionArtifact({
+  images,
+  semanticRef,
+  moduleRef,
+  functionId,
+  entry,
+  blockPrototypes = {},
+} = {}) {
+  if (!images || typeof images.getCodeArtifact !== 'function' || typeof images.putCodeArtifact !== 'function' || typeof images.getBlock !== 'function') {
+    throw new TypeError('images service with code artifact and Block access is required');
+  }
+  const semantic = await images.getCodeArtifact(semanticRef.imageId, semanticRef.objectId);
+  if (!semantic || semantic.representation !== LAGRANGE_CODE_V0) throw new TypeError(`semanticRef must reference ${LAGRANGE_CODE_V0}`);
+  const normalizedModuleRef = canonicalizeValue(moduleRef);
+  if (!isObjectRef(normalizedModuleRef)) throw new TypeError('moduleRef must be an unpinned object ref');
+  const moduleArtifact = await images.getCodeArtifact(normalizedModuleRef.imageId, normalizedModuleRef.objectId);
+  if (!moduleArtifact || moduleArtifact.representation !== WASM_MODULE_V1) throw new TypeError(`moduleRef must reference ${WASM_MODULE_V1}`);
+  const descriptor = moduleFunctionDescriptor(moduleArtifact, requiredText(entry, 'WASM function entry'));
+  const allClosureSites = Array.isArray(moduleArtifact.metadata?.closureSites) ? moduleArtifact.metadata.closureSites : [];
+  const closureSites = descriptor.closureSiteIndices.map((siteIndex) => {
+    if (!Number.isInteger(siteIndex) || siteIndex < 0 || siteIndex >= allClosureSites.length) {
+      throw new TypeError(`WASM function closure site index out of range: ${siteIndex}`);
+    }
+    return allClosureSites[siteIndex];
+  });
+
+  const prototypes = normalizePrototypeMap(blockPrototypes);
+  const prototypeRefs = [];
+  const closurePrototypes = [];
+  for (let localIndex = 0; localIndex < closureSites.length; localIndex += 1) {
+    const site = closureSites[localIndex];
+    const ref = prototypes.get(site.blockId);
+    if (!ref) throw new TypeError(`missing WASM Block prototype for semantic block: ${site.blockId}`);
+    if (!await images.getBlock(ref.imageId, ref.objectId)) {
+      throw new TypeError(`WASM Block prototype not found: ${ref.imageId}/${ref.objectId}`);
+    }
+    prototypeRefs.push(ref);
+    closurePrototypes.push(Object.freeze({
+      blockId: site.blockId,
+      siteIndex: descriptor.closureSiteIndices[localIndex],
+      derivedFromIndex: 2 + prototypeRefs.length - 1,
+    }));
+    prototypes.delete(site.blockId);
+  }
+  if (prototypes.size > 0) throw new TypeError(`unused WASM Block prototype: ${prototypes.keys().next().value}`);
+
+  const functionArtifact = await images.putCodeArtifact(semanticRef.imageId, {
+    id: functionId,
+    languageId: semantic.languageId,
+    representation: WASM_FUNCTION_V1,
+    content: normalizedModuleRef,
+    derivedFrom: [semanticRef, normalizedModuleRef, ...prototypeRefs],
+    metadata: {
+      abi: moduleArtifact.metadata.abi,
+      entry: descriptor.entry,
+      parameters: descriptor.parameters,
+      captures: descriptor.captures,
+      closurePrototypes,
+    },
+  });
+  return Object.freeze({moduleArtifact, functionArtifact});
+}
+
 async function compileWasmFunctionArtifact({
   images,
   compilation,
@@ -313,46 +500,27 @@ async function compileWasmFunctionArtifact({
   functionId,
   blockPrototypes = {},
 } = {}) {
-  if (!images || typeof images.getCodeArtifact !== 'function' || typeof images.putCodeArtifact !== 'function' || typeof images.getBlock !== 'function') {
-    throw new TypeError('images service with code artifact and Block access is required');
-  }
   if (!compilation || typeof compilation.compileArtifact !== 'function') throw new TypeError('compilation service is required');
-  const semantic = await images.getCodeArtifact(semanticRef.imageId, semanticRef.objectId);
-  if (!semantic || semantic.representation !== LAGRANGE_CODE_V0) throw new TypeError(`semanticRef must reference ${LAGRANGE_CODE_V0}`);
-  const moduleArtifact = await compilation.compileArtifact(semanticRef, {targetRepresentation: WASM_MODULE_V1, id: moduleId});
-  const metadata = moduleArtifact.metadata ?? {};
-  const closureSites = Array.isArray(metadata.closureSites) ? metadata.closureSites : [];
-  const prototypes = normalizePrototypeMap(blockPrototypes);
-  const prototypeRefs = [];
-  const closurePrototypes = [];
-  for (const site of closureSites) {
-    const ref = prototypes.get(site.blockId);
-    if (!ref) throw new TypeError(`missing WASM Block prototype for semantic block: ${site.blockId}`);
-    if (!await images.getBlock(ref.imageId, ref.objectId)) {
-      throw new TypeError(`WASM Block prototype not found: ${ref.imageId}/${ref.objectId}`);
-    }
-    prototypeRefs.push(ref);
-    closurePrototypes.push(Object.freeze({blockId: site.blockId, derivedFromIndex: 2 + prototypeRefs.length - 1}));
-    prototypes.delete(site.blockId);
-  }
-  if (prototypes.size > 0) throw new TypeError(`unused WASM Block prototype: ${prototypes.keys().next().value}`);
-
-  const moduleRef = objectRef(moduleArtifact.imageId, moduleArtifact.id);
-  const functionArtifact = await images.putCodeArtifact(semanticRef.imageId, {
-    id: functionId,
-    languageId: semantic.languageId,
-    representation: WASM_FUNCTION_V1,
-    content: moduleRef,
-    derivedFrom: [semanticRef, moduleRef, ...prototypeRefs],
-    metadata: {
-      abi: metadata.abi,
-      entry: metadata.entry,
-      parameters: metadata.parameters,
-      captures: metadata.captures,
-      closurePrototypes,
-    },
+  const moduleArtifact = await compilation.compileArtifact(semanticRef, {
+    targetRepresentation: WASM_MODULE_V1,
+    id: moduleId,
   });
-  return Object.freeze({moduleArtifact, functionArtifact});
+  return await assembleWasmFunctionArtifact({
+    images,
+    semanticRef,
+    moduleRef: objectRef(moduleArtifact.imageId, moduleArtifact.id),
+    functionId,
+    entry: moduleArtifact.metadata.entry,
+    blockPrototypes,
+  });
 }
 
-export {compileWasmFunctionArtifact, compileWasmModule, lagrangeCodeV0ToWasmModuleCompiler};
+export {
+  WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
+  assembleWasmFunctionArtifact,
+  compileWasmFunctionArtifact,
+  compileWasmModule,
+  compileWasmModuleEntries,
+  lagrangeCodeGroupToWasmModuleCompiler,
+  lagrangeCodeV0ToWasmModuleCompiler,
+};

@@ -71,8 +71,13 @@ Success: the same graph survives process/node restarts with no language/image se
 - [x] whole-tree WASM preflight before derived installation writes
 - [x] language-neutral transient compilation groups
 - [x] compiler-declared derivation identities/cache keys
-- [x] immutable WASM module reuse across independent tree installations
-- [ ] shared physical WASM modules for several compilation-group members
+- [x] language-neutral compilation-group compiler registry/service
+- [x] shared physical WASM module containing several compilation-group members
+- [x] per-entry signature/effect metadata and separate `wasm-function/v1` identities
+- [x] immutable shared-module reuse across independent tree installations
+- [ ] module-size/budget driven splitting of one logical group
+- [ ] direct optimized calls between entries in one shared module
+- [ ] compiled WebAssembly.Module / instance cache
 - [ ] indexed derivation-key lookup in the durable backend
 - [ ] general non-tail asynchronous WASM effects/continuations
 - [ ] transient/non-materialized optimized closure representation
@@ -80,7 +85,7 @@ Success: the same graph survives process/node restarts with no language/image se
 - [ ] exception/condition substrate
 - [ ] capability-aware host/WASM FFI boundary
 
-Success: grouping and executable reuse are compiler-owned policies rather than source-language assumptions; the current WASM tree policy already shares equivalent immutable modules without merging function or Block identity.
+Success: grouping, physical module layout and executable reuse are compiler-owned policies; one logical group may now become one multi-function WASM module without merging semantic, function or Block identity.
 
 ## 5. Symmetric Smalltalk seed
 
@@ -98,6 +103,7 @@ Success: grouping and executable reuse are compiler-owned policies rather than s
 - [x] tail Smalltalk sends from WASM back into ordinary language dispatch
 - [x] returned nested Smalltalk Blocks materialized from WASM with ordinary lexical captures
 - [x] complete nested Smalltalk semantic Block trees installable as WASM without manual prototype maps
+- [x] nested Block tree functions share one physical WASM module while retaining ordinary Block identity
 - [ ] create/use a nested Block inside one WASM activation
 - [ ] assignments, temporaries, sequences and cascades
 - [ ] Object/Behavior/Class/Metaclass bootstrap and inheritance
@@ -105,7 +111,7 @@ Success: grouping and executable reuse are compiler-owned policies rather than s
 - [ ] REPL/workspace
 - [ ] bootstrap image
 
-Success for the current seed: Smalltalk is the first grouping policy consumer, not a constraint on the compilation/cache substrate.
+Success for the current seed: Smalltalk is the first group-policy consumer, not a constraint on the compilation/group/cache substrate.
 
 ## 6. Projects and collaborative history
 
