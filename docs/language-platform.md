@@ -19,6 +19,7 @@ Implemented now:
 - transient direct-call, message-send and activation-request protocol
 - representation executor registry and activation execution
 - built-in `neutral-expression/v0` interpreter
+- first executable Symmetric Smalltalk source/parser/compiler/dispatcher seed
 - record versions, history and snapshots
 
 Likely later shared concepts include activation/debug metadata, conditions, namespaces/projects, WASM calls and capability contexts.
@@ -31,11 +32,35 @@ The substrate has a compact boolean Value, but Symmetric Smalltalk may still rep
 
 ## Symmetric Smalltalk first
 
-The first language experiment remains **Symmetric Smalltalk**: Smalltalk's object/message feel with blocks pushed much further toward a universal executable/compositional form.
+The first language experiment is **Symmetric Smalltalk**: Smalltalk's object/message feel with blocks pushed much further toward a universal executable/compositional form.
 
-A useful test is whether method bodies, conditionals, loops, exception handlers, module initialization, class construction, compiler passes and debugger actions can largely reduce to ordinary objects, messages and blocks.
+A useful test remains whether method bodies, conditionals, loops, exception handlers, module initialization, class construction, compiler passes and debugger actions can largely reduce to ordinary objects, messages and blocks.
 
 Semantic regularity must not force expensive runtime allocations. A non-escaping block may compile away completely.
+
+### First executable seed
+
+The first seed now parses a deliberately small Smalltalk-shaped expression language. Unary, binary and keyword messages use ordinary Smalltalk precedence. Implemented primaries are integers, strings, names, `self`, parentheses and block syntax.
+
+The executable compilation unit is an outer Block such as:
+
+```smalltalk
+[ :target | target echo: 'hello' ]
+```
+
+Block parameters map to positional arguments. `self` maps to the separate activation receiver. Explicitly declared captures map source names to stable lexical binding IDs. Message sends lower to a language-tagged neutral `send` expression rather than being interpreted by a parallel Smalltalk VM.
+
+Nested block literals are parsed already, but runtime closure creation/capture analysis is intentionally deferred. Source, parsed syntax and executable neutral code are stored as separate CodeArtifacts linked by provenance:
+
+```text
+Smalltalk source -> Smalltalk syntax -> neutral expression -> Block
+```
+
+The first message lookup policy is also image-resident. A receiver's `behavior` points to an ordinary behavior object. That object's shape slot names act as selectors and the corresponding slot Values are Block refs. This is a bootstrap method table, not yet the final Object/Behavior/Class/Metaclass model; it proves that lookup policy can live above the generic object graph.
+
+V0 dispatch handles object-ref receivers and text selectors only. It has no inheritance or `super` yet. Immediate objects/primitives remain a language-level problem rather than compiler special cases.
+
+See ADR 0006.
 
 ## Blocks and code
 
@@ -77,7 +102,7 @@ The common execution frame has a receiver Value or null, a positional array of a
 
 Arity and parameter naming are deliberately representation-specific rather than Block fields. `ActivationExecutor` revalidates Block/code/environment relationships, chooses an executor by CodeArtifact `representation`, and requires the executor to return one canonical tagged Value.
 
-The first built-in executable representation is `neutral-expression/v0`. Its CodeArtifact content is a JSON expression program stored inside a text Value. It supports literals, positional arguments, receiver, captured bindings, integer addition, equality and `if`. This is a small executable contract used to prove the common calling convention, not a source language or final bytecode.
+The first built-in executable representation is `neutral-expression/v0`. Its CodeArtifact content is a JSON expression program stored inside a text Value. It supports literals, positional arguments, receiver, captured bindings, integer addition, equality, `if`, and language-tagged nested message sends. This is a small executable contract used to prove the common calling convention, not a source language or final bytecode.
 
 Custom code representations register executors against the same activation path, so later interpreters, neutral IR and WASM can coexist without changing dispatch.
 
@@ -103,9 +128,10 @@ The portable object/value/code-artifact format is not the executable IR. Keeping
 
 ## Next open questions
 
-- whether methods are specialized blocks or distinct semantic objects
-- concrete Smalltalk method/selector lookup
-- mutation/assignment semantics
+- runtime creation of nested Blocks and capture analysis
+- Object/Behavior/Class/Metaclass bootstrap and inheritance
+- assignment, temporaries, sequences and cascades
+- immediate-value objects/primitives without losing semantic symmetry
 - which sends may cross image/node boundaries
 - debugger activation durability
 - condition/exception propagation
