@@ -162,6 +162,15 @@ test('toolchain service resolves dependency graph and persists provider outputs 
     assert.deepEqual(Object.keys(observedContext), ['protocol']);
     assert.equal(observedContext.protocol, TOOLCHAIN_PROVIDER_PROTOCOL_V0);
 
+    const sourceSnapshot = observedRequest.artifacts[0].artifact;
+    assert.deepEqual(
+      Object.keys(sourceSnapshot).sort(),
+      ['kind', 'id', 'imageId', 'languageId', 'representation', 'content', 'dependencies', 'metadata'].sort(),
+    );
+    assert.equal(Object.hasOwn(sourceSnapshot, 'derivedFrom'), false);
+    assert.equal(Object.hasOwn(sourceSnapshot, 'updatedAt'), false);
+    assert.equal(Object.hasOwn(sourceSnapshot, '_version'), false);
+
     assert.deepEqual(result.inputs.map(({objectId}) => objectId), ['source', 'manifest', 'lock', 'library']);
     assert.deepEqual(result.diagnostics, [{severity: 'note', message: 'compiled cleanly'}]);
     assert.deepEqual(result.outputs.map(({name}) => name), ['module', 'interface']);
@@ -180,6 +189,36 @@ test('toolchain service resolves dependency graph and persists provider outputs 
     assert.equal(module.metadata.toolchainProtocol, TOOLCHAIN_PROVIDER_PROTOCOL_V0);
     assert.equal(JSON.stringify(module.metadata).includes('compiled cleanly'), false);
     assert.deepEqual(referencesOfRecord(module), [objectRef('demo', 'library'), ...provenance]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('invalid output image fails before the provider runs', async () => {
+  let calls = 0;
+  const provider = Object.freeze({
+    identity: 'image-preflight-provider/v1',
+    async run() {
+      calls += 1;
+      return {outputs: [{name: 'out', representation: 'example/output-v1', content: textValue('out')}]};
+    },
+  });
+  const runtime = await createRuntime({
+    backend: {mode: 'mock'},
+    toolchainProviders: [['preflight/default', provider]],
+  });
+  await runtime.images.createImage({id: 'demo'});
+  try {
+    const source = await putArtifact(runtime, 'source');
+    await assert.rejects(
+      runtime.toolchains.run({
+        providerId: 'preflight/default',
+        imageId: 'missing-image',
+        roots: [objectRef('demo', source.id)],
+      }),
+      /image not found/,
+    );
+    assert.equal(calls, 0);
   } finally {
     await runtime.close();
   }
@@ -218,6 +257,42 @@ test('toolchain output dependency validation happens before output writes', asyn
     );
     assert.equal((await runtime.images.listCodeArtifacts('demo')).length, before);
     assert.equal(await runtime.images.getCodeArtifact('demo', 'bad-output'), null);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('toolchain output id collisions are preflighted before any output write', async () => {
+  const provider = Object.freeze({
+    identity: 'collision-provider/v1',
+    async run() {
+      return {
+        outputs: [
+          {name: 'first', representation: 'example/output-v1', content: textValue('first')},
+          {name: 'second', representation: 'example/output-v1', content: textValue('second')},
+        ],
+      };
+    },
+  });
+  const runtime = await createRuntime({
+    backend: {mode: 'mock'},
+    toolchainProviders: [['collision/default', provider]],
+  });
+  await runtime.images.createImage({id: 'demo'});
+  try {
+    const source = await putArtifact(runtime, 'source');
+    const existing = await putArtifact(runtime, 'existing-output', {content: textValue('keep-me')});
+    await assert.rejects(
+      runtime.toolchains.run({
+        providerId: 'collision/default',
+        imageId: 'demo',
+        roots: [objectRef('demo', source.id)],
+        outputIds: {first: 'would-be-first', second: existing.id},
+      }),
+      /toolchain output already exists/,
+    );
+    assert.equal(await runtime.images.getCodeArtifact('demo', 'would-be-first'), null);
+    assert.deepEqual((await runtime.images.getCodeArtifact('demo', existing.id)).content, textValue('keep-me'));
   } finally {
     await runtime.close();
   }
