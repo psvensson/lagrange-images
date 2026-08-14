@@ -25,7 +25,7 @@ It is useful for this proof because it is a normal `.pck.st` package, uses no ex
 
 ## Package loading contract
 
-The OpenSmalltalk/Cuis provider start spec may now contain explicit package installation inputs:
+The OpenSmalltalk/Cuis provider start spec may contain explicit package installation inputs:
 
 ```js
 {
@@ -36,31 +36,56 @@ The OpenSmalltalk/Cuis provider start spec may now contain explicit package inst
 }
 ```
 
-The path is transient deployment information. The identity is the immutable package identity recorded in runtime metadata.
+Three things are deliberately separate:
 
-The provider copies every package into its private temporary runtime workspace using generated names and then the Cuis bootstrap script installs them with Cuis' own package API:
+```text
+host path       transient deployment location
+safe basename   guest-visible Cuis package filename
+identity        immutable package identity
+```
+
+The provider copies each package into its private runtime workspace while preserving its validated `.pck.st` basename, then installs it with Cuis' own package API:
 
 ```smalltalk
 CodePackageFile installPackage:
-  DirectoryEntry currentDirectory // 'package-0.pck.st'.
+  DirectoryEntry currentDirectory // 'JSON.pck.st'.
 ```
+
+Host directory paths never enter the guest script or runtime metadata. Runtime metadata records package identity plus the guest-visible safe basename.
 
 The foreign runtime service itself remains language-neutral. It does not learn about `.pck.st`, Cuis features or package installation semantics.
 
-## Why copy packages into the private workspace
+## Bootstrap ordering discovered by the real proof
 
-The running Cuis image should not receive arbitrary caller filesystem paths as part of its Smalltalk script. Host deployment paths remain outside the guest-visible protocol.
+The first attempts installed the package before compiling the fixed Lagrange bridge. The package installation itself completed, but subsequent bridge compilation did not reliably reach readiness.
 
-The provider therefore copies explicit inputs into a private workspace first:
+The working ordering is:
 
 ```text
-caller path
-  -> provider-private copy
-  -> fixed workspace filename
+pristine Cuis image
+  -> compile provider-owned bridge/control plane
+  -> instantiate bridge service
+  -> install explicit guest packages
+  -> READY
+  -> package-backed calls
+```
+
+This is also the cleaner architectural boundary: provider control-plane code is established against the known base image before guest/application packages are allowed to modify the live Smalltalk environment.
+
+Package installation is therefore application/runtime state, not part of provider implementation identity.
+
+## Why copy packages into the private workspace
+
+The running Cuis image should not receive arbitrary caller filesystem paths. The provider materializes explicit inputs first:
+
+```text
+caller host path
+  -> provider-private workspace
+  -> validated original basename
   -> Cuis package loader
 ```
 
-Runtime metadata exposes package identities, not local paths.
+The basename is preserved because the real Cuis package machinery treats package filenames as meaningful documents. The directory path is not.
 
 ## Package proof service
 
@@ -72,7 +97,7 @@ A new explicit proof endpoint is:
 json/package-proof
 ```
 
-Inside the already-running image it obtains the installed `Json` class, parses a nested JSON document, renders it, parses the rendered result again, and verifies nested dictionary/array/boolean/string content. The result crosses the foreign-runtime boundary as one canonical boolean Value.
+Inside the running image it obtains the installed `Json` class, parses a nested JSON document, renders it, parses the rendered result again, and verifies nested dictionary/array/boolean/string content. The result crosses the foreign-runtime boundary as one canonical boolean Value.
 
 This proves:
 
@@ -85,23 +110,32 @@ real pinned Cuis image
   -> canonical Lagrange Value
 ```
 
-The bridge wire itself remains integer/boolean-only for now. Rich text transport should be designed as an interface/ABI concern rather than smuggled in merely for this test.
+The bridge wire itself remains integer/boolean-only. Rich text transport should be designed as an interface/ABI concern rather than smuggled in merely for this test.
 
 ## Real CI proof
 
-The existing OpenSmalltalk integration job now additionally downloads the pinned JSON package and verifies its Git blob identity before starting the runtime.
+The OpenSmalltalk integration job downloads the pinned JSON package and verifies its Git blob identity before starting the runtime.
 
 The authoritative test then:
 
 1. starts the pinned OpenSmalltalkVM + Cuis image;
-2. supplies the JSON package as an explicit start-spec package;
-3. waits until package installation and bridge initialization complete;
-4. proves the original `proof/add` call still works;
-5. calls `json/package-proof` and requires canonical `true`;
-6. proves another normal call still works afterward;
-7. shuts the runtime down cleanly.
+2. compiles the fixed provider bridge in the pristine image;
+3. supplies and installs the JSON package as an explicit start-spec package;
+4. reaches bridge readiness;
+5. proves the original `proof/add` call still works;
+6. calls `json/package-proof` and requires canonical `true` after parse/render/reparse;
+7. proves another normal call still works afterward;
+8. shuts the runtime down cleanly.
 
-That sequence also proves package installation does not replace the existing persistent runtime/service lifecycle.
+The package is therefore not merely accepted by the loader: real upstream package code executes successfully inside the persistent managed runtime.
+
+## Bootstrap diagnostics
+
+The provider emits narrowly scoped transient `BOOT` progress markers while starting. They identify bridge compilation and package-install start/done boundaries and are consumed by the provider for startup diagnostics.
+
+They are not runtime metadata, durable state or callable application output.
+
+The markers were useful enough during this proof to keep as runtime diagnostics: they distinguished a successful package installation from a later bootstrap compiler interaction without exposing arbitrary guest stdout as an interface.
 
 ## Boundaries deliberately not generalized yet
 
@@ -122,17 +156,19 @@ Those should be driven by larger real packages rather than inferred from one fix
 ## Guardrails
 
 ```text
-package path != package identity
+package path != package basename
+package basename != package identity
 package identity != provider identity
 installed package != Lagrange image object graph
 package loading != ambient eval
 package class/object != durable ObjectRef
 runtime interface != arbitrary Smalltalk selector
+provider bridge bootstrap != guest package state
 ```
 
 ## Consequence
 
-The compatibility claim is now stronger than "a Cuis image can run": an unmodified upstream Cuis package can be installed with Cuis' own package machinery and exercised through the common foreign-runtime boundary.
+The compatibility claim is now stronger than "a Cuis image can run": an unmodified upstream Cuis package can be installed with Cuis' own package machinery and its real parser/renderer code can be exercised through the common foreign-runtime boundary.
 
 The next useful Smalltalk step can therefore move in either of two concrete directions:
 
