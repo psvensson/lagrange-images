@@ -29,6 +29,19 @@ test('code artifact content may be a graph reference', () => {
   assert.deepEqual(referencesOfRecord(artifact), [syntax]);
 });
 
+test('pre-dependency CodeArtifacts remain readable as dependency-free artifacts', () => {
+  const current = createCodeArtifactRecord({
+    id: 'legacy',
+    imageId: 'core',
+    representation: 'source',
+    content: textValue('legacy'),
+    derivedFrom: [objectRef('core', 'origin')],
+  });
+  const {dependencies, ...legacy} = current;
+  assert.deepEqual(dependencies, []);
+  assert.deepEqual(referencesOfRecord(Object.freeze(legacy)), [objectRef('core', 'origin')]);
+});
+
 test('artifact dependencies are explicit role-tagged unpinned refs', () => {
   assert.throws(() => createCodeArtifactRecord({
     id: 'self',
