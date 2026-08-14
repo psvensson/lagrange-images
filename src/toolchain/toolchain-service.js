@@ -3,6 +3,7 @@ import {normalizeDerivationKeyMaterial} from '../compilation/derivation-cache.js
 import {normalizeArtifactDependencies} from '../execution/model.js';
 import {normalizeMetadata} from '../object/model.js';
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
+import {createToolchainDerivationDescriptor} from './derivation-cache.js';
 import {ToolchainProviderRegistry, normalizeProviderId} from './provider-registry.js';
 
 const TOOLCHAIN_PROVIDER_PROTOCOL_V0 = 'lagrange-toolchain-provider/v0';
@@ -39,6 +40,20 @@ function normalizePlainData(value, label) {
 
 function refKey(ref) {
   return `${ref.imageId}\u0000${ref.objectId}`;
+}
+
+function sameRef(left, right) {
+  return left?.kind === right?.kind
+    && left?.imageId === right?.imageId
+    && left?.objectId === right?.objectId
+    && (left?.revision ?? null) === (right?.revision ?? null);
+}
+
+function sameReferenceList(left, right) {
+  return Array.isArray(left)
+    && Array.isArray(right)
+    && left.length === right.length
+    && left.every((ref, index) => sameRef(ref, right[index]));
 }
 
 function toolchainArtifactSnapshot(artifact) {
@@ -139,6 +154,81 @@ function normalizeOutputIds(outputIds) {
   return Object.freeze(normalized);
 }
 
+function completeCachedResult(artifacts, provenance) {
+  if (artifacts.length === 0) return null;
+  const count = artifacts[0].metadata?.toolchainOutputCount;
+  if (!Number.isInteger(count) || count <= 0 || artifacts.length !== count) return null;
+  const resultId = artifacts[0].metadata?.toolchainResultId;
+  if (typeof resultId !== 'string' || resultId.length === 0) return null;
+  const byIndex = new Map();
+  const names = new Set();
+
+  for (const artifact of artifacts) {
+    const metadata = artifact.metadata ?? {};
+    if (metadata.toolchainResultId !== resultId || metadata.toolchainOutputCount !== count) return null;
+    const index = metadata.toolchainOutputIndex;
+    const name = metadata.toolchainOutputName;
+    if (!Number.isInteger(index) || index < 0 || index >= count || byIndex.has(index)) return null;
+    if (typeof name !== 'string' || name.length === 0 || names.has(name)) return null;
+    if (!sameReferenceList(artifact.derivedFrom ?? [], provenance)) return null;
+    byIndex.set(index, Object.freeze({name, artifact}));
+    names.add(name);
+  }
+
+  if (byIndex.size !== count) return null;
+  return Object.freeze({
+    resultId,
+    outputs: Object.freeze([...byIndex.entries()].sort(([left], [right]) => left - right).map(([, output]) => output)),
+  });
+}
+
+function requestedOutputIdsMatch(candidate, requestedOutputIds) {
+  const byName = new Map(candidate.outputs.map((output) => [output.name, output.artifact.id]));
+  for (const [name, requestedId] of Object.entries(requestedOutputIds)) {
+    if (!byName.has(name)) return Object.freeze({matches: false, unknownName: name});
+    if (byName.get(name) !== requestedId) return Object.freeze({matches: false, unknownName: null});
+  }
+  return Object.freeze({matches: true, unknownName: null});
+}
+
+async function findReusableToolchainResult({
+  images,
+  imageId,
+  providerId,
+  toolchainIdentity,
+  derivationKey,
+  provenance,
+  requestedOutputIds,
+}) {
+  if (typeof images.listCodeArtifacts !== 'function') {
+    throw new TypeError('toolchain result reuse requires images.listCodeArtifacts');
+  }
+  const artifacts = await images.listCodeArtifacts(imageId);
+  const groups = new Map();
+  for (const artifact of artifacts) {
+    const metadata = artifact.metadata ?? {};
+    if (metadata.toolchainProviderId !== providerId
+      || metadata.toolchainIdentity !== toolchainIdentity
+      || metadata.toolchainProtocol !== TOOLCHAIN_PROVIDER_PROTOCOL_V0
+      || metadata.toolchainDerivationKey !== derivationKey
+      || typeof metadata.toolchainResultId !== 'string') continue;
+    const group = groups.get(metadata.toolchainResultId) ?? [];
+    group.push(artifact);
+    groups.set(metadata.toolchainResultId, group);
+  }
+
+  let unknownName = null;
+  for (const resultId of [...groups.keys()].sort()) {
+    const candidate = completeCachedResult(groups.get(resultId), provenance);
+    if (!candidate) continue;
+    const match = requestedOutputIdsMatch(candidate, requestedOutputIds);
+    if (match.matches) return candidate;
+    if (match.unknownName !== null) unknownName = match.unknownName;
+  }
+  if (unknownName !== null) throw new TypeError(`toolchain outputIds names unknown output: ${unknownName}`);
+  return null;
+}
+
 class ToolchainService {
   constructor({images, providers = new ToolchainProviderRegistry()} = {}) {
     this.images = assertImages(images);
@@ -155,7 +245,9 @@ class ToolchainService {
     target = {},
     options = {},
     outputIds = {},
+    reuse = true,
   } = {}) {
+    if (typeof reuse !== 'boolean') throw new TypeError('toolchain reuse must be a boolean');
     const id = normalizeProviderId(providerId);
     const outputImageId = requiredText(imageId, 'toolchain output imageId');
     const provider = this.providers.get(id);
@@ -175,8 +267,34 @@ class ToolchainService {
       options: normalizedOptions,
     });
     const context = Object.freeze({protocol: TOOLCHAIN_PROVIDER_PROTOCOL_V0});
-    const result = normalizeProviderResult(await provider.run(request, context));
+    const descriptor = await createToolchainDerivationDescriptor(provider, request, context);
+    const provenance = graph.artifacts.map(({ref}) => objectRef(ref.imageId, ref.objectId));
 
+    if (reuse && descriptor) {
+      const reusable = await findReusableToolchainResult({
+        images: this.images,
+        imageId: outputImageId,
+        providerId: id,
+        toolchainIdentity: descriptor.toolchainIdentity,
+        derivationKey: descriptor.derivationKey,
+        provenance,
+        requestedOutputIds,
+      });
+      if (reusable) {
+        return Object.freeze({
+          providerId: id,
+          toolchainIdentity: provider.identity,
+          roots: Object.freeze(graph.roots.map(({ref}) => ref)),
+          inputs: Object.freeze(graph.artifacts.map(({ref}) => ref)),
+          outputs: reusable.outputs,
+          diagnostics: Object.freeze([]),
+          reused: true,
+          derivationKey: descriptor.derivationKey,
+        });
+      }
+    }
+
+    const result = normalizeProviderResult(await provider.run(request, context));
     const outputNames = new Set(result.outputs.map(({name}) => name));
     for (const name of Object.keys(requestedOutputIds)) {
       if (!outputNames.has(name)) throw new TypeError(`toolchain outputIds names unknown output: ${name}`);
@@ -204,9 +322,16 @@ class ToolchainService {
       }
     }
 
-    const provenance = graph.artifacts.map(({ref}) => objectRef(ref.imageId, ref.objectId));
+    const resultId = descriptor ? randomUUID() : null;
     const storedOutputs = [];
-    for (const output of result.outputs) {
+    for (const [index, output] of result.outputs.entries()) {
+      const cacheMetadata = descriptor ? {
+        toolchainDerivationKey: descriptor.derivationKey,
+        toolchainResultId: resultId,
+        toolchainOutputName: output.name,
+        toolchainOutputIndex: index,
+        toolchainOutputCount: result.outputs.length,
+      } : {};
       const artifact = await this.images.putCodeArtifact(outputImageId, {
         id: resolvedIds.get(output.name),
         languageId: output.languageId,
@@ -216,6 +341,7 @@ class ToolchainService {
         derivedFrom: provenance,
         metadata: {
           ...output.metadata,
+          ...cacheMetadata,
           toolchainProviderId: id,
           toolchainIdentity: provider.identity,
           toolchainProtocol: TOOLCHAIN_PROVIDER_PROTOCOL_V0,
@@ -231,6 +357,8 @@ class ToolchainService {
       inputs: Object.freeze(graph.artifacts.map(({ref}) => ref)),
       outputs: Object.freeze(storedOutputs),
       diagnostics: result.diagnostics,
+      reused: false,
+      derivationKey: descriptor?.derivationKey ?? null,
     });
   }
 }
@@ -238,6 +366,8 @@ class ToolchainService {
 export {
   TOOLCHAIN_PROVIDER_PROTOCOL_V0,
   ToolchainService,
+  completeCachedResult,
+  findReusableToolchainResult,
   normalizeProviderResult,
   resolveArtifactGraph,
   toolchainArtifactSnapshot,
