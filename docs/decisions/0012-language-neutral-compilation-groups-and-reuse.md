@@ -73,11 +73,14 @@ key version
 compiler identity
 target representation
 compiler-provided deterministic material
+normalized caller artifact metadata
 ```
 
-with SHA-256. The resulting `derivationKey` and `compilerIdentity` are stored as non-reference artifact metadata.
+with SHA-256. Caller metadata is included because it is part of the observable CodeArtifact even when it does not change executable bytes; a request for different annotations must not silently receive an older cached artifact lacking them.
 
-The compiler owns the cache-key meaning. The platform does not assume that source IDs, filenames, Blocks, classes, packages or any other language concept determine equivalence.
+The resulting `derivationKey` and `compilerIdentity` are stored as non-reference artifact metadata.
+
+The compiler owns executable cache-key meaning. The platform does not assume that source IDs, filenames, Blocks, classes, packages or any other language concept determine equivalence.
 
 ## Built-in WASM cache contract
 
@@ -114,7 +117,7 @@ The shared module retains the provenance of the semantic artifact from which tha
 
 `CompilationService.compileArtifact()` now reuses by default **only for compilers that opted into the cache contract**.
 
-A caller may request `reuse: false` to force a new immutable artifact. A forced duplicate receives the same derivation key because it represents the same declared derivation.
+A caller may request `reuse: false` to force a new immutable artifact. A forced duplicate receives the same derivation key because it represents the same declared derivation and caller metadata.
 
 When reuse succeeds, a caller-supplied artifact ID is ignored and the existing immutable artifact is returned.
 
