@@ -1,6 +1,8 @@
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 
+const MAX_ACTIVATION_DEPTH = 256;
+
 function normalizeObjectRef(value, label) {
   const normalized = canonicalizeValue(value);
   if (!isObjectRef(normalized)) throw new TypeError(`${label} must be an unpinned object ref`);
@@ -33,13 +35,22 @@ function assertImages(images) {
   return images;
 }
 
+function assertInvocations(invocations) {
+  if (invocations === null) return null;
+  if (!invocations || typeof invocations.sendMessage !== 'function') {
+    throw new TypeError('invocations must implement sendMessage or be null');
+  }
+  return invocations;
+}
+
 class ActivationExecutor {
-  constructor({images, executors = new CodeExecutorRegistry()} = {}) {
+  constructor({images, executors = new CodeExecutorRegistry(), invocations = null} = {}) {
     this.images = assertImages(images);
     if (!executors || typeof executors.get !== 'function') {
       throw new TypeError('executors must be a CodeExecutorRegistry-compatible object');
     }
     this.executors = executors;
+    this.invocations = assertInvocations(invocations);
   }
 
   async lookupBinding(environmentRef, bindingId) {
@@ -66,7 +77,9 @@ class ActivationExecutor {
     throw new TypeError(`lexical binding not found: ${bindingId}`);
   }
 
-  async execute(activation) {
+  async execute(activation, {depth = 0} = {}) {
+    if (!Number.isInteger(depth) || depth < 0) throw new TypeError('activation depth must be a non-negative integer');
+    if (depth > MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
     assertActivationRequest(activation);
 
     const block = await this.images.getBlock(activation.block.imageId, activation.block.objectId);
@@ -88,10 +101,20 @@ class ActivationExecutor {
           if (!activation.environment) throw new TypeError(`lexical binding not found: ${bindingId}`);
           return await this.lookupBinding(activation.environment, bindingId);
         },
+        sendMessage: async (request) => {
+          if (!this.invocations) throw new TypeError('activation executor has no message runtime');
+          if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
+          const nested = await this.invocations.sendMessage(request);
+          return await this.execute(nested, {depth: depth + 1});
+        },
       },
     );
     return canonicalizeValue(result);
   }
 }
 
-export {ActivationExecutor, assertActivationRequest};
+export {
+  ActivationExecutor,
+  MAX_ACTIVATION_DEPTH,
+  assertActivationRequest,
+};
