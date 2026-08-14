@@ -4,7 +4,7 @@
 
 The platform should not be one VM per language. It provides a small shared substrate for durable values, refs, objects, code artifacts, compilation, execution, debugging and capabilities. A language personality maps its own semantics onto that substrate.
 
-Implemented now includes the language-neutral graph/Block model, compiler and executor registries, `lagrange-code/v0`, `neutral-expression/v0`, the first Symmetric Smalltalk seed, and a real WASM backend with Value-handle ABI, tail message effects and tail closure materialization.
+Implemented now includes the language-neutral graph/Block model, compiler and executor registries, `lagrange-code/v0`, `neutral-expression/v0`, the first Symmetric Smalltalk seed, and a real WASM backend with Value-handle ABI, tail message/closure effects and automatic recursive Block-tree installation.
 
 ## Symmetric Smalltalk first
 
@@ -110,13 +110,42 @@ At execution, capture Values cross as handles. Once WASM returns, the ordinary c
 
 The prototype may itself be interpreter-backed or WASM-backed. A materialized closure therefore has no WASM-specific invocation semantics: later `value*` sends go through the ordinary Smalltalk dispatcher and common ActivationExecutor.
 
-For example, this can now execute with a WASM-backed outer Block:
+### Automatic complete Block trees
 
-```smalltalk
-[ :x | [ :y | x ] ]
+`installWasmBlockTree()` is now the normal high-level path when a whole semantic Block tree should use WASM. It starts from one root `lagrange-code/v0` artifact and recursively installs every nested semantic Block bottom-up:
+
+```text
+root semantic artifact
+  -> nested semantic artifacts
+  -> nested WASM functions
+  -> nested prototype Blocks
+  -> parent WASM functions with explicit prototype edges
+  -> root WASM-backed Block
 ```
 
-The returned closure may then receive `value:` normally.
+Callers no longer need to discover nested Blocks or construct `blockPrototypes` maps themselves. The lower-level `compileWasmFunctionArtifact()` remains available for mixed interpreter/WASM prototype experiments and custom assembly.
+
+Before writing derived tree artifacts, the installer recursively preflights every semantic node with the current WASM compiler. If a deep descendant contains an unsupported non-tail effect, installation fails before leaving a partially built executable tree.
+
+Nested semantic programs are persisted as derived `lagrange-code/v0` artifacts linked to their immediate semantic parent. All automatically created prototype Blocks are WASM-backed, while runtime materialized closures are still ordinary Blocks with ordinary lexical environments.
+
+A three-level tree therefore stays uniform:
+
+```text
+root WASM Block
+  -> child WASM prototype
+       -> grandchild WASM prototype
+```
+
+with `value*` sends and capture lookup unchanged.
+
+For example, the semantic tree corresponding to:
+
+```smalltalk
+[ :x | [ :y | [ :z | x ] ] ]
+```
+
+can now be installed from its single root semantic artifact and executed through three WASM-backed Block definitions without manual prototype wiring.
 
 This remains unsupported inside one WASM activation:
 
@@ -128,7 +157,7 @@ because closure materialization is needed before the final send. Lifting that re
 
 The interpreter remains the reference implementation. Differential/conformance tests require the same capture IDs, Block semantics and canonical results across execution representations.
 
-See ADR 0007, ADR 0008, ADR 0009 and ADR 0010.
+See ADR 0007, ADR 0008, ADR 0009, ADR 0010 and ADR 0011.
 
 ## Blocks and closures
 
@@ -160,12 +189,12 @@ Common Lisp can reuse durable data/code identity, lexical environments, conditio
 
 - general non-tail asynchronous WASM effects/continuations
 - transient/non-materialized optimized closures and possible WASM-GC use
-- automatic WASM installation of complete nested Block trees
+- shared-module/grouped compilation across several semantic Blocks
+- incremental reuse/deduplication of derived WASM tree nodes
 - Object/Behavior/Class/Metaclass bootstrap and inheritance
 - assignment, temporaries, sequences and mutable lexical cells
 - immediate-value Smalltalk objects/primitives
 - capability-aware host imports and distributed/local send policy
-- module grouping and compilation/cache policy
 - optimized/unboxed ABI variants
 - distributed placement of WASM execution through Lagrange
 - debugger activation durability and conditions/exceptions
