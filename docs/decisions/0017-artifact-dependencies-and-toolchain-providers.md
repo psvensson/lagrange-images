@@ -1,6 +1,6 @@
 # ADR 0017: artifact dependencies and toolchain providers
 
-Status: accepted for the first external-toolchain substrate.
+Status: accepted for the external-toolchain substrate.
 
 ## Problem
 
@@ -9,11 +9,11 @@ ADR 0016 established that the durable programming model is an artifact/dependenc
 1. an explicit dependency edge that is not confused with derivation/provenance
 2. a language-neutral way to invoke a toolchain without assuming that the compiler runs in-process
 
-Those are prerequisites for later Cargo/rustc, Java/JAR, OCI build and component-library work.
+Those are prerequisites for Cargo/rustc, Java/JAR, OCI build and component-library work.
 
 ## Decision
 
-Extend the current immutable `CodeArtifact` record as the bootstrap generic artifact carrier with explicit dependencies:
+Extend immutable `CodeArtifact` as the bootstrap generic artifact carrier with explicit dependencies:
 
 ```text
 CodeArtifact
@@ -37,7 +37,7 @@ artifact roots
   -> derived output CodeArtifacts + transient diagnostics
 ```
 
-This is deliberately smaller than a universal Artifact hierarchy. `CodeArtifact` remains the carrier until real Rust/Java/component imports prove that a broader durable record is needed.
+This is deliberately smaller than a universal Artifact hierarchy. `CodeArtifact` remains the carrier until real integrations prove a broader durable record is needed.
 
 ## Dependency is not provenance
 
@@ -58,7 +58,7 @@ A dependency says an artifact relates to another artifact for a role such as lib
 
 Do not encode dependency refs in metadata and do not use `derivedFrom` as a package/library dependency list.
 
-In-process `CodeCompilerRegistry` / `CompilationGroupCompilerRegistry` results may also explicitly declare output dependencies. Those dependencies are never copied implicitly from source inputs; linkage remains compiler policy.
+In-process compiler results may also explicitly declare output dependencies. Those dependencies are never copied implicitly from source inputs; linkage remains compiler policy.
 
 ## Dependency record
 
@@ -141,7 +141,7 @@ target
 options
 ```
 
-The artifact snapshot intentionally contains the build-relevant durable artifact view:
+The artifact snapshot contains the build-relevant durable artifact view:
 
 ```text
 kind
@@ -154,13 +154,11 @@ dependencies
 metadata
 ```
 
-It omits backend/concurrency/time bookkeeping such as `_version` and `updatedAt`, and it omits `derivedFrom` provenance history. Provenance is not an implicit build input.
+It omits backend/concurrency/time bookkeeping and `derivedFrom` provenance history. Provenance is not an implicit build input.
 
-The generic context currently contains only the protocol ID.
+The generic context currently contains only the protocol ID and deliberately does **not** contain `ImageService` or another ambient artifact reader.
 
-It deliberately does **not** contain `ImageService` or another ambient artifact reader. A provider should not quietly fetch undeclared build inputs outside the graph it was given. Later providers may receive narrowly scoped services when a concrete need exists, but hidden dependency access should remain exceptional.
-
-`target` and `options` are transient plain deterministic data under the same type restrictions used by derivation-key material.
+`target` and `options` are transient deterministic plain data.
 
 ## Provider result
 
@@ -178,15 +176,13 @@ outputs[]
 diagnostics[]
 ```
 
-Output names are invocation-local names used to assign requested or generated durable IDs.
-
-Diagnostics are transient. They are returned to the caller but are not silently embedded in output metadata.
+Diagnostics are transient.
 
 The provider cannot set output `derivedFrom` directly. `ToolchainService` owns provenance and writes every resolved input artifact as an explicit `derivedFrom` edge on every output.
 
-Provider-declared output dependencies remain separate dependency edges. For example a compiled module may derive from a source graph while retaining a runtime dependency on an imported component.
+Provider-declared output dependencies remain separate dependency edges.
 
-The service stamps non-reference output metadata with:
+The service stamps output metadata with:
 
 ```text
 toolchainProviderId
@@ -196,60 +192,56 @@ toolchainProtocol
 
 ## Multi-output behavior
 
-One toolchain invocation may produce several independent artifacts, for example:
+One invocation may produce several independent artifacts, for example module, interface and debug artifacts.
 
-```text
-module
-interface description
-debug artifact
-```
-
-Before the first output write, the bootstrap service validates:
+Before the first output write the service validates:
 
 - provider result/output shapes
 - provider-declared dependency targets
 - unique output names and IDs
 - requested output names
-- that every resolved output ID is currently unused
+- that every resolved output ID is unused
 
-This avoids ordinary validation/ID-collision partial installs.
-
-Output-to-output dependency references are not supported in v0 because sibling outputs do not exist yet during preflight. A later transactional/multi-output artifact protocol can add named sibling edges if real toolchains require them.
-
-The backend persistence path is still not a transaction spanning all outputs. A backend/runtime failure during persistence could therefore leave a partial invocation. Whole-invocation atomicity remains future work.
+Output-to-output dependency refs are not supported in v0. Persistence is also not yet transactional across all outputs; a backend failure during persistence could leave a partial invocation.
 
 ## Artifact graph resolution
 
-Artifact graph traversal follows only explicit `dependencies` edges, not arbitrary metadata or `derivedFrom` edges.
+Traversal follows only explicit `dependencies` edges, not metadata or `derivedFrom` edges.
 
 This is intentional:
 
-- dependencies describe the inputs the toolchain is allowed to see as the dependency graph
-- provenance describes history and should not automatically become a new build input
+- dependencies describe toolchain inputs
+- provenance describes history and should not automatically become a build input
 
-Shared transitive dependencies are deduplicated.
+Shared transitive dependencies are deduplicated and cycles are rejected.
 
-A dependency cycle is rejected by the resolver. Normal immutable artifact creation already makes such cycles difficult to construct through the public API, but the resolver still defends against corrupted/imported graph data.
+## First real mechanism proof
 
-## No external process yet
+This ADR originally proved the protocol with an in-process provider and deliberately left execution mechanism open.
 
-This ADR implements the generic contract and proves it with an in-process provider.
+ADR 0018 now validates that separation with a real OCI-backed Cargo/rustc provider:
 
-It does **not** yet implement:
+```text
+explicit Rust artifact graph
+  -> unchanged ToolchainService
+  -> Cargo/rustc provider
+  -> digest-pinned OCI runner
+  -> wasm-binary/v1
+```
 
-- OCI build execution
-- native-process execution
-- remote build services
-- Cargo/rustc integration
-- Java/JAR compilation integration
+No Rust, Cargo, path-materialization or OCI semantics were added to the generic service.
+
+Still not implemented by this ADR/protocol layer:
+
+- native-process provider
+- remote build provider
 - toolchain derivation-key caching
 - callable/interface semantics
-
-Those remain separate follow-up work. The next intended proof is an OCI-backed Cargo/rustc provider using this same contract rather than changing the generic image model.
+- transactional sibling-output graphs
 
 ## Reuse/cache consequence
 
-Unlike `CompilationService`, `ToolchainService` does not yet reuse outputs by a derivation key.
+Unlike `CompilationService`, `ToolchainService` does not yet reuse outputs by derivation key.
 
 A later cache contract should fingerprint at least:
 
@@ -259,18 +251,16 @@ provider execution identity/digest where relevant
 target
 options
 resolved input artifact representation/content/dependency/metadata fingerprints
-manifest/lock inputs
+manifest/lock/config inputs
 ```
 
 Backend versions, timestamps and derivation history should not become cache inputs merely because they are storage/provenance fields.
-
-Adding cache reuse must not weaken the explicit input/provenance model introduced here.
 
 ## Multilingual consequence
 
 Nothing in this contract knows what a Java JAR, Rust crate, Lisp system or Smalltalk package means.
 
-A future provider can consume those representations according to its own ecosystem while the platform keeps the same generic invariants:
+Providers consume those representations according to ecosystem-specific rules while the platform keeps generic invariants:
 
 ```text
 artifact dependency != provenance
@@ -281,8 +271,8 @@ diagnostics != durable artifact state
 
 ## Guardrail
 
-The first external-toolchain substrate should stay small:
+The provider substrate stays small:
 
 > explicit artifact graph in, explicit derived artifacts out.
 
-Do not broaden it into a filesystem/process/package-manager abstraction before the first real Cargo/rustc provider demonstrates which additional seams are actually necessary.
+ADR 0018 shows that a real Cargo/rustc/OCI integration can fit this seam without broadening `ToolchainService` into a filesystem/process/package-manager abstraction.
