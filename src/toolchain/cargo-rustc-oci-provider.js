@@ -15,6 +15,7 @@ const WASM_BINARY_V1 = 'wasm-binary/v1';
 const CARGO_RUSTC_OCI_PROVIDER_ID = 'rust/cargo-oci';
 const CARGO_RUSTC_OCI_PROVIDER_V0 = 'cargo-rustc-oci/v0';
 const CARGO_RUSTC_OCI_PROVIDER_V1 = 'cargo-rustc-oci/v1';
+const CARGO_VENDOR_CONFIG_V1 = '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n';
 const WASM_HEADER = Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
 const SHA256 = /^[0-9a-f]{64}$/;
 
@@ -208,6 +209,12 @@ function validateCargoGraph(request) {
   if (vendorFiles.length > 0 && configs.length !== 1) {
     throw new TypeError('Cargo Rust vendored dependencies require exactly one Cargo config artifact');
   }
+  if (configs.length === 1 && vendorFiles.length === 0) {
+    throw new TypeError('Cargo Rust config artifact is only supported with explicit vendored dependencies');
+  }
+  if (configs.length === 1 && textContent(configs[0].artifact, 'Cargo config') !== CARGO_VENDOR_CONFIG_V1) {
+    throw new TypeError('Cargo Rust config must be the canonical crates.io vendor source replacement');
+  }
 
   const supported = new Set([
     RUST_CARGO_MANIFEST_V1,
@@ -246,7 +253,7 @@ async function materializeCargoProject(request, workspace) {
   await writeProjectFile(workspace, 'Cargo.lock', Buffer.from(textContent(graph.lock, 'Cargo.lock'), 'utf8'));
   if (graph.config !== null) {
     paths.add('.cargo/config.toml');
-    await writeProjectFile(workspace, '.cargo/config.toml', Buffer.from(textContent(graph.config, 'Cargo config'), 'utf8'));
+    await writeProjectFile(workspace, '.cargo/config.toml', Buffer.from(CARGO_VENDOR_CONFIG_V1, 'utf8'));
   }
   for (const source of graph.sources) {
     const path = normalizeRustSourcePath(source.metadata?.path, `Rust source ${source.id} metadata.path`);
@@ -379,6 +386,7 @@ export {
   CARGO_RUSTC_OCI_PROVIDER_ID,
   CARGO_RUSTC_OCI_PROVIDER_V0,
   CARGO_RUSTC_OCI_PROVIDER_V1,
+  CARGO_VENDOR_CONFIG_V1,
   CargoRustcOciBuildError,
   RUST_CARGO_CONFIG_V1,
   RUST_CARGO_LOCK_V1,
