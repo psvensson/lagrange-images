@@ -19,3 +19,52 @@ jobs:
       - run: npm install --ignore-scripts
       - run: npm test
       - run: npm run demo
+
+  opensmalltalk-cuis-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts
+      - name: Download pinned OpenSmalltalkVM and Cuis image
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .integration/opensmalltalk-vm .integration/cuis
+
+          curl --fail --location --retry 3 \
+            --output .integration/opensmalltalk-vm/vm.tar.gz \
+            https://github.com/OpenSmalltalk/opensmalltalk-vm/releases/download/202606270913/squeak.cog.spur_linux64x64.tar.gz
+          echo 'dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba  .integration/opensmalltalk-vm/vm.tar.gz' | sha256sum --check --strict
+          tar -xzf .integration/opensmalltalk-vm/vm.tar.gz -C .integration/opensmalltalk-vm
+
+          curl --fail --location --retry 3 \
+            --output .integration/cuis/Cuis7.9-8090.image \
+            https://raw.githubusercontent.com/Cuis-Smalltalk/Cuis-Smalltalk-Dev/6bcee3f38ce037c9714b997ccd3b5b3ff62965c8/CuisImage/Cuis7.9-8090.image
+          test "$(git hash-object .integration/cuis/Cuis7.9-8090.image)" = '523dc5e74b5b550922b56ff2406415c19700ee8e'
+
+          # Give the running image its matching changes file. The commit URL pins
+          # its contents even though only the executable image identity is part
+          # of the first runtime-provider contract.
+          curl --fail --location --retry 3 \
+            --output .integration/cuis/Cuis7.9-8090.changes \
+            https://raw.githubusercontent.com/Cuis-Smalltalk/Cuis-Smalltalk-Dev/6bcee3f38ce037c9714b997ccd3b5b3ff62965c8/CuisImage/Cuis7.9-8090.changes
+
+          VM_PATH="$(find .integration/opensmalltalk-vm -type f -name squeak -perm -111 -print -quit)"
+          if [ -z "$VM_PATH" ]; then
+            echo 'Could not find executable squeak in pinned OpenSmalltalkVM archive' >&2
+            find .integration/opensmalltalk-vm -maxdepth 4 -type f -print >&2
+            exit 1
+          fi
+          printf '%s\n' "$VM_PATH" > .integration/opensmalltalk-vm/path
+      - name: Run real OpenSmalltalkVM + Cuis proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LAGRANGE_OPENSMALLTALK_INTEGRATION=1
+          export LAGRANGE_OPENSMALLTALK_VM_PATH="$(cat .integration/opensmalltalk-vm/path)"
+          export LAGRANGE_CUIS_IMAGE_PATH="$PWD/.integration/cuis/Cuis7.9-8090.image"
+          node --test test/opensmalltalk-cuis-real.test.js
