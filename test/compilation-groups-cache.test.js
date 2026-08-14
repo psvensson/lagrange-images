@@ -61,13 +61,24 @@ test('cacheable compilers reuse immutable derived artifacts by declared identity
   assert.equal(compileCount, 2);
   assert.notEqual(changed.id, first.id);
 
+  const annotated = await runtime.compilation.compileArtifact(objectRef('demo', source.id), {
+    id: 'annotated',
+    targetRepresentation: 'test-target/v0',
+    options: {mode: 'fast'},
+    metadata: {purpose: 'debug'},
+  });
+  assert.equal(compileCount, 3);
+  assert.equal(annotated.id, 'annotated');
+  assert.equal(annotated.metadata.purpose, 'debug');
+  assert.notEqual(annotated.metadata.derivationKey, first.metadata.derivationKey);
+
   const forced = await runtime.compilation.compileArtifact(objectRef('demo', source.id), {
     id: 'forced',
     targetRepresentation: 'test-target/v0',
     options: {mode: 'fast'},
     reuse: false,
   });
-  assert.equal(compileCount, 3);
+  assert.equal(compileCount, 4);
   assert.equal(forced.id, 'forced');
   assert.equal(forced.metadata.derivationKey, first.metadata.derivationKey);
   await runtime.close();
