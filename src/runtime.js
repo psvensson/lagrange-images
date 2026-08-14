@@ -12,6 +12,7 @@ import {
   createDefaultLanguagePlatform,
   createSymmetricSmalltalkDispatcher,
 } from './language/index.js';
+import {ToolchainProviderRegistry, ToolchainService} from './toolchain/index.js';
 
 async function createRuntime(options = {}) {
   const backend = await createBackend(options.backend ?? {});
@@ -34,6 +35,15 @@ async function createRuntime(options = {}) {
     groupCompilers.register(entry[0], entry[1], entry[2]);
   }
   const compilation = new CompilationService({images, compilers: codeCompilers, groupCompilers});
+
+  const toolchainProviders = new ToolchainProviderRegistry();
+  for (const entry of options.toolchainProviders ?? []) {
+    if (!Array.isArray(entry) || entry.length !== 2) {
+      throw new TypeError('toolchainProviders entries must be [providerId, provider]');
+    }
+    toolchainProviders.register(entry[0], entry[1]);
+  }
+  const toolchains = new ToolchainService({images, providers: toolchainProviders});
 
   const dispatchers = new DispatchRegistry();
   for (const [languageId, dispatcher] of Object.entries(options.dispatchers ?? {})) {
@@ -60,6 +70,8 @@ async function createRuntime(options = {}) {
     codeCompilers,
     groupCompilers,
     compilation,
+    toolchainProviders,
+    toolchains,
     dispatchers,
     invocations,
     codeExecutors,
@@ -77,6 +89,7 @@ export * from './execution/executor.js';
 export * from './execution/model.js';
 export * from './language/index.js';
 export * from './object/index.js';
+export * from './toolchain/index.js';
 export * from './value/index.js';
 export * from './wasm/index.js';
 export {createRuntime};
