@@ -37,10 +37,10 @@ Symmetric Smalltalk is here because the language itself is being designed in thi
 ### Existing compiler -> image execution
 
 ```text
-Rust / Java / Lisp / ...
+Rust / Java / Lisp / Smalltalk / ...
   -> existing compiler/toolchain
-  -> WASM/component/other artifact
-  -> explicit image callable interface
+  -> WASM/component/bytecode/image/other artifact
+  -> explicit image callable interface or native install
 ```
 
 This is the preferred route when an established compiler ecosystem already exists.
@@ -50,7 +50,7 @@ This is the preferred route when an established compiler ecosystem already exist
 ```text
 image callable/interface
   -> adapter
-  -> live JVM/native/Python/etc. runtime
+  -> live JVM/OpenSmalltalkVM/native/etc. runtime
 ```
 
 This maximizes compatibility but gives weaker automatic image integration. Foreign heap objects do not automatically become durable image objects.
@@ -64,7 +64,7 @@ Source is one artifact kind rather than the boundary of the platform.
 ```text
 source ------------------+
 semantic IR -------------+
-bytecode / JAR ----------+
+bytecode / JAR / image --+
 manifest / lock ---------+
 vendored package --------+--> compiler/toolchain --> derived artifact
 WASM/component ----------+
@@ -72,7 +72,7 @@ WASM/component ----------+
 
 The generic carrier today is `CodeArtifact` with explicit `dependencies` and separate `derivedFrom` provenance.
 
-Binary-only dependencies remain binary if that is what we possess. A JAR need not be decompiled. A WASM component need not become source.
+Binary-only dependencies remain binary if that is what we possess. A JAR need not be decompiled. A WASM component need not become source. A compatible Smalltalk runtime image may legitimately remain an image artifact.
 
 ## 4. Blocks and callables
 
@@ -96,7 +96,35 @@ free/static function      -> receiver = null
 
 The current foreign scalar-WASM ABI uses only the last form.
 
-## 5. Symmetric Smalltalk
+## 5. Smalltalk has two complementary paths
+
+The long-term Smalltalk model is deliberately not one implementation:
+
+```text
+                         Smalltalk
+                            |
+              +-------------+-------------+
+              |                           |
+              v                           v
+      Symmetric Smalltalk          Cuis/Squeak compatibility
+      image-native model                  |
+              |                           v
+              |                    OpenSmalltalkVM
+              |                           |
+              +-------------+-------------+
+                            |
+                            v
+                  shared image/project
+                     infrastructure
+```
+
+The native path explores what Smalltalk looks like when Blocks, persistent identity, artifacts and Lagrange execution are designed together.
+
+The compatibility path should reuse a real mature Smalltalk runtime/compiler rather than first reproducing all of Cuis/OpenSmalltalkVM semantics inside Lagrange Images.
+
+These paths can share projects, source/package artifacts, interfaces, tools, history and eventually migration support without sharing one physical heap or VM.
+
+## 6. Symmetric Smalltalk
 
 Current path:
 
@@ -113,9 +141,88 @@ Smalltalk owns parser, lexical capture and message lookup semantics. The common 
 
 Nested Blocks capture stable lexical binding IDs. `self` crossing a Block boundary is a lexical capture.
 
-Future Cuis compatibility should be a personality/library/import layer above this substrate rather than a reason to freeze the core into Cuis semantics.
+This remains the image-native language experiment. It does not need to become byte-for-byte compatible with OpenSmalltalkVM in order for the platform to support existing Smalltalk code.
 
-## 6. Rust
+## 7. OpenSmalltalkVM compatibility direction
+
+OpenSmalltalkVM should first be integrated through the same external-toolchain/foreign-runtime boundaries being developed for other mature ecosystems.
+
+### Compatibility runtime
+
+```text
+image project/interface
+  -> Smalltalk runtime adapter
+  -> OpenSmalltalkVM
+  -> Cuis/Squeak-style runtime image
+```
+
+This is the quickest route to real packages, primitives, compiler behavior and existing image semantics.
+
+The runtime may initially be a live OCI-managed foreign runtime. Its heap stays foreign runtime state:
+
+```text
+Spur object memory != Lagrange image graph
+Spur oop != durable ObjectRef
+```
+
+If arbitrary runtime objects later need stable cross-boundary identity, use explicit foreign-object handles resolved through the runtime adapter. Prefer explicitly exported Smalltalk services/interfaces before making every object remotely addressable.
+
+### Existing Smalltalk toolchain
+
+The same environment can be used as a real compiler/toolchain:
+
+```text
+Cuis source/package artifacts
+  -> OpenSmalltalkVM + compiler image
+  -> real Smalltalk compiler/tooling
+  -> runnable image and/or structured compiled artifacts
+```
+
+This is analogous to using Cargo/rustc instead of writing a Rust compiler. Lagrange Images should orchestrate the compiler and preserve inputs/outputs/provenance rather than reimplement it as a prerequisite for compatibility.
+
+### Migration/bootstrap engine
+
+The real Smalltalk environment can later export structured semantic information:
+
+```text
+classes
+methods / selectors
+compiled methods / bytecodes
+literals
+package/source relationships
+inheritance/runtime metadata
+```
+
+That gives a gradual migration path:
+
+```text
+foreign Cuis runtime
+  -> foreign Cuis + native Lagrange services
+  -> image-visible Cuis classes/methods/packages
+  -> selected native compilation
+  -> deeper native compatibility where useful
+```
+
+Compatibility does not imply mandatory migration. Code may remain on OpenSmalltalkVM indefinitely when that is the best engineering choice.
+
+### Longer-term WASM-hosted runtime
+
+A later target is a headless interpreter-style OpenSmalltalk/Spur runtime compiled to WebAssembly and hosted through the foreign/component-WASM layer:
+
+```text
+OpenSmalltalk interpreter + Spur runtime
+  -> WebAssembly
+  -> explicit runtime/component interface
+  -> Lagrange placement/sandboxing
+```
+
+This is not required for the first compatibility proof. It depends on richer foreign interfaces for runtime initialization, image loading, memory/string transport, controlled callbacks, capabilities, snapshots and possibly async effects.
+
+A native-code-generating/JIT VM should not be required for the first WASM-hosted proof.
+
+See ADR 0022 for the complete end-state and guardrails.
+
+## 8. Rust
 
 Rust support reuses Cargo and `rustc`.
 
@@ -134,7 +241,7 @@ Repeated deterministic builds can reuse the existing toolchain output when provi
 
 `wasm-binary/v1` is still just external WASM. It becomes callable only through an explicit interface.
 
-## 7. First foreign-WASM callable contract
+## 9. First foreign-WASM callable contract
 
 The durable shape is:
 
@@ -178,7 +285,7 @@ Those need new explicit contracts.
 
 The callable interface describes ABI shape. It grants no authority.
 
-## 8. Internal vs foreign WASM
+## 10. Internal vs foreign WASM
 
 Do not blur these paths.
 
@@ -195,14 +302,16 @@ Uses `lagrange-value-handle/v0`, host imports/effects and the normal image seman
 ### Foreign WASM
 
 ```text
-external toolchain
+external toolchain/runtime port
   -> wasm-binary/v1
-  -> wasm-callable-interface/v1 or later component interface
+  -> wasm-callable-interface/v1 or later component/runtime interface
 ```
 
 The foreign binary may have entirely different internal runtime conventions. The interface is the boundary.
 
-## 9. Java
+A future WASM-hosted OpenSmalltalkVM belongs in this foreign/runtime lane unless it is deliberately recompiled to the native Lagrange ABI.
+
+## 11. Java
 
 Java should reuse existing Java tooling, not acquire a new compiler here.
 
@@ -225,7 +334,7 @@ JAR/class artifacts should remain reusable binary dependencies where appropriate
 
 A deeper Java personality may later model Java classes/methods/interfaces as image objects while still using external compilation/runtime machinery.
 
-## 10. Common Lisp
+## 12. Common Lisp
 
 Common Lisp can reuse durable identity, artifacts, lexical environments, projects and execution infrastructure without being forced through Smalltalk semantics.
 
@@ -242,7 +351,7 @@ compiler integration
 
 The common substrate should remain neutral enough that these are personality/runtime concerns rather than special cases in storage.
 
-## 11. Cross-language libraries
+## 13. Cross-language libraries
 
 A portable executable library should have an explicit interface independent of its implementation language.
 
@@ -259,7 +368,9 @@ Lisp --------+
 
 Interface identity is not authority. Capability checks remain separate.
 
-## 12. Toolchain reuse and language semantics
+OpenSmalltalkVM-backed Smalltalk should use the same explicit interface/capability model when crossing into native image services or other runtimes.
+
+## 14. Toolchain reuse and language semantics
 
 Toolchain cache keys are mechanical build equivalence contracts, not language semantics.
 
@@ -267,7 +378,9 @@ A provider opts in explicitly. The key includes provider identity, target/option
 
 The first cache is identity-sensitive so output provenance remains truthful. Cross-install content reuse needs an installation wrapper rather than deleting provenance distinctions.
 
-## 13. Current frontier
+OpenSmalltalkVM toolchain integration should follow the same rule: VM/compiler image/version, source/package inputs, target/runtime options and imported dependencies must be explicit cache/provenance material.
+
+## 15. Current frontier
 
 The substrate has now proved:
 
@@ -282,11 +395,14 @@ first explicit foreign callable ABI
 
 The next multilingual proofs should come from pressure on this shared model rather than from adding generic abstractions speculatively:
 
+- OpenSmalltalkVM/Cuis compatibility runtime + toolchain spike
 - richer Component/WIT-style foreign interfaces
 - Java/JAR integration
 - Common Lisp personality/compiler spike
 - standard Cargo package importer
 - capability-aware host/foreign calls
 - distributed placement through Lagrange
+
+The Smalltalk end state is intentionally a continuum: native Symmetric Smalltalk, real OpenSmalltalkVM compatibility, optional WASM-hosted compatibility runtime, and selective migration between them where it is useful.
 
 See [architecture.md](architecture.md) for the layers, [roadmap.md](roadmap.md) for ordered work and [decisions/README.md](decisions/README.md) for detailed ADRs grouped by topic.
