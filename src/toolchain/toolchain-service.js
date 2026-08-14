@@ -20,7 +20,7 @@ function normalizeObjectRef(value, label) {
 
 function assertImages(images) {
   if (!images || typeof images !== 'object') throw new TypeError('images service is required');
-  for (const method of ['getCodeArtifact', 'putCodeArtifact']) {
+  for (const method of ['getImage', 'getRecord', 'getCodeArtifact', 'putCodeArtifact']) {
     if (typeof images[method] !== 'function') throw new TypeError(`images service must implement ${method}`);
   }
   return images;
@@ -41,6 +41,19 @@ function refKey(ref) {
   return `${ref.imageId}\u0000${ref.objectId}`;
 }
 
+function toolchainArtifactSnapshot(artifact) {
+  return deepFreeze({
+    kind: 'code-artifact',
+    id: artifact.id,
+    imageId: artifact.imageId,
+    languageId: artifact.languageId ?? null,
+    representation: artifact.representation,
+    content: structuredClone(artifact.content),
+    dependencies: structuredClone(artifact.dependencies ?? []),
+    metadata: structuredClone(artifact.metadata ?? {}),
+  });
+}
+
 async function resolveArtifactGraph(images, roots) {
   if (!Array.isArray(roots) || roots.length === 0) throw new TypeError('toolchain roots must be a non-empty array');
   const rootRefs = Object.freeze(roots.map((root, index) => normalizeObjectRef(root, `toolchain root ${index}`)));
@@ -57,11 +70,7 @@ async function resolveArtifactGraph(images, roots) {
     try {
       const artifact = await images.getCodeArtifact(ref.imageId, ref.objectId);
       if (!artifact) throw new TypeError(`toolchain artifact not found: ${ref.imageId}/${ref.objectId}`);
-      const snapshot = deepFreeze({
-        ...structuredClone(artifact),
-        dependencies: structuredClone(artifact.dependencies ?? []),
-      });
-      const node = Object.freeze({ref, artifact: snapshot});
+      const node = Object.freeze({ref, artifact: toolchainArtifactSnapshot(artifact)});
       byKey.set(key, node);
       nodes.push(node);
       for (const dependency of artifact.dependencies ?? []) await visit(dependency.artifact);
@@ -150,6 +159,7 @@ class ToolchainService {
     const id = normalizeProviderId(providerId);
     const outputImageId = requiredText(imageId, 'toolchain output imageId');
     const provider = this.providers.get(id);
+    await this.images.getImage(outputImageId);
     const graph = await resolveArtifactGraph(this.images, roots);
     const normalizedTarget = normalizePlainData(target, 'toolchain target');
     const normalizedOptions = normalizePlainData(options, 'toolchain options');
@@ -186,6 +196,11 @@ class ToolchainService {
         if (!dependencyArtifact) {
           throw new TypeError(`toolchain output dependency not found: ${dependency.artifact.imageId}/${dependency.artifact.objectId}`);
         }
+      }
+    }
+    for (const [name, outputId] of resolvedIds) {
+      if (await this.images.getRecord(outputImageId, outputId)) {
+        throw new TypeError(`toolchain output already exists: ${name} -> ${outputImageId}/${outputId}`);
       }
     }
 
@@ -225,4 +240,5 @@ export {
   ToolchainService,
   normalizeProviderResult,
   resolveArtifactGraph,
+  toolchainArtifactSnapshot,
 };
