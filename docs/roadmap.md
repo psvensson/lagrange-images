@@ -67,13 +67,15 @@ Success: the same graph survives process/node restarts with no language/image se
 - [x] Node WebAssembly execution through the normal ActivationExecutor
 - [x] interpreter/WASM differential tests
 - [x] tail-position WASM message-send host effects through normal dispatch
-- [ ] general non-tail asynchronous WASM sends/continuations
-- [ ] WASM nested closure creation
+- [x] tail-position WASM closure materialization through normal Block/LexicalEnvironment semantics
+- [x] explicit closure prototype graph edges on `wasm-function/v1`
+- [ ] general non-tail asynchronous WASM effects/continuations
+- [ ] transient/non-materialized optimized closure representation
 - [ ] activations and debugger metadata
 - [ ] exception/condition substrate
 - [ ] capability-aware host/WASM FFI boundary
 
-Success: semantic code is independent of execution representation; pure code and tail language sends can execute through real WASM while preserving the same dispatch and Value semantics as the interpreter.
+Success: semantic code is independent of execution representation; pure code, tail language sends and returned nested closures can execute through real WASM while preserving the interpreter's Value/Block semantics.
 
 ## 5. Symmetric Smalltalk seed
 
@@ -89,13 +91,15 @@ Success: semantic code is independent of execution representation; pure code and
 - [x] lexical `self` capture across Block boundaries
 - [x] ordinary `value*` sends to Blocks through the Smalltalk dispatcher
 - [x] tail Smalltalk sends from WASM back into ordinary language dispatch
+- [x] returned nested Smalltalk Blocks materialized from WASM with ordinary lexical captures
+- [ ] create/use a nested Block inside one WASM activation
 - [ ] assignments, temporaries, sequences and cascades
 - [ ] Object/Behavior/Class/Metaclass bootstrap and inheritance
 - [ ] immediate-value objects/primitives
 - [ ] REPL/workspace
 - [ ] bootstrap image
 
-Success for the current seed: nested Smalltalk closures execute in the interpreter, while ordinary tail message sends can also execute from WASM without changing lookup semantics.
+Success for the current seed: nested Smalltalk closures execute in the interpreter and may be returned/materialized from WASM; ordinary tail sends also cross from WASM through unchanged Smalltalk lookup semantics.
 
 ## 6. Projects and collaborative history
 
