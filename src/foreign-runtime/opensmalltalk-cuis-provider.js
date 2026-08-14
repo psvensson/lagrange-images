@@ -106,12 +106,14 @@ async function materializePackages(packageInputs, workspace) {
   const directory = join(workspace, 'packages');
   await mkdir(directory, {recursive: true});
   const materialized = [];
-  for (let index = 0; index < packageInputs.length; index += 1) {
-    const packageInput = packageInputs[index];
+  for (const packageInput of packageInputs) {
     const bytes = await readFile(packageInput.path);
     if (bytes.length === 0) throw new TypeError(`OpenSmalltalk Cuis package ${packageInput.name} must not be empty`);
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const filename = `${String(index + 1).padStart(2, '0')}-${packageInput.name}.pck.st`;
+    // Cuis package machinery expects the normal package filename. Package
+    // names are unique in one runtime start spec, so no synthetic prefix is
+    // needed and the guest sees the same logical filename as upstream.
+    const filename = `${packageInput.name}.pck.st`;
     await writeFile(join(directory, filename), bytes, {flag: 'wx'});
     materialized.push(Object.freeze({
       name: packageInput.name,
@@ -123,10 +125,22 @@ async function materializePackages(packageInputs, workspace) {
   return Object.freeze(materialized);
 }
 
+function packageInstallSource(packages) {
+  return packages.map((packageInput) => `output
+    nextPutAll: 'BOOT'; nextPut: Character tab;
+    nextPutAll: 'package'; nextPut: Character tab;
+    nextPutAll: '${packageInput.name}'; nextPut: Character tab;
+    nextPutAll: 'install'; newLine; flush.
+CodePackageFile installPackage: DirectoryEntry currentDirectory // 'packages' // '${packageInput.filename}'.
+output
+    nextPutAll: 'BOOT'; nextPut: Character tab;
+    nextPutAll: 'package'; nextPut: Character tab;
+    nextPutAll: '${packageInput.name}'; nextPut: Character tab;
+    nextPutAll: 'installed'; newLine; flush.`).join('\n');
+}
+
 function bridgeSource(packages = []) {
-  const packageInstallSource = packages
-    .map((packageInput) => `CodePackageFile installPackage: DirectoryEntry currentDirectory // 'packages' // '${packageInput.filename}'.`)
-    .join('\n');
+  const installSource = packageInstallSource(packages);
   const hasJson = packages.some((packageInput) => packageInput.name === 'JSON');
   const jsonMethodSource = hasJson
     ? `\nLagrangeProofService compile: 'jsonRoundTripSum: a with: b\\n    | rendered parsed |\\n    rendered := Json render: {a. b}.\\n    parsed := Json readFrom: rendered readStream.\\n    ^ (parsed at: 1) + (parsed at: 2)'.`
@@ -136,7 +150,10 @@ function bridgeSource(packages = []) {
     : `\n                                Error signal: 'unknown service'`;
 
   return `| input output service done line fields requestId operation result decode encode readLine |
-${packageInstallSource}
+output := StdIOWriteStream stdout.
+Preferences name: #authorInitials category: #programming value: 'LGI'.
+Preferences name: #authorName category: #programming value: 'Lagrange Images'.
+${installSource}
 Object subclass: #LagrangeProofService
     instanceVariableNames: ''
     classVariableNames: ''
@@ -146,7 +163,6 @@ LagrangeProofService compile: 'add: a to: b\n    ^ a + b'.
 LagrangeProofService compile: 'factorial: n\n    n < 0 ifTrue: [ Error signal: ''factorial requires a non-negative integer'' ].\n    n = 0 ifTrue: [ ^ 1 ].\n    ^ n * (self factorial: n - 1)'.${jsonMethodSource}
 service := LagrangeProofService new.
 input := StdIOReadStream stdin.
-output := StdIOWriteStream stdout.
 readLine := [ | char stream |
     stream := WriteStream on: (String new: 64).
     [
@@ -243,13 +259,24 @@ class OpenSmalltalkCuisCallError extends Error {
   }
 }
 
-async function nextMatchingLine(session, predicate, {timeoutMs, action}) {
+class OpenSmalltalkCuisStartupError extends Error {
+  constructor(cause, lines, stderr) {
+    const output = lines.length > 0 ? `; guest output: ${lines.slice(-8).join(' | ')}` : '';
+    const errorOutput = stderr ? `; guest stderr: ${stderr}` : '';
+    super(`OpenSmalltalk Cuis bridge failed to become ready${output}${errorOutput}: ${cause.message}`, {cause});
+    this.name = 'OpenSmalltalkCuisStartupError';
+    this.output = Object.freeze([...lines]);
+  }
+}
+
+async function nextMatchingLine(session, predicate, {timeoutMs, action, observedLines = null}) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new TypeError(`OpenSmalltalk Cuis timed out waiting for ${action}`);
     const line = await session.nextLine({timeoutMs: remaining, action});
     if (predicate(line)) return line;
+    if (observedLines) observedLines.push(line);
   }
 }
 
@@ -309,11 +336,16 @@ function createOpenSmalltalkCuisProvider({
           cwd: workspace,
           environment: {},
         });
-        await nextMatchingLine(
-          session,
-          (line) => line === `READY\t${CUIS_STDIO_BRIDGE_V0}`,
-          {timeoutMs: startupTimeoutMs, action: 'Cuis bridge readiness'},
-        );
+        const startupLines = [];
+        try {
+          await nextMatchingLine(
+            session,
+            (line) => line === `READY\t${CUIS_STDIO_BRIDGE_V0}`,
+            {timeoutMs: startupTimeoutMs, action: 'Cuis bridge readiness', observedLines: startupLines},
+          );
+        } catch (error) {
+          throw new OpenSmalltalkCuisStartupError(error, startupLines, session.stderrText());
+        }
         return Object.freeze({
           handle: {
             session,
@@ -402,6 +434,7 @@ export {
   OPENSMALLTALK_CUIS_PROVIDER_V0,
   OPENSMALLTALK_CUIS_PROVIDER_V1,
   OpenSmalltalkCuisCallError,
+  OpenSmalltalkCuisStartupError,
   bridgeSource as createCuisStdioBridgeSource,
   createOpenSmalltalkCuisProvider,
   decodeBridgeValue as decodeCuisBridgeValue,
