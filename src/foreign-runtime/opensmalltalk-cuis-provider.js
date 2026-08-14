@@ -77,7 +77,7 @@ function expectedArity(operation) {
 }
 
 function bridgeSource() {
-  return `| input output service done line fields requestId operation result decode encode |
+  return `| input output service done line fields requestId operation result decode encode readLine |
 Object subclass: #LagrangeProofService
     instanceVariableNames: ''
     classVariableNames: ''
@@ -88,6 +88,13 @@ LagrangeProofService compile: 'factorial: n\n    n < 0 ifTrue: [ Error signal: '
 service := LagrangeProofService new.
 input := StdIOReadStream stdin.
 output := StdIOWriteStream stdout.
+readLine := [ | char stream |
+    stream := WriteStream on: (String new: 64).
+    [
+        char := input next.
+        char = Character lf
+    ] whileFalse: [ stream nextPut: char ].
+    stream contents ].
 decode := [ :token |
     (token beginsWith: 'i:')
         ifTrue: [ (token copyFrom: 3 to: token size) asInteger ]
@@ -116,7 +123,7 @@ output
     flush.
 done := false.
 [ done ] whileFalse: [
-    line := input upTo: Character lf.
+    line := readLine value.
     line notEmpty ifTrue: [
         fields := line findTokens: Character tab asString.
         fields notEmpty ifTrue: [
