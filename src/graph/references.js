@@ -16,7 +16,11 @@ function referencesOfRecord(record) {
   }
   if (record?.kind === 'code-artifact') {
     assertCodeArtifactRecord(record);
-    return [...referencesOfValue(record.content), ...record.derivedFrom];
+    return [
+      ...referencesOfValue(record.content),
+      ...record.dependencies.map(({artifact}) => artifact),
+      ...record.derivedFrom,
+    ];
   }
   if (record?.kind === 'lexical-environment') {
     assertLexicalEnvironmentRecord(record);
