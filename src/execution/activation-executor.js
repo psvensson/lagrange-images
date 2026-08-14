@@ -1,4 +1,4 @@
-import {canonicalizeValue, isObjectRef} from '../value/index.js';
+import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 
 const MAX_ACTIVATION_DEPTH = 256;
@@ -29,7 +29,7 @@ function assertActivationRequest(activation) {
 
 function assertImages(images) {
   if (!images || typeof images !== 'object') throw new TypeError('images service is required');
-  for (const method of ['getBlock', 'getCodeArtifact', 'getLexicalEnvironment']) {
+  for (const method of ['getBlock', 'getCodeArtifact', 'getLexicalEnvironment', 'putLexicalEnvironment', 'putBlock']) {
     if (typeof images[method] !== 'function') throw new TypeError(`images service must implement ${method}`);
   }
   return images;
@@ -77,6 +77,35 @@ class ActivationExecutor {
     throw new TypeError(`lexical binding not found: ${bindingId}`);
   }
 
+  async createClosure({prototype, captures}) {
+    const prototypeRef = normalizeObjectRef(prototype, 'closure prototype');
+    if (!Array.isArray(captures)) throw new TypeError('closure captures must be an array');
+    const prototypeBlock = await this.images.getBlock(prototypeRef.imageId, prototypeRef.objectId);
+    if (!prototypeBlock) {
+      throw new TypeError(`closure prototype Block not found: ${prototypeRef.imageId}/${prototypeRef.objectId}`);
+    }
+
+    const bindings = {};
+    for (const capture of captures) {
+      if (!capture || typeof capture !== 'object' || Array.isArray(capture)) throw new TypeError('closure capture must be an object');
+      if (typeof capture.id !== 'string' || capture.id.length === 0) throw new TypeError('closure capture id must be non-empty text');
+      if (typeof capture.name !== 'string' || capture.name.length === 0) throw new TypeError('closure capture name must be non-empty text');
+      if (Object.hasOwn(bindings, capture.id)) throw new TypeError(`duplicate closure capture id: ${capture.id}`);
+      bindings[capture.id] = {name: capture.name, value: canonicalizeValue(capture.value)};
+    }
+
+    let environment = null;
+    if (Object.keys(bindings).length > 0) {
+      environment = await this.images.putLexicalEnvironment(prototypeRef.imageId, {bindings});
+    }
+    const block = await this.images.putBlock(prototypeRef.imageId, {
+      code: prototypeBlock.code,
+      environment: environment ? objectRef(environment.imageId, environment.id) : null,
+      metadata: {prototypeBlockId: prototypeRef.objectId},
+    });
+    return objectRef(block.imageId, block.id);
+  }
+
   async execute(activation, {depth = 0} = {}) {
     if (!Number.isInteger(depth) || depth < 0) throw new TypeError('activation depth must be a non-negative integer');
     if (depth > MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
@@ -101,6 +130,7 @@ class ActivationExecutor {
           if (!activation.environment) throw new TypeError(`lexical binding not found: ${bindingId}`);
           return await this.lookupBinding(activation.environment, bindingId);
         },
+        createClosure: async (request) => await this.createClosure(request),
         sendMessage: async (request) => {
           if (!this.invocations) throw new TypeError('activation executor has no message runtime');
           if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
