@@ -4,7 +4,7 @@
 
 The platform should not be one VM per language. It provides a small shared substrate for durable values, refs, objects, code artifacts, compilation, execution, debugging and capabilities. A language personality maps its own semantics onto that substrate.
 
-Implemented now includes the language-neutral graph/Block model, single-artifact and group compiler registries, `lagrange-code/v0`, `neutral-expression/v0`, transient compilation groups, compiler-declared derivation reuse, the first Symmetric Smalltalk seed, and a real WASM backend with a Value-handle ABI, tail host effects, recursive Block-tree installation and multi-function shared modules.
+Implemented now includes the language-neutral graph/Block model, single-artifact and group compiler registries, `lagrange-code/v0`, `neutral-expression/v0`, transient compilation groups, compiler-declared derivation reuse, the first Symmetric Smalltalk seed, and a real WASM backend with a Value-handle ABI, tail host effects, recursive Block-tree installation, multi-function shared modules and runtime-local host module compilation caching.
 
 ## Symmetric Smalltalk first, not Smalltalk-only
 
@@ -62,7 +62,7 @@ A logical group does **not** prescribe physical layout. A compiler may map it to
 
 ### Group compiler registry
 
-Grouped compilation now has its own language-neutral registry parallel to the single-artifact compiler registry:
+Grouped compilation has its own language-neutral registry parallel to the single-artifact compiler registry:
 
 ```text
 policyId + targetRepresentation
@@ -77,15 +77,11 @@ The first registered group compiler is:
 wasm-nested-block-tree/v0 -> wasm-module/v1
 ```
 
-Its physical layout is now:
-
-```text
-shared-module
-```
+with physical layout `shared-module`.
 
 ## Multi-function shared WASM modules
 
-A grouped Block tree now produces one WASM module with one exported entry per semantic member:
+A grouped Block tree produces one WASM module with one exported entry per semantic member:
 
 ```text
 semantic root  ----\
@@ -130,7 +126,7 @@ So sharing a module does not make another entry's host-effect boundary ambiently
 
 This matters later for capability-aware host calls as well as for today's message-send and closure effects.
 
-## Compiler-declared reuse
+## Compiler-declared durable reuse
 
 `CompilationService` reuses an immutable derived artifact only when the compiler explicitly declares:
 
@@ -160,7 +156,38 @@ The shared module keeps the provenance of the first exact artifact that produced
 
 The bootstrap cache lookup scans image CodeArtifacts by compiler identity + derivation key. The durable backend may later index that pair without changing the contract.
 
-See ADR 0012 and ADR 0013.
+## Runtime-local compiled module reuse
+
+Artifact reuse and host execution reuse are separate layers:
+
+```text
+semantic group
+  -> reusable immutable wasm-module/v1 CodeArtifact
+  -> runtime-local compiled WebAssembly.Module
+  -> fresh WebAssembly.Instance per activation
+```
+
+`WasmModuleCache` caches the host engine's compiled `WebAssembly.Module` by immutable module-artifact identity inside one runtime. Different entries in one shared module therefore compile the physical bytes only once.
+
+The cache stores an in-flight compilation promise, so concurrent first activations coalesce rather than compiling the same module twice. Failed compilation removes the entry and can be retried later.
+
+The cache is intentionally not durable. It exposes only execution diagnostics:
+
+```text
+entries
+hits
+misses
+compilations
+failures
+```
+
+Default executor registries own separate cache instances. A compiled host module therefore does not leak between image/runtime sessions merely because artifact IDs happen to match.
+
+Instances are still fresh for every activation because their imports close over invocation-local Value handles, active send/closure sites and pending-effect state. Instance pooling requires a separate design.
+
+This execution cache is language-neutral below the WASM artifact boundary: future Smalltalk, Lisp, Java or Rust compilers that emit `wasm-module/v1` use it without source-language-specific cache rules.
+
+See ADR 0012, ADR 0013 and ADR 0014.
 
 ## WASM backend
 
@@ -208,11 +235,11 @@ Tail position propagates through `if`. Intermediate asynchronous results still r
 
 Closure-site metadata contains only semantic block/capture descriptors. Prototype Block refs remain explicit `wasm-function/v1.derivedFrom` edges.
 
-Runtime closure materialization still creates the ordinary `LexicalEnvironment + Block` image representation. Shared modules do not change that.
+Runtime closure materialization still creates the ordinary `LexicalEnvironment + Block` image representation. Shared modules and host-module caching do not change that.
 
 ## Automatic complete Block trees
 
-`installWasmBlockTree()` now runs roughly as:
+`installWasmBlockTree()` runs roughly as:
 
 ```text
 preflight complete semantic tree
@@ -232,7 +259,7 @@ A tree corresponding to:
 [ :x | [ :y | [ :z | x ] ] ]
 ```
 
-now uses one physical module with three exported entries, while the three semantic/function/prototype identities remain distinct.
+uses one physical module with three exported entries, while the three semantic/function/prototype identities remain distinct.
 
 The existing whole-tree preflight still rejects unsupported deep non-tail effects before derived installation writes begin.
 
@@ -268,9 +295,9 @@ Java can layer JavaClass/JavaMethod/etc. objects plus Java-specific dispatch/cla
 
 ## Next open questions
 
+- `WebAssembly.Instance` pooling/reuse policy
 - module-size/budget driven splitting of one logical group into several modules
 - direct optimized calls between entries inside a shared module
-- compiled `WebAssembly.Module` / instance caching in the host
 - group policy/planner selection once several policies exist
 - indexed derivation-key lookup and cache lifetime policy
 - general non-tail asynchronous WASM effects/continuations
