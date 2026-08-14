@@ -26,11 +26,13 @@ long-lived foreign runtime
 real compatible Smalltalk runtime
         -> OpenSmalltalkVM provider
         -> pinned headless Cuis image
-        -> real Cuis compiler/object service
+        -> provider bridge compiled in pristine image
+        -> explicit pinned upstream .pck.st package installation
+        -> real Cuis package code
         -> canonical Value result
 ```
 
-The OpenSmalltalk proof deliberately exposes only a tiny whitelisted service bridge; it does not expose arbitrary `perform:`, eval or Spur object pointers.
+The first package proof uses the unchanged upstream Cuis JSON package and exercises its parser and renderer. The OpenSmalltalk bridge remains deliberately whitelisted; it does not expose arbitrary `perform:`, eval or Spur object pointers.
 
 ## Next
 
@@ -61,11 +63,16 @@ OpenSmalltalkVM-backed compatible Smalltalk
 - [x] compile a real Smalltalk service class in the running Cuis image
 - [x] invoke service methods through canonical Lagrange Values
 - [x] PR-only integration job using a SHA-256-pinned OpenSmalltalkVM release and commit/blob-pinned Cuis image
-- [ ] durable artifact conventions for OpenSmalltalkVM runtime/build identity and Smalltalk runtime images
+- [x] explicit package path/identity inputs with safe guest-visible `.pck.st` basenames
+- [x] install an unchanged upstream Cuis package with Cuis' own `CodePackageFile` loader
+- [x] prove useful existing Cuis package code beyond the bridge service: JSON parse/render/reparse
+- [x] establish provider bridge/control plane before loading guest packages
+- [ ] durable artifact conventions for OpenSmalltalkVM runtime/build identity and Smalltalk runtime/package artifacts
+- [ ] explicit dependency graph/order for several Cuis packages
 - [ ] OCI foreign-runtime launcher/placement implementation
 - [ ] explicit restart/reconciliation and image/snapshot persistence behavior
-- [ ] prove one useful existing Cuis package/library beyond the bridge service
 - [ ] richer explicit Smalltalk service interfaces without introducing ambient eval
+- [ ] prove a larger third-party Cuis package with real package dependencies
 
 Guardrails:
 
@@ -75,7 +82,10 @@ Spur oop != durable ObjectRef
 runtime instance != image object
 provider handle != ObjectRef
 runtime ID != capability
+package host path != package identity
+package basename != package identity
 exported service != arbitrary perform:
+provider control plane != guest package state
 compatibility != mandatory migration
 ```
 
@@ -87,6 +97,8 @@ compatibility != mandatory migration
 - [ ] produce a reproducible runnable Smalltalk image artifact as the first derived output
 - [ ] opt deterministic builds into toolchain result reuse where honest
 - [ ] expose compiler diagnostics/source mapping/provenance through the generic toolchain result contract
+
+The runtime proof has now established real package materialization and loading, so this toolchain work can reuse observed Cuis conventions rather than inventing a parallel package model.
 
 #### C. Structured export and migration bridge
 
@@ -109,7 +121,7 @@ compatibility != mandatory migration
 
 Success: a real compatible Smalltalk application/library can remain on OpenSmalltalkVM, participate in Lagrange image projects/interfaces/history, and selectively move code or the runtime itself toward native/WASM execution without a flag-day port.
 
-See ADR 0022 for the end state, ADR 0023 for the generic lifecycle and ADR 0024 for the first real runtime proof.
+See ADR 0022 for the end state, ADR 0023 for the generic lifecycle, ADR 0024 for the first real runtime proof and ADR 0025 for the first unchanged upstream-package proof.
 
 ### 2. Richer foreign/component interfaces
 
@@ -136,6 +148,8 @@ Success: a nontrivial external library is callable from at least two language pe
 - [x] explicit Cargo manifest/lock/source artifacts
 - [x] explicit vendored package config/files and SHA-256 validation
 - [x] deterministic provider-opt-in result reuse
+- [x] first existing-runtime package import proof through OpenSmalltalkVM/Cuis
+- [ ] durable Cuis package artifact convention and dependency graph
 - [ ] crates.io `.crate` importer -> explicit vendor/package artifacts
 - [ ] git/private-registry dependency import conventions
 - [ ] real pinned-OCI integration job for the vendored Cargo fixture
@@ -186,7 +200,9 @@ Symmetric Smalltalk remains the native language experiment; Cuis compatibility i
 - [x] generic runtime registry/service + lifecycle contract
 - [x] real OpenSmalltalkVM runtime adapter + explicit proof service boundary
 - [x] real pinned Cuis image execution in CI
-- [ ] existing Cuis package/library compatibility proof
+- [x] existing unchanged Cuis package compatibility proof using upstream JSON package
+- [x] explicit package identities separate from host paths and provider identity
+- [ ] multi-package dependency proof with a larger third-party package
 - [ ] real Smalltalk compiler/toolchain provider
 - [ ] structured class/method/package export
 - [ ] mixed foreign/native Smalltalk project proof
@@ -219,7 +235,7 @@ Next:
 - [ ] Java source/class/JAR artifact conventions
 - [ ] JAR/class importer and dependency reuse
 - [ ] existing javac/JVM/AOT/Java-to-WASM toolchain spike
-- [ ] JVM/OCI foreign-runtime compatibility spike over the generic lifecycle contract
+- [ ] JVM/OCI foreign-runtime compatibility spike over the generic lifecycle
 - [ ] compare JVM compatibility vs deeper WASM/image integration on one realistic application
 
 ## Execution/runtime work
@@ -249,6 +265,10 @@ Implemented:
 - first real local-process OpenSmalltalkVM/Cuis provider
 - process-line runner with no shell
 - pinned real-runtime integration proof in PR CI
+- explicit Cuis package startup inputs with immutable identities and safe basenames
+- provider bridge bootstrap before guest package installation
+- first unchanged upstream package execution proof
+- transient bootstrap progress diagnostics for runtime/package startup
 
 Next:
 
@@ -309,6 +329,7 @@ Established substrate:
 - Cargo/rustc OCI integration with explicit package inputs
 - first explicit foreign-WASM callable interface
 - generic long-lived foreign-runtime lifecycle
-- first real OpenSmalltalkVM/Cuis foreign-runtime provider proof
+- real OpenSmalltalkVM/Cuis foreign-runtime provider
+- unchanged upstream Cuis package loading/execution proof
 
 See [decisions/README.md](decisions/README.md) for ADRs grouped by topic.
