@@ -49,6 +49,7 @@ semantic code != executable artifact
 toolchain selection != toolchain identity
 toolchain provider != language semantics
 build OCI != foreign-runtime OCI
+raw foreign WASM != Lagrange WASM ABI
 WASM handle != image identity
 compilation group != source-language construct
 shared module != function/Block identity
@@ -93,12 +94,26 @@ pooled instance != activation state
 - Toolchain diagnostics are transient v0 results, not durable metadata by default.
 - v0 supports several independent named outputs but not sibling output-to-output dependency refs or whole-invocation transactional persistence. Add those only if a real toolchain proves the need.
 - `ToolchainService` does not yet have derivation-key reuse. Do not claim external-toolchain caching until target/options/toolchain/dependency fingerprints are covered explicitly.
-- The next intended provider is OCI-backed Cargo/rustc. Implement that as a provider over this contract rather than teaching the image graph about containers, filesystems or Cargo internals.
+
+### OCI Cargo/rustc provider
+
+- Keep Rust/Cargo semantics inside `cargo-rustc-oci-provider.js`; do not teach generic `ToolchainService` about Cargo, source paths, Rust targets or containers.
+- OCI build images must be digest-pinned (`@sha256:...`). Tags alone are not reproducible provider identity.
+- The first Cargo provider accepts exactly one `rust/cargo-manifest-v1` root, exactly one `rust/cargo-lock-v1`, and one or more `rust/source-v1` artifacts in the explicit dependency closure.
+- `rust/source-v1` uses `metadata.path` only as a non-reference portable project path. Reject absolute paths, backslashes, empty segments and `.`/`..` traversal.
+- Unknown dependency representations fail explicitly. Do not silently ignore imported crates/libraries the provider cannot materialize.
+- The first Cargo build is closed-input: `cargo build --frozen` plus OCI network `none`. Do not enable network fetches to make third-party crates convenient; add explicit vendored/package/config artifacts instead.
+- The pinned image must already contain Cargo/rustc and the requested target. Do not mutate/install the toolchain during a build unless a later explicit toolchain contract requires it.
+- OCI runner argv is constructed without a shell. Keep the temporary workspace bind mount, explicit workdir/network and host uid/gid behavior where available.
+- Temporary workspaces are build machinery and must be removed in a `finally` path.
+- Cargo-produced bytes are stored as `wasm-binary/v1`, not `wasm-module/v1`. The latter is reserved for the current Lagrange Value-handle/import/effect ABI.
+- Do not make raw foreign WASM callable merely because its header validates. Add an explicit callable/component/ABI adapter first.
+- Provider identity and output metadata must preserve the digest-pinned OCI toolchain identity; later toolchain cache keys must include it with target/options and all explicit dependency fingerprints.
 
 ### Compiler/toolchain derivation
 
 - Add single-source lowering backends through `CodeCompilerRegistry` and grouped backends through `CompilationGroupCompilerRegistry`; external providers use `ToolchainProviderRegistry` / `ToolchainService`.
-- A toolchain provider may later run in-process, as WASM, in OCI, as a native process or remotely. Generic semantics describe artifact inputs/outputs, toolchain identity/options, diagnostics, interfaces and provenance rather than process location.
+- A toolchain provider may run in-process, as WASM, in OCI, as a native process or remotely. Generic semantics describe artifact inputs/outputs, toolchain identity/options, diagnostics, interfaces and provenance rather than process location.
 - OCI build/toolchain containers are reproducible compilation machinery. OCI foreign-runtime containers remain part of execution. Never conflate those lifecycles or imply that a foreign JVM/native/Python heap is automatically image object state.
 - Compilation groups are transient compiler/planner values. The substrate may validate members/target/policy IDs but must not assume that a group is a Smalltalk Block tree, Java class, Rust crate or Lisp file.
 - Physical module grouping belongs to compiler/toolchain policy. One logical group may produce one module, many modules or another executable representation.

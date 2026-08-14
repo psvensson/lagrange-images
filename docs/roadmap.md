@@ -94,8 +94,11 @@ Artifact/toolchain generalization:
 - [x] toolchain service owns output provenance and persists every resolved input as `derivedFrom`
 - [x] provider-declared runtime/library output dependencies remain separate graph edges
 - [x] provider result/dependency preflight before output writes
+- [x] OCI-backed build/toolchain execution adapter using digest-pinned images
+- [x] Docker/Podman-style no-shell OCI CLI runner with bind-mounted workspace and explicit network mode
+- [x] first real Cargo/rustc OCI provider over the generic toolchain protocol
+- [x] import validated Cargo-produced raw WASM as `wasm-binary/v1` without claiming the Lagrange WASM ABI
 - [ ] external-toolchain derivation keys include compiler/toolchain identity plus dependency/manifest/lock fingerprints
-- [ ] OCI-backed build/toolchain provider using pinned image digest/version
 - [ ] native-process or equivalent trusted external-toolchain provider where useful
 - [ ] remote build provider if a real deployment needs it
 - [ ] callable/interface artifact contract for imported executable libraries/components
@@ -116,7 +119,7 @@ Execution/compiler follow-ups:
 - [ ] exception/condition substrate
 - [ ] capability-aware host/WASM/foreign-call boundary
 
-Success: source is one artifact representation rather than the platform boundary; the explicit artifact graph can already be handed to a language-neutral provider and turned into derived artifacts with preserved provenance. The next proof is to run a real existing toolchain through this contract rather than changing the image model again.
+Success: source is one artifact representation rather than the platform boundary; the explicit artifact graph can now drive both in-process compilers and a real digest-pinned OCI Cargo/rustc toolchain without adding Rust semantics to `ToolchainService`. The next proof is richer explicit dependency materialization plus a callable foreign-WASM interface.
 
 ## 5. Symmetric Smalltalk seed
 
@@ -168,13 +171,17 @@ Smalltalk/Lisp:
 - [ ] prove several useful Cuis libraries
 - [ ] Common Lisp personality spike
 
-Rust — next external-toolchain proof:
+Rust — external-toolchain path:
 
-- [ ] Rust source/manifest/lock artifact conventions using the generic dependency edges
-- [ ] OCI-backed Cargo/`rustc` provider over `ToolchainService`, not a new Rust compiler
-- [ ] pin toolchain/container identity and include it in reproducible derivation/cache inputs
-- [ ] compile one ordinary Cargo project with at least one third-party crate to WASM
-- [ ] preserve source/manifest/lock/dependency provenance on the produced WASM artifact
+- [x] Rust source/manifest/lock artifact conventions using the generic dependency edges
+- [x] OCI-backed Cargo/`rustc` provider over `ToolchainService`, not a new Rust compiler
+- [x] require digest-pinned toolchain image and record image/toolchain identity on produced artifacts
+- [x] materialize a closed Cargo project from artifact snapshots and build with Cargo frozen/offline
+- [x] preserve manifest/source/lock provenance on the produced raw WASM artifact
+- [ ] explicit vendored crate/package/config artifact conventions for third-party dependencies
+- [ ] compile one ordinary Cargo project with at least one third-party crate to WASM using only explicit dependency artifacts
+- [ ] external-toolchain cache key includes pinned image, target/options and full explicit dependency fingerprints
+- [ ] callable/interface adapter for suitable Rust-produced `wasm-binary/v1`
 - [ ] Lagrange Rust SDK/crate for explicit host/call interfaces
 - [ ] prove reuse of source crates plus at least one portable precompiled WASM/component or stable-ABI dependency
 - [ ] document/compiler-test which Rust intermediate/binary formats are only build caches versus stable imported dependencies
@@ -218,4 +225,4 @@ Success: executable placement can choose image-native/WASM or explicit foreign r
 - [ ] replaceable shell/window-manager policy
 - [ ] inspectors, browsers and debugger as image-resident tools
 
-See ADR 0016 for the broader artifact/toolchain/foreign-runtime direction and ADR 0017 for the implemented dependency/provider substrate.
+See ADR 0016 for the broader artifact/toolchain/foreign-runtime direction, ADR 0017 for the generic dependency/provider substrate, and ADR 0018 for the first OCI-backed Cargo/rustc provider.

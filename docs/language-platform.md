@@ -2,31 +2,29 @@
 
 ## One image substrate, multiple language personalities
 
-The platform should not be one VM per language and should not be one compiler implementation per language. It provides a shared substrate for durable values, refs, objects, artifacts, dependencies, compilation/toolchains, execution, debugging and capabilities. A language personality maps its own semantics and ecosystem conventions onto that substrate.
+The platform should not be one VM per language and should not be one compiler implementation per language. It provides shared durable identity, artifacts, dependencies, compilation/toolchains, execution, debugging and capabilities. A language personality maps its own semantics and ecosystem conventions onto that substrate.
 
 Implemented now includes:
 
-- the language-neutral graph/Block model
-- immutable CodeArtifacts with explicit role-tagged dependency edges and separate `derivedFrom` provenance
-- single-artifact and group compiler registries
+- language-neutral object/Block graph
+- immutable CodeArtifacts with explicit dependency edges and separate provenance
+- single/group compiler registries
 - generic `ToolchainProviderRegistry` / `ToolchainService`
-- transitive explicit artifact-graph resolution for toolchain providers
-- `lagrange-code/v0` and `neutral-expression/v0`
-- compiler-declared derivation reuse
-- the first Symmetric Smalltalk seed
-- a real WASM backend with a Value-handle ABI, tail host effects, recursive Block-tree installation, multi-function shared modules, runtime-local compiled-module caching and explicit stateless instance reuse
+- frozen explicit artifact-graph requests for toolchain providers
+- a real digest-pinned OCI Cargo/rustc provider
+- `lagrange-code/v0` plus the neutral-expression interpreter
+- Symmetric Smalltalk as the first image-native language experiment
+- the Lagrange WASM backend, shared modules and runtime caches/pools
 
-OCI/native/remote toolchain execution, Cargo/rustc and Java/JAR adapters, callable WASM Component interfaces and foreign-runtime adapters remain planned.
+Java/JAR adapters, vendored third-party Cargo dependency artifacts, callable foreign-WASM/component interfaces and foreign-runtime adapters remain future work.
 
-## Symmetric Smalltalk first, not Smalltalk-only
+## Language personality does not mean compiler ownership
 
-The first language experiment is **Symmetric Smalltalk**: Smalltalk's object/message feel with Blocks pushed much further toward a universal executable/compositional form.
+Symmetric Smalltalk owns its parser/compiler because this project defines that language experiment.
 
-Smalltalk owns its parser, lexical rules and message lookup. Those choices are not image-, artifact-, compilation-group- or WASM-level contracts. Later Common Lisp, Java, Rust and other personalities may keep different semantic representations, grouping rules, ABIs, runtime-state models and external toolchains while reusing durable identity, history, projects, compilation infrastructure, activation/execution and WASM where useful.
+That is not the platform rule.
 
-A language personality does **not** imply that Lagrange Images implements that language's compiler.
-
-It may own any combination of:
+A language personality may own any combination of:
 
 - syntax/editing conventions
 - semantic object/runtime conventions
@@ -36,46 +34,43 @@ It may own any combination of:
 - adapters to precompiled libraries/components
 - adapters to a foreign runtime
 
+Rust should normally use Cargo/`rustc`. Java should normally use existing Java/JVM/AOT/WASM tooling. The image owns the artifact graph and integration contract rather than replacement compiler ecosystems.
+
 ## Artifact graph, not source-only pipeline
 
-The durable programming model is an **artifact/dependency graph**.
-
-Source is important when it is editable meaning we own, but it is not the only valid durable input:
+The durable programming model is an artifact/dependency graph:
 
 ```text
 source -------------------+
 semantic / IR ------------+
 bytecode / package -------+
-precompiled library ------+----> toolchain/provider
+precompiled library ------+----> compiler/toolchain
 WASM component/module ----+            |
 manifest / lock / config -+            v
                                     derived artifacts
                                     + callable interfaces
 ```
 
-`CodeArtifact` is currently the bootstrap generic artifact carrier. Artifact representations belong to language/tooling adapters rather than generic image semantics.
+`CodeArtifact` is currently the bootstrap generic artifact carrier. Representations belong to language/tooling adapters rather than generic image semantics.
 
-Examples of possible representations include:
+Examples now or planned include:
 
 ```text
 symmetric-smalltalk/source-v0
-java/source-v1
-java/class-v1
-java/jar-v1
 rust/source-v1
-rust/crate-manifest-v1
+rust/cargo-manifest-v1
+rust/cargo-lock-v1
+java/jar-v1
+wasm-binary/v1
 wasm-module/v1
 wasm-component/v1
-native-static-library/...
-native-shared-library/...
-oci-image-ref/v1
 ```
 
-The generic image layer should not learn what a JAR, crate or shared library means.
+The generic graph should not learn what a JAR, Cargo manifest or shared library means.
 
 ### Dependency is not provenance
 
-CodeArtifacts now have explicit dependency edges:
+CodeArtifacts have explicit dependencies:
 
 ```js
 {
@@ -87,74 +82,42 @@ CodeArtifacts now have explicit dependency edges:
 They are distinct from `derivedFrom`:
 
 ```text
-application source
-  dependency(role=library) -> library.jar
+source
+  dependency -> manifest
+  dependency -> library
 
-compiled application
-  derivedFrom -> application source
-  derivedFrom -> library.jar
+compiled output
+  derivedFrom -> source
+  derivedFrom -> manifest
+  derivedFrom -> library
 ```
 
-Dependency roles are language/toolchain policy rather than a platform enum. Metadata may not hide dependency refs, and graph traversal includes them.
+Dependency roles are tooling policy, not a platform enum. Metadata may not hide graph refs. Toolchain graph resolution follows `dependencies`, not provenance history.
 
-Older CodeArtifacts with no stored dependency field behave as dependency-free artifacts.
+Older CodeArtifacts without a stored dependency field behave as dependency-free artifacts.
 
-### Source remains canonical when it is what we own
+### Source is canonical when it is what we own
 
-For editable code the durable chain is still:
+Editable source/semantic meaning should remain sufficient to rebuild derived execution artifacts.
 
-```text
-language source / semantic artifacts
-  -> toolchain
-  -> derived executable artifacts
-```
+That does not imply a binary-only third-party artifact must be reconstructed as source. If what we possess is a JAR or WASM component, that binary can be the canonical imported dependency.
 
-For Symmetric Smalltalk today:
+## Generic toolchain providers
 
-```text
-Smalltalk source
-  -> Smalltalk syntax
-  -> lagrange-code/v0
-       |-> neutral-expression/v0
-       `-> wasm-module/v1 + wasm-function/v1
-```
-
-Executable artifacts remain rebuildable state when the source/semantic meaning exists in the image.
-
-But this does **not** mean a binary-only third-party dependency must be reconstructed as source. If what we possess is a JAR or WASM component, that imported artifact can be the canonical dependency artifact.
-
-Examples:
-
-```text
-editable Rust crate source -> canonical source + derived WASM
-third-party Java JAR       -> canonical imported JAR dependency
-third-party WASM component -> canonical imported component
-```
-
-`lagrange-code/v0` remains an early shared semantic IR, not a requirement that Java, Rust or Lisp express all of their semantics as Smalltalk-like sends/Blocks.
-
-## Toolchain providers
-
-The generic external-toolchain orchestration contract is implemented now.
-
-A provider is selected by a runtime/configuration ID but declares a stable implementation identity:
-
-```text
-providerId          rust/default
-provider.identity   rust-toolchain/1.88@sha256:...
-```
-
-Those are deliberately different concepts. Selection policy can change without pretending two compiler implementations are equivalent.
-
-The first provider protocol is:
+The first external-toolchain protocol is:
 
 ```text
 lagrange-toolchain-provider/v0
 ```
 
-### Toolchain request
+A provider is selected by configuration/runtime ID and declares a separate stable implementation identity:
 
-`ToolchainService.run()` accepts:
+```text
+providerId          rust/cargo-oci
+provider.identity   cargo-rustc-oci/v0/sha256:...
+```
+
+`ToolchainService.run()` receives:
 
 ```text
 providerId
@@ -165,91 +128,136 @@ options data
 optional output IDs
 ```
 
-It resolves the complete transitive graph reachable through explicit `CodeArtifact.dependencies`, deduplicates shared dependencies and passes frozen snapshots to the provider:
+It resolves the transitive explicit dependency graph and sends the provider frozen build-relevant snapshots:
 
 ```text
 protocol
 providerId
 toolchainIdentity
-roots:
-  ref
-  artifact
-artifacts:
-  ref
-  artifact
+roots
+artifacts
 target
 options
 ```
 
-The generic provider context intentionally contains no `ImageService` or ambient artifact reader. A provider should compile the artifact graph it was explicitly given rather than quietly fetch undeclared inputs.
+The generic provider context deliberately exposes no ambient `ImageService`. Providers should compile the artifact graph they were given rather than quietly fetch undeclared inputs.
 
-`derivedFrom` edges are **not** followed as build dependencies. Provenance is history; dependencies are build/runtime relationships.
+A provider returns named output descriptions plus transient diagnostics. `ToolchainService` owns persistence and `derivedFrom` provenance; provider-declared runtime/library dependencies remain separate dependency edges.
 
-### Toolchain result
+## First real provider: Cargo/rustc in OCI
 
-A provider returns one or more named output descriptions plus transient diagnostics:
-
-```text
-outputs[]
-  name
-  languageId | null
-  representation
-  content
-  dependencies[]
-  metadata
-
-diagnostics[]
-```
-
-`ToolchainService` owns persistence and provenance. Every resolved input artifact becomes a `derivedFrom` edge on every output artifact. Provider-declared runtime/library dependencies remain separate dependency edges.
-
-The service also records non-reference provider metadata:
+The first provider physically executes an existing compiler ecosystem rather than an in-process proof compiler:
 
 ```text
-toolchainProviderId
-toolchainIdentity
-toolchainProtocol
+rust/cargo-manifest-v1  <-- root
+    |
+    +-- source --> rust/source-v1
+    `-- lock   --> rust/cargo-lock-v1
+            |
+            v
+     digest-pinned OCI image
+            |
+     cargo build --frozen
+            |
+            v
+       wasm-binary/v1
 ```
 
-Diagnostics are returned to the caller and are not silently persisted as output metadata.
+Create it explicitly:
 
-The v0 service supports several independent named outputs, but not sibling output-to-output dependency refs or atomic whole-invocation persistence yet.
+```js
+const provider = createCargoRustcOciProvider({
+  image: 'registry.example/rust-wasm@sha256:<digest>',
+});
+```
 
-### Physical execution mechanism is still open
+and register it through the generic runtime seam:
 
-The provider abstraction is mechanism-neutral:
+```js
+const runtime = await createRuntime({
+  toolchainProviders: [[CARGO_RUSTC_OCI_PROVIDER_ID, provider]],
+});
+```
+
+A build target is explicit:
+
+```js
+{
+  representation: WASM_BINARY_V1,
+  triple: 'wasm32-wasip1',
+  binary: 'demo',
+  profile: 'release',
+}
+```
+
+The target triple is caller policy. The pinned image must already contain Cargo/rustc and that target.
+
+### Closed input graph
+
+The first Cargo provider requires:
+
+- exactly one manifest root
+- exactly one lock artifact
+- one or more Rust source artifacts
+- no unknown input representations
+
+Each `rust/source-v1` declares a safe portable relative path in `metadata.path`.
+
+The provider materializes a private temporary workspace, runs Cargo frozen with OCI network `none`, imports the expected output, validates the WASM header and deletes the workspace afterward.
+
+This is deliberately stricter than ordinary interactive Cargo use. Third-party crate support should add explicit vendored/package/config artifacts instead of enabling hidden network resolution.
+
+### OCI runner
+
+`OciCliRunner` is a small Docker/Podman-style host adapter. It constructs argv directly rather than using a shell, bind-mounts the temporary workspace, selects an explicit container workdir/network, and uses the host uid/gid where available so build outputs remain removable.
+
+The OCI image must be digest-pinned. Tags alone are rejected.
+
+The provider stable identity and output metadata include the pinned digest so the later toolchain-cache contract has a reproducible toolchain identity to fingerprint.
+
+## Raw WASM is not the Lagrange WASM ABI
+
+Cargo output is stored as:
 
 ```text
-in-process compiler
-WASM tool
-OCI build container
-native process
-remote build service
+wasm-binary/v1
 ```
 
-The repository currently proves only an in-process provider. OCI/native/remote provider implementations are the next layer.
+That means validated opaque WebAssembly bytes from a foreign/external toolchain.
 
-The first intended real proof is Cargo/`rustc` in a pinned OCI build environment over this exact provider contract.
-
-## Rust
-
-Rust support should normally reuse Cargo and `rustc`, not implement another Rust compiler.
-
-Conceptually:
+It is intentionally **not**:
 
 ```text
-Rust source artifacts
-Cargo manifest / lock artifacts
-dependency artifacts
-        -> Cargo/rustc toolchain provider
-        -> WASM module/component + interface/debug artifacts
+wasm-module/v1
 ```
 
-Lagrange-specific APIs can be supplied as an SDK/crate rather than by changing the Rust compiler.
+`wasm-module/v1` already means executable code following the current Lagrange Value-handle imports, function metadata and host-effect contract.
 
-Rust compiler-private intermediate libraries may be useful build-cache artifacts but should not automatically be treated as stable portable language-level library formats. Source crates, stable native/C ABIs and WASM components are better long-lived interchange points.
+A valid Cargo WASM module is therefore not automatically an image Block or directly executable through `ActivationExecutor`. It needs a later callable/component/ABI adapter.
 
-## Java
+This separation keeps external-language integration honest and leaves room for WASI, Component Model and language-specific runtimes.
+
+## Rust direction
+
+Rust now has its first concrete artifact/toolchain path without a Rust compiler in this project:
+
+```text
+image artifacts
+  -> Cargo/rustc in OCI
+  -> raw WASM artifact
+```
+
+Next Rust work should focus on:
+
+- explicit vendored crate/package/config artifacts
+- one real third-party dependency build with no hidden network input
+- toolchain result caching keyed by image digest + target/options + complete input fingerprints
+- a callable/component boundary for suitable Rust-produced WASM
+- Lagrange Rust SDK/crate for explicit host calls
+
+Compiler-private Rust intermediates should remain build-cache material unless a stable compatibility contract says otherwise.
+
+## Java direction
 
 Java can support more than one integration tier.
 
@@ -257,7 +265,7 @@ Deep/compiled integration:
 
 ```text
 Java source + JAR dependencies
-        -> javac / Java AOT / Java-to-WASM provider
+        -> existing Java/AOT/WASM provider
         -> executable artifact
 ```
 
@@ -269,252 +277,62 @@ image callable/interface
         -> JVM in OCI
 ```
 
-The JVM/OCI path preserves maximum compatibility with existing libraries/applications, but the JVM heap remains foreign runtime state rather than automatically becoming the durable image object graph.
+Those can coexist. A JVM heap remains foreign runtime state rather than automatically becoming the durable image graph.
 
-A deeper Java personality may later model Java classes/methods/interfaces as image objects and lower executable code to WASM while keeping Java-specific runtime semantics above the common substrate.
+## OCI has two roles
 
-These modes can coexist.
-
-## OCI means two different things
-
-### OCI as build environment
+OCI as a **build environment** is now implemented for the Cargo provider:
 
 ```text
-artifact inputs
-  -> compiler/package manager inside OCI
-  -> derived artifacts
+artifact graph -> temporary workspace -> OCI compiler -> derived artifact
 ```
 
-The container is toolchain machinery. After compilation, execution need not involve that container at all.
-
-Toolchain identity/cache fingerprints should include the relevant OCI image digest/version plus compiler options, target/ABI, manifests/locks and dependency fingerprints that affect output.
-
-### OCI as foreign runtime
+OCI as a **foreign runtime** remains future execution work:
 
 ```text
-image callable/interface
-  -> adapter
-  -> live OCI JVM / native app / Python / ...
+image callable/interface -> adapter -> live JVM/native/Python/etc. container
 ```
 
-Here the container remains part of execution. This is a compatibility layer with a stronger process/runtime boundary and weaker automatic object integration.
+Do not conflate the two. Build containers disappear after compilation; foreign-runtime containers remain part of execution/lifecycle policy.
 
-Do not conflate build containers with runtime containers.
+## Compiled libraries and components
 
-## Compiled libraries are reusable dependencies
+Compiled libraries should remain first-class dependencies whenever their format/runtime/ABI permits it.
 
-Compiled libraries should be first-class dependencies whenever their format/runtime/ABI makes that meaningful.
+- Java JAR/class artifacts can remain byte dependencies.
+- Rust should favor source crates or explicitly stable portable ABIs/components for long-lived reuse.
+- WASM Components are attractive cross-language library boundaries.
 
-### Java JAR/class libraries
+A future callable/interface artifact should describe exported calls, argument/result representation, ABI/component contract, required capabilities and version/provenance. Interface description remains separate from authority.
 
-A project may simply depend on byte artifacts:
+## Compilation groups and durable reuse
 
-```text
-Java project
-  source A
-  source B
-  dependency -> jackson.jar
-  dependency -> customer-core.jar
-        -> Java toolchain
-```
+`CompilationGroup` remains a transient compiler planning value. The substrate does not assume it means a Smalltalk Block tree, Java class set or Rust crate.
 
-The image retains dependency identity, history and provenance. It does not need to decompile those JARs into source objects.
+In-process compilers already support deterministic derived-artifact reuse through explicit compiler identity + cache key.
 
-### Rust/native libraries
-
-Reuse depends more heavily on compiler/target/ABI. Source crates are natural editable dependencies; stable native/C ABIs and WASM components can be reusable binary interfaces; compiler-private formats remain version/configuration-sensitive build artifacts unless a stronger contract says otherwise.
-
-### WASM components
-
-WASM Component-style interfaces are an especially useful cross-language library boundary:
+`ToolchainService` does **not** yet reuse external-toolchain results. The later key needs to include at least:
 
 ```text
-Smalltalk caller ---+
-Rust caller --------+--> geometry component
-Java caller --------+
-```
-
-Once the component interface is stable, its implementation language can be irrelevant to callers.
-
-The Component Model/WIT-style boundary therefore fits outer foreign-language/library interfaces well. It should not be imposed on every internal Smalltalk message send.
-
-## Dependency roles are tooling policy
-
-A dependency may participate as:
-
-```text
-static/link dependency
-dynamic component dependency
-foreign-runtime dependency
-service dependency
-build-only dependency
-```
-
-The durable graph records a free role string plus artifact ref. Compiler/toolchain/runtime policy decides how the relation is interpreted.
-
-Do not encode one linkage choice into generic object identity and do not turn role strings into a platform enum prematurely.
-
-## Callable/interface descriptions
-
-An imported executable artifact cannot safely become callable merely because bytes exist.
-
-The eventual interface contract should describe enough for dispatch/routing, ABI selection, tooling and capability checks, for example:
-
-```text
-artifact/interface identity
-exported callable names/IDs
-argument/result representation
-ABI/component contract
-required host capabilities
-runtime/toolchain kind
-version/provenance
-```
-
-Interface description is not authority. The platform's reference/capability separation remains unchanged.
-
-A toolchain provider can already emit an interface description as an ordinary named output artifact; the semantic callable/interface contract itself remains future work.
-
-## Compilation groups
-
-A transient `CompilationGroup` describes a compiler planning unit:
-
-```text
-policyId
-targetRepresentation
-members: artifact/semantic CodeArtifact refs
-options
-```
-
-The substrate validates the shape but does not interpret why the members belong together.
-
-Natural policies may look like:
-
-```text
-Smalltalk / Lisp   nested code tree, package, compilation unit
-Java               class/package/codegen unit
-Rust               crate/codegen unit
-```
-
-A logical group does **not** prescribe physical layout. A compiler/toolchain may map it to one module, several modules or another executable representation.
-
-Grouped compilation currently has its own language-neutral registry parallel to the single-artifact compiler registry:
-
-```text
-policyId + targetRepresentation
-  -> group compiler
-```
-
-`CompilationService.compileGroup()` resolves all members, currently requires them to be in one image, applies compiler-declared cache rules, and persists every member as an explicit `derivedFrom` edge.
-
-The first registered group compiler is:
-
-```text
-wasm-nested-block-tree/v0 -> wasm-module/v1
-```
-
-with physical layout `shared-module`.
-
-## Durable reuse
-
-Compiler-derived artifacts already require an explicit stable compiler identity plus deterministic key material.
-
-`CompilationService` uses:
-
-```text
-identity
-cacheKey(request, context)
-```
-
-The provider owns executable equivalence. The platform does not infer it from filenames, Block IDs, Java class names, Rust crate names or selectors.
-
-`ToolchainService` does **not** yet reuse external-toolchain results by derivation key. When added, the key needs to cover:
-
-```text
-toolchain/compiler identity and version
+toolchain/provider identity
 OCI image digest when applicable
 target / ABI
-compiler/linker options
+options
 resolved source/binary dependency fingerprints
-manifest / lock artifacts
-declared environment inputs that affect semantics
+manifest / lock/config artifacts
 ```
 
-Outputs already retain explicit `derivedFrom` provenance to the resolved input graph even when compilation is delegated to a provider.
+Backend versions, timestamps and old provenance history should not become cache inputs merely because they exist in storage.
 
-## Multi-function shared WASM modules
+## Internal Lagrange WASM backend
 
-A grouped Smalltalk Block tree currently produces one WASM module with one exported entry per semantic member:
+The current image-native `lagrange-code/v0 -> wasm-module/v1` path remains separate from foreign/raw WASM.
 
-```text
-semantic root  ----\
-semantic child -----+--> one wasm-module/v1
-semantic grandchild/
+It supports scalar literals, positional arguments, receiver, captures, arbitrary-precision integer addition, equality, `if`, tail sends and tail Block materialization through the `lagrange-value-handle/v0` ABI.
 
-exports:
-  run_0
-  run_1
-  run_2
-```
+Grouped Smalltalk Block trees may share one `wasm-module/v1`, and runtime execution reuses compiled `WebAssembly.Module` objects plus explicitly stateless `WebAssembly.Instance` objects without merging Block/function/activation identity.
 
-The module stores module-global literal/host-effect tables plus per-entry descriptors. Each member still has separate `wasm-function/v1` and Block/prototype identity. Sharing a module is executable packaging, not language identity.
-
-One physical module contains imports needed by all entries, but an activation selects one function descriptor and enables only that entry's send/closure sites. This effect isolation will matter even more once privileged/capability-aware foreign calls are added.
-
-## Runtime-local host reuse
-
-Durable artifact reuse and host execution reuse are separate layers:
-
-```text
-artifact/semantic group
-  -> reusable immutable wasm-module/v1 CodeArtifact
-  -> runtime-local compiled WebAssembly.Module
-  -> optionally pooled WebAssembly.Instance
-```
-
-`WasmModuleCache` caches compiled modules by immutable module-artifact identity. `WasmInstancePool` only reuses instances for modules explicitly declaring a supported reset/reuse contract.
-
-The built-in compiler currently emits:
-
-```text
-metadata.instanceReuse = "stateless-v0"
-```
-
-because its generated modules do not carry activation-persistent guest memory, mutable globals/tables or another guest runtime heap/state model.
-
-Every pooled checkout receives fresh Value handles, active entry/effect policy, closure prototypes and pending-effect state. A trap or host/result-boundary violation retires the instance.
-
-A future Java/Rust/Lisp backend with linear-memory heaps, mutable globals, TLS, GC/runtime state or meaningful initialization must not inherit `stateless-v0` merely because the current Smalltalk-oriented backend can use it. It may remain one-shot or define a later reset contract.
-
-See ADR 0012 through ADR 0017.
-
-## WASM backend
-
-The current directly executable `lagrange-code/v0` operations are:
-
-- scalar literals
-- positional arguments
-- receiver
-- captured bindings
-- arbitrary-precision integer addition through a host import
-- canonical Value equality
-- `if`
-- tail-position language message sends
-- tail-position nested Block materialization
-
-General non-tail asynchronous effects are still rejected explicitly.
-
-The generic ABI is `lagrange-value-handle/v0`:
-
-```text
-entry(receiverHandle,
-      argumentHandle0, ...,
-      captureHandle0, ...)
-  -> resultHandle
-```
-
-Handles are invocation-local references to host-owned canonical Values. They are not object IDs, addresses or capabilities.
-
-Future external-language backends may add optimized direct-scalar, component or WASM-GC ABIs behind explicit contracts.
+A future Java/Rust/Lisp backend with mutable heaps/globals/TLS must not inherit the current `stateless-v0` instance contract unless its compiler can honestly guarantee it.
 
 ## Blocks and invocation
 
@@ -526,7 +344,7 @@ Block
   environment -> LexicalEnvironment | null
 ```
 
-Smalltalk maps naturally to it; Lisp closures can too. Java/Rust do not need every source-level function to become Smalltalk-shaped. They can use common callable/activation infrastructure according to their language personality and imported interface contracts.
+Smalltalk maps naturally to it; Lisp closures can too. Java/Rust do not need every source-level function to become Smalltalk-shaped. They can use common callable/activation infrastructure according to their language/runtime/interface semantics.
 
 Receiver remains an optional distinguished Value rather than argument zero:
 
@@ -536,49 +354,21 @@ Java instance method      -> receiver = this
 static/free function       -> receiver = null
 ```
 
-Language dispatch owns dynamic lookup. Sharing artifact/toolchain/runtime infrastructure does not make Smalltalk sends, Java virtual calls and Lisp generic-function semantics identical.
-
-## Compatibility direction
-
-A Cuis compatibility kernel can add dialect/package conventions above the shared substrate without freezing the core into Cuis semantics.
-
-Common Lisp can reuse durable code/artifact identity, lexical environments, conditions, projects and compilation/toolchain infrastructure while remaining Lisp.
-
-Java should reuse existing Java compilers/runtimes and compiled JAR libraries rather than require a home-grown compiler. Rust should reuse Cargo/`rustc` and source/binary ecosystems rather than require a home-grown compiler.
-
-The useful continuum is:
-
-```text
-foreign OCI runtime
-  highest compatibility, weakest automatic image integration
-
-existing compiler/toolchain -> WASM/component
-  high ecosystem compatibility + strong Lagrange execution integration
-
-image-native language personality/compiler
-  deepest image semantics/tooling integration
-```
-
-The platform should support all three where they solve real problems.
+Sharing the artifact/toolchain substrate does not make different language dispatch semantics identical.
 
 ## Next open questions
 
-- OCI-backed Cargo/`rustc` provider as the first real external-toolchain proof
+- vendored/package/config artifact conventions for third-party Cargo dependencies
 - external-toolchain derivation cache/fingerprint contract
-- callable/interface artifact contract
-- reusable WASM Component artifact/interface boundary
+- callable/interface artifact contract for `wasm-binary/v1`
+- WASM Component artifact/interface boundary
 - Java JAR/class importer and existing-toolchain spike
-- foreign OCI runtime adapter and callable lifecycle
+- foreign OCI runtime adapter and lifecycle
 - dependency linkage policy: static/component/foreign-runtime/service/build-only
-- transactional multi-output toolchain installation/sibling output refs if real builds need them
-- reset/reuse contracts for WASM modules with mutable guest state
-- module-size/budget driven splitting of one logical group into several modules
-- direct optimized calls between entries inside a shared module
-- indexed derivation-key lookup and cache lifetime policy
-- general non-tail asynchronous WASM effects/continuations
-- capability-aware host/foreign/WASM interfaces and distributed/local call policy
-- optimized/unboxed/component ABI variants
-- distributed placement of compiled artifacts and foreign runtimes through Lagrange
+- transactional multi-output toolchain installation if real builds need it
+- general non-tail asynchronous Lagrange-WASM effects
+- capability-aware host/foreign/component interfaces
+- distributed placement of compiled artifacts and foreign runtimes
 - debugger activation durability and conditions/exceptions
 
-See ADR 0016 for the broad source/artifact/toolchain/foreign-runtime boundary and ADR 0017 for the implemented dependency/provider contract.
+See ADR 0016 for the broad artifact/toolchain direction, ADR 0017 for the generic dependency/provider contract, and ADR 0018 for the first OCI Cargo/rustc provider.
