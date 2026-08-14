@@ -40,11 +40,15 @@ A language may skip or specialize parts of this stack. Rust does not need Smallt
 
 **Reference is not authority.** A ref identifies an object. Read/mutate/invoke rights come from principal/capability context.
 
-**Identity is not revision.** Ordinary refs name evolving objects. Pinned refs add historical revision. Backend row versions are concurrency metadata.
+**Identity is not revision.** Ordinary refs name evolving object identities. Pinned refs add historical revision. Backend row versions are concurrency metadata.
 
 **Source is not the artifact boundary.** Source is one important artifact representation, especially when it is the editable meaning the image owns. Bytecode, JARs, WASM components/modules, precompiled libraries, manifests and other imported binary artifacts may also be legitimate durable program/dependency artifacts. The platform must not require source it does not possess.
 
+**Dependency is not provenance.** `CodeArtifact.dependencies` describes role-tagged artifact relationships. `derivedFrom` describes how an immutable result was produced. Build/runtime/library relationships must not be hidden in metadata or overloaded into provenance.
+
 **Semantic code is not executable code.** When editable/semantic meaning exists in the image, interpreters, WASM and future optimized executors are derived products. Removing rebuildable executable artifacts must not erase the program meaning needed to inspect/rebuild them. A third-party binary-only dependency may itself be the canonical artifact we possess rather than rebuildable output.
+
+**Toolchain selection is not toolchain identity.** A runtime/provider ID chooses an implementation. The provider's stable identity names its implementation/version for provenance and future cache equivalence.
 
 **Toolchain is not language semantics.** A Java or Rust personality does not imply that this project implements `javac`, a JVM, `rustc` or Cargo. Language/runtime semantics and project conventions may be integrated while compilation is delegated to an existing in-process, WASM, OCI, native or remote toolchain.
 
@@ -62,7 +66,7 @@ A language may skip or specialize parts of this stack. Rust does not need Smallt
 
 ## Durable artifact graph
 
-The longer-term programming model is a durable **artifact/dependency graph**, not a source-code-only pipeline.
+The programming model is a durable **artifact/dependency graph**, not a source-code-only pipeline.
 
 Conceptually:
 
@@ -77,7 +81,20 @@ manifest / lock / config -+            v
                                     + callable interfaces
 ```
 
-Artifact representations belong to language/tooling conventions rather than generic object fields. Possible future representations include Java source/class/JAR, Rust source/manifests, WASM components, native libraries and OCI image references alongside the representations implemented today.
+`CodeArtifact` is currently the bootstrap generic artifact carrier. It has explicit role-tagged dependency edges:
+
+```text
+CodeArtifact
+  representation
+  content
+  dependencies:
+    role
+    artifact ref
+  derivedFrom
+  metadata
+```
+
+Dependency roles belong to language/tooling policy rather than the generic graph. The image substrate does not interpret `library`, `manifest`, `lock`, `runtime`, `build` or similar roles.
 
 The graph should record what we actually possess. An editable source crate can remain canonical source with derived executable caches; an imported third-party JAR may remain a JAR dependency; an imported WASM component may remain the portable component itself.
 
@@ -85,7 +102,7 @@ Dependency participation is tooling policy rather than generic identity. A depen
 
 ## Compiler and toolchain substrate
 
-There are currently parallel registries for single-source and grouped compilation:
+There are now three related compiler/toolchain seams:
 
 ```text
 source representation + target
@@ -93,25 +110,47 @@ source representation + target
 
 group policy + target
   -> CompilationGroupCompilerRegistry
+
+provider selection ID
+  -> ToolchainProviderRegistry
+  -> ToolchainService
 ```
 
-Both feed `CompilationService`, use the same derivation-cache contract, and preserve explicit `derivedFrom` provenance.
+The first two feed `CompilationService` and already use compiler-declared derivation reuse.
 
-The next generalization should preserve those semantics while allowing compiler/toolchain providers that execute outside the process. A provider should consume explicit artifact inputs/options and return derived artifacts, diagnostics, interface metadata and provenance regardless of whether it physically runs:
+`ToolchainService` is the first external-toolchain orchestration contract. It accepts root artifact refs, resolves only their explicit transitive `dependencies`, and passes frozen snapshots to the selected provider together with target/options.
+
+The generic v0 provider request deliberately has no `ImageService` or ambient artifact reader. A provider should consume the declared graph it was given rather than quietly fetch hidden inputs.
+
+A provider returns one or more named output artifact descriptions plus transient diagnostics. `ToolchainService` owns persistence/provenance:
 
 ```text
-in-process
-WASM
-OCI build container
-native process
-remote build service
+resolved input graph
+  -> provider.run(...)
+  -> output descriptions
+  -> CodeArtifacts
+       derivedFrom = every resolved input
+       dependencies = provider-declared output dependencies
+       metadata includes provider selection/identity/protocol
 ```
+
+This preserves the distinction between build provenance and runtime/library relationships.
+
+The current provider implementation is mechanism-neutral but the repository only proves it with an in-process provider. OCI/native/remote execution providers are still follow-up work.
 
 For mature languages the normal expectation is to reuse their existing toolchains. Rust support should normally orchestrate Cargo/`rustc`; Java support should normally orchestrate existing Java/JVM/AOT/WASM tooling. The image owns artifact identity/history and the integration contract, not a replacement compiler ecosystem.
 
 A group compiler may emit one executable artifact containing several entries. The first implementation maps one nested WASM tree group to one multi-function `wasm-module/v1`; this is policy, not a generic requirement.
 
 The built-in WASM compiler also declares the current `stateless-v0` instance-reuse contract. That declaration is a compiler/runtime promise about generated guest state, not a property of Smalltalk or of compilation groups in general.
+
+### Toolchain provenance and future reuse
+
+Toolchain output currently preserves the resolved artifact graph as explicit `derivedFrom` edges and records provider ID/identity/protocol in non-reference metadata.
+
+`ToolchainService` does not yet cache results. A later derivation key must include every declared input that can change output, including provider/toolchain identity, target/options, dependency fingerprints, manifest/lock artifacts and OCI image digest/version when an OCI build provider is used.
+
+Diagnostics are transient in v0. Multi-output toolchain calls support several independent outputs, but not sibling output-to-output dependency refs or atomic whole-invocation persistence yet.
 
 ## OCI integration roles
 
@@ -179,7 +218,7 @@ These caches/pools are not durable graph records and are not replicated image st
 
 The mock boundary remains intentionally small: lifecycle, get/put with optimistic version, scan, and append/read history. It exists so image semantics can progress before the Lagrange mapping is settled; it must not grow into a second database API.
 
-Current derivation-cache lookup scans CodeArtifacts. A durable backend can index compiler/toolchain identity + derivation key later without changing compilation semantics.
+Current compiler derivation-cache lookup scans CodeArtifacts. A durable backend can index compiler/toolchain identity + derivation key later without changing compilation semantics.
 
 ## Active execution later
 
@@ -200,4 +239,4 @@ Not every object send becomes RPC and not every foreign call becomes an image ob
 
 Projects should be object graphs with Git/files as interoperability projections. Project graphs should eventually relate source, binary dependencies, manifests, notes, tests and work items without forcing every dependency into source form. The graphical system should follow the same layering: drawing/input substrate, widgets/surfaces, then replaceable shell/window-manager policy.
 
-See ADR 0016 for the artifact/toolchain/foreign-runtime direction.
+See ADR 0016 for the broad artifact/toolchain/foreign-runtime direction and ADR 0017 for the implemented dependency/provider substrate.
