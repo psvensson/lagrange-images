@@ -198,8 +198,4 @@ async function installWasmBlockTree({
   });
 }
 
-export {
-  directNestedBlocks as directNestedWasmBlocks,
-  installWasmBlockTree,
-  validateTree as validateWasmBlockTree,
-};
+export {installWasmBlockTree};
