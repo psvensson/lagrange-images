@@ -16,6 +16,7 @@ async function putArtifact(runtime, id, {
   representation = 'example/artifact-v1',
   content = textValue(id),
   dependencies = [],
+  derivedFrom = [],
   languageId = null,
 } = {}) {
   return await runtime.images.putCodeArtifact('demo', {
@@ -24,6 +25,7 @@ async function putArtifact(runtime, id, {
     representation,
     content,
     dependencies,
+    derivedFrom,
   });
 }
 
@@ -107,6 +109,10 @@ test('toolchain service resolves dependency graph and persists provider outputs 
   });
   await runtime.images.createImage({id: 'demo'});
   try {
+    const historical = await putArtifact(runtime, 'historical-source', {
+      representation: 'example/source-history-v1',
+      content: textValue('previous source'),
+    });
     const library = await putArtifact(runtime, 'library', {
       representation: 'java/jar-v1',
       content: bytesValue(new Uint8Array([0xca, 0xfe])),
@@ -130,6 +136,7 @@ test('toolchain service resolves dependency graph and persists provider outputs 
         {role: 'manifest', artifact: objectRef('demo', manifest.id)},
         {role: 'library', artifact: objectRef('demo', library.id)},
       ],
+      derivedFrom: [objectRef('demo', historical.id)],
     });
 
     const result = await runtime.toolchains.run({
@@ -150,6 +157,7 @@ test('toolchain service resolves dependency graph and persists provider outputs 
       observedRequest.artifacts.map(({ref}) => ref.objectId),
       ['source', 'manifest', 'lock', 'library'],
     );
+    assert.equal(observedRequest.artifacts.some(({ref}) => ref.objectId === historical.id), false);
     assert.deepEqual(observedRequest.roots.map(({ref}) => ref.objectId), ['source']);
     assert.deepEqual(Object.keys(observedContext), ['protocol']);
     assert.equal(observedContext.protocol, TOOLCHAIN_PROVIDER_PROTOCOL_V0);
@@ -163,6 +171,7 @@ test('toolchain service resolves dependency graph and persists provider outputs 
     const provenance = ['source', 'manifest', 'lock', 'library'].map((id) => objectRef('demo', id));
     assert.deepEqual(module.derivedFrom, provenance);
     assert.deepEqual(iface.derivedFrom, provenance);
+    assert.equal(module.derivedFrom.some(({objectId}) => objectId === historical.id), false);
     assert.deepEqual(module.dependencies, [{role: 'runtime', artifact: objectRef('demo', 'library')}]);
     assert.deepEqual(iface.dependencies, []);
     assert.equal(module.metadata.entry, 'main');
