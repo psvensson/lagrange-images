@@ -24,14 +24,39 @@ image-native semantics
   -> wasm-module/v1 / wasm-function/v1
   -> Lagrange Value-handle ABI
 
-external language/toolchain
+external language/toolchain or runtime port
   -> wasm-binary/v1
-  -> explicit callable/component interface
+  -> explicit callable/component/runtime interface
 ```
 
 Toolchains consume explicit artifact dependency graphs and produce immutable derived artifacts. Deterministic providers may opt into result reuse.
 
 The first external ecosystem proof is Rust/Cargo in digest-pinned OCI. The first foreign executable interface is `wasm-scalar-call/v0` over `wasm-callable-interface/v1`.
+
+## Smalltalk direction
+
+Smalltalk intentionally has two complementary paths:
+
+```text
+native Symmetric Smalltalk
+          |
+          | shared projects/artifacts/interfaces/tools
+          |
+OpenSmalltalkVM-backed compatible Smalltalk
+```
+
+Symmetric Smalltalk is the image-native language experiment.
+
+OpenSmalltalkVM is the preferred first compatibility route for mature Cuis/Squeak-style code and is intended to serve as:
+
+- a real foreign compatibility runtime;
+- a host for the real Smalltalk compiler/toolchain;
+- a migration/bootstrap engine that can export structured classes/methods/packages for selective native integration;
+- later, possibly a headless interpreter/Spur runtime compiled to WASM for stronger placement/sandboxing integration.
+
+The foreign Smalltalk heap remains foreign runtime state. Compatibility does not require every package to migrate to the native image model.
+
+See [ADR 0022](decisions/0022-opensmalltalkvm-compatibility-direction.md) and the [Smalltalk section of the language platform](language-platform.md#5-smalltalk-has-two-complementary-paths).
 
 ## ADRs
 
@@ -60,4 +85,4 @@ explicit source/package artifact graph
    -> ordinary Block activation
 ```
 
-The next pressure points are richer component interfaces, Java/JAR and Common Lisp ecosystem proofs, standard package importers, capabilities and distributed placement on the durable Lagrange backend.
+The next pressure points are OpenSmalltalkVM/Cuis compatibility, richer component interfaces, Java/JAR and Common Lisp ecosystem proofs, standard package importers, capabilities and distributed placement on the durable Lagrange backend.
