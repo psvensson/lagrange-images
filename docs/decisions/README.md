@@ -36,6 +36,7 @@ ADRs are the detailed design history. Read them by topic rather than as a prereq
 - [0018 — OCI Cargo/rustc provider](0018-oci-cargo-rustc-provider.md): first real existing compiler ecosystem through digest-pinned OCI.
 - [0019 — explicit vendored Cargo dependencies](0019-explicit-vendored-cargo-dependencies.md): closed third-party package inputs without network discovery.
 - [0020 — deterministic toolchain result reuse](0020-toolchain-result-reuse.md): provider-opt-in external build cache over the explicit artifact graph.
+- [0022 — OpenSmalltalkVM compatibility direction](0022-opensmalltalkvm-compatibility-direction.md): native Symmetric Smalltalk plus real OpenSmalltalkVM compatibility/runtime/toolchain/migration paths.
 
 ## Foreign executable interfaces
 
