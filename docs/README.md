@@ -22,16 +22,16 @@ image-native semantics
   -> wasm-module/v1 / wasm-function/v1
   -> Lagrange Value-handle ABI
 
-external compiler ecosystem
+external compiler/tooling ecosystem
   -> ToolchainService
-  -> imported executable artifacts
+  -> derived/imported executable/runtime artifacts
 
 long-lived external runtime
   -> ForeignRuntimeService
   -> provider-private VM/process
 ```
 
-The first external compiler proof is Rust/Cargo in digest-pinned OCI. The first foreign WASM interface is `wasm-scalar-call/v0`. The first real long-lived foreign runtime is OpenSmalltalkVM + a pinned Cuis image.
+Two mature toolchains now exercise `ToolchainService`: Cargo/rustc produces raw WASM from an explicit Rust graph, while OpenSmalltalkVM/Cuis produces a fresh runnable Cuis image from explicit base-image/support/package artifacts. The first foreign WASM interface is `wasm-scalar-call/v0`.
 
 ## Smalltalk direction
 
@@ -47,22 +47,28 @@ OpenSmalltalkVM-backed compatible Smalltalk
 
 Symmetric Smalltalk is the image-native language experiment.
 
-The OpenSmalltalkVM path now has a concrete first provider proof:
+The compatibility path now has both runtime and compiler/toolchain proofs:
 
 ```text
-ForeignRuntimeService
-  -> headless OpenSmalltalkVM
-  -> real Cuis 7.9 image
-  -> Cuis compiles a service class
-  -> persistent calls
-  -> canonical Values
+runtime
+  ForeignRuntimeService
+    -> headless OpenSmalltalkVM
+    -> Cuis image + explicit packages
+    -> canonical Value calls
+
+toolchain
+  explicit Cuis artifact graph
+    -> ToolchainService
+    -> OpenSmalltalkVM + real Cuis package/compiler machinery
+    -> derived .image + .changes
+    -> fresh runtime proof of the derived image
 ```
 
-The bridge is intentionally whitelisted rather than generic `perform:`/eval, and the Spur heap remains foreign runtime state. A PR-only integration job downloads and verifies the pinned upstream VM/image and executes the proof against the real runtime.
+The runtime bridge is intentionally whitelisted rather than generic `perform:`/eval, and the Spur heap remains foreign runtime state. PR-only integration downloads and verifies the pinned upstream VM/image/package fixture, executes package code, builds a new Cuis image, then starts that derived image without reinstalling the package.
 
-Still ahead are an existing Cuis package compatibility proof, the OpenSmalltalkVM/Cuis compiler-toolchain role, structured class/method export, OCI/distributed placement and optional later interpreter/Spur-to-WASM hosting.
+Still ahead are a larger multi-package Cuis project, structured class/method/package export, mixed native/compatible Smalltalk services, OCI/distributed placement and optional later interpreter/Spur-to-WASM hosting.
 
-See [ADR 0022](decisions/0022-opensmalltalkvm-compatibility-direction.md), [ADR 0023](decisions/0023-foreign-runtime-lifecycle-substrate.md) and [ADR 0024](decisions/0024-opensmalltalkvm-cuis-runtime-proof.md).
+See [ADR 0022](decisions/0022-opensmalltalkvm-compatibility-direction.md), [ADR 0023](decisions/0023-foreign-runtime-lifecycle-substrate.md), [ADR 0024](decisions/0024-opensmalltalkvm-cuis-runtime-proof.md), [ADR 0025](decisions/0025-existing-cuis-package-proof.md) and [ADR 0026](decisions/0026-opensmalltalkvm-cuis-toolchain-provider.md).
 
 ## ADRs
 
@@ -70,16 +76,16 @@ Use [decisions/README.md](decisions/README.md) instead of reading the ADR direct
 
 ## Current frontier
 
-The current substrate can now show both major ecosystem reuse modes:
+The substrate now demonstrates both directions of ecosystem reuse:
 
 ```text
 explicit artifact graph
-   -> real existing compiler
-   -> reusable executable artifact
+   -> real existing compiler/tooling
+   -> runnable/executable artifact
 
 explicit runtime interface
    -> real persistent existing VM/image
    -> canonical Value calls
 ```
 
-The next pressure points are a useful existing Cuis package, the Cuis compiler/toolchain role, richer Component/WIT interfaces, Java/JAR and Common Lisp proofs, capabilities and distributed placement on the durable Lagrange backend.
+The next pressure points are multi-package Smalltalk dependencies and structured export, richer Component/WIT interfaces, Java/JAR and Common Lisp proofs, capabilities and distributed placement on the durable Lagrange backend.
