@@ -9,6 +9,11 @@ function assertImages(images) {
   return images;
 }
 
+function blockValueSelector(argumentCount) {
+  if (!Number.isInteger(argumentCount) || argumentCount < 0) throw new TypeError('argument count must be a non-negative integer');
+  return argumentCount === 0 ? 'value' : Array.from({length: argumentCount}, () => 'value:').join('');
+}
+
 function createSymmetricSmalltalkDispatcher() {
   return Object.freeze({
     languageId: SYMMETRIC_SMALLTALK_ID,
@@ -23,6 +28,14 @@ function createSymmetricSmalltalkDispatcher() {
       }
       if (!isObjectRef(request.receiver)) {
         throw new TypeError('Symmetric Smalltalk v0 message receivers must be object refs');
+      }
+
+      const selector = request.message.value;
+      const blockReceiver = await images.getBlock(request.receiver.imageId, request.receiver.objectId);
+      if (blockReceiver) {
+        const expected = blockValueSelector(request.arguments.length);
+        if (selector !== expected) throw new TypeError(`Symmetric Smalltalk Block does not understand: ${selector}`);
+        return Object.freeze({block: request.receiver});
       }
 
       const receiver = await images.getObject(request.receiver.imageId, request.receiver.objectId);
@@ -42,7 +55,6 @@ function createSymmetricSmalltalkDispatcher() {
         throw new TypeError(`Symmetric Smalltalk behavior shape not found: ${behavior.shape.imageId}/${behavior.shape.objectId}`);
       }
 
-      const selector = request.message.value;
       const methodSlot = shape.slots.find(({name}) => name === selector);
       if (!methodSlot) throw new TypeError(`Symmetric Smalltalk message not understood: ${selector}`);
       const blockRef = behavior.slots[methodSlot.id];
@@ -58,4 +70,4 @@ function createSymmetricSmalltalkDispatcher() {
   });
 }
 
-export {createSymmetricSmalltalkDispatcher};
+export {blockValueSelector, createSymmetricSmalltalkDispatcher};
