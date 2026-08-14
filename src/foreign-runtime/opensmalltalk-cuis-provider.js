@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {copyFile, mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join, resolve} from 'node:path';
+import {basename, join, resolve} from 'node:path';
 import {VALUE_KIND, booleanValue, canonicalizeValue, integerValue} from '../value/index.js';
 import {LineProcessRunner} from './line-process-runner.js';
 
@@ -9,6 +9,7 @@ const OPENSMALLTALK_CUIS_PROVIDER_ID = 'smalltalk/opensmalltalk-cuis';
 const OPENSMALLTALK_CUIS_PROVIDER_V0 = 'opensmalltalk-cuis-runtime/v0';
 const CUIS_STDIO_BRIDGE_V0 = 'lagrange-cuis-stdio/v0';
 const SAFE_NAME = /^[A-Za-z][A-Za-z0-9._-]*$/;
+const SAFE_PACKAGE_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.pck\.st$/;
 
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be a non-empty string`);
@@ -39,9 +40,15 @@ function providerIdentity(vmIdentity, imageIdentity) {
 
 function normalizePackageSpec(value, index) {
   exactKeys(value, ['identity', 'path'], `OpenSmalltalk Cuis package ${index}`);
+  const path = resolve(requiredText(value.path, `OpenSmalltalk Cuis package ${index} path`));
+  const fileName = basename(path);
+  if (!SAFE_PACKAGE_FILE.test(fileName) || fileName.includes('..')) {
+    throw new TypeError(`OpenSmalltalk Cuis package ${index} filename must be a safe .pck.st basename`);
+  }
   return Object.freeze({
     identity: requiredText(value.identity, `OpenSmalltalk Cuis package ${index} identity`),
-    path: resolve(requiredText(value.path, `OpenSmalltalk Cuis package ${index} path`)),
+    path,
+    fileName,
   });
 }
 
@@ -57,9 +64,12 @@ function normalizeStartSpec(spec) {
   if (!Array.isArray(packages)) throw new TypeError('OpenSmalltalk Cuis packages must be an array');
   const normalized = packages.map((entry, index) => normalizePackageSpec(entry, index));
   const identities = new Set();
+  const fileNames = new Set();
   for (const entry of normalized) {
     if (identities.has(entry.identity)) throw new TypeError(`duplicate OpenSmalltalk Cuis package identity: ${entry.identity}`);
+    if (fileNames.has(entry.fileName)) throw new TypeError(`duplicate OpenSmalltalk Cuis package filename: ${entry.fileName}`);
     identities.add(entry.identity);
+    fileNames.add(entry.fileName);
   }
   return Object.freeze({packages: Object.freeze(normalized)});
 }
@@ -98,14 +108,14 @@ function expectedArity(service, operation) {
   throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
 }
 
-function packageInstallSource(packageCount) {
-  return Array.from({length: packageCount}, (_, index) =>
-    `CodePackageFile installPackage: DirectoryEntry currentDirectory // 'package-${index}.pck.st'.`)
+function packageInstallSource(packages) {
+  return packages
+    .map(({fileName}) => `CodePackageFile installPackage: DirectoryEntry currentDirectory // '${fileName}'.`)
     .join('\n');
 }
 
-function bridgeSource(packageCount = 0) {
-  const installPackages = packageInstallSource(packageCount);
+function bridgeSource(packages = []) {
+  const installPackages = packageInstallSource(packages);
   return `| input output service done line fields requestId serviceName operation result decode encode readLine |
 ${installPackages}
 Object subclass: #LagrangeProofService
@@ -273,10 +283,10 @@ function createOpenSmalltalkCuisProvider({
       const scriptPath = join(workspace, 'lagrange-bridge.st');
       let session = null;
       try {
-        for (let index = 0; index < spec.packages.length; index += 1) {
-          await copyFile(spec.packages[index].path, join(workspace, `package-${index}.pck.st`));
+        for (const packageSpec of spec.packages) {
+          await copyFile(packageSpec.path, join(workspace, packageSpec.fileName));
         }
-        await writeFile(scriptPath, bridgeSource(spec.packages.length), 'utf8');
+        await writeFile(scriptPath, bridgeSource(spec.packages), 'utf8');
         session = await runner.start({
           command: executable,
           args: ['-vm-sound-null', '-vm-display-null', image, '-s', scriptPath],
@@ -302,7 +312,10 @@ function createOpenSmalltalkCuisProvider({
             bridgeProtocol: CUIS_STDIO_BRIDGE_V0,
             vmIdentity: stableVmIdentity,
             imageIdentity: stableImageIdentity,
-            packages: spec.packages.map(({identity: packageIdentity}) => Object.freeze({identity: packageIdentity})),
+            packages: spec.packages.map(({identity: packageIdentity, fileName}) => Object.freeze({
+              identity: packageIdentity,
+              fileName,
+            })),
           }),
         });
       } catch (error) {
