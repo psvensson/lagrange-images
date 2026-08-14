@@ -11,8 +11,8 @@ import {CompilationService} from './compilation-service.js';
 import {CodeCompilerRegistry} from './compiler-registry.js';
 import {CompilationGroupCompilerRegistry} from './group-compiler-registry.js';
 
-const LAGRANGE_CODE_WASM_COMPILER_ID = 'lagrange-code-v0-to-wasm-module-v1/value-handle-v0/compiler-v1';
-const LAGRANGE_CODE_WASM_GROUP_COMPILER_ID = 'lagrange-code-group-to-wasm-module-v1/value-handle-v0/compiler-v1';
+const LAGRANGE_CODE_WASM_COMPILER_ID = 'lagrange-code-v0-to-wasm-module-v1/value-handle-v0/compiler-v2';
+const LAGRANGE_CODE_WASM_GROUP_COMPILER_ID = 'lagrange-code-group-to-wasm-module-v1/value-handle-v0/compiler-v2';
 
 function withStatelessInstanceReuse(result) {
   return Object.freeze({
