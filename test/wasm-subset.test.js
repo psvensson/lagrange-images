@@ -41,6 +41,31 @@ test('WASM backend v0 rejects non-tail message sends instead of falling back', a
   await runtime.close();
 });
 
+test('WASM backend v0 rejects non-tail nested Block creation', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  await runtime.images.createImage({id: 'demo'});
+  const source = await semantic(runtime, 'block-semantic', {
+    op: 'send',
+    languageId: 'symmetric-smalltalk',
+    receiver: {
+      op: 'block',
+      blockId: 'root/block:0',
+      captures: [],
+      program: {parameters: [], captures: [], body: {op: 'literal', value: integerValue(1)}},
+    },
+    message: textValue('value'),
+    arguments: [],
+  });
+  await assert.rejects(
+    runtime.compilation.compileArtifact(objectRef('demo', source.id), {
+      id: 'block-wasm',
+      targetRepresentation: WASM_MODULE_V1,
+    }),
+    /nested Block creation only in tail position/,
+  );
+  await runtime.close();
+});
+
 test('WASM backend v0 refuses reference literals because metadata cannot hide graph edges', async () => {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   await runtime.images.createImage({id: 'demo'});
