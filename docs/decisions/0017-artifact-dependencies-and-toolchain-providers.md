@@ -58,6 +58,8 @@ A dependency says an artifact relates to another artifact for a role such as lib
 
 Do not encode dependency refs in metadata and do not use `derivedFrom` as a package/library dependency list.
 
+In-process `CodeCompilerRegistry` / `CompilationGroupCompilerRegistry` results may also explicitly declare output dependencies. Those dependencies are never copied implicitly from source inputs; linkage remains compiler policy.
+
 ## Dependency record
 
 The bootstrap dependency shape is:
@@ -88,7 +90,7 @@ Older stored CodeArtifacts that predate this field are read as if `dependencies`
 A provider is registered under a selection ID but also declares a stable identity:
 
 ```text
-providerId       example/default
+providerId        example/default
 provider.identity example-toolchain/v7
 ```
 
@@ -119,6 +121,8 @@ options data
 optional output IDs
 ```
 
+The output image is validated before provider execution.
+
 The service resolves the complete explicit dependency graph reachable from the roots, once per artifact, in deterministic first-discovery order.
 
 The provider receives frozen snapshots:
@@ -136,6 +140,21 @@ artifacts:
 target
 options
 ```
+
+The artifact snapshot intentionally contains the build-relevant durable artifact view:
+
+```text
+kind
+id
+imageId
+languageId
+representation
+content
+dependencies
+metadata
+```
+
+It omits backend/concurrency/time bookkeeping such as `_version` and `updatedAt`, and it omits `derivedFrom` provenance history. Provenance is not an implicit build input.
 
 The generic context currently contains only the protocol ID.
 
@@ -185,11 +204,19 @@ interface description
 debug artifact
 ```
 
-The bootstrap service validates all result shapes and dependency targets before writing outputs.
+Before the first output write, the bootstrap service validates:
+
+- provider result/output shapes
+- provider-declared dependency targets
+- unique output names and IDs
+- requested output names
+- that every resolved output ID is currently unused
+
+This avoids ordinary validation/ID-collision partial installs.
 
 Output-to-output dependency references are not supported in v0 because sibling outputs do not exist yet during preflight. A later transactional/multi-output artifact protocol can add named sibling edges if real toolchains require them.
 
-The mock/backend persistence path is not yet a transaction spanning all outputs. Whole-invocation atomicity remains future work.
+The backend persistence path is still not a transaction spanning all outputs. A backend/runtime failure during persistence could therefore leave a partial invocation. Whole-invocation atomicity remains future work.
 
 ## Artifact graph resolution
 
@@ -231,9 +258,11 @@ toolchain identity
 provider execution identity/digest where relevant
 target
 options
-ordered/resolved input artifact fingerprints
+resolved input artifact representation/content/dependency/metadata fingerprints
 manifest/lock inputs
 ```
+
+Backend versions, timestamps and derivation history should not become cache inputs merely because they are storage/provenance fields.
 
 Adding cache reuse must not weaken the explicit input/provenance model introduced here.
 
