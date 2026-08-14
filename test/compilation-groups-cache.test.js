@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LAGRANGE_CODE_WASM_COMPILER_ID,
+  LAGRANGE_CODE_WASM_GROUP_COMPILER_ID,
   WASM_MODULE_V1,
   createCompilationGroup,
   createRuntime,
@@ -131,7 +131,51 @@ test('compilation groups describe compiler policy without prescribing a source l
   }), /duplicate compilation group member/);
 });
 
-test('independent WASM Block-tree installations reuse modules but keep function and Block identities separate', async () => {
+test('group compilers share the generic provenance and reuse contract', async () => {
+  let compileCount = 0;
+  const compiler = Object.freeze({
+    identity: 'test-group-compiler/v1',
+    cacheKey({group, members}) {
+      return {
+        policyId: group.policyId,
+        options: group.options,
+        members: members.map(({representation, content}) => ({representation, content})),
+      };
+    },
+    async compile({members}) {
+      compileCount += 1;
+      return {content: textValue(members.map(({content}) => content.value).join('|'))};
+    },
+  });
+  const runtime = await createRuntime({
+    backend: {mode: 'mock'},
+    groupCompilers: [['mixed-bundle/v0', 'bundle/v0', compiler]],
+  });
+  await runtime.images.createImage({id: 'demo'});
+  const java = await runtime.images.putCodeArtifact('demo', {
+    id: 'java', languageId: 'java', representation: 'java-semantic/v0', content: textValue('J'),
+  });
+  const rust = await runtime.images.putCodeArtifact('demo', {
+    id: 'rust', languageId: 'rust', representation: 'rust-semantic/v0', content: textValue('R'),
+  });
+  const group = createCompilationGroup({
+    policyId: 'mixed-bundle/v0',
+    targetRepresentation: 'bundle/v0',
+    members: [objectRef('demo', java.id), objectRef('demo', rust.id)],
+    options: {optimization: 'release'},
+  });
+
+  const first = await runtime.compilation.compileGroup(group, {id: 'bundle-one'});
+  const reused = await runtime.compilation.compileGroup(group, {id: 'ignored'});
+  assert.equal(compileCount, 1);
+  assert.equal(reused.id, first.id);
+  assert.deepEqual(first.derivedFrom, [objectRef('demo', java.id), objectRef('demo', rust.id)]);
+  assert.equal(first.languageId, null);
+  assert.equal(first.metadata.compilerIdentity, 'test-group-compiler/v1');
+  await runtime.close();
+});
+
+test('independent WASM Block-tree installations share one multi-function module but keep function and Block identities separate', async () => {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   await runtime.images.createImage({id: 'demo'});
   const installed = await installSymmetricSmalltalkBlock({
@@ -150,8 +194,12 @@ test('independent WASM Block-tree installations reuse modules but keep function 
   });
   const modulesAfterFirst = (await runtime.images.listCodeArtifacts('demo'))
     .filter((artifact) => artifact.representation === WASM_MODULE_V1);
-  assert.equal(modulesAfterFirst.length, 3);
-  assert.ok(modulesAfterFirst.every((artifact) => artifact.metadata.compilerIdentity === LAGRANGE_CODE_WASM_COMPILER_ID));
+  assert.equal(modulesAfterFirst.length, 1);
+  assert.equal(modulesAfterFirst[0].metadata.compilerIdentity, LAGRANGE_CODE_WASM_GROUP_COMPILER_ID);
+  assert.equal(modulesAfterFirst[0].metadata.functions.length, 3);
+  assert.deepEqual(modulesAfterFirst[0].metadata.functions.map(({entry}) => entry), ['run_0', 'run_1', 'run_2']);
+  assert.ok(first.nodes.every(({moduleArtifact}) => moduleArtifact.id === modulesAfterFirst[0].id));
+  assert.equal(new Set(first.nodes.map(({functionArtifact}) => functionArtifact.metadata.entry)).size, 3);
 
   const second = await installWasmBlockTree({
     images: runtime.images,
@@ -161,15 +209,12 @@ test('independent WASM Block-tree installations reuse modules but keep function 
   });
   const modulesAfterSecond = (await runtime.images.listCodeArtifacts('demo'))
     .filter((artifact) => artifact.representation === WASM_MODULE_V1);
-  assert.equal(modulesAfterSecond.length, 3);
-
-  const firstModules = new Map(first.nodes.map((node) => [node.semanticBlockId ?? '$root', node.moduleArtifact.id]));
-  const secondModules = new Map(second.nodes.map((node) => [node.semanticBlockId ?? '$root', node.moduleArtifact.id]));
-  assert.deepEqual(secondModules, firstModules);
+  assert.equal(modulesAfterSecond.length, 1);
+  assert.ok(second.nodes.every(({moduleArtifact}) => moduleArtifact.id === modulesAfterFirst[0].id));
   assert.notEqual(first.block.id, second.block.id);
   assert.notEqual(first.functionArtifact.id, second.functionArtifact.id);
   assert.equal(first.group.policyId, 'wasm-nested-block-tree/v0');
   assert.equal(first.group.members.length, 3);
-  assert.equal(first.group.options.physicalLayout, 'one-module-per-member');
+  assert.equal(first.group.options.physicalLayout, 'shared-module');
   await runtime.close();
 });
