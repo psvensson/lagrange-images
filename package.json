@@ -1,12 +1,14 @@
 {
   "name": "lagrange-images",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Persistent image service and language platform for Lagrange",
   "type": "module",
   "main": "src/runtime.js",
   "exports": {
     ".": "./src/runtime.js",
     "./backend": "./src/backend/index.js",
+    "./code": "./src/code/index.js",
+    "./compilation": "./src/compilation/index.js",
     "./dispatch": "./src/dispatch/invocation-service.js",
     "./execution": "./src/execution/model.js",
     "./executor": "./src/execution/executor.js",

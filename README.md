@@ -2,31 +2,32 @@
 
 A persistent image service and language platform built to sit on Lagrange.
 
-An image is a durable object graph, not a VM memory dump and not a pile of source files. Languages are personalities over that graph. The image substrate has an explicit language-neutral value/reference/object representation plus a first executable Block/code/dispatch layer; Lagrange can later provide distributed persistence, placement, transactions and compute underneath it without changing those semantics.
+An image is a durable object graph, not a VM memory dump and not a pile of source files. Languages are personalities over that graph. Program meaning is kept separately from derived execution artifacts so interpreters, WASM and future optimized runtimes can change without changing image semantics.
 
 ## What is here now
 
 - stable image and object identities
 - canonical tagged scalar values (`boolean`, arbitrary-precision `integer`, exact-bit `float64`, `text`, `bytes`)
 - ordinary object refs and revision-pinned refs
-- immutable shape records with stable slot IDs
-- generic object records with separate `shape` and optional `behavior` refs
-- slot state restricted to tagged Values; arbitrary nested JSON is not object state
+- immutable shapes plus generic objects with separate physical shape and language behavior
 - immutable CodeArtifacts, versioned LexicalEnvironments and durable Blocks
 - transient message dispatch and activation requests
+- `CodeCompilerRegistry` / `CompilationService` for immutable code derivation
+- language-neutral `lagrange-code/v0` semantic code
 - pluggable representation executors plus `neutral-expression/v0`
-- first executable Symmetric Smalltalk tokenizer/parser/compiler/dispatcher seed
-- reference walking for reachability/dependency work
-- optimistic object versions, image history and snapshots
+- reserved `wasm-module/v1` and `wasm-function/v1` artifact contracts
+- executable Symmetric Smalltalk parser/compiler/dispatcher with nested lexical Blocks
+- reference walking, optimistic versions, history and snapshots
 - in-memory mock backend plus optional `lagrange-server` probing
-- a small HTTP surface, executable demo and tests
+- executable demo and tests
 
-Three invariants are deliberate:
+Core invariants:
 
 ```text
-shape     != behavior
+shape != behavior
 reference != authority
-identity  != revision
+identity != revision
+semantic code != executable artifact
 ```
 
 ## Run it
@@ -39,50 +40,15 @@ npm run demo
 npm start
 ```
 
-The service listens on port `7331` by default.
-
-## JavaScript example
-
-```js
-import {
-  createRuntime,
-  integerValue,
-  objectRef,
-} from 'lagrange-images';
-
-const runtime = await createRuntime({backend: {mode: 'mock'}});
-const image = await runtime.images.createImage({id: 'playground'});
-
-const shape = await runtime.images.putShape(image.id, {
-  id: 'counter-shape-v1',
-  slots: [{id: 'slot-value', name: 'value'}],
-});
-
-const counter = await runtime.images.putObject(image.id, {
-  id: 'counter',
-  shape: objectRef(image.id, shape.id),
-  slots: {'slot-value': integerValue(0)},
-});
-
-await runtime.images.setRoot(image.id, counter.id);
-```
-
-A structural shape change gets a new shape identity. A rename can preserve the stable slot ID:
-
-```text
-shape-v1: slot-postal -> "postalCode"
-shape-v2: slot-postal -> "postcode"
-```
-
 ## First Symmetric Smalltalk seed
 
-The first source language is now executable through the common substrate rather than through a parallel VM. For example:
+The language runs through the common image/dispatch/execution substrate rather than a separate Smalltalk VM:
 
 ```js
 import {
   createRuntime,
   evaluateSymmetricSmalltalkBlock,
-  textValue,
+  integerValue,
 } from 'lagrange-images';
 
 const runtime = await createRuntime({backend: {mode: 'mock'}});
@@ -91,99 +57,87 @@ await runtime.images.createImage({id: 'playground'});
 const result = await evaluateSymmetricSmalltalkBlock({
   runtime,
   imageId: 'playground',
-  source: '[ :value | value ]',
-  arguments: [textValue('hello')],
+  source: '[ :x | [ :y | x ] value: 99 ]',
+  arguments: [integerValue(7)],
 });
 ```
 
-The seed parses integer/string literals, names, `self`, parentheses, block syntax, and unary/binary/keyword message sends with Smalltalk precedence. The outer source form is a Block compilation unit. Source, parsed syntax and compiled neutral code are persisted as separate CodeArtifacts linked by provenance.
+The seed supports integer/string literals, names, `self`, parentheses, Blocks, and unary/binary/keyword message sends with Smalltalk precedence. Nested Blocks automatically capture free lexical bindings by stable binding ID; `self` is captured lexically when it crosses a Block boundary.
 
-Message sends compile to the language-neutral runtime send operation. The first image-resident lookup convention uses a receiver's `behavior` object as a method table: selector names are the behavior shape's slot names and the corresponding slot Values are Block refs. This is intentionally a bootstrap convention before the Object/Behavior/Class/Metaclass model is designed.
+Compilation preserves separate immutable artifacts:
 
-Nested Block syntax is parsed but runtime nested closure creation, assignment, temporaries, sequences, inheritance and immediate-value primitives are still pending.
-
-## HTTP example
-
-```sh
-curl -X POST http://127.0.0.1:7331/images \
-  -H 'content-type: application/json' \
-  -d '{"id":"playground"}'
-
-curl -X PUT http://127.0.0.1:7331/images/playground/shapes/workspace-v1 \
-  -H 'content-type: application/json' \
-  -d '{"slots":[{"id":"slot-title","name":"title"}]}'
-
-curl -X PUT http://127.0.0.1:7331/images/playground/objects/root \
-  -H 'content-type: application/json' \
-  -d '{
-    "shape":{"kind":"ref","imageId":"playground","objectId":"workspace-v1"},
-    "slots":{"slot-title":{"kind":"text","value":"hello"}}
-  }'
+```text
+Smalltalk source
+  -> Smalltalk syntax
+  -> lagrange-code/v0 semantic code
+  -> neutral-expression/v0 executable artifact
+  -> Block
 ```
 
-`GET /images/playground/records` returns substrate and language/runtime graph records.
+The final executable artifact is derived state. Recompiling the semantic artifact produces the same executable meaning, and a future WASM backend can derive a different executable artifact from the same semantic code.
 
-## Values are deliberately small
+The bootstrap interpreter currently materializes nested closures as Block + LexicalEnvironment records. That is not a language requirement: an optimized/WASM executor may stack-allocate, inline or eliminate a nonescaping closure.
 
-The durable Value union is currently:
+The first image-resident lookup convention uses a receiver's `behavior` object as a method table: selector names are behavior-shape slot names and corresponding slot Values are Block refs. Block refs themselves receive ordinary `value`, `value:`, `value:value:`, ... sends through the same dispatcher. This is intentionally a bootstrap convention before Object/Behavior/Class/Metaclass is designed.
+
+## Code artifacts and WASM
+
+`CodeArtifact.representation` identifies what the content means. The compiler registry currently knows:
+
+```text
+lagrange-code/v0 -> neutral-expression/v0
+```
+
+The next backend can add:
+
+```text
+lagrange-code/v0 -> wasm-module/v1 / wasm-function/v1
+```
+
+without changing Smalltalk source, semantic code, Blocks, dispatch, or image identity.
+
+The reserved WASM contracts are:
+
+```text
+wasm-module/v1
+  content: bytes
+
+wasm-function/v1
+  content: ref -> wasm module CodeArtifact
+  metadata.entry: entry name
+```
+
+WASM is therefore an execution product, not the canonical program representation.
+
+## Values and objects
+
+The durable Value union remains deliberately small:
 
 ```text
 boolean | integer | float64 | text | bytes | ref | pinned-ref
 ```
 
-There is no generic inline array/map value. Language-level collections, cons cells, closures and similar structures are objects in the graph. There is also deliberately no platform `nil`: a Smalltalk personality can map `nil` to a normal object ref, while Lisp can choose its own semantics.
+There is no generic inline map/array and no platform `nil`. Language collections, closures and other semantic structures live in the graph.
 
-The durable representation is not the execution representation. A compiler may unbox integers, collapse non-escaping blocks, or use compact runtime handles while preserving the same image semantics.
+A generic object contains physical shape separately from language behavior. Smalltalk currently uses `behavior` as its dispatch hook; the image layer still does not know what a class is.
 
-## Objects are not classes
-
-A generic object contains physical shape separately from language behavior:
-
-```js
-{
-  kind: 'object',
-  id: 'counter',
-  imageId: 'playground',
-  shape: {kind: 'ref', imageId: 'playground', objectId: 'counter-shape-v1'},
-  behavior: null,
-  slots: {
-    'slot-value': {kind: 'integer', value: '0'}
-  },
-  metadata: {}
-}
-```
-
-Smalltalk uses `behavior` as its first dispatch hook. Another language may use a prototype/type/dispatch object or leave it null. The image layer does not know what a class is.
-
-Generic objects have no `classId` or `source`. Source, syntax, executable IR and provenance live in CodeArtifacts and linked graph objects.
+Generic objects have no `classId` or `source`. Source, syntax, semantic code, executable artifacts and provenance live in CodeArtifacts and linked graph objects.
 
 ## References are not capabilities
 
-`{kind:'ref', imageId, objectId}` means only "this object identity". It grants no right to read, mutate or invoke that object. Authorization is resolved separately from the reference.
+`{kind:'ref', imageId, objectId}` means only "this object identity". It grants no right to read, mutate or invoke that object. Authorization is resolved separately.
 
-A pinned reference adds a revision for history/debugger use:
-
-```js
-{kind: 'pinned-ref', imageId: 'playground', objectId: 'counter', revision: 'snapshot:one'}
-```
-
-Ordinary refs continue to mean the same object as it evolves.
+A pinned reference adds a historical revision; ordinary refs continue to mean the same evolving identity.
 
 ## Backend selection
 
 `LAGRANGE_BACKEND` accepts `auto`, `mock`, or `lagrange`.
 
 - `mock`: always use the in-memory backend.
-- `auto` (default): try to import `lagrange-server`; use a compatible adapter when one exists, otherwise fall back to the mock.
-- `lagrange`: require the library and a compatible adapter; fail instead of silently falling back.
+- `auto` (default): try `lagrange-server`; otherwise use mock.
+- `lagrange`: require a compatible public Lagrange adapter and fail rather than silently falling back.
 
-For local integration work:
-
-```sh
-npm install --no-save ../lagrange
-```
-
-Do not import from `lagrange-server/src/...`. The image service should use a public Lagrange seam only.
+Do not import `lagrange-server/src/...`; use public package seams only.
 
 ## Documentation
 
@@ -200,3 +154,4 @@ Do not import from `lagrange-server/src/...`. The image service should use a pub
 - [ADR 0004: invocation and message dispatch](docs/decisions/0004-invocation-and-message-dispatch.md)
 - [ADR 0005: calling convention and neutral executor](docs/decisions/0005-calling-convention-and-neutral-executor.md)
 - [ADR 0006: Symmetric Smalltalk seed](docs/decisions/0006-symmetric-smalltalk-seed.md)
+- [ADR 0007: semantic code and derived execution](docs/decisions/0007-semantic-code-and-derived-execution.md)

@@ -42,6 +42,7 @@ shape     != behavior
 reference != authority
 identity  != revision
 durable representation != execution representation
+semantic code != executable artifact
 ```
 
 - Object slots contain only tagged Values; do not reintroduce arbitrary nested JSON state.
@@ -53,14 +54,21 @@ durable representation != execution representation
 - Do not add `classId`, `source` or another language-specific shortcut to generic objects.
 - A ref grants no access rights. Capability/authorization state stays separate.
 
+## Code derivation
+
+- Preserve language source -> syntax -> `lagrange-code/v0` semantic code -> derived execution artifacts.
+- Executable artifacts such as `neutral-expression/v0` or future WASM are rebuildable state, never the sole surviving meaning of a program.
+- Add new lowering backends through `CodeCompilerRegistry`; do not teach language compilers about executor internals.
+- WASM belongs in CodeArtifacts (`wasm-module/v1`, `wasm-function/v1`), not in Block/image identity fields.
+- A bootstrap interpreter may materialize a closure as Block + LexicalEnvironment; optimized executors may elide that allocation while preserving semantics.
+
 ## Symmetric Smalltalk seed
 
 - Keep parser/compiler/dispatch semantics in the language personality; do not teach the image backend what a selector, class or method is.
-- Preserve source -> syntax -> executable-artifact provenance rather than overwriting source with compiled form.
 - Compile ordinary source sends through the shared language-tagged send path. Do not add compiler-only primitive semantics just to make examples easier.
 - The current behavior-object selector-slot lookup is a bootstrap convention, not the final Class/Metaclass model.
-- Nested block literals are syntax-only until runtime closure creation and capture analysis are designed deliberately.
-- Prefer stable lexical binding IDs over source names for captured state.
+- Nested Blocks use automatic lexical capture analysis; captured state is identified by stable binding ID rather than source name.
+- `self` crossing a Block boundary is a lexical capture, not the Block object used as the `value*` message receiver.
 
 ## Architecture
 

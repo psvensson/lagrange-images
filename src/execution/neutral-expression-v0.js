@@ -112,6 +112,22 @@ async function evaluate(expression, frame, context, depth = 0) {
       }
       return await context.sendMessage({languageId, receiver, message, arguments: args});
     }
+    case 'make-block': {
+      exactKeys(expression, ['op', 'prototype', 'captures'], 'make-block expression');
+      if (!Array.isArray(expression.captures)) throw new TypeError('make-block captures must be an array');
+      if (typeof context.createClosure !== 'function') throw new TypeError('make-block requires a closure runtime');
+      const captures = [];
+      for (let index = 0; index < expression.captures.length; index += 1) {
+        const capture = expression.captures[index];
+        exactKeys(capture, ['id', 'name', 'value'], `make-block capture ${index}`);
+        captures.push(Object.freeze({
+          id: requiredText(capture.id, `make-block capture ${index} id`),
+          name: requiredText(capture.name, `make-block capture ${index} name`),
+          value: await evaluate(capture.value, frame, context, depth + 1),
+        }));
+      }
+      return await context.createClosure({prototype: canonicalizeValue(expression.prototype), captures});
+    }
     default:
       throw new TypeError(`unknown neutral expression op: ${expression.op}`);
   }

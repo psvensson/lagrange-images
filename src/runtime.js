@@ -1,4 +1,5 @@
 import {createBackend} from './backend/create-backend.js';
+import {CompilationService, createDefaultCodeCompilerRegistry} from './compilation/index.js';
 import {DispatchRegistry, InvocationService} from './dispatch/invocation-service.js';
 import {ActivationExecutor, createDefaultCodeExecutorRegistry} from './execution/executor.js';
 import {ImageService} from './image/graph-image-service.js';
@@ -13,6 +14,15 @@ async function createRuntime(options = {}) {
   await backend.start();
   const images = new ImageService({backend, clock: options.clock});
   const languages = createDefaultLanguagePlatform();
+
+  const codeCompilers = createDefaultCodeCompilerRegistry();
+  for (const entry of options.codeCompilers ?? []) {
+    if (!Array.isArray(entry) || entry.length !== 3) {
+      throw new TypeError('codeCompilers entries must be [sourceRepresentation, targetRepresentation, compiler]');
+    }
+    codeCompilers.register(entry[0], entry[1], entry[2]);
+  }
+  const compilation = new CompilationService({images, compilers: codeCompilers});
 
   const dispatchers = new DispatchRegistry();
   for (const [languageId, dispatcher] of Object.entries(options.dispatchers ?? {})) {
@@ -33,6 +43,8 @@ async function createRuntime(options = {}) {
     backend,
     images,
     languages,
+    codeCompilers,
+    compilation,
     dispatchers,
     invocations,
     codeExecutors,
@@ -42,6 +54,8 @@ async function createRuntime(options = {}) {
 }
 
 export * from './backend/index.js';
+export * from './code/index.js';
+export * from './compilation/index.js';
 export * from './dispatch/invocation-service.js';
 export {ImageService};
 export * from './execution/executor.js';
