@@ -150,6 +150,8 @@ The grouped WASM compiler has its own stable compiler/ABI identity and cache key
 
 Two independent equivalent tree installations therefore reuse one immutable multi-function module while retaining separate function/Block identities.
 
+ADR 0014 adds a second, runtime-only reuse layer: once an immutable `wasm-module/v1` is selected for execution, its host `WebAssembly.Module` compilation is cached per runtime. That execution cache does not change this artifact-level derivation contract.
+
 ## Backward compatibility
 
 The single-artifact `lagrange-code/v0 -> wasm-module/v1` compiler remains supported.
@@ -177,7 +179,7 @@ Each compiler owns member semantics, cache equivalence, ABI and physical layout.
 
 - module-size/budget driven splitting of one logical group into several modules
 - direct optimized calls between entries in the same module
-- compiled `WebAssembly.Module` / instance caching in the host runtime
+- `WebAssembly.Instance` pooling/reuse policy
 - cross-image grouped compilation and global artifact stores
 - dependency fingerprints beyond explicit group members
 - incremental recompilation of only affected members
