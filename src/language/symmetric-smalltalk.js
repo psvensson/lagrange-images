@@ -1,7 +1,7 @@
 const SYMMETRIC_SMALLTALK = Object.freeze({
   id: 'symmetric-smalltalk',
   name: 'Symmetric Smalltalk',
-  status: 'designing',
+  status: 'seed',
   executionModel: 'image-resident',
   principles: Object.freeze([
     'everything user-visible is an object',
@@ -11,9 +11,9 @@ const SYMMETRIC_SMALLTALK = Object.freeze({
     'syntax is a language personality, not a persistence boundary',
   ]),
   capabilities: Object.freeze({
-    parse: false,
-    compile: false,
-    evaluate: false,
+    parse: true,
+    compile: true,
+    evaluate: true,
     bootstrap: false,
   }),
 });
