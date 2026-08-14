@@ -86,15 +86,22 @@ ForeignRuntimeService
         -> smalltalk/opensmalltalk-cuis
         -> headless OpenSmalltalkVM
         -> real Cuis image
-        -> compiled LagrangeProofService
+        -> provider bridge compiled in the pristine image
+        -> explicit upstream Cuis packages
         -> canonical Value result
 ```
 
-`createOpenSmalltalkCuisProvider()` launches a configured VM/image pair without a shell and keeps the child process/stdin/stdout transport private. The first bridge protocol, `lagrange-cuis-stdio/v0`, deliberately exports only `proof/add` and recursive `proof/factorial`; it is **not** remote Smalltalk eval or arbitrary `perform:`. Provider identity uses explicit VM/image identities rather than local paths.
+`createOpenSmalltalkCuisProvider()` launches a configured VM/image pair without a shell and keeps the child process/stdin/stdout transport private. Provider identity uses explicit VM/image identities rather than local paths.
 
-Normal tests inject the process transport. A separate PR-only CI job downloads and verifies the pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur runtime and Cuis 7.9-8090 image and runs the same provider against the real VM.
+The provider start spec can also carry explicit Cuis package inputs as `{path, identity}`. Host paths are transient; packages are copied into the private runtime workspace with validated original `.pck.st` basenames, and runtime metadata retains package identity plus that guest-visible basename. The fixed bridge/control plane is compiled before guest packages are installed.
 
-OCI foreign-runtime placement, durable runtime-definition artifacts, capabilities, restart/reconciliation and foreign-object handles remain later work.
+The first unchanged-package proof uses Cuis' upstream `JSON.pck.st`. Cuis installs it with its own `CodePackageFile` loader, and the real integration test exercises the package's parser and renderer by parsing a nested document, rendering it, reparsing it and validating the reconstructed structure.
+
+The bridge protocol, `lagrange-cuis-stdio/v0`, remains deliberately narrow. It exports named proof services including `proof/add`, recursive `proof/factorial` and the package-backed `json/package-proof`; it is **not** remote Smalltalk eval or arbitrary `perform:`.
+
+Normal tests inject the process transport. A separate PR-only CI job downloads and verifies the pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur runtime, Cuis 7.9-8090 image and pinned upstream JSON package, then runs the same provider against the real VM.
+
+OCI foreign-runtime placement, durable runtime/package artifacts, package dependency resolution, capabilities, restart/reconciliation and foreign-object handles remain later work.
 
 ### Foreign WASM callable boundary
 
@@ -195,13 +202,15 @@ Cuis/Squeak-style compatible Smalltalk
   -> later optional structured migration or WASM-hosted runtime
 ```
 
-OpenSmalltalkVM is the preferred first compatibility path because it lets established Smalltalk code keep using its real runtime/compiler semantics. Its Spur heap remains foreign runtime state rather than becoming the Lagrange image graph.
+OpenSmalltalkVM is the preferred first compatibility path because it lets established Smalltalk code keep using its real runtime/compiler/package semantics. Its Spur heap remains foreign runtime state rather than becoming the Lagrange image graph.
+
+The compatibility path has now proved both a real pinned Cuis runtime and unchanged upstream package loading/execution. The next package pressure test should involve several dependencies or a larger third-party Cuis package rather than more generic runtime abstraction.
 
 The long-term goal is coexistence: native Symmetric Smalltalk and OpenSmalltalkVM-backed compatible Smalltalk should share projects, artifacts, interfaces and tools, with selective native migration only where useful.
 
 Compiled libraries and runtime images can remain compiled artifacts when that is the useful canonical form. A JAR does not need to be decompiled; a WASM component does not need to become source; a vendored crate can remain explicit package bytes/files; a compatible Smalltalk runtime image can remain an external runtime artifact.
 
-See [ADR 0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md) for the Smalltalk compatibility end state, [ADR 0023](docs/decisions/0023-foreign-runtime-lifecycle-substrate.md) for the generic runtime lifecycle seam, and [ADR 0024](docs/decisions/0024-opensmalltalkvm-cuis-runtime-proof.md) for the first real runtime proof.
+See [ADR 0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md) for the Smalltalk compatibility end state, [ADR 0023](docs/decisions/0023-foreign-runtime-lifecycle-substrate.md) for the generic runtime lifecycle seam, [ADR 0024](docs/decisions/0024-opensmalltalkvm-cuis-runtime-proof.md) for the first real runtime proof, and [ADR 0025](docs/decisions/0025-existing-cuis-package-proof.md) for the first unchanged upstream-package proof.
 
 ## Deterministic toolchain reuse
 
@@ -230,6 +239,9 @@ provider handle != ObjectRef
 runtime ID != capability
 foreign heap != image graph
 Spur oop != ObjectRef
+package host path != package identity
+package basename != package identity
+provider control plane != guest package state
 exported service != arbitrary perform:
 raw foreign WASM != Lagrange WASM ABI
 callable interface != authority

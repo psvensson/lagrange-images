@@ -110,7 +110,7 @@ foreign runtime ID != capability
 
 The native path explores Smalltalk when Blocks, persistent identity, artifacts and Lagrange execution are designed together.
 
-The compatibility path reuses the mature runtime/compiler rather than first reproducing Cuis/OpenSmalltalkVM semantics inside Lagrange Images.
+The compatibility path reuses the mature runtime/compiler/package ecosystem rather than first reproducing Cuis/OpenSmalltalkVM semantics inside Lagrange Images.
 
 These paths may share projects, source/package artifacts, interfaces, tools and history without sharing one physical heap or VM.
 
@@ -133,32 +133,34 @@ This remains the image-native language experiment. It does not need to become by
 
 ## 7. OpenSmalltalkVM compatibility
 
-The first compatibility-runtime proof is now implemented:
+The compatibility runtime now proves both a real VM/image and real upstream package code:
 
 ```text
 ForeignRuntimeService
   -> smalltalk/opensmalltalk-cuis
   -> headless OpenSmalltalkVM
-  -> real Cuis 7.9 image
-  -> Cuis compiles LagrangeProofService
-  -> explicit calls
+  -> pinned Cuis 7.9 image
+  -> fixed provider bridge
+  -> explicit upstream .pck.st packages
+  -> real package code
   -> canonical Lagrange Values
 ```
 
-`createOpenSmalltalkCuisProvider()` uses explicit VM/image identities separate from local installation paths. The current PR-only integration test pins an OpenSmalltalkVM release archive by SHA-256 and a Cuis image by repository commit + Git blob identity, then actually starts the VM.
+`createOpenSmalltalkCuisProvider()` uses explicit VM/image identities separate from local installation paths. PR-only integration pins the OpenSmalltalkVM release by SHA-256, the Cuis image by repository commit + Git blob identity, and package fixtures by immutable package identity/blob.
 
-### First service boundary
+### Service boundary
 
-The first bridge is intentionally tiny:
+The bridge remains intentionally tiny:
 
 ```text
 lagrange-cuis-stdio/v0
 
 proof/add
 proof/factorial
+json/package-proof
 ```
 
-The bridge script asks the real Cuis compiler to create methods on `LagrangeProofService`, then keeps that object alive in the running image while several calls arrive over stdin/stdout.
+The bridge is compiled in the pristine image before guest packages are loaded. It then keeps one service object alive while several calls arrive over stdin/stdout.
 
 Only integer and boolean Values are transported in v0.
 
@@ -172,7 +174,47 @@ ambient image callback
 capability hidden in a runtime handle
 ```
 
-This proves the real VM/compiler/object model and persistent runtime lifecycle without prematurely defining a generic remote Smalltalk protocol.
+This proves the real VM/compiler/object model/package ecosystem and persistent runtime lifecycle without defining a generic remote Smalltalk protocol.
+
+### Package loading
+
+Runtime start may include explicit package inputs:
+
+```text
+host path
+  + immutable package identity
+  -> private provider workspace
+  -> validated original .pck.st basename
+  -> CodePackageFile installPackage:
+```
+
+The real package proof established that these concepts must remain distinct:
+
+```text
+host path != guest package basename
+package basename != package identity
+package identity != provider identity
+```
+
+Host directory paths remain transient. The safe package basename is preserved because Cuis package tooling treats the package filename as meaningful. Runtime metadata records immutable identity plus the guest-visible basename.
+
+Provider-owned bridge/control-plane code is established before guest packages are installed. This avoids making provider bootstrap dependent on application package side effects.
+
+### Existing package proof
+
+The first unchanged package is Cuis' upstream `JSON.pck.st`. It is installed with Cuis' own `CodePackageFile` machinery. The package-backed proof then uses the real `Json` class to:
+
+```text
+parse nested JSON
+  -> render
+  -> parse rendered JSON
+  -> validate arrays/dictionaries/boolean/string content
+  -> canonical true
+```
+
+Normal bridge calls are exercised before and after the package call, proving that package installation participates in the same persistent managed runtime rather than replacing its lifecycle.
+
+This is still not evidence that every Cuis package will load unchanged. The next useful package test should involve several package dependencies or a larger third-party package, so dependency ordering and artifact conventions are driven by real pressure.
 
 ### Heap boundary
 
@@ -194,13 +236,9 @@ Cuis source/package artifacts
   -> runnable image and/or structured compiled artifacts
 ```
 
-This is analogous to using Cargo/rustc rather than writing a Rust compiler. VM/compiler-image version, package/source inputs and options must be explicit toolchain/provenance material.
+This is analogous to using Cargo/rustc rather than writing a Rust compiler. VM/compiler-image version, package/source inputs, package ordering and options must be explicit toolchain/provenance material.
 
-### Existing-package proof
-
-The runtime bridge is not yet evidence that arbitrary Cuis libraries work. The next compatibility test should load and exercise a useful existing Cuis package through the real runtime, without reimplementing that package in Lagrange Images.
-
-That test should drive any needed package/runtime artifact conventions.
+The runtime package proof now gives this toolchain work observed package materialization/loading rules rather than a speculative package model.
 
 ### Migration/bootstrap engine
 
@@ -237,7 +275,7 @@ OpenSmalltalk interpreter + Spur runtime
 
 The current native proof uses Cog/Spur because compatibility with the current Cuis image is the goal. A native-code-generating JIT is not required for the later WASM proof.
 
-See ADR 0022 for the end state, ADR 0023 for the generic lifecycle and ADR 0024 for the real Cuis runtime proof.
+See ADR 0022 for the end state, ADR 0023 for the generic lifecycle, ADR 0024 for the real Cuis runtime proof and ADR 0025 for the first unchanged upstream-package proof.
 
 ## 8. Rust
 
@@ -327,11 +365,12 @@ explicit package dependencies and build caching
 raw + callable foreign WASM
 language-neutral foreign-runtime lifecycle
 real persistent OpenSmalltalkVM/Cuis runtime
+unchanged upstream Cuis package loading + execution
 ```
 
 The next multilingual proofs should be concrete rather than generic:
 
-- an existing useful Cuis package on the real compatibility runtime;
+- a larger/multi-package Cuis compatibility proof;
 - OpenSmalltalkVM/Cuis as a real ToolchainService compiler host;
 - richer Component/WIT-style interfaces;
 - Java/JAR integration;
