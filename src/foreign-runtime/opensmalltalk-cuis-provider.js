@@ -123,7 +123,7 @@ async function materializePackages(packageInputs, workspace) {
 }
 
 function packageInstallSource(packages) {
-  return packages.map((packageInput) => `| packageRequirement packageEntry |
+  return packages.map((packageInput) => `[ | packageRequirement packageEntry |
 output
     nextPutAll: 'BOOT'; nextPut: Character tab;
     nextPutAll: 'package'; nextPut: Character tab;
@@ -146,7 +146,8 @@ output
     nextPutAll: 'BOOT'; nextPut: Character tab;
     nextPutAll: 'package'; nextPut: Character tab;
     nextPutAll: '${packageInput.name}'; nextPut: Character tab;
-    nextPutAll: 'installed'; newLine; flush.`).join('\n');
+    nextPutAll: 'installed'; newLine; flush.
+] value.`).join('\n');
 }
 
 function bridgeSource(packages = []) {
