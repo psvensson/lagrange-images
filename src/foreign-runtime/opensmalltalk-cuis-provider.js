@@ -110,14 +110,17 @@ function expectedArity(service, operation) {
 
 function packageInstallSource(packages) {
   return packages
-    .map(({fileName}) => `CodePackageFile installPackage: DirectoryEntry currentDirectory // '${fileName}'.`)
+    .map(({fileName}) => `output nextPutAll: 'BOOT\tPACKAGE\t${fileName}\tSTART'; newLine; flush.\nCodePackageFile installPackage: DirectoryEntry currentDirectory // '${fileName}'.\noutput nextPutAll: 'BOOT\tPACKAGE\t${fileName}\tDONE'; newLine; flush.`)
     .join('\n');
 }
 
 function bridgeSource(packages = []) {
   const installPackages = packageInstallSource(packages);
   return `| input output service done line fields requestId serviceName operation result decode encode readLine |
+output := StdIOWriteStream stdout.
+output nextPutAll: 'BOOT\tBRIDGE\tSTART'; newLine; flush.
 ${installPackages}
+output nextPutAll: 'BOOT\tBRIDGE\tCOMPILE'; newLine; flush.
 Object subclass: #LagrangeProofService
     instanceVariableNames: ''
     classVariableNames: ''
@@ -128,7 +131,6 @@ LagrangeProofService compile: 'factorial: n\n    n < 0 ifTrue: [ Error signal: '
 LagrangeProofService compile: 'jsonPackageProof\n    | jsonClass parsed rendered reparsed numbers nested |\n    jsonClass := Smalltalk at: #Json.\n    parsed := jsonClass readFrom: ''{"numbers":[3,5,8],"ok":true,"nested":{"name":"cuis"}}'' readStream.\n    rendered := jsonClass render: parsed.\n    reparsed := jsonClass readFrom: rendered readStream.\n    numbers := reparsed at: ''numbers''.\n    nested := reparsed at: ''nested''.\n    ^ (((numbers at: 1) + (numbers at: 2) + (numbers at: 3)) = 16)\n        and: [ (reparsed at: ''ok'') = true\n        and: [ (nested at: ''name'') = ''cuis'' ]]'.
 service := LagrangeProofService new.
 input := StdIOReadStream stdin.
-output := StdIOWriteStream stdout.
 readLine := [ | char stream |
     stream := WriteStream on: (String new: 64).
     [
@@ -227,10 +229,21 @@ class OpenSmalltalkCuisCallError extends Error {
 
 async function nextMatchingLine(session, predicate, {timeoutMs, action}) {
   const deadline = Date.now() + timeoutMs;
+  const boot = [];
   for (;;) {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new TypeError(`OpenSmalltalk Cuis timed out waiting for ${action}`);
-    const line = await session.nextLine({timeoutMs: remaining, action});
+    if (remaining <= 0) {
+      const suffix = boot.length > 0 ? `; bootstrap: ${boot.join(' -> ')}` : '';
+      throw new TypeError(`OpenSmalltalk Cuis timed out waiting for ${action}${suffix}`);
+    }
+    let line;
+    try {
+      line = await session.nextLine({timeoutMs: remaining, action});
+    } catch (error) {
+      if (boot.length === 0) throw error;
+      throw new TypeError(`${error.message}; bootstrap: ${boot.join(' -> ')}`, {cause: error});
+    }
+    if (line.startsWith('BOOT\t')) boot.push(line);
     if (predicate(line)) return line;
   }
 }
