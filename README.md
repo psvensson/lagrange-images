@@ -18,6 +18,7 @@ An image is a durable object graph, not a VM memory dump and not a pile of sourc
 - `lagrange-value-handle/v0` WASM calling ABI
 - WASM tail message sends through normal language dispatch
 - WASM tail nested-Block materialization with ordinary lexical captures
+- automatic recursive WASM compilation/installation of complete nested Block trees
 - `wasm-function/v1` execution through the normal ActivationExecutor
 - interpreter/WASM differential and closure conformance tests
 - executable Symmetric Smalltalk parser/compiler/dispatcher with nested lexical Blocks
@@ -59,7 +60,7 @@ Smalltalk source
   -> Block
 ```
 
-The executable forms are derived state. Both bootstrap execution paths can now materialize a returned nested closure as the ordinary `Block + LexicalEnvironment` image representation. Future optimized paths may still stack-allocate, inline or eliminate nonescaping closures.
+The executable forms are derived state. Both bootstrap execution paths can materialize a returned nested closure as the ordinary `Block + LexicalEnvironment` image representation. Future optimized paths may still stack-allocate, inline or eliminate nonescaping closures.
 
 ## WASM backend
 
@@ -114,13 +115,37 @@ A closure site's module metadata contains only its semantic block ID and capture
 
 The prototype may be interpreted or WASM-backed. Once materialized, the closure is an ordinary Block and receives `value`, `value:`, etc. through the normal Symmetric Smalltalk dispatcher.
 
-This now works as a WASM-backed outer Block:
+### Compile a complete nested tree
 
-```smalltalk
-[ :x | [ :y | x ] ]
+`installWasmBlockTree()` takes one root semantic artifact and recursively builds all nested WASM functions and prototype Blocks for you:
+
+```js
+import {
+  installWasmBlockTree,
+  objectRef,
+} from 'lagrange-images';
+
+const installed = await installWasmBlockTree({
+  images: runtime.images,
+  compilation: runtime.compilation,
+  semanticRef: objectRef(imageId, semanticArtifact.id),
+  id: 'compiled-service',
+});
+
+// installed.block is the root WASM-backed Block.
 ```
 
-The returned closure can subsequently receive `value:` and observe the captured `x`.
+For a semantic tree corresponding to:
+
+```smalltalk
+[ :x | [ :y | [ :z | x ] ] ]
+```
+
+the installer compiles the deepest Block first, creates its WASM prototype, wires that prototype into its parent function, and continues upward until the root Block is complete. No caller-supplied `blockPrototypes` map is needed.
+
+The whole semantic tree is preflighted before derived tree writes begin. If a deep descendant uses unsupported WASM semantics, installation fails without leaving a partially assembled executable tree.
+
+The low-level `compileWasmFunctionArtifact()` API remains available when mixed interpreter/WASM prototypes or custom assembly are useful.
 
 This is still rejected inside one WASM activation:
 
@@ -130,9 +155,9 @@ This is still rejected inside one WASM activation:
 
 because closure materialization is an intermediate asynchronous effect. A future continuation/trampoline or other async-WASM contract can lift that restriction explicitly.
 
-The interpreter remains the reference oracle. Tests exercise identical stable capture IDs and results across interpreter-backed and WASM-backed closure prototypes.
+The interpreter remains the reference oracle. Tests exercise identical stable capture IDs and results across interpreter-backed and WASM-backed closure prototypes and complete recursively compiled WASM trees.
 
-See ADR 0008, ADR 0009 and ADR 0010.
+See ADR 0008, ADR 0009, ADR 0010 and ADR 0011.
 
 ## Values and objects
 
@@ -181,3 +206,4 @@ Do not import `lagrange-server/src/...`; use public package seams only.
 - [ADR 0008: first WASM backend and Value-handle ABI](docs/decisions/0008-wasm-backend-and-value-handle-abi.md)
 - [ADR 0009: WASM tail message effects](docs/decisions/0009-wasm-tail-message-effects.md)
 - [ADR 0010: WASM tail closure effects](docs/decisions/0010-wasm-tail-closure-effects.md)
+- [ADR 0011: automatic WASM Block tree installation](docs/decisions/0011-automatic-wasm-block-tree-installation.md)
