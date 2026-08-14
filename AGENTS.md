@@ -42,8 +42,11 @@ Protect these invariants:
 shape != behavior
 reference != authority
 identity != revision
+source != artifact boundary
 durable representation != execution representation
 semantic code != executable artifact
+toolchain != language semantics
+build OCI != foreign-runtime OCI
 WASM handle != image identity
 compilation group != source-language construct
 shared module != function/Block identity
@@ -60,18 +63,26 @@ pooled instance != activation state
 - Do not add `classId`, `source` or another language-specific shortcut to generic objects.
 - A ref grants no access rights. Capability/authorization state stays separate.
 
-## Compilation and code derivation
+## Artifacts, toolchains and code derivation
 
-- Preserve language source -> syntax -> semantic code -> derived execution artifacts.
-- Executable artifacts are rebuildable state, never the sole surviving meaning of a program.
-- Add single-source lowering backends through `CodeCompilerRegistry` and grouped backends through `CompilationGroupCompilerRegistry`; do not teach language compilers about executor internals.
+- Preserve language source -> syntax -> semantic code -> derived execution artifacts where source/semantic meaning is actually owned by the image.
+- Do not turn that chain into a source-code-only platform rule. Source is one artifact representation; bytecode/packages, precompiled libraries, WASM components/modules, manifests/locks and other imported binary artifacts may be legitimate durable dependencies.
+- Do not reconstruct or decompile a third-party binary dependency merely to make it look source-native. Preserve the artifact we actually possess plus its provenance/interface contract.
+- Executable artifacts are rebuildable state when their semantic/source inputs exist, never the sole surviving meaning of such a program. Binary-only imported dependencies are not rebuildable merely because other code is.
+- Language personality does not imply compiler ownership. Do not implement a new Rust/Java/etc. compiler just to integrate the language when an existing mature toolchain can be adapted cleanly.
+- Add single-source lowering backends through `CodeCompilerRegistry` and grouped backends through `CompilationGroupCompilerRegistry`; future external toolchain/provider work must preserve the same explicit-input/provenance/cache principles rather than create an opaque second build path.
+- A future toolchain/provider may run in-process, as WASM, in OCI, as a native process or remotely. Generic compilation semantics should describe artifact inputs/outputs, toolchain identity/options, diagnostics, interfaces and provenance rather than process location.
+- OCI build/toolchain containers are reproducible compilation machinery. OCI foreign-runtime containers remain part of execution. Never conflate those lifecycles or imply that a foreign JVM/native/Python heap is automatically image object state.
 - Compilation groups are transient compiler/planner values. The substrate may validate members/target/policy IDs but must not assume that a group is a Smalltalk Block tree, Java class, Rust crate or Lisp file.
-- Physical module grouping belongs to compiler policy. One logical group may produce one module, many modules or another executable representation.
-- `CompilationService.compileGroup()` must keep every semantic member as an explicit `derivedFrom` edge on the grouped executable artifact.
-- Reuse is allowed only when a compiler explicitly declares a stable `identity` and deterministic `cacheKey()`. Never infer cache equivalence from filenames, Block IDs, source-language names or target representation alone.
-- Compiler cache keys must include every input that can change emitted executable meaning. Changing ABI/compiler semantics or observable derived-artifact contracts requires changing compiler identity or key material.
+- Physical module grouping belongs to compiler/toolchain policy. One logical group may produce one module, many modules or another executable representation.
+- `CompilationService.compileGroup()` must keep every semantic/artifact member as an explicit `derivedFrom` edge on the grouped executable artifact.
+- Reuse is allowed only when a compiler/toolchain explicitly declares a stable identity and deterministic cache key. Never infer cache equivalence from filenames, Block IDs, source-language names or target representation alone.
+- External-toolchain derivation keys must cover every declared input that can change output, including toolchain/compiler version, OCI image digest where applicable, target/ABI/options, dependency fingerprints and manifest/lock artifacts.
+- Changing ABI/compiler semantics or observable derived-artifact contracts requires changing compiler/toolchain identity or key material.
 - A reused immutable executable may be shared by distinct installations, but function/Block/image identity must remain distinct unless language semantics explicitly say otherwise.
 - Keep current-installation provenance explicit in wrapper/function artifacts even when a lower-level module artifact is reused from an earlier equivalent derivation.
+- Imported executable libraries/components need explicit callable/interface descriptions before invocation. Interface metadata is not authority; capability checks stay separate.
+- Treat dependency linkage as tooling policy: static/link, dynamic component, foreign runtime, service and build-only dependencies must not become different generic object identities merely because execution differs.
 - Derivation-key lookup is currently a scan; backend indexing is an optimization, not a semantic change.
 
 ## WASM
@@ -119,7 +130,7 @@ pooled instance != activation state
 tools -> languages/runtime -> image graph -> backend -> Lagrange
 ```
 
-Do not reverse the dependency direction. Projects, source, notes and work items should tend toward objects in the image model; files/Git are interoperability views. Distributed execution is later runtime policy, not an excuse to make every object send an RPC.
+Do not reverse the dependency direction. Projects, source, binary dependencies, notes and work items should tend toward objects/artifacts in the image model; files/Git are interoperability views. Distributed execution is later runtime policy, not an excuse to make every object send an RPC.
 
 ## Documentation
 

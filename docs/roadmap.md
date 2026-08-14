@@ -45,7 +45,9 @@ Success: the same graph survives process/node restarts with no language/image se
 - [ ] garbage-collection rules respecting history/pinned refs
 - [ ] object migration between immutable shapes
 
-## 4. Language-neutral execution and compilation kernel
+## 4. Language-neutral execution, artifacts and compilation kernel
+
+Implemented execution/compiler foundation:
 
 - [x] code artifact contract
 - [x] blocks/closures and lexical environments
@@ -78,6 +80,23 @@ Success: the same graph survives process/node restarts with no language/image se
 - [x] runtime-local compiled `WebAssembly.Module` cache with concurrent-miss coalescing
 - [x] explicit `stateless-v0` WASM instance-reuse contract
 - [x] runtime-local stateless instance pool with activation rebinding and failure retirement
+
+Artifact/toolchain generalization:
+
+- [ ] generic artifact dependency model that can relate source, semantic IR, bytecode/package archives, precompiled libraries, WASM components/modules and manifest/lock artifacts
+- [ ] keep canonical imported binary dependencies as binary artifacts instead of requiring source reconstruction
+- [ ] toolchain/provider contract independent of physical execution mechanism
+- [ ] provider inputs/outputs include explicit artifact refs, target/ABI/options, diagnostics, interface descriptions and provenance
+- [ ] external-toolchain derivation keys include compiler/toolchain identity plus dependency/manifest/lock fingerprints
+- [ ] OCI-backed build/toolchain provider using pinned image digest/version
+- [ ] native-process or equivalent trusted external-toolchain provider where useful
+- [ ] callable/interface artifact contract for imported executable libraries/components
+- [ ] interface contract keeps exported calls/ABI/capabilities/version separate from authority
+- [ ] WASM Component-style imported library/callable boundary
+- [ ] dependency-role policy for static/link, dynamic component, foreign runtime, service and build-only dependencies
+
+Execution/compiler follow-ups:
+
 - [ ] reset/reuse contracts for WASM modules with mutable guest state
 - [ ] module-size/budget driven splitting of one logical group
 - [ ] direct optimized calls between entries in one shared module
@@ -86,9 +105,9 @@ Success: the same graph survives process/node restarts with no language/image se
 - [ ] transient/non-materialized optimized closure representation
 - [ ] activations and debugger metadata
 - [ ] exception/condition substrate
-- [ ] capability-aware host/WASM FFI boundary
+- [ ] capability-aware host/WASM/foreign-call boundary
 
-Success: grouping, physical module layout and executable reuse are compiler-owned policies; repeated activations can now reuse both the compiled host module and a proven-stateless host instance without merging semantic, function, Block or activation-local state.
+Success: source is one artifact representation rather than the platform boundary; built-in and external toolchains can derive executable artifacts with explicit provenance/cache inputs, and imported compiled libraries can participate without being rewritten as source.
 
 ## 5. Symmetric Smalltalk seed
 
@@ -115,34 +134,69 @@ Success: grouping, physical module layout and executable reuse are compiler-owne
 - [ ] REPL/workspace
 - [ ] bootstrap image
 
-Success for the current seed: Smalltalk is the first group/reuse-policy consumer, not a constraint on the compilation, cache or instance-lifetime substrate.
+Success for the current seed: Smalltalk is the first group/reuse-policy consumer and the first in-process compiler, not a constraint on the artifact/toolchain/runtime substrate.
 
 ## 6. Projects and collaborative history
 
 - [ ] project objects and relationships
 - [ ] code + notes + tests + data + work items
+- [ ] first-class project relationships to binary/package/component dependencies
+- [ ] manifest and lock artifacts as project members/inputs where applicable
 - [ ] branches/working views and object-level diffs
 - [ ] merge semantics
-- [ ] Git import/export projection
+- [ ] Git import/export projection for source-oriented views
+- [ ] binary/artifact dependency import/export without pretending Git text files are canonical
 - [ ] multi-author conflict UI/API
 
-## 7. Compatibility kernels
+Success: a project can own/edit source where appropriate while also referring explicitly to imported binary libraries, components and reproducible toolchain inputs.
+
+## 7. Languages and compatibility kernels
+
+Smalltalk/Lisp:
 
 - [ ] Cuis source/package importer
 - [ ] Smalltalk compatibility library layer
 - [ ] prove several useful Cuis libraries
 - [ ] Common Lisp personality spike
-- [ ] Java language-personality/compiler spike
-- [ ] Rust language-personality/compiler spike
 
-## 8. Distributed execution
+Java:
+
+- [ ] Java artifact conventions for source/class/JAR without teaching generic graph storage what Java means
+- [ ] Java JAR/class importer and dependency reuse spike
+- [ ] Java personality/toolchain spike using existing `javac`/JVM/AOT/Java-to-WASM tooling rather than a new compiler
+- [ ] JVM/OCI foreign-runtime compatibility spike
+- [ ] compare JVM/OCI compatibility path with deeper Java-to-WASM/image integration on one realistic library/application
+
+Rust:
+
+- [ ] Rust source/manifest/lock artifact conventions
+- [ ] Cargo/`rustc` external-toolchain spike rather than a new Rust compiler
+- [ ] Lagrange Rust SDK/crate for explicit host/call interfaces
+- [ ] prove reuse of source crates plus at least one portable precompiled WASM/component or stable-ABI dependency
+- [ ] document/compiler-test which Rust intermediate/binary formats are only build caches versus stable imported dependencies
+
+Cross-language libraries:
+
+- [ ] WASM Component-style library interface spike callable from two language personalities
+- [ ] prove the same imported component can be depended on without exposing implementation-language semantics
+
+Success: mature languages reuse their existing compiler/runtime ecosystems and compiled libraries while gaining image identity/history, project relationships, capabilities and Lagrange execution where useful.
+
+## 8. Distributed and foreign-runtime execution
 
 - [ ] object locator and activation policy
 - [ ] capability handles separate from object refs
 - [ ] local vs remote send semantics
 - [ ] WASM code placement
+- [ ] foreign-runtime adapter contract separate from image object identity
+- [ ] OCI foreign-runtime lifecycle/placement policy
+- [ ] callable routing between image/WASM execution and JVM/native/etc. foreign runtimes
+- [ ] explicit failure/retry/idempotency semantics across foreign runtime boundaries
+- [ ] capability checks for foreign/runtime/component calls
 - [ ] measured `ctx.call()` compute-near-object wins
-- [ ] failure/retry/idempotency model
+- [ ] measured tradeoff between foreign-runtime compatibility and WASM/image integration
+
+Success: executable placement can choose image-native/WASM or explicit foreign runtimes without pretending that foreign heaps/processes are automatically image objects.
 
 ## 9. Graphical environment
 
@@ -151,3 +205,5 @@ Success for the current seed: Smalltalk is the first group/reuse-policy consumer
 - [ ] surfaces/windows
 - [ ] replaceable shell/window-manager policy
 - [ ] inspectors, browsers and debugger as image-resident tools
+
+See ADR 0016 for the artifact graph, external toolchain, compiled-library and foreign-runtime direction.
