@@ -53,6 +53,15 @@ durable representation != execution representation
 - Do not add `classId`, `source` or another language-specific shortcut to generic objects.
 - A ref grants no access rights. Capability/authorization state stays separate.
 
+## Symmetric Smalltalk seed
+
+- Keep parser/compiler/dispatch semantics in the language personality; do not teach the image backend what a selector, class or method is.
+- Preserve source -> syntax -> executable-artifact provenance rather than overwriting source with compiled form.
+- Compile ordinary source sends through the shared language-tagged send path. Do not add compiler-only primitive semantics just to make examples easier.
+- The current behavior-object selector-slot lookup is a bootstrap convention, not the final Class/Metaclass model.
+- Nested block literals are syntax-only until runtime closure creation and capture analysis are designed deliberately.
+- Prefer stable lexical binding IDs over source names for captured state.
+
 ## Architecture
 
 ```text
