@@ -15,6 +15,17 @@ function normalizeMember(value, index) {
   return ref;
 }
 
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const entry of Object.values(value)) deepFreeze(entry);
+  return Object.freeze(value);
+}
+
+function normalizeOptions(options) {
+  normalizeDerivationKeyMaterial(options, 'compilation group options');
+  return deepFreeze(structuredClone(options));
+}
+
 function createCompilationGroup({policyId, targetRepresentation, members, options = {}} = {}) {
   const policy = requiredText(policyId, 'compilation group policyId');
   const target = normalizeRepresentation(targetRepresentation, 'compilation group target representation');
@@ -26,13 +37,12 @@ function createCompilationGroup({policyId, targetRepresentation, members, option
     if (seen.has(key)) throw new TypeError(`duplicate compilation group member: ${member.imageId}/${member.objectId}`);
     seen.add(key);
   }
-  const normalizedOptions = normalizeDerivationKeyMaterial(options, 'compilation group options');
   return Object.freeze({
     kind: COMPILATION_GROUP_KIND,
     policyId: policy,
     targetRepresentation: target,
     members: normalizedMembers,
-    options: normalizedOptions,
+    options: normalizeOptions(options),
   });
 }
 
