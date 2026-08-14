@@ -114,6 +114,29 @@ test('a WASM-created closure may itself use a WASM-backed prototype', async () =
   await runtime.close();
 });
 
+test('WASM function artifacts require an explicit Block prototype for every closure site', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  await runtime.images.createImage({id: 'demo'});
+  const installed = await installSymmetricSmalltalkBlock({
+    images: runtime.images,
+    compilation: runtime.compilation,
+    imageId: 'demo',
+    id: 'missing-prototype',
+    source: '[ [ 1 ] ]',
+  });
+  await assert.rejects(
+    compileWasmFunctionArtifact({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      semanticRef: objectRef('demo', installed.semanticArtifact.id),
+      moduleId: 'missing-prototype:module',
+      functionId: 'missing-prototype:function',
+    }),
+    /missing WASM Block prototype/,
+  );
+  await runtime.close();
+});
+
 test('WASM function artifacts keep closure prototype graph edges in derivedFrom rather than metadata', async () => {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   await runtime.images.createImage({id: 'demo'});
