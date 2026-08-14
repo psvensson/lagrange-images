@@ -59,36 +59,23 @@ The first placement mechanism is a local process. OCI/runtime placement remains 
 
 ## Headless launch
 
-The provider writes a temporary bridge script and launches the configured VM without a shell:
+The provider writes a temporary bridge script and launches the configured VM without a shell. It follows the current Cuis Linux CI convention for null sound/display, then uses Cuis' script option:
 
 ```text
 squeak
+  -vm-sound-null
   -vm-display-null
-  -headless
   <Cuis.image>
   -s <bridge.st>
 ```
 
 The VM path and image path are runtime installation details. Their stable upstream identities are separate constructor inputs.
 
-The provider's opaque handle owns:
-
-- the child-process/line transport;
-- the temporary bridge workspace;
-- request sequencing/serialization;
-- termination state.
-
-None of this becomes durable image state or an ObjectRef.
+The provider's opaque handle owns the child-process/line transport, temporary bridge workspace, request sequencing/serialization and termination state. None of this becomes durable image state or an ObjectRef.
 
 ## The bridge is deliberately not remote Smalltalk eval
 
-The first bridge protocol is:
-
-```text
-lagrange-cuis-stdio/v0
-```
-
-It is line framed over the VM process stdin/stdout.
+The first bridge protocol is `lagrange-cuis-stdio/v0`, line-framed over VM stdin/stdout.
 
 The bridge source creates and compiles a real Cuis class at runtime:
 
@@ -105,9 +92,7 @@ service = proof
 operation = add | factorial
 ```
 
-There is no generic `perform:`, source evaluation, arbitrary selector send or oop/object lookup in v0.
-
-This is important: the proof is intended to demonstrate the real compiler/object model/runtime, not create an ambient code-execution endpoint.
+There is no generic `perform:`, source evaluation, arbitrary selector send or oop/object lookup in v0. The proof demonstrates the real compiler/object model/runtime without creating an ambient code-execution endpoint.
 
 ## Wire Values
 
@@ -118,23 +103,15 @@ integer  -> i:<decimal>
 boolean  -> b:0 | b:1
 ```
 
-The provider converts wire results back into canonical Lagrange Values.
-
-Refs, strings, bytes, floats, arrays/records and foreign-object handles are intentionally absent. They should be added only behind explicit interface/identity/capability contracts.
+The provider converts wire results back into canonical Lagrange Values. Refs, strings, bytes, floats, arrays/records and foreign-object handles are intentionally absent.
 
 ## Persistent runtime
 
-One provider `start()` launches one VM and waits for:
+One provider `start()` launches one VM and waits for `READY <bridge protocol>`. Several `call()` operations then use the same running Cuis image and service object. Calls are serialized by this provider's stdio transport even though the generic service does not prescribe serialization.
 
-```text
-READY <bridge protocol>
-```
+`stop()` asks the bridge to quit cleanly using `Smalltalk quitPrimitive: 0` and waits for VM exit. If graceful shutdown fails, it attempts forced termination before deleting the temporary bridge workspace.
 
-Several `call()` operations then use the same running Cuis image and service object. Calls are serialized by this provider's stdio transport even though the generic foreign-runtime service does not require providers to serialize internally.
-
-`stop()` asks the bridge to quit cleanly and waits for VM exit. If graceful shutdown fails, it attempts forced process termination before deleting the temporary bridge workspace.
-
-The running Cuis heap therefore persists across calls, but remains foreign runtime state:
+The running Cuis heap persists across calls but remains foreign runtime state:
 
 ```text
 persistent foreign heap != durable Lagrange image graph
@@ -142,17 +119,9 @@ persistent foreign heap != durable Lagrange image graph
 
 ## Real CI proof
 
-Normal unit tests inject a fake line runner and test:
+Normal unit tests inject a fake line runner and test process arguments/bridge materialization, stable provider identity, interface whitelisting, Value encoding, calls/shutdown and the Node line transport itself.
 
-- process arguments and bridge materialization;
-- stable provider identity separate from paths;
-- explicit interface whitelist;
-- canonical Value encoding/decoding;
-- calls and shutdown;
-- no generic `perform:` bridge;
-- the Node line-process transport itself.
-
-A separate PR-only GitHub Actions job then runs the real integration:
+A separate PR-only GitHub Actions job runs the real integration:
 
 ```text
 verified OpenSmalltalkVM archive
@@ -168,30 +137,11 @@ A green repository PR therefore proves more than mock protocol compatibility.
 
 ## Why Cog/Spur here
 
-The first native compatibility proof uses the normal current Linux x64 Cog/Spur runtime because the goal is compatibility with a real current Cuis image, not yet the later WASM-runtime experiment.
-
-ADR 0022 still prefers an interpreter-style VM for a future OpenSmalltalk-to-WASM port because a native-code-generating JIT has different constraints inside WebAssembly.
-
-These are separate milestones.
+The first native compatibility proof uses the current Linux x64 Cog/Spur runtime because the goal is compatibility with a real current Cuis image. ADR 0022 still prefers an interpreter-style VM for a future OpenSmalltalk-to-WASM port; these are separate milestones.
 
 ## What remains out of scope
 
-This proof does not yet add:
-
-- durable Smalltalk runtime/image artifact conventions inside an image;
-- OCI foreign-runtime launching/placement;
-- runtime restart/reconciliation;
-- arbitrary foreign-object handles;
-- generic Smalltalk message sending;
-- callbacks from Cuis into Lagrange services;
-- capability/principal propagation;
-- snapshot import/export semantics;
-- a Cuis package compatibility test beyond the bridge class;
-- OpenSmalltalkVM as a `ToolchainService` compiler host;
-- structured class/method/package export;
-- a WASM-hosted OpenSmalltalk runtime.
-
-Those should now be driven by this real provider rather than designed in isolation.
+This proof does not yet add durable Smalltalk runtime/image artifacts inside an image, OCI runtime placement, restart/reconciliation, arbitrary foreign-object handles, generic Smalltalk message sending, callbacks into Lagrange, capabilities, snapshot import/export, an existing Cuis package proof beyond the bridge class, the OpenSmalltalk toolchain role, structured class/method export or a WASM-hosted OpenSmalltalk runtime.
 
 ## Guardrails
 
@@ -208,4 +158,4 @@ current Cog proof != future WASM VM strategy
 
 ## Consequence
 
-The foreign-runtime abstraction has a real intended consumer rather than only a fake provider. If this proof remains green, the next useful Smalltalk work should move upward into a real existing Cuis package and/or the OpenSmalltalkVM/Cuis toolchain role, rather than adding more generic runtime machinery first.
+The foreign-runtime abstraction now has a real intended consumer. If this proof remains green, the next useful Smalltalk work should move upward into a real existing Cuis package and/or the OpenSmalltalkVM/Cuis toolchain role, rather than adding more generic runtime machinery first.
