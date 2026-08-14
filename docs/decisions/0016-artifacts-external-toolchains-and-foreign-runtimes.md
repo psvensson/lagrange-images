@@ -1,10 +1,10 @@
 # ADR 0016: artifact graphs, external toolchains and foreign runtimes
 
-Status: accepted as architectural direction; external toolchain/runtime support is not implemented yet.
+Status: accepted as architectural direction. ADR 0017 implements the first artifact-dependency/toolchain-provider substrate; external process/container/runtime integration remains planned.
 
 ## Problem
 
-The first executable language is Symmetric Smalltalk, so the current implementation naturally looks source-first:
+The first executable language is Symmetric Smalltalk, so the first implementation naturally looked source-first:
 
 ```text
 Smalltalk source
@@ -49,7 +49,7 @@ manifest/lock/config ------+          v
                                   artifacts/interfaces
 ```
 
-Artifact representations are owned by language/tooling plugins or conventions rather than hard-coded into generic image objects. Possible future representations include:
+Artifact representations are owned by language/tooling plugins or conventions rather than hard-coded into generic image objects. Possible representations include:
 
 ```text
 symmetric-smalltalk/source-v0
@@ -66,6 +66,8 @@ oci-image-ref/v1
 ```
 
 These names are illustrative except for representations already implemented.
+
+ADR 0017 keeps `CodeArtifact` as the bootstrap generic artifact carrier and adds explicit role-tagged dependency refs plus a generic toolchain-provider service. A broader universal Artifact record remains deferred until real integrations prove it necessary.
 
 ## Source remains special when it is the meaning we own
 
@@ -91,9 +93,9 @@ third-party WASM component -> canonical component dependency
 
 ## Toolchains are providers, not necessarily in-process compilers
 
-The compiler substrate should evolve toward a generic toolchain/provider contract. A toolchain consumes artifact refs plus options and produces derived artifacts, interface descriptions, diagnostics and provenance.
+The compiler/tooling substrate now has a first generic provider contract under ADR 0017. `ToolchainService` resolves an explicit artifact dependency graph and invokes a selected `ToolchainProvider` using the `lagrange-toolchain-provider/v0` protocol.
 
-A toolchain may physically run as:
+A toolchain may eventually physically run as:
 
 ```text
 in-process compiler
@@ -103,7 +105,9 @@ native process
 remote build service
 ```
 
-The generic compilation layer should care about the declared inputs, outputs, identity, deterministic cache inputs and provenance, not about where the tool physically executes.
+The generic provider contract cares about declared artifact inputs, target/options, stable toolchain identity, outputs, diagnostics and provenance rather than where the compiler physically executes.
+
+The current repository proves that contract with an in-process provider only. OCI/native/remote providers are separate follow-ups.
 
 This means future Rust support should normally use the existing Rust toolchain, and Java support should normally use existing Java/JVM/AOT/WASM tooling rather than new compilers written by this project.
 
@@ -179,6 +183,16 @@ Precompiled libraries should be reusable when their format/runtime/ABI permits i
 
 The image should retain identity, history, provenance and dependency relationships without requiring source conversion.
 
+ADR 0017 now provides the first explicit dependency edge:
+
+```text
+CodeArtifact.dependencies[]
+  role
+  artifact ref
+```
+
+`dependencies` is intentionally separate from `derivedFrom` provenance.
+
 Examples:
 
 ### Java
@@ -227,7 +241,9 @@ service dependency
 build-only dependency
 ```
 
-The artifact graph records dependencies and provenance. The relevant compiler/toolchain/runtime policy decides how a dependency participates in execution.
+The artifact graph records role-tagged dependency edges and provenance. The relevant compiler/toolchain/runtime policy decides how a dependency participates in execution.
+
+The generic graph deliberately does not define a closed enum of dependency roles.
 
 Do not encode one linkage choice into generic image identity.
 
@@ -249,11 +265,15 @@ version/provenance
 
 An interface description is not authority by itself. Existing reference/capability separation remains in force.
 
+ADR 0017 permits a toolchain provider to emit an interface description as an ordinary named output artifact, but the callable/interface semantic contract itself remains future work.
+
 ## Provenance and cache consequence
 
 External toolchains must participate in the same derivation principles as built-in compilers.
 
-A reusable derived artifact should be keyed by all inputs that can affect it, potentially including:
+ADR 0017 already makes `ToolchainService` own output provenance: every resolved explicit toolchain input becomes a `derivedFrom` edge on every output. Providers cannot silently replace that with metadata-only provenance.
+
+A reusable derived artifact should eventually be keyed by all inputs that can affect it, potentially including:
 
 ```text
 toolchain identity/version
@@ -265,7 +285,7 @@ manifest/lock data
 environment inputs explicitly declared as semantic
 ```
 
-Output artifacts must retain explicit provenance to their input artifacts. An external compiler is not permission to make the build opaque.
+Toolchain result caching is not implemented yet.
 
 ## Multilingual consequence
 
@@ -286,21 +306,26 @@ This lets mature ecosystems remain themselves while sharing durable image identi
 
 Implemented now:
 
-- generic CodeArtifacts and provenance
+- generic CodeArtifacts and `derivedFrom` provenance
+- explicit role-tagged CodeArtifact dependency refs
+- dependency-aware graph walking and dependency target validation
 - compiler/group-compiler registries
 - compilation groups and compiler-declared derivation reuse
+- generic `ToolchainProviderRegistry` / `ToolchainService`
+- transitive explicit artifact-graph resolution for providers
+- provider target/options, multi-output artifacts, transient diagnostics and automatic output provenance
 - built-in Smalltalk -> semantic IR -> WASM path
 - durable WASM module/function artifacts and runtime execution caches
 
 Not implemented yet:
 
-- generic artifact dependency records beyond current derivation edges/project concepts
-- external toolchain/provider registry
-- OCI-backed build toolchain invocation
+- OCI/native/remote toolchain execution providers
+- external-toolchain derivation-key reuse
 - Java/Rust toolchain adapters
 - generic JAR/native/component importers
-- WASM Component callable/import boundary
+- callable WASM Component interface/import boundary
 - OCI foreign-runtime adapter
+- transactional toolchain multi-output installation/sibling output dependency edges
 
 These belong on the roadmap before claiming broad Java/Rust/library compatibility.
 
