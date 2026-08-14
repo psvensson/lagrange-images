@@ -32,7 +32,7 @@ compiler/tooling
 artifact graph | toolchain providers | derivation reuse
                     |
 execution
-Blocks | dispatch | activations | executable interfaces
+Blocks | dispatch | activations | executable interfaces | foreign-runtime adapters
                     |
 image graph
 Values | refs | objects | artifacts | history
@@ -57,6 +57,7 @@ dependency != provenance
 semantic code != executable artifact
 toolchain selection != toolchain identity
 build OCI != foreign-runtime OCI
+foreign heap != image graph
 raw foreign WASM != Lagrange WASM ABI
 callable interface != authority
 compiled host module != durable code identity
@@ -81,7 +82,13 @@ Neither belongs hidden in metadata.
 
 ### Source is not the platform boundary
 
-Source is one artifact kind. JARs, manifests, lock files, vendored packages, WASM and other imported binaries can be first-class graph artifacts too.
+Source is one artifact kind. JARs, manifests, lock files, vendored packages, runtime images, WASM and other imported binaries can be first-class graph artifacts too.
+
+### Foreign heap is not the image graph
+
+A JVM, OpenSmalltalkVM or another foreign runtime may own a real object heap. That heap does not become durable Lagrange image state merely because the runtime is integrated.
+
+If foreign objects need stable cross-boundary identities, explicit runtime handles/adapters must mediate them.
 
 ## 4. Durable artifact graph
 
@@ -106,6 +113,7 @@ rust/cargo-lock-v1
 rust/source-v1
 rust/cargo-vendor-file-v1
 java/jar-v1                    # future convention
+smalltalk/runtime-image/...    # future convention
 wasm-binary/v1
 wasm-callable-interface/v1
 wasm-module/v1
@@ -140,6 +148,8 @@ explicit input graph
            derivedFrom = resolved inputs
            dependencies = provider-declared runtime/library edges
 ```
+
+A mature language may use its real runtime as a compiler/toolchain host. OpenSmalltalkVM + a Cuis compiler image is one intended future example.
 
 ## 6. Deterministic toolchain reuse
 
@@ -199,14 +209,16 @@ Neither is durable image state.
 ### B. Foreign/external WASM
 
 ```text
-existing language ecosystem
+existing language ecosystem or runtime port
    -> external compiler/toolchain
    -> wasm-binary/v1
-   -> explicit callable/component interface
+   -> explicit callable/component/runtime interface
    -> ActivationExecutor / later distributed placement
 ```
 
 `wasm-binary/v1` means validated external WASM bytes. It does not imply the Lagrange Value-handle ABI.
+
+A future WASM-hosted OpenSmalltalk interpreter runtime belongs in this lane unless it is deliberately compiled against a native Lagrange ABI.
 
 ## 8. First foreign callable interface
 
@@ -278,7 +290,66 @@ foreign-runtime adapter
 
 Symmetric Smalltalk currently owns its compiler because the language itself is being designed here. Rust should use Cargo/rustc. Java should reuse Java/JVM/AOT/WASM tooling. Common Lisp can reuse its own compiler/runtime semantics above the common graph.
 
-## 11. Distribution and capabilities later
+Mature Smalltalk compatibility should likewise reuse OpenSmalltalkVM rather than require a replacement VM/compiler as the first step.
+
+## 11. Smalltalk: native language plus compatibility runtime
+
+The intended end state has two complementary Smalltalk paths:
+
+```text
+                         Smalltalk
+                            |
+              +-------------+-------------+
+              |                           |
+              v                           v
+      Symmetric Smalltalk          Cuis/Squeak compatibility
+      image-native model                  |
+              |                           v
+              |                    OpenSmalltalkVM
+              |                           |
+              +-------------+-------------+
+                            |
+                            v
+                  shared project/artifact
+                     infrastructure
+```
+
+OpenSmalltalkVM is intended to serve three roles:
+
+1. **foreign runtime** — run real compatible Smalltalk images/packages behind explicit interfaces;
+2. **toolchain host** — use the real compiler/runtime to produce runnable images and structured compiled artifacts;
+3. **migration/bootstrap engine** — export classes/methods/packages/compiled structures so selected code can be represented or compiled natively later.
+
+This is a continuum, not a forced migration:
+
+```text
+foreign compatible runtime
+   -> foreign runtime + native Lagrange services
+   -> image-visible structured Smalltalk artifacts
+   -> selected native compilation where useful
+```
+
+The OpenSmalltalk heap remains its own object memory. Do not map runtime oops directly to durable ObjectRefs.
+
+A longer-term target is a headless interpreter-style OpenSmalltalk/Spur runtime compiled to WASM and hosted through the foreign/component-WASM lane. That requires richer runtime interfaces for image loading, memory/string transfer, callbacks, capabilities, snapshots and possibly async effects. It is not a prerequisite for the first OCI/native compatibility runtime.
+
+See ADR 0022 for the full direction and guardrails.
+
+## 12. Build OCI vs foreign-runtime OCI
+
+The same external ecosystem may use OCI in two completely different roles:
+
+```text
+build/toolchain OCI
+  artifacts -> compiler/runtime tooling -> derived artifacts -> exits
+
+foreign-runtime OCI
+  interface/call -> live runtime process -> remains active
+```
+
+This matters for both Java/JVM and OpenSmalltalkVM. Build reproducibility, runtime lifecycle, authority, failure semantics and placement belong to different contracts.
+
+## 13. Distribution and capabilities later
 
 The future execution decision can look like:
 
@@ -291,18 +362,19 @@ runtime placement policy
  |---- local image-native activation
  |---- Lagrange WASM activation
  |---- foreign/component WASM activation
- |---- foreign OCI runtime
+ |---- OpenSmalltalkVM/JVM/native foreign runtime
  `---- distributed activation via Lagrange
 ```
 
 Not every object send becomes RPC. Not every foreign call becomes an object message. Location, failure/retry policy and authority remain explicit runtime concerns.
 
-## 12. Current frontier
+## 14. Current frontier
 
 Implemented substrate now reaches from durable source/package artifacts through existing Cargo/rustc tooling to reusable raw WASM and a first explicit callable interface.
 
 The next architectural pressure points are:
 
+- OpenSmalltalkVM/Cuis foreign-runtime + toolchain proof
 - richer foreign-WASM/component ABIs: strings, memory, records and WASI-like capabilities
 - WASM Component/WIT-style interfaces
 - standard Cargo `.crate` importer
@@ -310,5 +382,7 @@ The next architectural pressure points are:
 - Java/JAR and Common Lisp ecosystem proofs
 - capability-aware foreign calls
 - durable Lagrange backend and distributed placement
+
+The Smalltalk end goal is explicitly broader than a Cuis source compatibility layer: native Symmetric Smalltalk and real OpenSmalltalkVM compatibility should coexist, with selective migration and a possible later WASM-hosted compatibility runtime.
 
 See [docs/README.md](README.md) for the documentation map and [decisions/README.md](decisions/README.md) for topic-grouped ADRs.
