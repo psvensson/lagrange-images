@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   LAGRANGE_CODE_V0,
   WASM_FUNCTION_V1,
+  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
   compileSymmetricSmalltalkBlock,
   createRuntime,
   installSymmetricSmalltalkBlock,
@@ -123,29 +124,26 @@ test('automatic WASM tree compilation includes nested Blocks whose bodies tail-s
   await runtime.close();
 });
 
-test('WASM Block tree preflight rejects unsupported deep code before writing derived tree artifacts', async () => {
+test('WASM Block trees resume after non-tail nested Block creation inside a shared module', async () => {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   await runtime.images.createImage({id: 'demo'});
   const semantic = await putSmalltalkSemantic(
     runtime,
-    'invalid-tree-semantic',
+    'resumable-tree-semantic',
     '[ :x | [ :y | [ :z | x ] value: y ] ]',
   );
 
-  const beforeArtifacts = await runtime.images.listCodeArtifacts('demo');
-  const beforeBlocks = await runtime.images.listBlocks('demo');
-  await assert.rejects(
-    installWasmBlockTree({
-      images: runtime.images,
-      compilation: runtime.compilation,
-      semanticRef: objectRef('demo', semantic.id),
-      id: 'invalid-tree',
-    }),
-    /nested Block creation only in tail position/,
-  );
-  const afterArtifacts = await runtime.images.listCodeArtifacts('demo');
-  const afterBlocks = await runtime.images.listBlocks('demo');
-  assert.equal(afterArtifacts.length, beforeArtifacts.length);
-  assert.equal(afterBlocks.length, beforeBlocks.length);
+  const installed = await installWasmBlockTree({
+    images: runtime.images,
+    compilation: runtime.compilation,
+    semanticRef: objectRef('demo', semantic.id),
+    id: 'resumable-tree',
+  });
+  assert.equal(installed.moduleArtifact.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+  assert.equal(installed.nodes.length, 3);
+  assert.ok(installed.moduleArtifact.metadata.effectSites.some(({resumeEntry}) => resumeEntry !== null));
+
+  const middle = await executeBlock(runtime, objectRef('demo', installed.block.id), [integerValue(31)]);
+  assert.deepEqual(await invokeValue(runtime, middle, [integerValue(7)]), integerValue(31));
   await runtime.close();
 });

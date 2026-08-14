@@ -14,6 +14,11 @@ import {
   compileWasmModule,
   compileWasmModuleEntries,
 } from './compiler.js';
+import {
+  compileResumableWasmModule,
+  compileResumableWasmModuleEntries,
+  isWasmTailEffectRestrictionError,
+} from './resumable-compiler.js';
 
 function normalizeObjectRef(value, label) {
   const ref = canonicalizeValue(value);
@@ -61,9 +66,27 @@ function blockKey(blockId) {
   return Buffer.from(blockId, 'utf8').toString('base64url');
 }
 
+function preflightProgram(program) {
+  try {
+    return compileWasmModule(program);
+  } catch (error) {
+    if (!isWasmTailEffectRestrictionError(error)) throw error;
+    return compileResumableWasmModule(program);
+  }
+}
+
+function preflightEntries(entries) {
+  try {
+    return compileWasmModuleEntries(entries);
+  } catch (error) {
+    if (!isWasmTailEffectRestrictionError(error)) throw error;
+    return compileResumableWasmModuleEntries(entries);
+  }
+}
+
 function validateTree(program, seen = new Set()) {
   const normalized = normalizeLagrangeCodeProgram(program);
-  compileWasmModule(normalized);
+  preflightProgram(normalized);
   for (const nested of directNestedBlocks(normalized.body)) {
     if (typeof nested.blockId !== 'string' || nested.blockId.length === 0) {
       throw new TypeError('nested semantic block id must be non-empty text');
@@ -121,7 +144,7 @@ function flattenPlans(root) {
 }
 
 function preflightSharedModule(groupPlans) {
-  compileWasmModuleEntries(groupPlans.map((plan, memberIndex) => ({
+  preflightEntries(groupPlans.map((plan, memberIndex) => ({
     entry: `run_${memberIndex}`,
     memberIndex,
     program: plan.program,

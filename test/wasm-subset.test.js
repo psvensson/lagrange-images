@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   LAGRANGE_CODE_V0,
   WASM_MODULE_V1,
+  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
   createRuntime,
   integerValue,
   objectRef,
@@ -17,7 +18,7 @@ async function semantic(runtime, id, body) {
   });
 }
 
-test('WASM backend v0 rejects non-tail message sends instead of falling back', async () => {
+test('WASM compiler selects the resumable ABI for a non-tail message send', async () => {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   await runtime.images.createImage({id: 'demo'});
   const source = await semantic(runtime, 'send-semantic', {
@@ -31,17 +32,19 @@ test('WASM backend v0 rejects non-tail message sends instead of falling back', a
     },
     right: {op: 'literal', value: integerValue(1)},
   });
-  await assert.rejects(
-    runtime.compilation.compileArtifact(objectRef('demo', source.id), {
-      id: 'send-wasm',
-      targetRepresentation: WASM_MODULE_V1,
-    }),
-    /only in tail position/,
-  );
+  const module = await runtime.compilation.compileArtifact(objectRef('demo', source.id), {
+    id: 'send-wasm',
+    targetRepresentation: WASM_MODULE_V1,
+  });
+  assert.equal(module.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+  assert.equal(module.metadata.effectSites.length, 1);
+  assert.equal(module.metadata.effectSites[0].kind, 'send');
+  assert.match(module.metadata.effectSites[0].resumeEntry, /\$resume_/);
+  assert.equal(module.metadata.continuations.length, 1);
   await runtime.close();
 });
 
-test('WASM backend v0 rejects non-tail nested Block creation', async () => {
+test('WASM compiler selects the resumable ABI for non-tail nested Block creation', async () => {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   await runtime.images.createImage({id: 'demo'});
   const source = await semantic(runtime, 'block-semantic', {
@@ -56,17 +59,18 @@ test('WASM backend v0 rejects non-tail nested Block creation', async () => {
     message: textValue('value'),
     arguments: [],
   });
-  await assert.rejects(
-    runtime.compilation.compileArtifact(objectRef('demo', source.id), {
-      id: 'block-wasm',
-      targetRepresentation: WASM_MODULE_V1,
-    }),
-    /nested Block creation only in tail position/,
-  );
+  const module = await runtime.compilation.compileArtifact(objectRef('demo', source.id), {
+    id: 'block-wasm',
+    targetRepresentation: WASM_MODULE_V1,
+  });
+  assert.equal(module.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+  assert.deepEqual(module.metadata.effectSites.map(({kind}) => kind), ['closure', 'send']);
+  assert.match(module.metadata.effectSites[0].resumeEntry, /\$resume_/);
+  assert.equal(module.metadata.effectSites[1].resumeEntry, null);
   await runtime.close();
 });
 
-test('WASM backend v0 refuses reference literals because metadata cannot hide graph edges', async () => {
+test('WASM backend refuses reference literals because metadata cannot hide graph edges', async () => {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   await runtime.images.createImage({id: 'demo'});
   const source = await semantic(runtime, 'ref-semantic', {

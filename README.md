@@ -15,13 +15,13 @@ Smalltalk | Lisp | Java | Rust | ...
 objects + Blocks + artifact graph
               |
 execution
-interpreter | Lagrange WASM | foreign WASM | foreign runtimes
+neutral | Lagrange WASM | foreign WASM | foreign runtimes
               |
 image backend
 mock now | Lagrange durable/distributed backend
 ```
 
-Programs are also artifact graphs, not source-only pipelines:
+Programs are artifact graphs, not source-only pipelines:
 
 ```text
 source / IR / JAR / runtime image / manifest / lock / package / WASM
@@ -47,15 +47,42 @@ source / IR / JAR / runtime image / manifest / lock / package / WASM
 - executable Symmetric Smalltalk seed with lexical nested Blocks
 - mixed Block composition across image-native Smalltalk, foreign WASM and live foreign runtimes
 
-### Compilation and WASM
+### Image-native compilation and Lagrange WASM
 
-- language-neutral semantic `lagrange-code/v0`
-- reference `neutral-expression/v0` executor
-- Lagrange WASM backend using `lagrange-value-handle/v0`
-- shared multi-entry WASM modules for compilation groups
+Semantic code is stored as `lagrange-code/v0`. It can currently execute through the reference `neutral-expression/v0` backend or be compiled into Lagrange WASM.
+
+The WASM compiler is deliberately hybrid:
+
+```text
+lagrange-code/v0
+      |
+      +-> lagrange-value-handle/v0
+      |      simple/pure/tail-effect path
+      |
+      `-> lagrange-value-handle-resumable/v1
+             only when a host effect is non-tail
+```
+
+The established v0 ABI remains the small fast path. If compilation fails specifically because a message send or nested Block creation occurs in non-tail position, the compiler emits the resumable v1 ABI instead. Other compile errors remain errors; there is no silent neutral-executor fallback.
+
+The resumable ABI uses compiler-generated WASM resume entries. At a non-tail host effect the compiled function yields an explicit request plus the activation-local Value handles needed later. The host performs the ordinary effect, puts the returned canonical Value into the same `ValueHandleArena`, and re-enters the same leased WASM instance through the resume entry. Resume entries and saved handles are transient execution machinery, not durable Blocks or continuations.
+
+Implemented WASM machinery includes:
+
+- shared multi-entry modules for compilation groups
 - runtime-local compiled-module cache
-- explicit stateless instance pooling/rebinding
-- tail message-send and nested-Block effects
+- explicit `stateless-v0` instance pooling/rebinding
+- message-send and nested-Block host effects
+- non-tail suspension/resumption and multiple sequential effects
+- non-tail nested Block creation in shared modules
+
+The mixed PR32 program now proves backend agreement from the same persistent semantic artifact:
+
+```smalltalk
+[ :x | cuis value: (rust value: x value: x) value: x ]
+```
+
+For `x = 14`, both neutral execution and resumable Lagrange WASM produce `42`: the inner Rust/foreign-WASM Block returns `28`, Lagrange WASM resumes, and the Cuis Block adds the original `14`.
 
 ### Artifact/toolchain graph
 
@@ -70,7 +97,7 @@ source / IR / JAR / runtime image / manifest / lock / package / WASM
 - explicit Cuis build/image/changes/sources/package artifact conventions
 - raw external WASM stored as `wasm-binary/v1`
 
-The Cuis toolchain path is intentionally artifact-first:
+The Cuis toolchain path is artifact-first:
 
 ```text
 smalltalk/cuis-build-v1
@@ -85,11 +112,11 @@ OpenSmalltalkVM + real Cuis tooling
           `-> derived .changes
 ```
 
-The VM executable path is deployment machinery. Its stable version is provider identity; the compiler-bearing base Cuis image is an explicit build input. The first provider does **not** opt into deterministic result reuse yet because closed inputs do not prove byte-identical Smalltalk snapshots.
+The VM executable path is deployment machinery. Its stable version is provider identity; the compiler-bearing base Cuis image is an explicit build input. The first Cuis snapshot provider does **not** opt into deterministic result reuse because closed inputs do not by themselves prove byte-identical snapshots.
 
-### Foreign runtime lifecycle
+### Foreign runtime lifecycle and callable Blocks
 
-Long-lived external runtimes have a separate language-neutral lifecycle seam:
+Long-lived external runtimes have a language-neutral transient lifecycle:
 
 ```text
 ForeignRuntimeProviderRegistry
@@ -97,20 +124,18 @@ ForeignRuntimeProviderRegistry
         -> start -> many calls -> stop
 ```
 
-`createRuntime()` exposes `foreignRuntimeProviders` and `foreignRuntimes`. Provider handles remain private transient host state; callers receive a runtime-local descriptor rather than an `ObjectRef`. Calls carry frozen provider-specific interface data plus canonical Values and must return one canonical Value. `stop()` closes the call gate, waits for in-flight calls and then shuts the provider down. Normal `runtime.close()` owns active foreign runtimes before backend shutdown.
-
-Durable definitions now sit above that transient lifecycle:
+Durable runtime definitions sit above that lifecycle:
 
 ```text
 runtime-definition CodeArtifact
-        -> ForeignRuntimeDefinitionService
+        -> explicit artifact graph
         -> runtime-local definition/provider binding
-        -> transient runtime instance
+        -> lazy transient runtime instance
 ```
 
-Provider selection does not become durable program identity. The first concrete definition is `smalltalk/cuis-runtime-definition-v1`, whose image/changes/sources/package inputs are explicit artifact dependencies.
+Provider selection is deployment state, not durable program identity. The first concrete definition is `smalltalk/cuis-runtime-definition-v1`.
 
-Foreign-runtime services can also be ordinary Blocks:
+Foreign-runtime services are ordinary Blocks:
 
 ```text
 Block
@@ -119,25 +144,19 @@ Block
             -> lazy/reused transient runtime
 ```
 
-The first real provider is OpenSmalltalkVM + Cuis. `createArtifactBackedOpenSmalltalkCuisProvider()` materializes the durable definition privately, then delegates to the same narrow OpenSmalltalkVM/Cuis bridge used by the configured-image runtime proof. Host paths remain transient.
+`ForeignRuntimeDefinitionInstanceCache` coalesces concurrent first use and reuses one live instance. `runtime.close()` still owns normal shutdown.
 
-The first unchanged-package proof uses Cuis' upstream `JSON.pck.st`. Cuis installs it with its own `CodePackageFile` loader, and the real integration test exercises the package's parser and renderer by parsing a nested document, rendering it, reparsing it and validating the reconstructed structure.
+The first real provider is OpenSmalltalkVM + Cuis. `createArtifactBackedOpenSmalltalkCuisProvider()` materializes a durable definition privately and delegates to the same narrow Cuis bridge used by the configured-image proof. Host paths never become durable identity.
 
-The same pinned environment is also used by the toolchain proof. That proof derives a new Cuis image from explicit artifacts, starts the **derived image without reinstalling JSON**, and requires the already-installed package to execute through the artifact-backed callable path. Runtime lifecycle and toolchain lifecycle remain separate contracts even though they reuse the same mature ecosystem.
+The unchanged-package proof uses upstream `JSON.pck.st`. The real toolchain derives a new Cuis image containing JSON, and the artifact-backed runtime launches that derived image **without reinstalling the package**.
 
-The bridge protocol, `lagrange-cuis-stdio/v0`, remains deliberately narrow. It exports named proof services including `proof/add`, recursive `proof/factorial` and the package-backed `json/package-proof`; it is **not** remote Smalltalk eval or arbitrary `perform:`.
+The bridge protocol, `lagrange-cuis-stdio/v0`, remains deliberately narrow. It exports named proof services such as `proof/add`, recursive `proof/factorial` and package-backed `json/package-proof`; it is not remote Smalltalk eval or arbitrary `perform:`.
 
-The mixed proof then gives Symmetric Smalltalk two captured Blocks: a Rust/foreign-WASM add Block and a Cuis `proof/add` Block. The Smalltalk source composes them with ordinary `value:value:` sends; it contains no provider ID, runtime ID, VM path or WASM export name. A Block callable accepts either direct invocation (`receiver = null`) or a language-level Block send where the receiver is exactly that Block; arbitrary receiver semantics remain out of scope.
-
-Normal tests inject process/toolchain runners. A separate PR-only CI job downloads and verifies the pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur runtime, Cuis 7.9-8090 image and pinned upstream JSON package, then runs the real runtime/toolchain/mixed-Block proof.
-
-OCI foreign-runtime placement, package dependency resolution, capabilities, restart/reconciliation and foreign-object handles remain later work.
+A separate PR-only CI job downloads and verifies the pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur runtime, Cuis 7.9-8090 image and pinned upstream JSON package. It now proves the toolchain-produced image and the mixed program through the **resumable Lagrange-WASM** orchestration lane.
 
 ### Foreign WASM callable boundary
 
 Raw external WASM is not automatically treated as Lagrange WASM.
-
-The first callable path is explicit:
 
 ```text
 wasm-binary/v1
@@ -149,41 +168,11 @@ wasm-callable-interface/v1
      Block
 ```
 
-The first ABI is `wasm-scalar-call/v0`:
-
-- one named exported function
-- no WASM imports
-- no arbitrary receiver; direct invocation or the Block itself as a language-level Block receiver
-- no lexical environment
-- fresh instance per activation
-- scalar parameters/results only: `boolean`, signed `i32`, signed `i64`, `f32`, `f64`
-
-Example shape:
-
-```js
-const {block} = await installWasmScalarCallable({
-  images: runtime.images,
-  wasm: objectRef(imageId, wasmArtifact.id),
-  exportName: 'add',
-  parameters: ['i32', 'i32'],
-  result: 'i32',
-});
-
-const activation = await runtime.invocations.invokeBlock(
-  objectRef(imageId, block.id),
-  [integerValue(2), integerValue(3)],
-);
-
-const value = await runtime.executor.execute(activation);
-```
-
-This is intentionally small. WASI, strings/memory, callbacks, imported host functions, async operations and capabilities need later explicit ABI contracts.
+The first ABI, `wasm-scalar-call/v0`, supports one named no-import function over boolean/i32/i64/f32/f64 Values. A callable Block accepts direct invocation (`receiver = null`) or a language-level Block send whose receiver is exactly that Block. Arbitrary foreign receiver semantics remain out of scope.
 
 ## Two WASM lanes
 
-This distinction is central.
-
-### Image-native/Lagrange WASM
+### Image-native Lagrange WASM
 
 ```text
 language semantics
@@ -193,19 +182,19 @@ language semantics
       -> ActivationExecutor
 ```
 
-`wasm-module/v1` means the Lagrange Value-handle/import/effect contract.
+`wasm-module/v1` means a Lagrange-owned Value-handle/effect ABI. It may use the tail-only v0 contract or the resumable v1 contract without changing the semantic artifact or Block identity.
 
 ### External/foreign WASM
 
 ```text
-existing language ecosystem or runtime port
+existing ecosystem / imported binary
       -> external toolchain
       -> wasm-binary/v1
       -> explicit callable/component/runtime interface
       -> ActivationExecutor / later placement
 ```
 
-`wasm-binary/v1` only means validated external WASM bytes. A callable interface says how those bytes may be invoked. Neither the binary nor the interface grants authority.
+`wasm-binary/v1` only means validated external WASM bytes. A callable interface says how those bytes may be invoked. Neither binary nor interface grants authority.
 
 ## Existing language ecosystems
 
@@ -227,30 +216,22 @@ Smalltalk deliberately has two complementary paths:
 Symmetric Smalltalk
   -> image-native language designed here
 
-Cuis/Squeak-style compatible Smalltalk
+Cuis/Squeak-compatible Smalltalk
   -> OpenSmalltalkVM foreign runtime / toolchain
   -> later optional structured migration or WASM-hosted runtime
 ```
 
-OpenSmalltalkVM is the preferred first compatibility path because it lets established Smalltalk code keep using its real runtime/compiler/package semantics. Its Spur heap remains foreign runtime state rather than becoming the Lagrange image graph.
+The compatibility path has now proved a pinned Cuis runtime, unchanged upstream package execution, a real `ToolchainService` build producing a runnable package-bearing image, durable runtime definitions, callable Blocks, and composition from Symmetric Smalltalk alongside foreign WASM.
 
-The compatibility path has now proved a real pinned Cuis runtime, unchanged upstream package loading/execution, a real `ToolchainService` build that produces a runnable package-bearing Cuis image, durable artifact-backed runtime definitions, ordinary callable Blocks, and mixed composition from Symmetric Smalltalk alongside foreign WASM.
+Compiled libraries and runtime images can remain compiled artifacts when useful. A JAR need not be decompiled; a WASM component need not become source; a compatible Smalltalk runtime image may remain an external runtime artifact.
 
-The long-term goal is coexistence: native Symmetric Smalltalk and OpenSmalltalkVM-backed compatible Smalltalk should share projects, artifacts, interfaces and tools, with selective native migration only where useful.
-
-Compiled libraries and runtime images can remain compiled artifacts when that is the useful canonical form. A JAR does not need to be decompiled; a WASM component does not need to become source; a vendored crate can remain explicit package bytes/files; a compatible Smalltalk runtime image can remain an external runtime artifact.
-
-See [ADR 0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md), [ADR 0026](docs/decisions/0026-opensmalltalkvm-cuis-toolchain-provider.md), [ADR 0027](docs/decisions/0027-artifact-backed-foreign-runtime-definitions.md), [ADR 0028](docs/decisions/0028-foreign-runtime-callable-blocks.md) and [ADR 0029](docs/decisions/0029-mixed-implementation-block-composition.md).
+See ADRs [0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md), [0026](docs/decisions/0026-opensmalltalkvm-cuis-toolchain-provider.md), [0027](docs/decisions/0027-artifact-backed-foreign-runtime-definitions.md), [0028](docs/decisions/0028-foreign-runtime-callable-blocks.md), [0029](docs/decisions/0029-mixed-implementation-block-composition.md) and [0030](docs/decisions/0030-resumable-non-tail-wasm-effects.md).
 
 ## Deterministic toolchain reuse
 
-External providers opt in explicitly with `cacheKey(request, context)`.
+External providers opt in explicitly with `cacheKey(request, context)`. The derivation key covers provider identity, target/options and the complete explicit build-relevant artifact graph.
 
-The derivation key covers the provider identity, target/options and the complete explicit build-relevant artifact graph. For Cargo that includes manifest, lock, source, config, vendor metadata and every vendor byte plus the pinned OCI image identity.
-
-Repeated compatible builds can therefore return the existing immutable output without rematerializing a workspace or running Docker/Podman/Cargo again.
-
-The current cache is conservative: it reuses against the same explicit artifact identities so `derivedFrom` provenance remains truthful. Cross-install content-addressed reuse needs a later installation/provenance wrapper. The Cuis snapshot provider deliberately does not opt in until reproducible snapshot bytes or a safe normalization contract have been demonstrated.
+The current cache is conservative: reuse is tied to the same explicit input artifact identities so `derivedFrom` provenance remains truthful. Cross-install content-addressed reuse needs a later installation/provenance wrapper.
 
 ## Core invariants
 
@@ -265,22 +246,19 @@ toolchain selection != toolchain identity
 provider cache opt-in != inferred determinism
 build OCI != foreign-runtime OCI
 foreign runtime lifecycle != toolchain lifecycle
-VM path != VM/provider identity
-VM identity != compiler-bearing base image
 runtime definition != running instance
 provider handle != ObjectRef
 runtime ID != capability
 foreign heap != image graph
 Spur oop != ObjectRef
-package host path != package identity
-package basename != package identity
-provider control plane != guest package state
-snapshot bytes != assumed deterministic output
-exported service != arbitrary perform:
 raw foreign WASM != Lagrange WASM ABI
 callable interface != authority
 Block self receiver != arbitrary foreign receiver
 implementation lane != language-level Block identity
+semantic continuation != durable Block
+resume entry != public callable interface
+saved Value handle != durable Value identity
+resumption != retry
 compiled host module != durable code identity
 pooled instance != activation state
 ```
@@ -301,18 +279,8 @@ The default backend is the in-memory mock. `LAGRANGE_BACKEND=lagrange` requires 
 
 Start with [docs/README.md](docs/README.md).
 
-The short path is:
-
-1. [Architecture](docs/architecture.md) — layers and boundaries
-2. [Image model](docs/image-model.md) — durable graph records
-3. [Language platform](docs/language-platform.md) — how multiple languages fit
-4. [Roadmap](docs/roadmap.md) — current frontier and later work
-5. [Decision index](docs/decisions/README.md) — ADRs grouped by topic
-
-Useful focused docs:
-
-- [Value/reference/object model](docs/value-model.md)
-- [Security boundary](docs/security.md)
-- [Lagrange integration](docs/lagrange-integration.md)
-
-The ADRs contain detailed implementation history. The README and main docs describe the current model rather than repeating that chronology.
+1. [Architecture](docs/architecture.md)
+2. [Image model](docs/image-model.md)
+3. [Language platform](docs/language-platform.md)
+4. [Roadmap](docs/roadmap.md)
+5. [Decision index](docs/decisions/README.md)
