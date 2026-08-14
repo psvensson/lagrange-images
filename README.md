@@ -4,6 +4,8 @@ A persistent image service and language platform built to sit on Lagrange.
 
 An image is a durable object graph, not a VM memory dump and not a pile of source files. Languages are personalities over that graph. Program meaning is kept separately from derived execution artifacts so interpreters, WASM and future optimized runtimes can change without changing image semantics.
 
+The longer-term programming model is also **not source-code-only**: source, bytecode/packages, precompiled libraries, WASM components/modules, manifests and other imported artifacts should be able to form one durable dependency graph. Mature languages should normally reuse their existing compilers/package managers/runtimes through explicit toolchain adapters rather than require new compilers implemented here.
+
 ## What is here now
 
 - stable image and object identities
@@ -30,13 +32,18 @@ An image is a durable object graph, not a VM memory dump and not a pile of sourc
 - reference walking, optimistic versions, history and snapshots
 - in-memory mock backend plus optional `lagrange-server` probing
 
+Planned, not implemented yet, includes generic external-toolchain providers, OCI-backed builds, imported JAR/component/native-library dependencies and explicit OCI foreign-runtime adapters.
+
 Core invariants:
 
 ```text
 shape != behavior
 reference != authority
 identity != revision
+source != artifact boundary
 semantic code != executable artifact
+toolchain != language semantics
+build OCI != foreign-runtime OCI
 WASM handle != image identity
 compilation group != source-language construct
 shared module != function/Block identity
@@ -70,6 +77,71 @@ Smalltalk source
 ```
 
 The executable forms are derived state. Runtime closures still materialize as ordinary `Block + LexicalEnvironment` records regardless of whether their code entry is interpreted or lives in a shared WASM module.
+
+## Artifact graph and external toolchains
+
+Symmetric Smalltalk is source-first because it is a language this project defines. That is not meant to constrain Java, Rust, Lisp or imported libraries.
+
+The intended broader model is:
+
+```text
+source -------------------+
+semantic / IR ------------+
+bytecode / package -------+
+precompiled library ------+----> toolchain/provider
+WASM component/module ----+            |
+manifest / lock / config -+            v
+                                    derived artifacts
+                                    + callable interfaces
+```
+
+A toolchain provider may eventually execute in-process, as WASM, in an OCI build container, as a native process or through a remote build service. The compilation layer should care about explicit artifact inputs/outputs, toolchain identity, cache fingerprints and provenance rather than where the compiler physically runs.
+
+For mature languages the expected approach is to reuse their ecosystems:
+
+```text
+Rust source + Cargo metadata + dependencies
+  -> Cargo/rustc
+  -> WASM/component/other executable artifacts
+
+Java source + JAR dependencies
+  -> javac/JVM/AOT/Java-to-WASM tooling
+  -> bytecode/WASM/other executable artifacts
+```
+
+There should not be a requirement to implement new Rust or Java compilers here.
+
+### Compiled libraries
+
+Compiled libraries can remain first-class imported dependencies. A Java JAR need not be decompiled to participate in an image; a WASM component can remain a component; a Rust/native binary dependency can be reused when its compiler/target/ABI contract makes that safe.
+
+WASM Component-style interfaces are especially attractive as language-neutral library boundaries:
+
+```text
+Smalltalk caller ---+
+Rust caller --------+--> shared component/library
+Java caller --------+
+```
+
+The implementation language can become irrelevant at that outer interface while internal language semantics remain untouched.
+
+### OCI has two roles
+
+OCI as a **build environment**:
+
+```text
+artifact inputs -> compiler/package manager in OCI -> derived artifacts
+```
+
+OCI as a **foreign runtime**:
+
+```text
+image callable/interface -> adapter -> live JVM/native/Python/etc. container
+```
+
+These are deliberately separate. Build containers are reproducible toolchain machinery; foreign-runtime containers remain part of execution and have a stronger compatibility boundary. Objects in a JVM or other foreign heap do not automatically become durable image objects.
+
+See [ADR 0016](docs/decisions/0016-artifacts-external-toolchains-and-foreign-runtimes.md) and the [language platform](docs/language-platform.md).
 
 ## WASM backend
 
@@ -210,32 +282,17 @@ A transient compilation group says only:
 ```text
 policyId
 targetRepresentation
-semantic member refs
+artifact/semantic member refs
 compiler-policy options
 ```
 
 The generic compilation layer has separate registries for single-artifact and grouped compilers. `CompilationService.compileGroup()` resolves the members, makes them explicit provenance edges, applies compiler-declared cache semantics and persists the grouped artifact.
 
-The substrate does not assume that a group means a Smalltalk Block tree. Java may later group classes/packages, Rust codegen units/crates, Lisp compilation units, etc. A logical group may map to one physical module or several according to compiler policy.
+The substrate does not assume that a group means a Smalltalk Block tree. Java may group classes/packages, Rust codegen units/crates, Lisp compilation units, etc. A logical group may map to one physical module or several according to compiler/toolchain policy.
 
-The current WASM tree policy is `wasm-nested-block-tree/v0` with `physicalLayout: shared-module`.
+Derived-artifact reuse is provider-owned. A compiler/toolchain must opt in with a stable identity plus deterministic cache inputs. External toolchains will also need dependency/manifest/lock fingerprints and, for OCI-backed builds, the relevant image digest/version.
 
-The shared module contains one entry descriptor per group member:
-
-```text
-entry
-memberIndex
-parameters
-captures
-sendSiteIndices
-closureSiteIndices
-```
-
-At execution, only the active entry's host-effect sites are enabled. Being colocated in one WASM module does not grant one function another function's send/closure boundary.
-
-Derived-artifact reuse is compiler-owned. A compiler must opt in with a stable identity plus deterministic `cacheKey()`. Equivalent independent tree installations therefore reuse one immutable multi-function module while keeping separate semantic artifacts, `wasm-function/v1` wrappers, Blocks and runtime closures.
-
-There are now three distinct reuse layers:
+There are now three implemented WASM reuse layers:
 
 ```text
 durable derivation reuse: semantic group -> shared wasm-module/v1 CodeArtifact
@@ -245,7 +302,7 @@ runtime instance reuse:    stateless module -> rebound pooled WebAssembly.Instan
 
 None merges language/image identity or invocation-local Value/capability state.
 
-See ADR 0012, ADR 0013, ADR 0014 and ADR 0015.
+See ADR 0012 through ADR 0016.
 
 ## Values and objects
 
@@ -261,7 +318,7 @@ A generic object contains physical shape separately from language behavior. Smal
 
 ## References are not capabilities
 
-`{kind:'ref', imageId, objectId}` means only "this object identity". It grants no right to read, mutate or invoke that object. Authorization is resolved separately. WASM Value handles similarly grant no ambient authority.
+`{kind:'ref', imageId, objectId}` means only "this object identity". It grants no right to read, mutate or invoke that object. Authorization is resolved separately. WASM Value handles similarly grant no ambient authority. Imported interfaces and foreign-runtime adapters must preserve the same separation.
 
 ## Backend selection
 
@@ -297,3 +354,4 @@ Do not import `lagrange-server/src/...`; use public package seams only.
 - [ADR 0013: shared multi-function WASM modules](docs/decisions/0013-shared-multifunction-wasm-modules.md)
 - [ADR 0014: runtime-local compiled WASM module cache](docs/decisions/0014-runtime-wasm-module-cache.md)
 - [ADR 0015: runtime-local WASM instance pooling](docs/decisions/0015-runtime-wasm-instance-pooling.md)
+- [ADR 0016: artifact graphs, external toolchains and foreign runtimes](docs/decisions/0016-artifacts-external-toolchains-and-foreign-runtimes.md)
