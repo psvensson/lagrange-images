@@ -15,6 +15,10 @@ function requireReusableModule(artifact) {
   return artifact;
 }
 
+function shouldDropState(state) {
+  return state.inUse === 0 && state.creating === 0 && state.idle.length === 0;
+}
+
 class WasmInstancePool {
   constructor({maxIdlePerModule = 1} = {}) {
     if (!Number.isInteger(maxIdlePerModule) || maxIdlePerModule < 0) {
@@ -33,7 +37,7 @@ class WasmInstancePool {
     const key = modulePoolKey(moduleArtifact);
     let state = this.modules.get(key);
     if (!state) {
-      state = {idle: [], inUse: 0};
+      state = {idle: [], inUse: 0, creating: 0};
       this.modules.set(key, state);
     }
     return {key, state};
@@ -48,6 +52,7 @@ class WasmInstancePool {
       this.hits += 1;
     } else {
       this.misses += 1;
+      state.creating += 1;
       try {
         slot = await create();
         if (!slot || typeof slot !== 'object' || !(slot.instance instanceof WebAssembly.Instance)) {
@@ -55,9 +60,11 @@ class WasmInstancePool {
         }
         this.created += 1;
       } catch (error) {
-        if (state.inUse === 0 && state.idle.length === 0) this.modules.delete(key);
+        state.creating -= 1;
+        if (shouldDropState(state) && this.modules.get(key) === state) this.modules.delete(key);
         throw error;
       }
+      state.creating -= 1;
     }
     state.inUse += 1;
     let released = false;
@@ -74,7 +81,7 @@ class WasmInstancePool {
       } else {
         this.discarded += 1;
       }
-      if (state.inUse === 0 && state.idle.length === 0) this.modules.delete(key);
+      if (shouldDropState(state) && this.modules.get(key) === state) this.modules.delete(key);
     };
 
     return Object.freeze({slot, release});
@@ -83,7 +90,7 @@ class WasmInstancePool {
   clear() {
     for (const [key, state] of this.modules) {
       state.idle.length = 0;
-      if (state.inUse === 0) this.modules.delete(key);
+      if (shouldDropState(state)) this.modules.delete(key);
     }
   }
 
