@@ -8,6 +8,7 @@ import {
   WasmInstancePool,
   compileSymmetricSmalltalkBlock,
   compileWasmFunctionArtifact,
+  createDefaultCodeExecutorRegistry,
   createRuntime,
   installWasmBlockTree,
   integerValue,
@@ -196,7 +197,7 @@ test('WASM modules without an explicit instance-reuse contract remain one-shot',
     moduleId: 'marked-module',
     functionId: 'marked-function',
   });
-  const {instanceReuse, compilerIdentity, derivationKey, ...moduleMetadata} = moduleArtifact.metadata;
+  const {instanceReuse, compilerIdentity: _compilerIdentity, derivationKey: _derivationKey, ...moduleMetadata} = moduleArtifact.metadata;
   assert.equal(instanceReuse, WASM_INSTANCE_REUSE_STATELESS_V0);
   const oneShotModule = await runtime.images.putCodeArtifact('demo', {
     id: 'one-shot-module',
@@ -226,4 +227,12 @@ test('WASM modules without an explicit instance-reuse contract remain one-shot',
   assert.equal(wasmExecutor.instancePool.stats().hits, 0);
   assert.equal(wasmExecutor.moduleCache.stats().compilations, 1);
   await runtime.close();
+});
+
+test('default executor registries own separate runtime-local WASM instance pools', () => {
+  const first = createDefaultCodeExecutorRegistry().get(WASM_FUNCTION_V1);
+  const second = createDefaultCodeExecutorRegistry().get(WASM_FUNCTION_V1);
+  assert.notEqual(first, second);
+  assert.notEqual(first.instancePool, second.instancePool);
+  assert.notEqual(first.moduleCache, second.moduleCache);
 });
