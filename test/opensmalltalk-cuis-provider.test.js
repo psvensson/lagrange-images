@@ -104,8 +104,8 @@ test('OpenSmalltalk Cuis provider materializes a headless bridge and keeps runti
     });
     assert.equal(runner.starts.length, 1);
     assert.deepEqual(runner.starts[0].args.slice(0, 3), [
+      '-vm-sound-null',
       '-vm-display-null',
-      '-headless',
       '/opt/cuis/Cuis7.9-8090.image',
     ]);
     assert.equal(runner.starts[0].args[3], '-s');
@@ -116,6 +116,7 @@ test('OpenSmalltalk Cuis provider materializes a headless bridge and keeps runti
     assert.match(script, /LagrangeProofService compile: 'factorial: n/);
     assert.match(script, /StdIOReadStream stdin/);
     assert.match(script, /StdIOWriteStream stdout/);
+    assert.match(script, /Smalltalk quitPrimitive: 0/);
     assert.equal(script.includes('perform:'), false);
 
     assert.deepEqual(await provider.call(started.handle, {
