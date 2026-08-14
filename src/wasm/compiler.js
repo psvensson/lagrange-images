@@ -9,6 +9,7 @@ import {
 
 const I32 = 0x7f;
 const FUNC = 0x60;
+const BASE_IMPORT_COUNT = 4;
 
 function u32(value) {
   if (!Number.isInteger(value) || value < 0) throw new TypeError('u32 LEB value must be a non-negative integer');
@@ -63,6 +64,11 @@ function functionExport(name, functionIndex) {
   return [...text(name), 0x00, ...u32(functionIndex)];
 }
 
+function requiredText(value, label) {
+  if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be a non-empty string`);
+  return value;
+}
+
 function collectLiteral(literals, value) {
   const normalized = canonicalizeValue(value);
   if (isReference(normalized)) {
@@ -77,7 +83,22 @@ function collectLiteral(literals, value) {
   return index;
 }
 
-function compileExpression(expression, context) {
+function collectSendSite(sendSites, expression) {
+  const message = canonicalizeValue(expression.message);
+  if (isReference(message)) {
+    throw new TypeError('WASM backend v0 does not place reference messages in module metadata');
+  }
+  const site = Object.freeze({
+    languageId: requiredText(expression.languageId, 'send languageId'),
+    message,
+    arity: expression.arguments.length,
+  });
+  const index = sendSites.length;
+  sendSites.push(site);
+  return index;
+}
+
+function compileExpression(expression, context, {tail = false} = {}) {
   if (!expression || typeof expression !== 'object' || Array.isArray(expression)) {
     throw new TypeError('WASM compiler expression must be an object');
   }
@@ -116,13 +137,21 @@ function compileExpression(expression, context) {
         ...compileExpression(expression.condition, context),
         0x10, ...u32(3),
         0x04, I32,
-        ...compileExpression(expression.then, context),
+        ...compileExpression(expression.then, context, {tail}),
         0x05,
-        ...compileExpression(expression.else, context),
+        ...compileExpression(expression.else, context, {tail}),
         0x0b,
       ];
-    case 'send':
-      throw new TypeError('WASM backend v0 does not yet support message sends');
+    case 'send': {
+      if (!tail) throw new TypeError('WASM backend v0 supports message sends only in tail position');
+      if (!Array.isArray(expression.arguments)) throw new TypeError('WASM send arguments must be an array');
+      const siteIndex = collectSendSite(context.sendSites, expression);
+      return [
+        ...compileExpression(expression.receiver, context),
+        ...expression.arguments.flatMap((argument) => compileExpression(argument, context)),
+        0x10, ...u32(BASE_IMPORT_COUNT + siteIndex),
+      ];
+    }
     case 'block':
       throw new TypeError('WASM backend v0 does not yet support nested Block creation');
     default:
@@ -135,27 +164,32 @@ function compileWasmModule(program) {
   const captureIds = program.captures.map(({id}) => id);
   const captureIndex = new Map(captureIds.map((id, index) => [id, index]));
   const literals = {values: [], keys: new Map()};
+  const sendSites = [];
   const bodyExpression = compileExpression(program.body, {
     parameterCount,
     captureIndex,
     literals,
-  });
+    sendSites,
+  }, {tail: true});
 
   const entryParameters = 1 + parameterCount + captureIds.length;
+  const sendTypes = sendSites.map(({arity}) => functionType(Array.from({length: 1 + arity}, () => I32), [I32]));
+  const entryTypeIndex = 2 + sendTypes.length;
   const types = vector([
     functionType([I32], [I32]),
     functionType([I32, I32], [I32]),
-    functionType([I32], [I32]),
+    ...sendTypes,
     functionType(Array.from({length: entryParameters}, () => I32), [I32]),
   ]);
   const imports = vector([
     functionImport(WASM_IMPORT_MODULE, 'literal', 0),
     functionImport(WASM_IMPORT_MODULE, 'integer_add', 1),
     functionImport(WASM_IMPORT_MODULE, 'equals', 1),
-    functionImport(WASM_IMPORT_MODULE, 'is_true', 2),
+    functionImport(WASM_IMPORT_MODULE, 'is_true', 0),
+    ...sendSites.map((_, index) => functionImport(WASM_IMPORT_MODULE, `send_site_${index}`, 2 + index)),
   ]);
-  const functions = vector([[...u32(3)]]);
-  const exports = vector([functionExport(WASM_ENTRY_V0, 4)]);
+  const functions = vector([[...u32(entryTypeIndex)]]);
+  const exports = vector([functionExport(WASM_ENTRY_V0, BASE_IMPORT_COUNT + sendSites.length)]);
   const functionBody = [0x00, ...bodyExpression, 0x0b];
   const code = vector([[...u32(functionBody.length), ...functionBody]]);
 
@@ -170,6 +204,7 @@ function compileWasmModule(program) {
       ...section(10, code),
     ]),
     literals: Object.freeze(literals.values),
+    sendSites: Object.freeze(sendSites),
     parameterCount,
     captureIds: Object.freeze(captureIds),
   });
@@ -189,31 +224,21 @@ const lagrangeCodeV0ToWasmModuleCompiler = Object.freeze({
         parameters: compiled.parameterCount,
         captures: compiled.captureIds,
         literals: compiled.literals,
+        sendSites: compiled.sendSites,
         semanticRepresentation: LAGRANGE_CODE_V0,
       },
     });
   },
 });
 
-async function compileWasmFunctionArtifact({
-  images,
-  compilation,
-  semanticRef,
-  moduleId,
-  functionId,
-} = {}) {
+async function compileWasmFunctionArtifact({images, compilation, semanticRef, moduleId, functionId} = {}) {
   if (!images || typeof images.getCodeArtifact !== 'function' || typeof images.putCodeArtifact !== 'function') {
     throw new TypeError('images service with code artifact access is required');
   }
-  if (!compilation || typeof compilation.compileArtifact !== 'function') {
-    throw new TypeError('compilation service is required');
-  }
+  if (!compilation || typeof compilation.compileArtifact !== 'function') throw new TypeError('compilation service is required');
   const semantic = await images.getCodeArtifact(semanticRef.imageId, semanticRef.objectId);
   if (!semantic || semantic.representation !== LAGRANGE_CODE_V0) throw new TypeError(`semanticRef must reference ${LAGRANGE_CODE_V0}`);
-  const moduleArtifact = await compilation.compileArtifact(semanticRef, {
-    targetRepresentation: WASM_MODULE_V1,
-    id: moduleId,
-  });
+  const moduleArtifact = await compilation.compileArtifact(semanticRef, {targetRepresentation: WASM_MODULE_V1, id: moduleId});
   const metadata = moduleArtifact.metadata ?? {};
   const moduleRef = objectRef(moduleArtifact.imageId, moduleArtifact.id);
   const functionArtifact = await images.putCodeArtifact(semanticRef.imageId, {
@@ -232,8 +257,4 @@ async function compileWasmFunctionArtifact({
   return Object.freeze({moduleArtifact, functionArtifact});
 }
 
-export {
-  compileWasmFunctionArtifact,
-  compileWasmModule,
-  lagrangeCodeV0ToWasmModuleCompiler,
-};
+export {compileWasmFunctionArtifact, compileWasmModule, lagrangeCodeV0ToWasmModuleCompiler};
