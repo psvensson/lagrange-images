@@ -2,7 +2,11 @@ import {createBackend} from './backend/create-backend.js';
 import {DispatchRegistry, InvocationService} from './dispatch/invocation-service.js';
 import {ActivationExecutor, createDefaultCodeExecutorRegistry} from './execution/executor.js';
 import {ImageService} from './image/graph-image-service.js';
-import {createDefaultLanguagePlatform} from './language/index.js';
+import {
+  SYMMETRIC_SMALLTALK_ID,
+  createDefaultLanguagePlatform,
+  createSymmetricSmalltalkDispatcher,
+} from './language/index.js';
 
 async function createRuntime(options = {}) {
   const backend = await createBackend(options.backend ?? {});
@@ -14,13 +18,16 @@ async function createRuntime(options = {}) {
   for (const [languageId, dispatcher] of Object.entries(options.dispatchers ?? {})) {
     dispatchers.register(languageId, dispatcher);
   }
+  if (!dispatchers.has(SYMMETRIC_SMALLTALK_ID)) {
+    dispatchers.register(SYMMETRIC_SMALLTALK_ID, createSymmetricSmalltalkDispatcher());
+  }
   const invocations = new InvocationService({images, dispatchers});
 
   const codeExecutors = createDefaultCodeExecutorRegistry();
   for (const [representation, executor] of Object.entries(options.codeExecutors ?? {})) {
     codeExecutors.register(representation, executor);
   }
-  const executor = new ActivationExecutor({images, executors: codeExecutors});
+  const executor = new ActivationExecutor({images, executors: codeExecutors, invocations});
 
   return {
     backend,
