@@ -17,6 +17,9 @@ The programming model is also **not source-code-only**: source, bytecode/package
 - generic `ToolchainProviderRegistry` / `ToolchainService`
 - frozen transitive artifact-graph requests for toolchain providers
 - multi-output toolchain results persisted with automatic input provenance and transient diagnostics
+- digest-pinned Docker/Podman-style OCI build runner
+- first real Cargo/rustc OCI provider using explicit manifest/lock/source artifacts
+- raw Cargo-produced WASM import as `wasm-binary/v1`
 - transient message dispatch and activation requests
 - single-artifact and grouped compiler registries/services
 - language-neutral transient compilation groups
@@ -37,7 +40,7 @@ The programming model is also **not source-code-only**: source, bytecode/package
 - reference walking, optimistic versions, history and snapshots
 - in-memory mock backend plus optional `lagrange-server` probing
 
-Planned, not implemented yet, includes OCI/native/remote toolchain execution providers, toolchain derivation caching, Cargo/rustc and Java/JAR adapters, WASM Component callable interfaces and explicit OCI foreign-runtime adapters.
+Planned, not implemented yet, includes external-toolchain derivation caching, explicit vendored Cargo dependency materialization, callable interfaces for foreign/raw WASM, Java/JAR adapters, WASM Component interfaces and explicit OCI foreign-runtime adapters.
 
 Core invariants:
 
@@ -51,6 +54,7 @@ semantic code != executable artifact
 toolchain selection != toolchain identity
 toolchain provider != language semantics
 build OCI != foreign-runtime OCI
+raw foreign WASM != Lagrange WASM ABI
 WASM handle != image identity
 compilation group != source-language construct
 shared module != function/Block identity
@@ -107,7 +111,7 @@ Roles are compiler/tooling policy rather than a platform enum. Imported JARs, ma
 
 ### Generic toolchain provider contract
 
-The first generic provider substrate is implemented now:
+The generic provider substrate is implemented now:
 
 ```js
 const runtime = await createRuntime({
@@ -150,7 +154,60 @@ provider.identity   example-toolchain/v1
 
 The first protocol is `lagrange-toolchain-provider/v0`.
 
-This PR does **not** yet run external processes or containers. The next intended proof is an OCI-backed Cargo/rustc provider over this same substrate.
+### First OCI Cargo/rustc provider
+
+The first real external provider reuses Cargo and `rustc` inside a digest-pinned OCI build image:
+
+```js
+const cargoProvider = createCargoRustcOciProvider({
+  image: 'registry.example/rust-wasm@sha256:<digest>',
+  // runner defaults to OciCliRunner using `docker`;
+  // pass new OciCliRunner({command: 'podman'}) when appropriate.
+});
+
+const runtime = await createRuntime({
+  backend: {mode: 'mock'},
+  toolchainProviders: [[CARGO_RUSTC_OCI_PROVIDER_ID, cargoProvider]],
+});
+```
+
+The Cargo manifest is the root artifact. Its dependency closure must contain exactly one lock artifact and one or more Rust source artifacts:
+
+```text
+rust/cargo-manifest-v1
+  dependency(source) -> rust/source-v1  metadata.path = src/main.rs
+  dependency(lock)   -> rust/cargo-lock-v1
+```
+
+A build is requested explicitly:
+
+```js
+const result = await runtime.toolchains.run({
+  providerId: CARGO_RUSTC_OCI_PROVIDER_ID,
+  imageId,
+  roots: [objectRef(imageId, cargoManifestId)],
+  target: {
+    representation: WASM_BINARY_V1,
+    triple: 'wasm32-wasip1',
+    binary: 'demo',
+    profile: 'release',
+  },
+});
+```
+
+The provider materializes a private temporary Cargo workspace, runs Cargo frozen/offline with the OCI container network disabled, imports the expected `.wasm`, validates its WASM header, and deletes the workspace afterward. The pinned image must already contain Cargo/rustc and the requested target.
+
+Only `rust/cargo-manifest-v1`, `rust/cargo-lock-v1` and `rust/source-v1` inputs are supported in this first slice. Unknown dependency representations fail rather than being silently ignored. Third-party crate support should therefore add explicit vendored/package/config artifacts instead of allowing hidden network fetches.
+
+The output representation is deliberately:
+
+```text
+wasm-binary/v1
+```
+
+not `wasm-module/v1`. The latter already means the current Lagrange Value-handle/import/effect ABI. Cargo-produced WASM is portable binary input for a later callable/component adapter; it is not automatically executable as an image Block merely because it is valid WASM.
+
+The provider stable identity includes its implementation generation plus the OCI image digest. Output metadata also records the pinned image, digest, Cargo target/binary/profile and network/frozen build contract. `ToolchainService` still owns durable input provenance.
 
 ### Existing language ecosystems
 
@@ -182,21 +239,21 @@ The implementation language can become irrelevant at that outer interface while 
 
 ### OCI still has two roles
 
-OCI as a **build environment**:
+OCI as a **build environment** is implemented for the Cargo provider:
 
 ```text
 artifact inputs -> compiler/package manager in OCI -> derived artifacts
 ```
 
-OCI as a **foreign runtime**:
+OCI as a **foreign runtime** remains future execution work:
 
 ```text
 image callable/interface -> adapter -> live JVM/native/Python/etc. container
 ```
 
-These are deliberately separate. Build containers are reproducible toolchain machinery; foreign-runtime containers remain part of execution and have a stronger compatibility boundary. Objects in a JVM or other foreign heap do not automatically become durable image objects.
+These are deliberately separate. Build containers are reproducible toolchain machinery and disappear after the build; foreign-runtime containers remain part of execution and have a stronger compatibility boundary. Objects in a JVM or other foreign heap do not automatically become durable image objects.
 
-See [ADR 0016](docs/decisions/0016-artifacts-external-toolchains-and-foreign-runtimes.md), [ADR 0017](docs/decisions/0017-artifact-dependencies-and-toolchain-providers.md) and the [language platform](docs/language-platform.md).
+See [ADR 0016](docs/decisions/0016-artifacts-external-toolchains-and-foreign-runtimes.md), [ADR 0017](docs/decisions/0017-artifact-dependencies-and-toolchain-providers.md), [ADR 0018](docs/decisions/0018-oci-cargo-rustc-provider.md) and the [language platform](docs/language-platform.md).
 
 ## WASM backend
 
@@ -357,7 +414,7 @@ runtime instance reuse:    stateless module -> rebound pooled WebAssembly.Instan
 
 None merges language/image identity or invocation-local Value/capability state.
 
-See ADR 0012 through ADR 0017.
+See ADR 0012 through ADR 0018.
 
 ## Values and objects
 
@@ -411,3 +468,4 @@ Do not import `lagrange-server/src/...`; use public package seams only.
 - [ADR 0015: runtime-local WASM instance pooling](docs/decisions/0015-runtime-wasm-instance-pooling.md)
 - [ADR 0016: artifact graphs, external toolchains and foreign runtimes](docs/decisions/0016-artifacts-external-toolchains-and-foreign-runtimes.md)
 - [ADR 0017: artifact dependencies and toolchain providers](docs/decisions/0017-artifact-dependencies-and-toolchain-providers.md)
+- [ADR 0018: first OCI-backed Cargo/rustc provider](docs/decisions/0018-oci-cargo-rustc-provider.md)
