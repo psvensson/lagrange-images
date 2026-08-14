@@ -89,45 +89,78 @@ service := LagrangeProofService new.
 input := StdIOReadStream stdin.
 output := StdIOWriteStream stdout.
 decode := [ :token |
-    (token beginsWith: 'i:') ifTrue: [ (token copyFrom: 3 to: token size) asInteger ] ifFalse: [
-        token = 'b:1' ifTrue: [ true ] ifFalse: [
-            token = 'b:0' ifTrue: [ false ] ifFalse: [ Error signal: 'unsupported bridge value' ] ] ] ].
+    (token beginsWith: 'i:')
+        ifTrue: [ (token copyFrom: 3 to: token size) asInteger ]
+        ifFalse: [
+            token = 'b:1'
+                ifTrue: [ true ]
+                ifFalse: [
+                    token = 'b:0'
+                        ifTrue: [ false ]
+                        ifFalse: [ Error signal: 'unsupported bridge value' ] ] ] ].
 encode := [ :value |
-    value isInteger ifTrue: [ 'i:', value printString ] ifFalse: [
-        value == true ifTrue: [ 'b:1' ] ifFalse: [
-            value == false ifTrue: [ 'b:0' ] ifFalse: [ Error signal: 'unsupported result value' ] ] ] ].
-output nextPutAll: 'READY'; nextPut: Character tab; nextPutAll: '${CUIS_STDIO_BRIDGE_V0}'; newLine; flush.
+    value isInteger
+        ifTrue: [ 'i:', value printString ]
+        ifFalse: [
+            value == true
+                ifTrue: [ 'b:1' ]
+                ifFalse: [
+                    value == false
+                        ifTrue: [ 'b:0' ]
+                        ifFalse: [ Error signal: 'unsupported result value' ] ] ] ].
+output
+    nextPutAll: 'READY';
+    nextPut: Character tab;
+    nextPutAll: '${CUIS_STDIO_BRIDGE_V0}';
+    newLine;
+    flush.
 done := false.
 [ done ] whileFalse: [
     line := input upTo: Character lf.
-    (line notEmpty or: [ input atEnd not ]) ifTrue: [
+    line notEmpty ifTrue: [
         fields := line findTokens: Character tab asString.
         fields notEmpty ifTrue: [
-            fields first = 'QUIT'
+            (fields at: 1) = 'QUIT'
                 ifTrue: [
                     output nextPutAll: 'BYE'; newLine; flush.
                     done := true ]
                 ifFalse: [
-                    requestId := fields size > 1 ifTrue: [ fields second ] ifFalse: [ 'unknown' ].
+                    requestId := fields size > 1 ifTrue: [ fields at: 2 ] ifFalse: [ 'unknown' ].
                     [
-                        (fields first = 'CALL' and: [ fields size >= 4 ]) ifFalse: [ Error signal: 'bad request' ].
-                        fields third = 'proof' ifFalse: [ Error signal: 'unknown service' ].
-                        operation := fields fourth.
+                        ((fields at: 1) = 'CALL' and: [ fields size >= 4 ])
+                            ifFalse: [ Error signal: 'bad request' ].
+                        (fields at: 3) = 'proof' ifFalse: [ Error signal: 'unknown service' ].
+                        operation := fields at: 4.
                         operation = 'add'
                             ifTrue: [
                                 fields size = 6 ifFalse: [ Error signal: 'bad arity' ].
-                                result := service add: (decode value: fields fifth) to: (decode value: fields sixth) ]
+                                result := service
+                                    add: (decode value: (fields at: 5))
+                                    to: (decode value: (fields at: 6)) ]
                             ifFalse: [
                                 operation = 'factorial'
                                     ifTrue: [
                                         fields size = 5 ifFalse: [ Error signal: 'bad arity' ].
-                                        result := service factorial: (decode value: fields fifth) ]
+                                        result := service factorial: (decode value: (fields at: 5)) ]
                                     ifFalse: [ Error signal: 'unknown operation' ] ].
-                        output nextPutAll: 'OK'; nextPut: Character tab; nextPutAll: requestId; nextPut: Character tab; nextPutAll: (encode value: result); newLine; flush
+                        output
+                            nextPutAll: 'OK';
+                            nextPut: Character tab;
+                            nextPutAll: requestId;
+                            nextPut: Character tab;
+                            nextPutAll: (encode value: result);
+                            newLine;
+                            flush
                     ] on: Error do: [ :error |
-                        output nextPutAll: 'ERR'; nextPut: Character tab; nextPutAll: requestId; nextPut: Character tab; nextPutAll: 'bridge-error'; newLine; flush ] ] ] ].
-    input atEnd ifTrue: [ done := true ] ].
-Smalltalk quit.
+                        output
+                            nextPutAll: 'ERR';
+                            nextPut: Character tab;
+                            nextPutAll: requestId;
+                            nextPut: Character tab;
+                            nextPutAll: 'bridge-error';
+                            newLine;
+                            flush ] ] ] ] ].
+Smalltalk quitPrimitive: 0.
 `;
 }
 
@@ -154,8 +187,7 @@ async function forceStopSession(session, timeoutMs) {
   try {
     await session.waitForExit({timeoutMs});
   } catch {
-    // The original failure is more useful during start cleanup. The provider's
-    // normal stop path reports a forced-shutdown failure explicitly.
+    // The original startup failure is more useful than a secondary cleanup error.
   }
 }
 
@@ -201,25 +233,23 @@ function createOpenSmalltalkCuisProvider({
         await writeFile(scriptPath, bridgeSource(), 'utf8');
         session = await runner.start({
           command: executable,
-          args: ['-vm-display-null', '-headless', image, '-s', scriptPath],
+          args: ['-vm-sound-null', '-vm-display-null', image, '-s', scriptPath],
           cwd: workspace,
           environment: {},
         });
-        const ready = await nextMatchingLine(
+        await nextMatchingLine(
           session,
           (line) => line === `READY\t${CUIS_STDIO_BRIDGE_V0}`,
           {timeoutMs: startupTimeoutMs, action: 'Cuis bridge readiness'},
         );
-        if (ready !== `READY\t${CUIS_STDIO_BRIDGE_V0}`) throw new TypeError('unexpected Cuis bridge readiness response');
-        const handle = {
-          session,
-          workspace,
-          nextRequestId: 1,
-          tail: Promise.resolve(),
-          terminated: false,
-        };
         return Object.freeze({
-          handle,
+          handle: {
+            session,
+            workspace,
+            nextRequestId: 1,
+            tail: Promise.resolve(),
+            terminated: false,
+          },
           metadata: Object.freeze({
             runtime: 'OpenSmalltalkVM',
             image: 'Cuis',
