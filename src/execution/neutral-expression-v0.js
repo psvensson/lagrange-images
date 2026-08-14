@@ -25,6 +25,11 @@ function nonNegativeInteger(value, label) {
   return value;
 }
 
+function requiredText(value, label) {
+  if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be a non-empty string`);
+  return value;
+}
+
 function parseProgram(code) {
   if (code.content?.kind !== VALUE_KIND.TEXT) {
     throw new TypeError(`${NEUTRAL_EXPRESSION_V0} code content must be a text Value`);
@@ -93,6 +98,19 @@ async function evaluate(expression, frame, context, depth = 0) {
       const condition = await evaluate(expression.condition, frame, context, depth + 1);
       if (condition.kind !== VALUE_KIND.BOOLEAN) throw new TypeError('if condition must be a boolean Value');
       return await evaluate(condition.value ? expression.then : expression.else, frame, context, depth + 1);
+    }
+    case 'send': {
+      exactKeys(expression, ['op', 'languageId', 'receiver', 'message', 'arguments'], 'send expression');
+      const languageId = requiredText(expression.languageId, 'send languageId');
+      const message = canonicalizeValue(expression.message);
+      if (!Array.isArray(expression.arguments)) throw new TypeError('send arguments must be an array');
+      if (typeof context.sendMessage !== 'function') throw new TypeError('neutral expression send requires a message runtime');
+      const receiver = await evaluate(expression.receiver, frame, context, depth + 1);
+      const args = [];
+      for (const argument of expression.arguments) {
+        args.push(await evaluate(argument, frame, context, depth + 1));
+      }
+      return await context.sendMessage({languageId, receiver, message, arguments: args});
     }
     default:
       throw new TypeError(`unknown neutral expression op: ${expression.op}`);
