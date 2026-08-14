@@ -4,13 +4,13 @@
 
 The platform should not be one VM per language. It provides a small shared substrate for durable values, refs, objects, code artifacts, compilation, execution, debugging and capabilities. A language personality maps its own semantics onto that substrate.
 
-Implemented now includes the language-neutral graph/Block model, compiler and executor registries, `lagrange-code/v0`, `neutral-expression/v0`, the first Symmetric Smalltalk seed, and a real WASM backend with Value-handle ABI, tail message/closure effects and automatic recursive Block-tree installation.
+Implemented now includes the language-neutral graph/Block model, compiler and executor registries, `lagrange-code/v0`, `neutral-expression/v0`, transient compilation groups, compiler-declared derivation reuse, the first Symmetric Smalltalk seed, and a real WASM backend with Value-handle ABI, tail message/closure effects and automatic recursive Block-tree installation.
 
-## Symmetric Smalltalk first
+## Symmetric Smalltalk first, not Smalltalk-only
 
 The first language experiment is **Symmetric Smalltalk**: Smalltalk's object/message feel with Blocks pushed much further toward a universal executable/compositional form.
 
-The seed parses Smalltalk-shaped expressions, preserves source/syntax/semantic provenance, automatically analyzes nested Block captures, materializes bootstrap closures, and sends messages through image-resident behavior objects. Those semantics are independent of the execution backend.
+Smalltalk owns its parser, lexical rules and message lookup. Those choices are not image- or WASM-level contracts. Later Common Lisp, Java, Rust and other personalities may keep very different source and runtime semantics while reusing object identity, CodeArtifacts, compilation groups, derivation caching, activation/execution infrastructure and WASM where useful.
 
 ## Semantic code versus executable code
 
@@ -18,16 +18,83 @@ The durable compilation chain is:
 
 ```text
 language source
-  -> language syntax
-  -> lagrange-code/v0 semantic code
+  -> language syntax / language semantic artifacts
+  -> language-neutral/lower semantic representation when useful
   -> derived execution artifact
+       |-> interpreter form
+       `-> WASM / another backend
+```
+
+For the first language this currently becomes:
+
+```text
+Smalltalk source
+  -> Smalltalk syntax
+  -> lagrange-code/v0
        |-> neutral-expression/v0
        `-> wasm-module/v1 + wasm-function/v1
 ```
 
-`lagrange-code/v0` describes literals, arguments, receiver, lexical bindings, sends, conditionals and nested Blocks without choosing a machine/runtime representation. `CodeCompilerRegistry` and `CompilationService` create immutable derived artifacts linked with `derivedFrom`.
+`lagrange-code/v0` is an early shared semantic IR, not a requirement that every future language express all of its semantics as Smalltalk-like sends/Blocks. Java, Rust or Lisp may need additional or different semantic representations before lowering to a common executable substrate.
 
 Executable artifacts remain rebuildable state under ADR 0007. Blocks point at CodeArtifacts; they do not contain WASM-specific identity or layout.
+
+## Compilation groups and derived-artifact reuse
+
+Grouping policy belongs to compilers, not languages in the substrate.
+
+A transient `CompilationGroup` contains:
+
+```text
+policyId
+targetRepresentation
+members: semantic CodeArtifact refs
+options
+```
+
+The substrate validates those fields but does not interpret why the members belong together. That lets different compiler personalities make natural choices:
+
+```text
+Smalltalk / Lisp   nested code tree, package or compilation unit
+Java               class/package/compilation unit
+Rust               crate/codegen unit
+```
+
+A logical group does not mean one physical WASM module. One policy may emit one module, another several, and a later optimizer may change physical layout without changing source-language or image semantics.
+
+The first policy is `wasm-nested-block-tree/v0`. `installWasmBlockTree()` returns a group containing the semantic artifacts in that tree. Its current physical layout is explicitly `one-module-per-member`; shared-module generation is a later compiler optimization.
+
+### Compiler-declared cache equivalence
+
+`CompilationService` only reuses a derived artifact when the registered compiler explicitly declares both:
+
+```text
+identity
+cacheKey(request, context)
+```
+
+The compiler therefore owns equivalence. The platform does not infer it from a source filename, Block ID, Java class, Rust crate, selector or any other source-language concept.
+
+The key is hashed with the compiler identity and target representation. Cacheable artifacts record non-reference `compilerIdentity` and `derivationKey` metadata. Compilers without this contract behave exactly as before and always compile.
+
+The first cacheable compiler is `lagrange-code/v0 -> wasm-module/v1`. Its identity includes the current compiler/Value-handle ABI generation, and its key is based on the semantic content actually used to emit the module.
+
+As a result, two independent installations of equivalent semantic Block trees can share immutable WASM modules while retaining distinct installation identities:
+
+```text
+semantic A ----\
+                -> shared wasm-module/v1
+semantic B ----/
+
+function A -> Block A
+function B -> Block B
+```
+
+The `wasm-function/v1` wrappers remain separate because they carry the current semantic provenance and explicit closure-prototype graph edges. Module reuse therefore saves executable duplication without merging image objects or language identities.
+
+The bootstrap lookup scans image CodeArtifacts by compiler identity + derivation key. The durable backend may later index that pair without changing the contract.
+
+See ADR 0012.
 
 ## WASM backend
 
@@ -60,108 +127,38 @@ run(receiverHandle,
 
 Handle `0` is reserved. Positive handles live only for one activation; they are not image object IDs, addresses, capabilities or persistent references.
 
-This lets arbitrary-precision integers, object refs, text and other tagged Values cross the boundary without making WASM linear-memory or scalar layout part of image semantics. An object-ref receiver can enter and leave a WASM-backed method unchanged while WASM sees only a temporary integer handle.
-
-The base `lagrange` imports are `literal`, `integer_add`, `equals`, and `is_true`.
+This generic handle path is deliberately conservative. Future Java/Rust/etc. backends may use optimized direct scalar or WASM-GC conventions for proven cases while retaining explicit ABI identities and a generic path for image Values.
 
 ### Tail host effects
 
 Image-resident dispatch and closure materialization are asynchronous, while ordinary WASM imports are synchronous. The bootstrap ABI handles that mismatch explicitly by yielding one final host effect after pure WASM execution.
 
-A tail send becomes a derived send-site descriptor plus a typed import:
-
 ```text
-lagrange.send_site_N(receiverHandle, argumentHandles...) -> 0
+WASM -> send_site_N       -> return 0 -> normal dispatch -> Value
+WASM -> make_block_site_N -> return 0 -> create closure  -> Block ref
 ```
 
-A tail nested Block becomes a derived closure-site descriptor plus a typed import:
+Tail position propagates through `if`. Effects needed as intermediate expression results remain rejected until an explicit continuation/trampoline or other async-WASM contract exists.
 
-```text
-lagrange.make_block_site_N(captureHandles...) -> 0
-```
+### Closure graph edges
 
-The synchronous imports validate handles and record one pending request; they do not perform image lookup or writes. The WASM entry returns reserved handle `0`, then the executor resumes asynchronously outside WASM.
+A WASM closure site stores only semantic block/capture descriptors in module metadata. Prototype Block refs remain explicit `wasm-function/v1.derivedFrom` edges; metadata stores only the corresponding indices.
 
-```text
-WASM
-  -> one tail host effect
-  -> return 0
-  -> executor awaits normal runtime operation
-       |-> InvocationService/ActivationExecutor for send
-       `-> ActivationExecutor.createClosure for Block creation
-  -> canonical Value / Block ObjectRef
-```
-
-Tail position propagates through `if`, so pure WASM computation may choose a final send, a final closure materialization, or a pure return. Effects needed as intermediate expression results remain rejected for now.
-
-### WASM closure sites and graph edges
-
-A closure site stores only semantic data in module metadata:
-
-```text
-closureSites[N]
-  blockId
-  captures: [{id, name}, ...]
-```
-
-Prototype Block refs are never hidden there. `compileWasmFunctionArtifact()` requires an explicit prototype for every closure site and appends those refs to the `wasm-function/v1` CodeArtifact's `derivedFrom` edges. Function metadata stores only the corresponding `derivedFromIndex`.
-
-At execution, capture Values cross as handles. Once WASM returns, the ordinary closure runtime creates the same `LexicalEnvironment + Block` representation used by the interpreter.
-
-The prototype may itself be interpreter-backed or WASM-backed. A materialized closure therefore has no WASM-specific invocation semantics: later `value*` sends go through the ordinary Smalltalk dispatcher and common ActivationExecutor.
+At execution, capture Values cross as handles. Once WASM returns, the common closure runtime creates the same `LexicalEnvironment + Block` representation used by the interpreter. Prototype code may itself be interpreted or WASM-backed.
 
 ### Automatic complete Block trees
 
-`installWasmBlockTree()` is now the normal high-level path when a whole semantic Block tree should use WASM. It starts from one root `lagrange-code/v0` artifact and recursively installs every nested semantic Block bottom-up:
+`installWasmBlockTree()` recursively compiles a root semantic Block tree bottom-up, persists nested semantic artifacts, builds WASM-backed prototypes, wires explicit child prototype refs, and returns the root Block plus its transient compilation group.
 
-```text
-root semantic artifact
-  -> nested semantic artifacts
-  -> nested WASM functions
-  -> nested prototype Blocks
-  -> parent WASM functions with explicit prototype edges
-  -> root WASM-backed Block
-```
+The whole tree is preflighted before derived installation writes. Unsupported deep semantics therefore fail without leaving a partial executable tree.
 
-Callers no longer need to discover nested Blocks or construct `blockPrototypes` maps themselves. The lower-level `compileWasmFunctionArtifact()` remains available for mixed interpreter/WASM prototype experiments and custom assembly.
+This automation is the first **grouping policy consumer**, not the generic definition of a compilation group.
 
-Before writing derived tree artifacts, the installer recursively preflights every semantic node with the current WASM compiler. If a deep descendant contains an unsupported non-tail effect, installation fails before leaving a partially built executable tree.
-
-Nested semantic programs are persisted as derived `lagrange-code/v0` artifacts linked to their immediate semantic parent. All automatically created prototype Blocks are WASM-backed, while runtime materialized closures are still ordinary Blocks with ordinary lexical environments.
-
-A three-level tree therefore stays uniform:
-
-```text
-root WASM Block
-  -> child WASM prototype
-       -> grandchild WASM prototype
-```
-
-with `value*` sends and capture lookup unchanged.
-
-For example, the semantic tree corresponding to:
-
-```smalltalk
-[ :x | [ :y | [ :z | x ] ] ]
-```
-
-can now be installed from its single root semantic artifact and executed through three WASM-backed Block definitions without manual prototype wiring.
-
-This remains unsupported inside one WASM activation:
-
-```smalltalk
-[ :x | [ :y | x ] value: 1 ]
-```
-
-because closure materialization is needed before the final send. Lifting that restriction requires an explicit continuation/trampoline or other async-WASM contract.
-
-The interpreter remains the reference implementation. Differential/conformance tests require the same capture IDs, Block semantics and canonical results across execution representations.
-
-See ADR 0007, ADR 0008, ADR 0009, ADR 0010 and ADR 0011.
+See ADR 0008 through ADR 0012.
 
 ## Blocks and closures
 
-The semantic closure remains:
+The current neutral closure substrate remains:
 
 ```text
 Block
@@ -169,32 +166,44 @@ Block
   environment -> LexicalEnvironment | null
 ```
 
-Both the interpreter and the bootstrap WASM closure effect currently materialize nested closures as Block + LexicalEnvironment records. This is not a required optimized layout: a future backend may inline, flatten, stack-allocate or eliminate nonescaping closures while preserving the same semantic capture identities.
+Smalltalk naturally maps source Blocks to this record. Lisp functions/closures can map to the same durable concept. Java/Rust do not need every ordinary function to become a source-level Smalltalk-style Block; they can use the shared callable/activation substrate according to their language personality while retaining the same durable code identity and backend choices where appropriate.
+
+Durable representation does not dictate optimized runtime allocation. A future backend may inline, flatten, stack-allocate or eliminate nonescaping closures while preserving semantic capture behavior.
 
 ## Invocation and dispatch
 
-Direct Block calls and language message sends converge on transient activation requests. Language dispatch resolves a message to a Block; execution then depends on the Block's CodeArtifact representation.
+Direct Block calls and language message sends converge on transient activation requests. Receiver remains a distinguished optional Value rather than argument zero:
 
-This separation allows a Smalltalk send from interpreted code or WASM to resolve to either `neutral-expression/v0` or `wasm-function/v1` without changing method lookup semantics. The same is true for nested Block prototypes.
+```text
+Smalltalk instance method -> receiver = self
+Java instance method      -> receiver = this
+static/free function       -> receiver = null
+```
 
-References still identify objects rather than granting authority. WASM Value handles likewise do not grant capabilities. Host effects currently request only explicitly compiled language sends or closure materializations; capability-aware privileged or distributed operations remain later boundaries.
+Language dispatch owns dynamic lookup. A Smalltalk send, future Java virtual call policy, or Lisp generic-function layer need not become the same source-language operation merely because they can eventually converge on a callable activation.
 
-## Compatibility kernels
+References still identify objects rather than granting authority. WASM Value handles likewise do not grant capabilities.
+
+## Compatibility and future personalities
 
 A Cuis-oriented compatibility kernel can provide dialect conventions, class/library shims, file-in/package readers and primitives above the shared substrate without freezing the core into Cuis semantics.
 
-Common Lisp can reuse durable data/code identity, lexical environments, conditions, namespaces, history and tooling while remaining Lisp rather than Smalltalk-through-an-adapter.
+Common Lisp can reuse durable data/code identity, lexical environments, conditions, namespaces, history, compilation groups and executable reuse while remaining Lisp rather than Smalltalk-through-an-adapter.
+
+Java can layer JavaClass/JavaMethod/etc. objects and Java-specific virtual/interface/class-initialization semantics above the same image and compiler substrate. Rust can keep ownership/borrowing largely at compile time and use its own semantic/codegen grouping and ABI choices.
 
 ## Next open questions
 
+- shared physical WASM modules for several compilation-group members
+- group policy/planner registry once several policies need runtime selection
+- indexed derivation-key lookup and cache lifetime policy
 - general non-tail asynchronous WASM effects/continuations
 - transient/non-materialized optimized closures and possible WASM-GC use
-- shared-module/grouped compilation across several semantic Blocks
-- incremental reuse/deduplication of derived WASM tree nodes
 - Object/Behavior/Class/Metaclass bootstrap and inheritance
 - assignment, temporaries, sequences and mutable lexical cells
 - immediate-value Smalltalk objects/primitives
 - capability-aware host imports and distributed/local send policy
 - optimized/unboxed ABI variants
-- distributed placement of WASM execution through Lagrange
+- Java/Rust/Common Lisp compiler-personality spikes
+- distributed placement of compiled artifacts through Lagrange
 - debugger activation durability and conditions/exceptions
