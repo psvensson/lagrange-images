@@ -2,8 +2,8 @@ import {randomUUID} from 'node:crypto';
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
 import {integerValue, objectRef, textValue} from '../value/index.js';
 import {parseSymmetricSmalltalkBlock} from './symmetric-smalltalk-parser.js';
+import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
-const SYMMETRIC_SMALLTALK_ID = 'symmetric-smalltalk';
 const SYMMETRIC_SMALLTALK_SOURCE_V0 = 'symmetric-smalltalk/source-v0';
 const SYMMETRIC_SMALLTALK_SYNTAX_V0 = 'symmetric-smalltalk/syntax-v0';
 
@@ -123,7 +123,6 @@ async function evaluateSymmetricSmalltalkBlock({runtime, arguments: args = [], .
 }
 
 export {
-  SYMMETRIC_SMALLTALK_ID,
   SYMMETRIC_SMALLTALK_SOURCE_V0,
   SYMMETRIC_SMALLTALK_SYNTAX_V0,
   compileSymmetricSmalltalkBlock,
