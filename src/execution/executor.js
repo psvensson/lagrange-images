@@ -7,12 +7,13 @@ import {
   neutralExpressionV0Executor,
 } from './neutral-expression-v0.js';
 
-function createDefaultCodeExecutorRegistry({wasmModuleCache} = {}) {
+function createDefaultCodeExecutorRegistry({wasmModuleCache, wasmInstancePool} = {}) {
   const registry = new CodeExecutorRegistry();
   registry.register(NEUTRAL_EXPRESSION_V0, neutralExpressionV0Executor);
-  registry.register(WASM_FUNCTION_V1, createWasmFunctionV1Executor(
-    wasmModuleCache === undefined ? {} : {moduleCache: wasmModuleCache},
-  ));
+  const wasmOptions = {};
+  if (wasmModuleCache !== undefined) wasmOptions.moduleCache = wasmModuleCache;
+  if (wasmInstancePool !== undefined) wasmOptions.instancePool = wasmInstancePool;
+  registry.register(WASM_FUNCTION_V1, createWasmFunctionV1Executor(wasmOptions));
   return registry;
 }
 
