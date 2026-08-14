@@ -46,7 +46,25 @@ A language may skip or specialize parts of this stack. Rust does not need Smallt
 
 **Compilation group is not a language construct.** The compiler/tooling layer decides whether a useful unit is a Smalltalk Block tree, Lisp compilation unit, Java package/class set, Rust codegen unit or something else. The group does not prescribe one physical module.
 
+**Physical module is not function identity.** Several semantic members may share one `wasm-module/v1`, but each keeps separate semantic provenance, function artifact, Block/callable identity and entry-level effect policy.
+
 **Reuse is compiler-declared.** The substrate only reuses an immutable derived artifact when the compiler explicitly provides a stable compiler identity and deterministic cache key. It does not guess equivalence from names or source-language structure.
+
+## Compiler substrate
+
+There are parallel registries for single-source and grouped compilation:
+
+```text
+source representation + target
+  -> CodeCompilerRegistry
+
+group policy + target
+  -> CompilationGroupCompilerRegistry
+```
+
+Both feed `CompilationService`, use the same derivation-cache contract, and preserve explicit `derivedFrom` provenance.
+
+A group compiler may emit one executable artifact containing several entries. The first implementation maps one nested WASM tree group to one multi-function `wasm-module/v1`; this is policy, not a generic requirement.
 
 ## Unified graph identity
 
