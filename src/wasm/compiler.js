@@ -1,6 +1,6 @@
 import {LAGRANGE_CODE_V0, parseLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
-import {WASM_MODULE_V1} from '../code/wasm-artifacts.js';
-import {bytesValue, canonicalizeValue, objectRef} from '../value/index.js';
+import {WASM_FUNCTION_V1, WASM_MODULE_V1} from '../code/wasm-artifacts.js';
+import {bytesValue, canonicalizeValue, isReference, objectRef} from '../value/index.js';
 import {
   WASM_ENTRY_V0,
   WASM_IMPORT_MODULE,
@@ -65,6 +65,9 @@ function functionExport(name, functionIndex) {
 
 function collectLiteral(literals, value) {
   const normalized = canonicalizeValue(value);
+  if (isReference(normalized)) {
+    throw new TypeError('WASM backend v0 does not embed reference literals; use arguments/captures instead');
+  }
   const key = JSON.stringify(normalized);
   const existing = literals.keys.get(key);
   if (existing !== undefined) return existing;
@@ -212,12 +215,13 @@ async function compileWasmFunctionArtifact({
     id: moduleId,
   });
   const metadata = moduleArtifact.metadata ?? {};
+  const moduleRef = objectRef(moduleArtifact.imageId, moduleArtifact.id);
   const functionArtifact = await images.putCodeArtifact(semanticRef.imageId, {
     id: functionId,
     languageId: semantic.languageId,
-    representation: 'wasm-function/v1',
-    content: objectRef(moduleArtifact.imageId, moduleArtifact.id),
-    derivedFrom: [semanticRef, objectRef(moduleArtifact.imageId, moduleArtifact.id)],
+    representation: WASM_FUNCTION_V1,
+    content: moduleRef,
+    derivedFrom: [semanticRef, moduleRef],
     metadata: {
       abi: metadata.abi,
       entry: metadata.entry,
