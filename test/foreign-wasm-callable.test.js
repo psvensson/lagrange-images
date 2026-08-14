@@ -5,8 +5,12 @@ import {
   WASM_BINARY_V1,
   WASM_CALLABLE_INTERFACE_V1,
   WASM_SCALAR_CALL_V0,
+  booleanValue,
   bytesValue,
   createRuntime,
+  decodeForeignWasmScalar,
+  encodeForeignWasmScalar,
+  float64Value,
   installWasmScalarCallable,
   integerValue,
   objectRef,
@@ -78,6 +82,21 @@ test('raw WASM becomes callable only through an explicit scalar interface artifa
   }
 });
 
+test('foreign scalar mapping covers boolean, signed integers and floats explicitly', () => {
+  assert.equal(encodeForeignWasmScalar(booleanValue(true), 'boolean', 'bool'), 1);
+  assert.equal(encodeForeignWasmScalar(booleanValue(false), 'boolean', 'bool'), 0);
+  assert.equal(encodeForeignWasmScalar(integerValue(-17), 'i32', 'i32'), -17);
+  assert.equal(encodeForeignWasmScalar(integerValue('9223372036854775807'), 'i64', 'i64'), 9223372036854775807n);
+  assert.equal(encodeForeignWasmScalar(float64Value(1.25), 'f32', 'f32'), Math.fround(1.25));
+  assert.equal(encodeForeignWasmScalar(float64Value(-2.5), 'f64', 'f64'), -2.5);
+
+  assert.deepEqual(decodeForeignWasmScalar(1, 'boolean'), booleanValue(true));
+  assert.deepEqual(decodeForeignWasmScalar(-19, 'i32'), integerValue(-19));
+  assert.deepEqual(decodeForeignWasmScalar(-20n, 'i64'), integerValue(-20));
+  assert.deepEqual(decodeForeignWasmScalar(Math.fround(1.25), 'f32'), float64Value(Math.fround(1.25)));
+  assert.deepEqual(decodeForeignWasmScalar(-2.5, 'f64'), float64Value(-2.5));
+});
+
 test('scalar callable ABI validates arity, Value types and integer range before guest execution', async () => {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   await runtime.images.createImage({id: 'demo'});
@@ -100,7 +119,7 @@ test('scalar callable ABI validates arity, Value types and integer range before 
     await assert.rejects(runtime.executor.execute(wrongArity), /expected 2 arguments/);
 
     const wrongType = await runtime.invocations.invokeBlock(blockRef, [
-      {kind: 'boolean', value: true},
+      booleanValue(true),
       integerValue(1),
     ]);
     await assert.rejects(runtime.executor.execute(wrongType), /must be an integer Value/);
