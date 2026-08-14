@@ -8,38 +8,37 @@ The substrate can now do these paths end to end:
 
 ```text
 image-native Smalltalk
-        -> semantic code -> Lagrange WASM -> ordinary activation
+        -> semantic code -> neutral executor / Lagrange WASM -> ordinary activation
 
 external Rust/Cargo project
         -> explicit source/lock/vendor artifact graph
-        -> digest-pinned OCI Cargo/rustc
+        -> digest-pinned OCI Cargo/rustc provider
         -> deterministic toolchain-result reuse
         -> wasm-binary/v1
         -> wasm-callable-interface/v1
         -> ordinary Block activation
 
 long-lived foreign runtime
-        -> ForeignRuntimeProviderRegistry
+        -> durable runtime-definition artifact
+        -> runtime-local provider binding
         -> ForeignRuntimeService
-        -> start -> canonical-Value calls -> stop
+        -> lazy start -> canonical-Value calls -> stop
 
-real compatible Smalltalk runtime
-        -> OpenSmalltalkVM provider
-        -> pinned headless Cuis image
-        -> provider bridge compiled in pristine image
-        -> explicit pinned upstream .pck.st package installation
-        -> real Cuis package code
-        -> canonical Value result
-
-real compatible Smalltalk toolchain
+real compatible Smalltalk toolchain/runtime
         -> explicit base image/changes/sources/package artifact graph
-        -> ToolchainService
-        -> OpenSmalltalkVM + real Cuis tooling
+        -> ToolchainService + real OpenSmalltalkVM/Cuis tooling
         -> derived runnable .image + .changes artifacts
-        -> fresh runtime executes package already captured in derived image
+        -> durable Cuis runtime definition
+        -> foreign-runtime-callable-interface/v1
+        -> ordinary Block activation
+
+mixed program
+        -> Symmetric Smalltalk captures ordinary Blocks
+        -> foreign WASM Block + live Cuis Block
+        -> one expression composes both implementation lanes
 ```
 
-The first package/toolchain proof uses the unchanged upstream Cuis JSON package and exercises its parser and renderer. The OpenSmalltalk bridge remains deliberately whitelisted; it does not expose arbitrary `perform:`, eval or Spur object pointers.
+The real Cuis proof still uses the unchanged upstream JSON package and verifies that the package survives in the toolchain-produced image without reinstalling it at runtime. The mixed proof then composes a foreign-WASM add Block with a Cuis `proof/add` Block from Symmetric Smalltalk.
 
 ## Next
 
@@ -74,7 +73,9 @@ OpenSmalltalkVM-backed compatible Smalltalk
 - [x] install an unchanged upstream Cuis package with Cuis' own `CodePackageFile` loader
 - [x] prove useful existing Cuis package code beyond the bridge service: JSON parse/render/reparse
 - [x] establish provider bridge/control plane before loading guest packages
-- [ ] durable runtime-definition/deployment artifacts for managed OpenSmalltalkVM instances
+- [x] durable artifact-backed Cuis runtime definitions separate from running instances
+- [x] runtime-local definition -> provider binding and lazy reusable runtime instances
+- [x] ordinary Block/ActivationExecutor invocation of a Cuis-backed service
 - [ ] explicit dependency graph/order for several Cuis packages
 - [ ] OCI foreign-runtime launcher/placement implementation
 - [ ] explicit restart/reconciliation and image/snapshot persistence behavior
@@ -89,6 +90,7 @@ Spur oop != durable ObjectRef
 runtime instance != image object
 provider handle != ObjectRef
 runtime ID != capability
+runtime definition != provider installation
 package host path != package identity
 package basename != package identity
 exported service != arbitrary perform:
@@ -119,7 +121,8 @@ The toolchain deliberately has no `cacheKey()` yet. Closed inputs are necessary 
 - [ ] export CompiledMethod/bytecode/literal information where stable/useful
 - [ ] import those structures without treating foreign object pointers as durable identity
 - [ ] inspect/relate foreign Smalltalk code from image-native projects/tools while it still runs on OpenSmalltalkVM
-- [ ] prove a mixed project where OpenSmalltalkVM and native Lagrange services call through explicit interfaces
+- [x] prove image-native Symmetric Smalltalk can compose OpenSmalltalkVM and foreign-WASM Blocks through ordinary interfaces
+- [ ] prove a first-class project that relates native and OpenSmalltalkVM-backed code/artifacts explicitly
 - [ ] selectively lower/recompile methods where semantics and benefit justify it
 - [ ] measure which code benefits from migration and leave the rest on the compatibility runtime
 
@@ -134,7 +137,7 @@ The toolchain deliberately has no `cacheKey()` yet. Closed inputs are necessary 
 
 Success: a real compatible Smalltalk application/library can remain on OpenSmalltalkVM, participate in Lagrange image projects/interfaces/history, and selectively move code or the runtime itself toward native/WASM execution without a flag-day port.
 
-See ADR 0022 for the end state, ADR 0023 for the generic lifecycle, ADR 0024 for the first real runtime proof, ADR 0025 for the first unchanged upstream-package proof and ADR 0026 for the real Cuis toolchain provider.
+See ADR 0022 for the end state, ADR 0026 for the real Cuis toolchain, ADR 0027 for durable runtime definitions, ADR 0028 for callable runtime Blocks and ADR 0029 for mixed composition.
 
 ### 2. Richer foreign/component interfaces
 
@@ -143,6 +146,9 @@ See ADR 0022 for the end state, ADR 0023 for the generic lifecycle, ADR 0024 for
 - [x] first `wasm-scalar-call/v0` for boolean/i32/i64/f32/f64
 - [x] ordinary Block/ActivationExecutor invocation of foreign scalar WASM
 - [x] runtime-local compiled foreign module cache with fresh instance per activation
+- [x] first `foreign-runtime-callable-interface/v1` over durable runtime definitions
+- [x] language-level Block sends can invoke both foreign WASM and foreign-runtime callables
+- [x] one language program composes two implementation lanes through ordinary Blocks
 - [ ] explicit string/bytes memory ABI or skip directly to Component/WIT values
 - [ ] records/arrays and multiple results
 - [ ] WASM Component/WIT-style callable artifact contract
@@ -198,6 +204,8 @@ Implemented:
 - neutral interpreter + Lagrange WASM execution
 - automatic nested Block-tree WASM installation
 - shared physical modules with separate Block/function identity
+- captured foreign Blocks invoked with ordinary `value:`/`value:value:` sends
+- mixed neutral-executor orchestration over foreign WASM and live Cuis
 
 Next:
 
@@ -208,7 +216,7 @@ Next:
 - [ ] REPL/workspace
 - [ ] bootstrap image
 
-Symmetric Smalltalk remains the native language experiment; Cuis compatibility is no longer blocked on a replacement compiler/runtime.
+The mixed proof currently uses `neutral-expression/v0`: its nested foreign call is a non-tail async send. General non-tail continuation/effect support remains necessary for the same composition through the Lagrange-WASM backend.
 
 ### Compatible Smalltalk via OpenSmalltalkVM
 
@@ -220,9 +228,11 @@ Symmetric Smalltalk remains the native language experiment; Cuis compatibility i
 - [x] real OpenSmalltalkVM/Cuis `ToolchainService` provider
 - [x] explicit compiler-bearing base image/support/package artifact graph
 - [x] derived runnable Cuis image verified in a fresh runtime
+- [x] durable runtime-definition and callable Block path
+- [x] mixed image-native/compatible Smalltalk execution proof through ordinary Blocks
 - [ ] multi-package dependency proof with a larger third-party package
 - [ ] structured class/method/package export
-- [ ] mixed foreign/native Smalltalk project proof
+- [ ] first-class mixed project representation
 - [ ] selective native lowering/compilation where useful
 - [ ] optional headless interpreter/Spur-to-WASM runtime proof
 
@@ -237,10 +247,11 @@ Symmetric Smalltalk remains the native language experiment; Cuis compatibility i
 
 ### Rust
 
-Implemented: explicit Cargo graph, Cargo/rustc in OCI, closed vendored dependencies, toolchain cache, raw WASM import and scalar callable interface.
+Implemented: explicit Cargo graph, Cargo/rustc in OCI, closed vendored dependencies, toolchain cache, raw WASM import, scalar callable interface, and composition as an ordinary Block from Symmetric Smalltalk.
 
 Next:
 
+- [ ] real pinned-OCI Cargo integration proof in CI
 - [ ] standard package importer
 - [ ] Lagrange Rust SDK/crate for explicit host calls
 - [ ] Component/WIT-style rich interface proof
@@ -279,13 +290,17 @@ Implemented:
 - transient runtime IDs and provider-private opaque handles
 - explicit start/call/stop protocol with canonical Values
 - stop gating/waiting and top-level shutdown ownership
+- durable artifact-backed runtime definitions
+- runtime-local definition/provider bindings
+- lazy/coalesced reusable runtime instances for callable definitions
+- ordinary Block callable interface over live foreign runtimes
 - first real local-process OpenSmalltalkVM/Cuis provider
 - process-line runner with no shell
 - pinned real-runtime integration proof in PR CI
 - explicit Cuis package startup inputs with immutable identities and safe basenames
 - provider bridge bootstrap before guest package installation
-- first unchanged upstream package execution proof
-- transient bootstrap progress diagnostics for runtime/package startup
+- unchanged upstream package execution and toolchain-produced-image proof
+- local mixed routing between image-native Smalltalk, foreign WASM and live Cuis through Block dispatch
 
 Next:
 
@@ -296,9 +311,9 @@ Next:
 - [ ] Lagrange WASM placement
 - [ ] OCI foreign-runtime lifecycle/placement implementation
 - [ ] JVM foreign-runtime implementation using the generic contract
-- [ ] routing between image-native, component/foreign WASM and live foreign runtimes
+- [ ] distributed routing between image-native, component/foreign WASM and live foreign runtimes
 - [ ] explicit failure/retry/idempotency semantics
-- [ ] durable runtime-definition/reconciliation contract where deployment requires it
+- [ ] durable deployment/reconciliation contract above runtime definitions
 - [ ] measured `ctx.call()` compute-near-object wins
 
 ## Graph and project work
@@ -344,10 +359,11 @@ Established substrate:
 - artifact dependency/provenance graph
 - generic external toolchain providers + deterministic reuse
 - Cargo/rustc OCI integration with explicit package inputs
-- first explicit foreign-WASM callable interface
+- explicit foreign-WASM callable interface
 - generic long-lived foreign-runtime lifecycle
-- real OpenSmalltalkVM/Cuis foreign-runtime provider
-- unchanged upstream Cuis package loading/execution proof
-- real OpenSmalltalkVM/Cuis toolchain provider producing a fresh runnable package-bearing image
+- durable artifact-backed runtime definitions
+- foreign-runtime callable Blocks with lazy runtime reuse
+- real OpenSmalltalkVM/Cuis runtime/toolchain/package proofs
+- mixed Symmetric Smalltalk composition over foreign WASM and live Cuis Blocks
 
 See [decisions/README.md](decisions/README.md) for ADRs grouped by topic.
