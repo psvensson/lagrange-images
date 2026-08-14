@@ -56,12 +56,19 @@ source != artifact boundary
 dependency != provenance
 semantic code != executable artifact
 toolchain selection != toolchain identity
+provider cache opt-in != inferred determinism
 build OCI != foreign-runtime OCI
+foreign runtime lifecycle != toolchain lifecycle
+VM path != VM/provider identity
+VM identity != compiler-bearing base image
 runtime definition != running instance
 provider handle != ObjectRef
 runtime ID != capability
 foreign heap != image graph
 Spur oop != ObjectRef
+package host path != package identity
+package basename != package identity
+snapshot bytes != assumed deterministic output
 exported service != arbitrary perform:
 raw foreign WASM != Lagrange WASM ABI
 callable interface != authority
@@ -86,7 +93,7 @@ CodeArtifact
   metadata
 ```
 
-Roles are tooling policy, not a platform enum. Examples include Rust source/manifests/vendor files, future Java JARs and Smalltalk runtime images, raw foreign WASM and internal Lagrange WASM artifacts.
+Roles are tooling policy, not a platform enum. Examples include Rust source/manifests/vendor files, Cuis image/package/support files, future Java JARs, raw foreign WASM and internal Lagrange WASM artifacts.
 
 ## 5. Compilation/toolchain seams
 
@@ -106,11 +113,20 @@ The first two are in-process compiler seams. The third is mechanism-neutral and 
 
 `ToolchainService` resolves only explicit artifact dependencies and gives providers frozen build-relevant snapshots. Providers do not receive ambient ImageService access. Persisted outputs get explicit input provenance.
 
+Two mature compiler ecosystems now exercise that seam:
+
+```text
+Cargo/Rust graph -> Cargo/rustc in OCI -> raw WASM
+Cuis build graph -> OpenSmalltalkVM + Cuis -> derived runnable image
+```
+
 ## 6. Deterministic toolchain reuse
 
 A provider is cacheable only if it explicitly implements `cacheKey(request, context)`. The derivation key covers provider selection/identity/protocol, ordered roots, complete build-relevant artifact snapshots, target/options and provider-specific material.
 
 Multi-output results are cached as complete sets. The current cache intentionally includes input artifact identities so a reused output keeps truthful `derivedFrom` provenance.
+
+The Cargo provider opts in. The first Cuis snapshot provider deliberately does not: all inputs are closed, but byte-level Smalltalk snapshot determinism has not yet been proven.
 
 ## 7. Two WASM execution lanes
 
@@ -149,7 +165,7 @@ Block
 
 The first ABI, `wasm-scalar-call/v0`, is a no-import synchronous free-function boundary over boolean/i32/i64/f32/f64 Values. Foreign modules are compiled once per runtime but instantiated fresh per activation. Interface identity is not authority.
 
-## 9. Cargo/rustc as the first external compiler ecosystem
+## 9. Cargo/rustc external compiler ecosystem
 
 ```text
 Cargo.toml + Cargo.lock + source + explicit vendor artifacts
@@ -160,13 +176,52 @@ Cargo.toml + Cargo.lock + source + explicit vendor artifacts
 
 Builds stay closed-input (`cargo build --frozen`, OCI network disabled), and deterministic calls may reuse persisted results.
 
-## 10. Language personalities
+## 10. OpenSmalltalkVM/Cuis external compiler ecosystem
+
+The compatible Smalltalk path now uses the real Cuis environment as both runtime and toolchain, through separate generic contracts.
+
+Toolchain input representations:
+
+```text
+smalltalk/cuis-build-v1
+smalltalk/cuis-image-v1
+smalltalk/cuis-changes-v1
+smalltalk/cuis-sources-v1
+smalltalk/cuis-package-v1
+```
+
+A build root explicitly depends on one base image, optional matching changes/sources support files and ordered packages:
+
+```text
+build
+  +-> base-image
+  +-> base-changes
+  +-> base-sources
+  `-> package ...
+        |
+        v
+ToolchainService
+        |
+        v
+OpenSmalltalkVM + real Cuis package/compiler machinery
+        |
+        +-> derived image
+        `-> derived changes
+```
+
+The VM executable path is transient host installation state. `vmIdentity` determines provider identity. The compiler-bearing base Cuis image remains an explicit input, so changing it changes the build graph rather than silently changing provider behavior.
+
+The derived image keeps the unchanged base sources artifact as an explicit dependency. Real CI then launches the derived image without reinstalling the package and requires package code to run.
+
+See ADR 0026.
+
+## 11. Language personalities
 
 A language personality owns syntax, lookup, exceptions/conditions, package conventions and compiler/runtime adapters—not image storage mechanics.
 
-Symmetric Smalltalk owns its compiler because the language is designed here. Rust reuses Cargo/rustc. Java should reuse JVM/AOT/WASM tooling. Mature Smalltalk compatibility reuses OpenSmalltalkVM.
+Symmetric Smalltalk owns its compiler because the language is designed here. Rust reuses Cargo/rustc. Java should reuse JVM/AOT/WASM tooling. Mature Smalltalk compatibility reuses OpenSmalltalkVM and Cuis tooling.
 
-## 11. Smalltalk: native language plus compatibility runtime
+## 12. Smalltalk: native language plus compatibility ecosystem
 
 ```text
                          Smalltalk
@@ -186,19 +241,19 @@ Symmetric Smalltalk owns its compiler because the language is designed here. Rus
                      infrastructure
 ```
 
-OpenSmalltalkVM has three intended roles:
+OpenSmalltalkVM/Cuis now has three concrete/intended roles:
 
-1. **foreign runtime** — run real compatible images/packages behind explicit interfaces;
-2. **toolchain host** — use the real compiler/runtime to produce runnable images and structured compiled artifacts;
-3. **migration/bootstrap engine** — export classes/methods/packages so selected code can later be represented or compiled natively.
+1. **foreign runtime** — implemented; run real compatible images/packages behind explicit interfaces;
+2. **toolchain host** — implemented for explicit base-image/support/package graphs producing runnable derived images;
+3. **migration/bootstrap engine** — next; export classes/methods/packages so selected code can later be represented or compiled natively.
 
 Compatibility is not a forced migration. The OpenSmalltalk heap remains its own object memory and runtime oops never become durable ObjectRefs.
 
-A longer-term target is an interpreter-style OpenSmalltalk/Spur runtime compiled to WASM. That is separate from the current native compatibility proof.
+A longer-term target is an interpreter-style OpenSmalltalk/Spur runtime compiled to WASM. That is separate from the current native compatibility/toolchain proofs.
 
-See ADR 0022.
+See ADRs 0022, 0025 and 0026.
 
-## 12. Foreign runtime lifecycle
+## 13. Foreign runtime lifecycle
 
 Long-lived external runtimes use a separate transient execution seam from toolchains:
 
@@ -216,7 +271,7 @@ Provider-specific start/interface data is frozen plain data. Calls accept and re
 
 See ADR 0023.
 
-## 13. First real foreign runtime: OpenSmalltalkVM + Cuis
+## 14. Real foreign runtime: OpenSmalltalkVM + Cuis
 
 `createOpenSmalltalkCuisProvider()` is the first real consumer of that lifecycle:
 
@@ -225,55 +280,55 @@ ForeignRuntimeService
    -> smalltalk/opensmalltalk-cuis
    -> local headless OpenSmalltalkVM process
    -> pinned Cuis image
-   -> LagrangeProofService
+   -> provider bridge
+   -> optional explicit Cuis packages
    -> canonical Value
 ```
 
-The provider launches without a shell using:
+The provider launches without a shell using the current headless Cuis convention:
 
 ```text
--vm-display-null -headless <image> -s <bridge-script>
+-vm-sound-null -vm-display-null <image> -s <bridge-script>
 ```
 
 Its stable identity is derived from explicit upstream VM/image identities rather than local paths. A runtime-private `LineProcessRunner` manages the child process and line-framed stdin/stdout protocol.
 
-The first bridge, `lagrange-cuis-stdio/v0`, compiles a real Cuis service class and exports only:
+The bridge, `lagrange-cuis-stdio/v0`, is deliberately whitelisted. Current proof services include `proof/add`, `proof/factorial` and package-backed `json/package-proof`. It transports only integer/boolean tagged Values and exposes no arbitrary `perform:`, source eval or oop lookup.
+
+A dedicated PR-only CI job downloads a SHA-256-pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur archive, a commit/blob-pinned Cuis 7.9-8090 image and the pinned upstream JSON package. It proves both live package execution and a toolchain-produced derived image containing that package.
+
+See ADRs 0024 and 0025.
+
+## 15. Build process vs foreign-runtime placement
 
 ```text
-proof/add
-proof/factorial
-```
-
-It transports only integer/boolean tagged Values. There is no arbitrary `perform:`, source eval or oop lookup. This is a compatibility/runtime proof, not a generic remote Smalltalk protocol.
-
-A dedicated PR-only CI job downloads a SHA-256-pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur archive and a commit/blob-pinned Cuis 7.9-8090 image, then executes add and recursive factorial against the real VM before clean shutdown.
-
-See ADR 0024.
-
-## 14. Build OCI vs foreign-runtime placement
-
-```text
-build/toolchain OCI
+build/toolchain process
   artifacts -> compiler tooling -> derived artifacts -> exits
 
 foreign runtime
   interface/call -> live runtime process -> remains active
 ```
 
-The current OpenSmalltalk proof uses a local process. OCI foreign-runtime lifecycle and placement remain provider/deployment work. Local process placement does not become part of generic runtime semantics.
+Cargo currently uses OCI build execution; Cuis currently uses a local shell-free process for both toolchain and runtime proofs. OCI foreign-runtime/toolchain placement remains provider/deployment work. Physical placement does not become generic runtime/toolchain semantics.
 
-## 15. Distribution and capabilities later
+## 16. Distribution and capabilities later
 
 A future call may route to local image-native activation, Lagrange WASM, foreign/component WASM, OpenSmalltalkVM/JVM/native runtime, or distributed execution. Location, failure/retry policy and authority remain explicit concerns; not every object send becomes RPC.
 
-## 16. Current frontier
+## 17. Current frontier
 
-The substrate has now been pressured by both a real external compiler ecosystem (Cargo/rustc) and a real long-lived image runtime (OpenSmalltalkVM/Cuis).
+The substrate has now been pressured by:
+
+- a real external compiler producing WASM (Cargo/rustc);
+- a real long-lived image runtime (OpenSmalltalkVM/Cuis);
+- an unchanged upstream Cuis package;
+- the real Cuis compiler/package environment producing a fresh runnable image through `ToolchainService`.
 
 The next high-value steps are:
 
-- prove a useful existing Cuis package beyond the bridge service;
-- use OpenSmalltalkVM/Cuis as a real `ToolchainService` compiler host;
+- a multi-package Cuis dependency graph / larger third-party package;
+- structured class/method/package export from OpenSmalltalkVM/Cuis;
+- a mixed native/compatible Smalltalk project through explicit interfaces;
 - richer Component/WIT-style foreign interfaces;
 - standard Cargo package import;
 - Java/JAR and Common Lisp ecosystem proofs;
