@@ -174,11 +174,13 @@ test('OpenSmalltalk Cuis provider copies exact package bytes, records content id
 
     const scriptPath = runner.starts[0].args[4];
     const script = await readFile(scriptPath, 'utf8');
-    assert.match(script, /CodePackageFile installPackage: DirectoryEntry currentDirectory \/\/ 'packages' \/\/ '01-JSON\.pck\.st'/);
+    assert.match(script, /CodePackageFile installPackage: DirectoryEntry currentDirectory \/\/ 'packages' \/\/ 'JSON\.pck\.st'/);
+    assert.match(script, /nextPutAll: 'JSON'; nextPut: Character tab;\n    nextPutAll: 'install'/);
+    assert.match(script, /nextPutAll: 'JSON'; nextPut: Character tab;\n    nextPutAll: 'installed'/);
     assert.match(script, /LagrangeProofService compile: 'jsonRoundTripSum: a with: b/);
     assert.match(script, /rendered := Json render:/);
     assert.match(script, /parsed := Json readFrom: rendered readStream/);
-    const materialized = await readFile(join(runner.starts[0].cwd, 'packages', '01-JSON.pck.st'));
+    const materialized = await readFile(join(runner.starts[0].cwd, 'packages', 'JSON.pck.st'));
     assert.deepEqual(materialized, packageBytes);
 
     const result = await provider.call(started.handle, {
