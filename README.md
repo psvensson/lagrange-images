@@ -40,6 +40,7 @@ source / IR / JAR / runtime image / manifest / lock / package / WASM
 ### Image and language substrate
 
 - stable image/object identity and history
+- atomic current-state + history mutation through a shared backend transaction contract
 - tagged Values, refs and pinned refs
 - immutable shapes with language behavior kept separate
 - immutable CodeArtifacts, LexicalEnvironments and Blocks
