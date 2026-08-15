@@ -35,6 +35,7 @@ test('a loaded Lagrange module can provide the backend through a factory', async
       async scan() { return []; },
       async append(_stream, event) { return event; },
       async readStream() { return []; },
+      async transaction(work) { return await work(this); },
     }),
   });
 
