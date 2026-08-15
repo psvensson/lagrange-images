@@ -9,6 +9,7 @@ ADRs are the detailed design history. Read them by topic rather than as a prereq
 - [0003 — code artifacts and closures](0003-code-artifacts-and-closures.md): immutable code, lexical environments and Blocks.
 - [0004 — invocation and message dispatch](0004-invocation-and-message-dispatch.md): transient invocation protocol and language-owned lookup.
 - [0005 — calling convention and neutral executor](0005-calling-convention-and-neutral-executor.md): receiver/arguments/environment activation frame.
+- [0031 — one runtime composition path](0031-one-runtime-composition-path.md): keep one runtime, graph ImageService and HTTP projection instead of parallel object models.
 
 ## First language and semantic compilation
 
