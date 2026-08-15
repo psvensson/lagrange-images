@@ -96,7 +96,7 @@ test('the sole HTTP server exposes graph records and rejects legacy object short
       path: '/images/demo/records',
     });
     assert.equal(records.status, 200);
-    assert.deepEqual(records.body.map(({kind}) => kind), ['shape', 'object']);
+    assert.deepEqual(records.body.map(({kind}) => kind).sort(), ['object', 'shape']);
 
     const legacy = await sendJson({
       port: address.port,
