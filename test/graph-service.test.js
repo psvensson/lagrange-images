@@ -30,7 +30,9 @@ test('shape identities are immutable', async () => {
   const service = new ImageService({backend});
   await service.createImage({id: 'demo'});
   await service.putShape('demo', {id: 'shape-v1', slots: []});
+  const history = await service.history('demo');
   await assert.rejects(service.putShape('demo', {id: 'shape-v1', slots: []}), VersionConflictError);
+  assert.deepEqual(await service.history('demo'), history);
 });
 
 test('generic objects reject language-specific shortcut fields', async () => {
@@ -60,7 +62,6 @@ test('cycles use references rather than nested records', async () => {
   assert.equal((await service.getObject('cycle', 'a')).slots.peer.objectId, 'b');
   assert.equal((await service.getObject('cycle', 'b')).slots.peer.objectId, 'a');
 });
-
 
 test('graph service rolls state back when its history append fails', async () => {
   class RejectingHistoryBackend extends MockBackend {
