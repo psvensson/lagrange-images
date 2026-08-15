@@ -10,6 +10,7 @@ ADRs are the detailed design history. Read them by topic rather than as a prereq
 - [0004 — invocation and message dispatch](0004-invocation-and-message-dispatch.md): transient invocation protocol and language-owned lookup.
 - [0005 — calling convention and neutral executor](0005-calling-convention-and-neutral-executor.md): receiver/arguments/environment activation frame.
 - [0031 — one runtime composition path](0031-one-runtime-composition-path.md): keep one runtime, graph ImageService and HTTP projection instead of parallel object models.
+- [0032 — atomic backend transactions](0032-atomic-backend-transactions.md): commit current state and its history event through one backend transaction and shared conformance contract.
 
 ## First language and semantic compilation
 
