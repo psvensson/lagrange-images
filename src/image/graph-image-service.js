@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {assertBackend} from '../backend/backend-contract.js';
+import {assertBackend, assertBackendTransaction} from '../backend/backend-contract.js';
 import {assertObjectMatchesShape, createObjectRecord, createShapeRecord, normalizeMetadata} from '../object/index.js';
 import {
   assertLexicalEnvironmentLayoutCompatible,
@@ -26,7 +26,8 @@ async function putWithHistory(backend, {
   stream,
   event,
 }) {
-  return await backend.transaction(async (transaction) => {
+  return await backend.transaction(async (candidate) => {
+    const transaction = assertBackendTransaction(candidate);
     const stored = await transaction.put(collection, key, value, {expectedVersion});
     await transaction.append(stream, event(stored));
     return stored;
