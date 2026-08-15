@@ -1,6 +1,6 @@
 import {createServer} from 'node:http';
 import {fileURLToPath} from 'node:url';
-import {createRuntime} from './index.js';
+import {createRuntime} from './runtime.js';
 
 async function readJson(request) {
   const chunks = [];
@@ -20,6 +20,7 @@ function pathParts(url) {
 
 async function createImageHttpServer({runtime = null} = {}) {
   const ownedRuntime = runtime ?? await createRuntime();
+  const ownsRuntime = runtime === null;
 
   const server = createServer(async (request, response) => {
     try {
@@ -49,20 +50,34 @@ async function createImageHttpServer({runtime = null} = {}) {
           return send(response, 200, await ownedRuntime.images.getImage(imageId));
         }
 
+        if (request.method === 'GET' && parts[2] === 'records' && parts.length === 3) {
+          return send(response, 200, await ownedRuntime.images.listRecords(imageId));
+        }
+
+        if (request.method === 'GET' && parts[2] === 'shapes' && parts.length === 3) {
+          return send(response, 200, await ownedRuntime.images.listShapes(imageId));
+        }
+
+        if (request.method === 'PUT' && parts[2] === 'shapes' && parts[3]) {
+          return send(response, 201, await ownedRuntime.images.putShape(imageId, {
+            ...await readJson(request),
+            id: decodeURIComponent(parts[3]),
+          }));
+        }
+
         if (request.method === 'GET' && parts[2] === 'objects' && parts.length === 3) {
           return send(response, 200, await ownedRuntime.images.listObjects(imageId));
         }
 
         if (request.method === 'PUT' && parts[2] === 'objects' && parts[3]) {
-          const body = await readJson(request);
-          const objectId = decodeURIComponent(parts[3]);
+          const {expectedVersion, ...object} = await readJson(request);
           return send(
             response,
             200,
             await ownedRuntime.images.putObject(
               imageId,
-              {...body, id: objectId},
-              {expectedVersion: body.expectedVersion},
+              {...object, id: decodeURIComponent(parts[3])},
+              {expectedVersion},
             ),
           );
         }
@@ -86,10 +101,12 @@ async function createImageHttpServer({runtime = null} = {}) {
   });
 
   server.closeRuntime = async () => {
-    await new Promise((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
-    });
-    if (!runtime) await ownedRuntime.close();
+    if (server.listening) {
+      await new Promise((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    }
+    if (ownsRuntime) await ownedRuntime.close();
   };
 
   return server;
@@ -98,7 +115,7 @@ async function createImageHttpServer({runtime = null} = {}) {
 async function main() {
   const port = Number(process.env.PORT ?? 7331);
   const server = await createImageHttpServer();
-  server.listen(port, () => {
+  server.listen(port, '127.0.0.1', () => {
     console.log(`lagrange-images listening on http://127.0.0.1:${port}`);
   });
 }
