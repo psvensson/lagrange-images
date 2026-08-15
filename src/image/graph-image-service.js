@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {assertBackend} from '../backend/backend-contract.js';
+import {assertBackend, assertBackendTransaction} from '../backend/backend-contract.js';
 import {assertObjectMatchesShape, createObjectRecord, createShapeRecord, normalizeMetadata} from '../object/index.js';
 import {
   assertLexicalEnvironmentLayoutCompatible,
@@ -18,6 +18,22 @@ function assertAllowedFields(input, allowed, label) {
   if (extra.length) throw new TypeError(`unknown ${label} fields: ${extra.join(', ')}`);
 }
 
+async function putWithHistory(backend, {
+  collection,
+  key,
+  value,
+  expectedVersion,
+  stream,
+  event,
+}) {
+  return await backend.transaction(async (candidate) => {
+    const transaction = assertBackendTransaction(candidate);
+    const stored = await transaction.put(collection, key, value, {expectedVersion});
+    await transaction.append(stream, event(stored));
+    return stored;
+  });
+}
+
 class ImageService {
   constructor({backend, clock = () => new Date()} = {}) {
     this.backend = assertBackend(backend);
@@ -29,12 +45,18 @@ class ImageService {
   async createImage({id = randomUUID(), name = id, language = 'symmetric-smalltalk', metadata = {}} = {}) {
     const at = this.now();
     if (await this.backend.get(IMAGE_COLLECTION, id)) throw new TypeError(`image already exists: ${id}`);
-    const image = await this.backend.put(IMAGE_COLLECTION, id, {
-      id, name, language, rootObjectId: null,
-      metadata: normalizeMetadata(metadata, 'image metadata'),
-      createdAt: at, updatedAt: at,
-    }, {expectedVersion: 0});
-    await this.backend.append(history(id), {type: 'image.created', at, image: structuredClone(image)});
+    const image = await putWithHistory(this.backend, {
+      collection: IMAGE_COLLECTION,
+      key: id,
+      value: {
+        id, name, language, rootObjectId: null,
+        metadata: normalizeMetadata(metadata, 'image metadata'),
+        createdAt: at, updatedAt: at,
+      },
+      expectedVersion: 0,
+      stream: history(id),
+      event: (stored) => ({type: 'image.created', at, image: structuredClone(stored)}),
+    });
     return image;
   }
 
@@ -53,8 +75,14 @@ class ImageService {
     const id = input.id ?? randomUUID();
     const at = this.now();
     const shape = createShapeRecord({id, imageId, slots: input.slots ?? [], metadata: input.metadata ?? {}, updatedAt: at});
-    const stored = await this.backend.put(records(imageId), id, shape, {expectedVersion: 0});
-    await this.backend.append(history(imageId), {type: 'shape.put', at, shapeId: id, shapeVersion: stored._version, shape: structuredClone(stored)});
+    const stored = await putWithHistory(this.backend, {
+      collection: records(imageId),
+      key: id,
+      value: shape,
+      expectedVersion: 0,
+      stream: history(imageId),
+      event: (saved) => ({type: 'shape.put', at, shapeId: id, shapeVersion: saved._version, shape: structuredClone(saved)}),
+    });
     return stored;
   }
 
@@ -97,8 +125,14 @@ class ImageService {
     const shape = await this.getShape(object.shape.imageId, object.shape.objectId);
     if (!shape) throw new TypeError(`shape not found: ${object.shape.imageId}/${object.shape.objectId}`);
     assertObjectMatchesShape(object, shape);
-    const stored = await this.backend.put(records(imageId), id, object, {expectedVersion});
-    await this.backend.append(history(imageId), {type: 'object.put', at, objectId: id, objectVersion: stored._version, object: structuredClone(stored)});
+    const stored = await putWithHistory(this.backend, {
+      collection: records(imageId),
+      key: id,
+      value: object,
+      expectedVersion,
+      stream: history(imageId),
+      event: (saved) => ({type: 'object.put', at, objectId: id, objectVersion: saved._version, object: structuredClone(saved)}),
+    });
     return stored;
   }
 
@@ -130,8 +164,14 @@ class ImageService {
     for (const dependency of artifact.dependencies) {
       await this.requireRecordKind(dependency.artifact, 'code-artifact', `code artifact dependency ${dependency.role}`);
     }
-    const stored = await this.backend.put(records(imageId), id, artifact, {expectedVersion: 0});
-    await this.backend.append(history(imageId), {type: 'code-artifact.put', at, artifactId: id, artifactVersion: stored._version, artifact: structuredClone(stored)});
+    const stored = await putWithHistory(this.backend, {
+      collection: records(imageId),
+      key: id,
+      value: artifact,
+      expectedVersion: 0,
+      stream: history(imageId),
+      event: (saved) => ({type: 'code-artifact.put', at, artifactId: id, artifactVersion: saved._version, artifact: structuredClone(saved)}),
+    });
     return stored;
   }
 
@@ -163,10 +203,14 @@ class ImageService {
       if (current.kind !== 'lexical-environment') throw new TypeError(`record already exists with another kind: ${imageId}/${id}`);
       assertLexicalEnvironmentLayoutCompatible(current, environment);
     }
-    const stored = await this.backend.put(records(imageId), id, environment, {
+    const stored = await putWithHistory(this.backend, {
+      collection: records(imageId),
+      key: id,
+      value: environment,
       expectedVersion: expectedVersion ?? current?._version ?? 0,
+      stream: history(imageId),
+      event: (saved) => ({type: 'lexical-environment.put', at, environmentId: id, environmentVersion: saved._version, environment: structuredClone(saved)}),
     });
-    await this.backend.append(history(imageId), {type: 'lexical-environment.put', at, environmentId: id, environmentVersion: stored._version, environment: structuredClone(stored)});
     return stored;
   }
 
@@ -194,8 +238,14 @@ class ImageService {
     });
     await this.requireRecordKind(block.code, 'code-artifact', 'block code');
     if (block.environment) await this.requireRecordKind(block.environment, 'lexical-environment', 'block environment');
-    const stored = await this.backend.put(records(imageId), id, block, {expectedVersion: 0});
-    await this.backend.append(history(imageId), {type: 'block.put', at, blockId: id, blockVersion: stored._version, block: structuredClone(stored)});
+    const stored = await putWithHistory(this.backend, {
+      collection: records(imageId),
+      key: id,
+      value: block,
+      expectedVersion: 0,
+      stream: history(imageId),
+      event: (saved) => ({type: 'block.put', at, blockId: id, blockVersion: saved._version, block: structuredClone(saved)}),
+    });
     return stored;
   }
 
@@ -212,10 +262,14 @@ class ImageService {
     const image = await this.getImage(imageId);
     if (!await this.getObject(imageId, rootObjectId)) throw new TypeError(`root object not found: ${rootObjectId}`);
     const at = this.now();
-    const stored = await this.backend.put(IMAGE_COLLECTION, imageId, {
-      ...image, rootObjectId, updatedAt: at, _version: undefined,
-    }, {expectedVersion: expectedVersion ?? image._version});
-    await this.backend.append(history(imageId), {type: 'image.root-set', at, rootObjectId, imageVersion: stored._version});
+    const stored = await putWithHistory(this.backend, {
+      collection: IMAGE_COLLECTION,
+      key: imageId,
+      value: {...image, rootObjectId, updatedAt: at, _version: undefined},
+      expectedVersion: expectedVersion ?? image._version,
+      stream: history(imageId),
+      event: (saved) => ({type: 'image.root-set', at, rootObjectId, imageVersion: saved._version}),
+    });
     return stored;
   }
 

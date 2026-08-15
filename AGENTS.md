@@ -34,6 +34,16 @@ main -> agent/<task> -> pull request -> GitHub Actions -> squash merge -> main
 - A mock behavior is not a production guarantee. Mark weaker semantics in docs/tests.
 - Add a test before broadening the backend contract.
 
+## Backend transactions
+
+- Every backend implements `transaction(callback)`; the scoped transaction exposes only `get`, `put`, `scan`, `append` and `readStream`.
+- Commit a materialized image record and its corresponding history event in one backend transaction.
+- Construct history events from the stored record inside the transaction when the assigned `_version` is part of the event.
+- A transaction callback must use its scoped transaction object, not call the owning backend recursively.
+- Transaction failure or optimistic version conflict commits no scoped operation.
+- The mock proves API atomicity/rollback only. Do not describe it as crash-durable.
+- Every durable backend must run the reusable backend conformance suite before adding backend-specific integration claims.
+
 ## Graph representation
 
 Protect these invariants:

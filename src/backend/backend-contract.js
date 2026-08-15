@@ -1,11 +1,16 @@
-const REQUIRED_BACKEND_METHODS = Object.freeze([
-  'start',
-  'stop',
+const REQUIRED_TRANSACTION_METHODS = Object.freeze([
   'get',
   'put',
   'scan',
   'append',
   'readStream',
+]);
+
+const REQUIRED_BACKEND_METHODS = Object.freeze([
+  'start',
+  'stop',
+  ...REQUIRED_TRANSACTION_METHODS,
+  'transaction',
 ]);
 
 class BackendContractError extends Error {
@@ -15,22 +20,50 @@ class BackendContractError extends Error {
   }
 }
 
-function assertBackend(backend) {
-  if (!backend || typeof backend !== 'object') {
-    throw new BackendContractError('backend must be an object');
+class VersionConflictError extends Error {
+  constructor({collection, key, expectedVersion, actualVersion}) {
+    super(
+      `version conflict for ${collection}/${key}: expected ${expectedVersion}, actual ${actualVersion}`,
+    );
+    this.name = 'VersionConflictError';
+    this.collection = collection;
+    this.key = key;
+    this.expectedVersion = expectedVersion;
+    this.actualVersion = actualVersion;
+  }
+}
+
+function assertMethods(value, methods, label) {
+  if (!value || typeof value !== 'object') {
+    throw new BackendContractError(`${label} must be an object`);
   }
 
-  const missing = REQUIRED_BACKEND_METHODS.filter(
-    (method) => typeof backend[method] !== 'function',
+  const missing = methods.filter(
+    (method) => typeof value[method] !== 'function',
   );
 
   if (missing.length > 0) {
     throw new BackendContractError(
-      `backend is missing required methods: ${missing.join(', ')}`,
+      `${label} is missing required methods: ${missing.join(', ')}`,
     );
   }
 
-  return backend;
+  return value;
 }
 
-export {BackendContractError, REQUIRED_BACKEND_METHODS, assertBackend};
+function assertBackendTransaction(transaction) {
+  return assertMethods(transaction, REQUIRED_TRANSACTION_METHODS, 'backend transaction');
+}
+
+function assertBackend(backend) {
+  return assertMethods(backend, REQUIRED_BACKEND_METHODS, 'backend');
+}
+
+export {
+  BackendContractError,
+  REQUIRED_BACKEND_METHODS,
+  REQUIRED_TRANSACTION_METHODS,
+  VersionConflictError,
+  assertBackend,
+  assertBackendTransaction,
+};

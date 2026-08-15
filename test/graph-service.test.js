@@ -30,7 +30,9 @@ test('shape identities are immutable', async () => {
   const service = new ImageService({backend});
   await service.createImage({id: 'demo'});
   await service.putShape('demo', {id: 'shape-v1', slots: []});
+  const history = await service.history('demo');
   await assert.rejects(service.putShape('demo', {id: 'shape-v1', slots: []}), VersionConflictError);
+  assert.deepEqual(await service.history('demo'), history);
 });
 
 test('generic objects reject language-specific shortcut fields', async () => {
@@ -59,4 +61,31 @@ test('cycles use references rather than nested records', async () => {
   await service.putObject('cycle', {id: 'b', shape: objectRef('cycle', 'node-shape'), slots: {peer: objectRef('cycle', 'a')}});
   assert.equal((await service.getObject('cycle', 'a')).slots.peer.objectId, 'b');
   assert.equal((await service.getObject('cycle', 'b')).slots.peer.objectId, 'a');
+});
+
+test('graph service rolls state back when its history append fails', async () => {
+  class RejectingHistoryBackend extends MockBackend {
+    async transaction(work) {
+      return await super.transaction(async (transaction) => {
+        return await work(Object.freeze({
+          ...transaction,
+          async append() {
+            throw new Error('history unavailable');
+          },
+        }));
+      });
+    }
+  }
+
+  const backend = new RejectingHistoryBackend();
+  await backend.start();
+  const service = new ImageService({backend});
+
+  await assert.rejects(
+    service.createImage({id: 'atomic'}),
+    /history unavailable/,
+  );
+  assert.equal(await backend.get('images', 'atomic'), undefined);
+  assert.deepEqual(await backend.readStream('image:atomic:history'), []);
+  await backend.stop();
 });

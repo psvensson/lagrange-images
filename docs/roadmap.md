@@ -121,8 +121,8 @@ The mock backend is still deliberately the default. This becomes increasingly im
 
 - [ ] settle the public Lagrange embedding seam
 - [ ] map Values/refs/shapes/objects/artifacts/history to durable schema
-- [ ] atomic state + history writes
-- [ ] backend conformance suite shared with mock
+- [x] atomic state + history writes through the backend transaction contract
+- [x] reusable backend conformance suite running against the mock
 - [ ] restart and multi-node durability tests
 - [ ] logical snapshot/revision frontiers
 - [ ] indexes for graph reachability and derivation lookup
@@ -291,6 +291,7 @@ Next:
 Established substrate now includes:
 
 - language-neutral Value/ref/shape/object graph
+- atomic graph state + history mutation contract with reusable backend conformance
 - Block + LexicalEnvironment closure model
 - language-owned dispatch + common activation execution
 - semantic vs executable code separation
