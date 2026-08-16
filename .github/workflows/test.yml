@@ -20,6 +20,33 @@ jobs:
       - run: npm test
       - run: npm run demo
 
+  lagrange-backend-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: psvensson/lagrange
+          ref: cd6f6d5251cc41d1a49d928c36ed6727037f5deb
+          path: .integration/lagrange
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts
+      - run: npm ci --omit=dev
+        working-directory: .integration/lagrange
+      - name: Link the public Lagrange package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p node_modules
+          ln -s ../.integration/lagrange node_modules/lagrange-server
+      - name: Prove schema and atomic transactions against real Lagrange
+        run: node --test test/lagrange-backend-real.test.js
+        env:
+          LAGRANGE_IMAGES_REAL_LAGRANGE: '1'
+
   opensmalltalk-cuis-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 10

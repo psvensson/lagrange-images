@@ -117,13 +117,17 @@ Success: a real compatible Smalltalk project can remain on OpenSmalltalkVM while
 
 ### 4. Durable Lagrange backend
 
-The mock backend is still deliberately the default. This becomes increasingly important once the semantic/execution seams stop moving rapidly.
+The mock backend remains the default for local bootstrap work, but the real Lagrange adapter now owns a durable five-table schema and consumes the public embedded application-session API.
 
-- [ ] settle the public Lagrange embedding seam
-- [ ] map Values/refs/shapes/objects/artifacts/history to durable schema
+- [x] settle the public Lagrange embedding seam
+- [x] map Values/refs/shapes/objects/artifacts/history to durable schema
 - [x] atomic state + history writes through the backend transaction contract
 - [x] reusable backend conformance suite running against the mock
-- [ ] restart and multi-node durability tests
+- [x] run the reusable backend conformance suite against the Lagrange SQL adapter
+- [x] prove schema and atomic state/history against the real public package
+- [x] prove mapping restart behavior with a file-backed compatibility runtime
+- [ ] real Lagrange process-restart durability test
+- [ ] multi-node failure/recovery durability tests
 - [ ] logical snapshot/revision frontiers
 - [ ] indexes for graph reachability and derivation lookup
 - [ ] measure partitioning/index choices on large images
@@ -292,6 +296,7 @@ Established substrate now includes:
 
 - language-neutral Value/ref/shape/object graph
 - atomic graph state + history mutation contract with reusable backend conformance
+- public-session Lagrange backend with image-owned schema and real-package proof
 - Block + LexicalEnvironment closure model
 - language-owned dispatch + common activation execution
 - semantic vs executable code separation

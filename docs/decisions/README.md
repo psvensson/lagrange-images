@@ -11,6 +11,7 @@ ADRs are the detailed design history. Read them by topic rather than as a prereq
 - [0005 — calling convention and neutral executor](0005-calling-convention-and-neutral-executor.md): receiver/arguments/environment activation frame.
 - [0031 — one runtime composition path](0031-one-runtime-composition-path.md): keep one runtime, graph ImageService and HTTP projection instead of parallel object models.
 - [0032 — atomic backend transactions](0032-atomic-backend-transactions.md): commit current state and its history event through one backend transaction and shared conformance contract.
+- [0033 — durable Lagrange backend](0033-durable-lagrange-backend.md): map the backend contract to the public embedded SQL session and five image-owned tables.
 
 ## First language and semantic compilation
 

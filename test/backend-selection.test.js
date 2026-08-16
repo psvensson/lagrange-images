@@ -42,6 +42,20 @@ test('a loaded Lagrange module can provide the backend through a factory', async
   assert.equal(backend.kind, 'lagrange-test');
 });
 
+test('the public embedded Lagrange factory selects the durable SQL adapter', async () => {
+  const backend = await createBackend({
+    mode: 'lagrange',
+    lagrangeSpecifier: new URL('../fixtures/fake-embedded-lagrange.js', import.meta.url).href,
+    namespace: 'image-tests',
+  });
+
+  assert.equal(backend.kind, 'lagrange');
+  assert.equal(backend.durable, true);
+  assert.equal(backend.integration.namespace, 'image-tests');
+  await backend.start();
+  await backend.stop();
+});
+
 
 test('injected backends must implement the atomic transaction contract', async () => {
   await assert.rejects(
