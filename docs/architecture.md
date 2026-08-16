@@ -313,7 +313,9 @@ The substrate has now been pressured by:
 - durable artifact-backed runtime definitions and callable foreign-runtime Blocks;
 - mixed Symmetric Smalltalk composition over foreign WASM and live Cuis;
 - the same mixed semantic program running through neutral and resumable Lagrange-WASM execution;
-- multiple sequential non-tail WASM effects and non-tail closure creation in shared modules.
+- multiple sequential non-tail WASM effects and non-tail closure creation in shared modules;
+- the public Lagrange application-session seam with atomic image state/history,
+  real-package compatibility and file-backed mapping restart coverage.
 
 The next high-value pressures are now outside this semantic gap:
 
@@ -323,6 +325,7 @@ The next high-value pressures are now outside this semantic gap:
 - capability-aware calls;
 - Java/JVM and Common Lisp ecosystem proofs;
 - OCI/distributed runtime placement and failure semantics;
-- durable Lagrange backend.
+- real Lagrange process-restart and multi-node failure/recovery proofs for the
+  durable backend.
 
 See [docs/README.md](README.md) for navigation and [decisions/README.md](decisions/README.md) for topic-grouped ADRs.

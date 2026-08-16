@@ -55,6 +55,14 @@ This is especially important if remote message/call syntax becomes pleasantly si
 
 History and source objects can contain sensitive material. Authorization must apply to history, snapshots, debugger state and exports as well as current object state.
 
+## Storage namespace
+
+The Lagrange backend's `namespace` becomes the public application session label.
+It does not create a schema, tenant or authorization boundary. The five image
+tables are shared application-owned tables; a future multi-tenant service must
+enforce principals and image capabilities above this adapter rather than rely on
+`applicationId` isolation.
+
 ## Mock warning
 
 The current HTTP scaffold has **no authentication**. It is a local development surface only. Do not expose it on an untrusted network.

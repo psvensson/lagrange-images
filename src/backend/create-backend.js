@@ -1,4 +1,5 @@
 import {assertBackend} from './backend-contract.js';
+import {LagrangeBackend} from './lagrange-backend.js';
 import {MockBackend} from './mock-backend.js';
 
 const DEFAULT_LAGRANGE_SPECIFIER = 'lagrange-server';
@@ -36,17 +37,30 @@ async function tryImportLagrange(specifier = DEFAULT_LAGRANGE_SPECIFIER) {
 }
 
 async function createLagrangeBackend({loaded, lagrangeFactory, options}) {
-  const factory = lagrangeFactory ?? loaded.module.createImageBackend;
-
-  if (typeof factory !== 'function') {
-    return null;
+  if (typeof lagrangeFactory === 'function') {
+    const backend = await lagrangeFactory({
+      namespace: options.namespace ?? 'lagrange-images',
+      module: loaded.module,
+    });
+    assertBackend(backend);
+    if (!backend.kind) backend.kind = 'lagrange';
+    return backend;
   }
 
-  const backend = await factory({
+  if (typeof loaded.module.createEmbeddedLagrange === 'function') {
+    return new LagrangeBackend({
+      createEmbeddedLagrange: loaded.module.createEmbeddedLagrange,
+      configuration: options.configuration ?? {},
+      namespace: options.namespace ?? 'lagrange-images',
+    });
+  }
+
+  const legacyFactory = loaded.module.createImageBackend;
+  if (typeof legacyFactory !== 'function') return null;
+  const backend = await legacyFactory({
     namespace: options.namespace ?? 'lagrange-images',
     module: loaded.module,
   });
-
   assertBackend(backend);
   if (!backend.kind) backend.kind = 'lagrange';
   return backend;
@@ -80,7 +94,7 @@ async function createBackend(options = {}) {
 
     if (mode === 'lagrange') {
       throw new LagrangeIntegrationError(
-        'lagrange-server was imported, but no image backend adapter is available yet; provide lagrangeFactory or add createImageBackend to the public Lagrange API',
+        'lagrange-server was imported, but it exposes neither createEmbeddedLagrange nor an image backend factory',
       );
     }
 

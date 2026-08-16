@@ -81,7 +81,7 @@ Ordinary refs name evolving object identities. `pinned-ref` adds an opaque histo
 
 `referencesOfRecord()` walks explicit shape, behavior, slot, artifact dependency/provenance, lexical-environment and Block edges. Metadata may not hide refs.
 
-The mock backend materializes current state and appends a history spine. Its snapshots still copy the materialized records; a Lagrange backend should eventually represent snapshots as logical root/revision frontiers where possible.
+The mock and Lagrange backends materialize current state and append a history spine. Snapshots still copy the materialized records; a later schema should represent them as logical root/revision frontiers where possible.
 
 ## Projects
 

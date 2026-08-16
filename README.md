@@ -18,7 +18,7 @@ execution
 neutral | Lagrange WASM | foreign WASM | foreign runtimes
               |
 image backend
-mock now | Lagrange durable/distributed backend
+mock | Lagrange durable/distributed backend
 ```
 
 Programs are artifact graphs, not source-only pipelines:
@@ -41,6 +41,9 @@ source / IR / JAR / runtime image / manifest / lock / package / WASM
 
 - stable image/object identity and history
 - atomic current-state + history mutation through a shared backend transaction contract
+- public-package Lagrange backend over embedded application database sessions
+- five-table durable schema with primary-key range routing
+- real-package schema/transaction proof and file-backed mapping restart coverage
 - tagged Values, refs and pinned refs
 - immutable shapes with language behavior kept separate
 - immutable CodeArtifacts, LexicalEnvironments and Blocks
@@ -274,7 +277,29 @@ npm run demo
 npm start
 ```
 
-The default backend is the in-memory mock. `LAGRANGE_BACKEND=lagrange` requires the compatible public `lagrange-server` seam; there is no private-source import fallback.
+The default backend remains the in-memory mock. With `lagrange-server >= 0.1.0`
+installed, select the durable backend through configuration or the environment:
+
+```js
+import {createRuntime} from 'lagrange-images';
+
+const runtime = await createRuntime({
+  backend: {
+    mode: 'lagrange',
+    configuration: {storage: {dataDir: './data/lagrange-images'}},
+  },
+});
+```
+
+```sh
+LAGRANGE_BACKEND=lagrange npm start
+```
+
+The adapter uses only `createEmbeddedLagrange()` and
+`openApplicationDatabase()` from the public package. Lagrange currently permits
+one embedded runtime start per process lifetime, so a stopped runtime is not
+restartable in-process. The default namespace labels SQL sessions; it is not a
+tenant or authorization boundary.
 
 ## Where to read next
 

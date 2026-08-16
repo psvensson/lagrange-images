@@ -2,9 +2,9 @@
 
 ## Current state
 
-`lagrange-images` consumes Lagrange as a library rather than starting another daemon or importing private source paths. The backend loader probes the side-effect-free public `lagrange-server` package and otherwise uses the mock during bootstrap work.
+`lagrange-images` consumes Lagrange as a library rather than starting another daemon or importing private source paths. The backend loader probes the side-effect-free public `lagrange-server` package and constructs `LagrangeBackend` over `createEmbeddedLagrange()` and `openApplicationDatabase()`.
 
-The image-side persistence and transaction semantics are now explicit and covered by a reusable conformance suite. The remaining integration gap is a deliberately small application-facing Lagrange session/factory plus the durable schema mapping.
+The image-side persistence and transaction semantics are explicit and covered by one reusable conformance suite running against both the mock and the SQL adapter. The mock remains the `auto` fallback when the package is absent.
 
 ## Handshake
 
@@ -28,49 +28,34 @@ A transaction callback commits all scoped operations or none of them. Scoped rea
 
 This is an image-side abstraction, not a request for Lagrange to reproduce collections and streams as its database API. A Lagrange adapter may implement the contract over an embedded SQL/session transaction.
 
-## Likely durable schema
+## Durable schema
 
-The mock collection layout should not be copied literally. A real mapping should preserve the neutral graph model, roughly:
+The adapter owns five tables rather than copying the mock's in-memory maps literally:
 
 ```text
-images
-  image_id
-  root_object_id
-  language_id
-  metadata
+lagrange_images_images
+  id / record_key / version / payload
 
-image_records
-  image_id
-  object_id
-  record_kind       # shape | object | code-artifact | lexical-environment | block
-  shape_image_id?   # object records
-  shape_object_id?
-  behavior_image_id?
-  behavior_object_id?
-  payload / normalized slots
-  version
+lagrange_images_records
+  id / record_key / version / payload
 
-image_events
-  image_id
-  revision
-  event_type
-  object_id?
-  payload
+lagrange_images_snapshots
+  id / record_key / version / payload
 
-image_snapshots
-  image_id
-  snapshot_id
-  revision_frontier
-  metadata
+lagrange_images_stream_heads
+  id / revision
+
+lagrange_images_events
+  id / stream_id / revision / payload
 ```
 
-The schema must not reintroduce `class_id` or generic source columns as substrate semantics. Language class/type/code objects are graph data above this layer.
+Every table has an `id` primary key for Lagrange routing. Identities use tagged composite keys whose variable parts are UTF-8 hex. Delimiters therefore cannot collide with image/object IDs, and collection scans become bounded primary-key ranges rather than unqualified table scans.
 
-Partitioning should make ordinary image/object operations local without forcing a large image into one partition. `(image_id, object_id)` naturally leaves room for object-level distribution; history and graph indexes may need different placement/index strategies.
+The schema does not reintroduce `class_id` or generic source columns as substrate semantics. Language class/type/code objects remain graph data above this layer. Composite record IDs retain both image locality and object-level distribution; measured split/index policy remains later work.
 
 ## Values and refs
 
-The portable codec uses tagged records, but the Lagrange adapter may normalize them efficiently. Integer, float and ref fields do not need to remain JSON blobs if typed columns/indexes help. The observable semantics remain identical: refs mean identity, pinned refs include historical revision, and backend row versions are not object identity.
+The first durable codec stores the normalized graph record as JSON payload text. Canonical bytes are already base64 Values, integers are decimal Values, and refs remain explicit tagged records, so this preserves observable semantics. Later typed projections may accelerate measured queries without changing the graph contract. Backend row versions are not object identity.
 
 ## Transactions
 
@@ -78,7 +63,13 @@ Image creation and every versioned graph mutation commit the materialized record
 
 The mock implements rollback and transaction-local visibility with isolated in-memory drafts. That proves the backend API contract but not process-crash durability.
 
-`test/support/backend-conformance.js` is the reusable acceptance suite. Every durable adapter must pass the same ordinary-operation, atomic-commit, callback-rollback and version-conflict-rollback cases. Real restart and multi-node tests remain separate because an in-memory backend cannot prove them.
+`test/support/backend-conformance.js` is the reusable acceptance suite. It runs against both backends for ordinary operations, atomic commit, callback rollback and version-conflict rollback. Adapter-specific tests cover key encoding, range scans, graph/history round trips and scoped-handle expiry.
+
+The PR-only integration lane installs the pinned public Lagrange package and
+proves the owned schema plus one atomic state/history round trip through its
+embedded session. A separate file-backed compatibility-runtime test proves the
+adapter mapping across restart. Real Lagrange process restart and multi-node
+failure/recovery remain separate proofs.
 
 Snapshots currently write one snapshot record and do not append an event. Logical revision-frontier semantics remain later work.
 
@@ -94,11 +85,13 @@ Never import `lagrange-server/src/...`. If integration requires a private class,
 
 ## Integration checklist
 
-1. [ ] Decide the smallest public Lagrange primitive: embedded SQL/session or image-side adapter.
-2. [ ] Map Values, shapes, objects, artifacts and refs to a durable schema.
+1. [x] Use the public embedded runtime and application database session.
+2. [x] Map Values, shapes, objects, artifacts and refs to a durable schema.
 3. [x] Make state write + history append atomic.
 4. [x] Add a reusable backend conformance suite and run it against the mock.
-5. [ ] Run the same conformance suite against the Lagrange adapter.
-6. [ ] Add restart and multi-node durability tests.
-7. [ ] Define logical snapshot/revision frontiers.
-8. [ ] Only then move selected runtime work into distributed WASM.
+5. [x] Run the same conformance suite against the Lagrange adapter.
+6. [x] Add file-backed mapping restart coverage.
+7. [ ] Add a real Lagrange process-restart durability test.
+8. [ ] Add multi-node failure/recovery durability tests.
+9. [ ] Define logical snapshot/revision frontiers.
+10. [ ] Only then move selected runtime work into distributed WASM.
