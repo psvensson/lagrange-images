@@ -78,7 +78,7 @@ The scalar callable proofs have now done their job. The next interface work shou
 - [x] bytes and float64 fidelity through both lanes
 - [x] transient authority/principal/capability substrate (`require` seam, attenuation, exact-match v0 grants)
 - [x] capability-aware imported host functions (`wasm-component-binding/v2`)
-- [ ] authorized object projection (ADR 0039 decided; unimplemented)
+- [x] authorized object projection (`image-projection-binding/v1`)
 - [ ] WIT `resource` handles for continuing image access
 - [ ] async foreign callbacks/effects only through explicit contracts (after authority, deliberately)
 - [x] Component instance lifetime settled: fresh per activation, compilation cached separately

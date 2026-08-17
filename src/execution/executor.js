@@ -13,6 +13,10 @@ import {
   FOREIGN_RUNTIME_BINDING_V1,
   createForeignRuntimeBindingV1Executor,
 } from '../callable/foreign-runtime-binding.js';
+import {
+  IMAGE_PROJECTION_BINDING_V1,
+  createImageProjectionBindingV1Executor,
+} from '../callable/image-projection-binding.js';
 import {ActivationExecutor} from './activation-executor.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 import {
@@ -46,6 +50,8 @@ function createDefaultCodeExecutorRegistry({
   });
   registry.register(WASM_COMPONENT_BINDING_V1, componentBindingExecutor);
   registry.register(WASM_COMPONENT_BINDING_V2, componentBindingExecutor);
+  // The image is a third implementation lane; it needs no external runtime at all.
+  registry.register(IMAGE_PROJECTION_BINDING_V1, createImageProjectionBindingV1Executor());
 
   const foreignRuntimeConfigured = [
     foreignRuntimeDefinitions,

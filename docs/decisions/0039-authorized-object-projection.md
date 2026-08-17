@@ -1,6 +1,7 @@
 # ADR 0039: authorized object projection
 
-Status: accepted — the decision for projecting image objects outward; deliberately no implementation yet.
+Status: implemented — the image is a third callable implementation lane; projection is authorized per object at use time, produces ref-free composites, and never follows a ref.
+Proven by: test/image-projection.test.js
 
 ## Problem
 
