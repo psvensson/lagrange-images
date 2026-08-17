@@ -21,6 +21,10 @@ import {
   IMAGE_MUTATION_BINDING_V1,
   createImageMutationBindingV1Executor,
 } from '../callable/image-mutation-binding.js';
+import {
+  IMAGE_VERSIONED_PROJECTION_BINDING_V1,
+  createImageVersionedProjectionBindingV1Executor,
+} from '../callable/image-versioned-projection-binding.js';
 import {ActivationExecutor, ExpiredExecutionContextError} from './activation-executor.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 import {
@@ -57,6 +61,10 @@ function createDefaultCodeExecutorRegistry({
   // The image is a third implementation lane; it needs no external runtime at all.
   registry.register(IMAGE_PROJECTION_BINDING_V1, createImageProjectionBindingV1Executor());
   registry.register(IMAGE_MUTATION_BINDING_V1, createImageMutationBindingV1Executor());
+  registry.register(
+    IMAGE_VERSIONED_PROJECTION_BINDING_V1,
+    createImageVersionedProjectionBindingV1Executor(),
+  );
 
   const foreignRuntimeConfigured = [
     foreignRuntimeDefinitions,
