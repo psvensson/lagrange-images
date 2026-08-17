@@ -78,6 +78,7 @@ The scalar callable proofs have now done their job. The next interface work shou
 - [x] bytes and float64 fidelity through both lanes
 - [ ] capability-aware imported host functions
 - [ ] async foreign callbacks/effects only through explicit contracts
+- [x] Component instance lifetime settled: fresh per activation, compilation cached separately
 - [ ] reusable foreign instance/reset contracts where a toolchain can prove safety
 
 Success: a nontrivial external library exposes structured values through an implementation-independent interface usable from multiple language personalities.

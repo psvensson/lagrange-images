@@ -35,6 +35,11 @@ world normalize {
   // scalars in, record out: proves a record result independent of a record argument
   export make-item: func(name: string, quantity: s64) -> item;
 
+  // Deliberately stateful: it exists only so a test can observe whether guest state
+  // survives from one activation to the next. Fresh instantiation means it always
+  // returns 1.
+  export bump: func() -> s64;
+
   // list of record: the first composite whose element type is itself a composite, so the
   // codec has to recurse rather than special-case
   export relabel-all: func(items: list<item>) -> list<item>;
