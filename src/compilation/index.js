@@ -5,9 +5,14 @@ import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
 import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
 import {
   WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1,
+  isWasmV1TailEffectRestrictionError,
   lagrangeCodeV1GroupToWasmModuleCompiler,
   lagrangeCodeV1ToWasmModuleCompiler,
 } from '../wasm/compiler-v1.js';
+import {
+  lagrangeCodeV1GroupToResumableWasmModuleCompiler,
+  lagrangeCodeV1ToResumableWasmModuleCompiler,
+} from '../wasm/resumable-compiler-v2.js';
 import {
   WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
   lagrangeCodeGroupToWasmModuleCompiler,
@@ -92,6 +97,17 @@ const reusableLagrangeCodeGroupToWasmCompiler = Object.freeze({
   },
 });
 
+// Same shape as the v0 fallback: try the simple backend, and drop to the resumable one when an
+// effect is not in tail position. Only the ABI pair differs.
+async function compileWithV1ResumableFallback(request, context, tailCompiler, resumableCompiler) {
+  try {
+    return await tailCompiler.compile(request, context);
+  } catch (error) {
+    if (!isWasmV1TailEffectRestrictionError(error)) throw error;
+    return await resumableCompiler.compile(request, context);
+  }
+}
+
 const reusableLagrangeCodeV1ToWasmCompiler = Object.freeze({
   identity: LAGRANGE_CODE_V1_WASM_COMPILER_ID,
   cacheKey({source}) {
@@ -102,7 +118,12 @@ const reusableLagrangeCodeV1ToWasmCompiler = Object.freeze({
     });
   },
   async compile(request, context) {
-    return withStatelessInstanceReuse(await lagrangeCodeV1ToWasmModuleCompiler.compile(request, context));
+    return withStatelessInstanceReuse(await compileWithV1ResumableFallback(
+      request,
+      context,
+      lagrangeCodeV1ToWasmModuleCompiler,
+      lagrangeCodeV1ToResumableWasmModuleCompiler,
+    ));
   },
 });
 
@@ -121,7 +142,12 @@ const reusableLagrangeCodeV1GroupToWasmCompiler = Object.freeze({
     });
   },
   async compile(request, context) {
-    return withStatelessInstanceReuse(await lagrangeCodeV1GroupToWasmModuleCompiler.compile(request, context));
+    return withStatelessInstanceReuse(await compileWithV1ResumableFallback(
+      request,
+      context,
+      lagrangeCodeV1GroupToWasmModuleCompiler,
+      lagrangeCodeV1GroupToResumableWasmModuleCompiler,
+    ));
   },
 });
 

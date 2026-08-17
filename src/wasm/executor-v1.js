@@ -104,18 +104,34 @@ function sameStrings(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function sameCellBindings(left, right) {
+  return left.length === right.length && left.every((binding, index) => (
+    binding.id === right[index].id
+    && binding.name === right[index].name
+    && binding.source === right[index].source
+  ));
+}
+
 function normalizeModuleFunctions(value, sendSites, closureSites) {
   if (value === undefined) return null;
   if (!Array.isArray(value)) throw new TypeError('WASM module metadata.functions must be an array');
+  const entries = new Set();
+  const memberIndices = new Set();
   return Object.freeze(value.map((descriptor, index) => {
     exactKeys(
       descriptor,
       ['entry', 'memberIndex', 'parameters', 'captures', 'cellBindings', 'sendSiteIndices', 'closureSiteIndices'],
       `WASM module function ${index}`,
     );
+    const entry = requiredText(descriptor.entry, `WASM module function ${index} entry`);
+    const memberIndex = requireNonNegativeInteger(descriptor.memberIndex, `WASM module function ${index} memberIndex`);
+    if (entries.has(entry)) throw new TypeError(`duplicate WASM module function entry: ${entry}`);
+    if (memberIndices.has(memberIndex)) throw new TypeError(`duplicate WASM module function memberIndex: ${memberIndex}`);
+    entries.add(entry);
+    memberIndices.add(memberIndex);
     return Object.freeze({
-      entry: requiredText(descriptor.entry, `WASM module function ${index} entry`),
-      memberIndex: requireNonNegativeInteger(descriptor.memberIndex, `WASM module function ${index} memberIndex`),
+      entry,
+      memberIndex,
       parameters: requireNonNegativeInteger(descriptor.parameters, `WASM module function ${index} parameters`),
       captures: normalizeCaptureIds(descriptor.captures, `WASM module function ${index} captures`),
       cellBindings: normalizeCellBindings(descriptor.cellBindings, `WASM module function ${index} cellBindings`),
@@ -134,8 +150,12 @@ function activeFunctionDescriptor(code, moduleArtifact, sendSites, closureSites)
     if (!sameStrings(descriptor.captures, normalizeCaptureIds(code.metadata.captures ?? []))) {
       throw new TypeError('WASM function capture metadata does not match module entry');
     }
+    // Full equality, not just ids. The module descriptor is what drives execution, so an id-only
+    // check would let two durable artifacts disagree about whether a cell is a temporary or a
+    // capture — the difference between declaring a fresh cell and using the declaring frame's —
+    // and still validate. Versioned metadata should reject that contradiction, not tolerate it.
     const codeCells = normalizeCellBindings(code.metadata.cellBindings ?? [], 'WASM function metadata.cellBindings');
-    if (!sameStrings(descriptor.cellBindings.map(({id}) => id), codeCells.map(({id}) => id))) {
+    if (!sameCellBindings(descriptor.cellBindings, codeCells)) {
       throw new TypeError('WASM function cell binding metadata does not match module entry');
     }
     return descriptor;
@@ -379,9 +399,10 @@ function createWasmFunctionV1CellExecutor({
       const closurePrototypes = normalizeClosurePrototypes(code, descriptor, closureSites);
       const compiledModule = await moduleCache.get(moduleArtifact);
 
-      // Temporaries and cell captures both become cells of this activation's frame. Declaring them
-      // here rather than in the guest is what keeps frame machinery out of the ABI: the module
-      // knows slot indices, the host owns which cell each one is.
+      // Only temporaries: this activation declares the cells it owns. A cell capture already
+      // exists in the frame that declared it, and declaring one here would shadow it with a fresh
+      // empty cell. Declaring host-side rather than in the guest is what keeps frame machinery out
+      // of the ABI — the module knows slot indices, the host owns which cell each one is.
       context.declareTemporaries(descriptor.cellBindings.filter(({source}) => source === 'temporary'));
 
       const arena = new ValueHandleArena();
