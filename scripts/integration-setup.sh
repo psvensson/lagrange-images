@@ -24,13 +24,33 @@ CUIS_IMAGE_ROOT="$CUIS_ROOT/CuisImage"
 mkdir -p .integration/opensmalltalk-vm .integration/cuis
 
 fetch() {
-  local url="$1" output="$2"
+  local url="$1" output="$2" tmp="$2.part"
   if [ -f "$output" ]; then
     echo "have $output"
     return 0
   fi
   echo "fetching $output"
-  curl --fail --location --retry 3 --output "$output" "$url"
+  rm -f "$tmp"
+  # --retry-all-errors because curl does not retry an HTTP 429 without it, and these pinned
+  # assets are fetched often enough to be rate limited by the host.
+  # The partial is removed explicitly rather than relying on errexit, because a caller that
+  # invokes fetch inside a conditional disables errexit for the whole call — which would let a
+  # doomed `mv` run and bury curl's real diagnostic under "cannot stat".
+  if ! curl \
+    --fail \
+    --location \
+    --retry 5 \
+    --retry-all-errors \
+    --retry-delay 2 \
+    --output "$tmp" \
+    "$url"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  # Renamed only on success. Otherwise a failed or truncated transfer leaves the output file
+  # behind, and the next run's "have $output" check treats it as a good asset — turning one
+  # transient failure into a persistently broken checkout.
+  mv "$tmp" "$output"
 }
 
 # The VM archive is content-addressed by sha256; the Cuis files are pinned to a Git commit

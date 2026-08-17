@@ -38,6 +38,11 @@ npm run test:integration
 `.integration/` is gitignored. The pins live in `scripts/integration-setup.sh`, which CI
 calls too — change them in one place.
 
+Downloads retry transient failures including HTTP 429, which the host does return when these
+assets are fetched repeatedly, and land through a temporary file renamed only on success. A
+failed transfer therefore leaves nothing behind for the next run to mistake for a cached asset.
+If a download fails persistently, curl's own message is the diagnostic.
+
 The Lagrange backend proof needs a checkout of `psvensson/lagrange` linked as
 `node_modules/lagrange-server`; see the `lagrange-backend-integration` job in
 `.github/workflows/test.yml`.
