@@ -81,7 +81,7 @@ function normalizeInterface(value) {
   const operation = requiredText(value.operation, 'OpenSmalltalk Cuis interface operation');
   if (!SAFE_NAME.test(service)) throw new TypeError('OpenSmalltalk Cuis interface service contains unsafe characters');
   if (!SAFE_NAME.test(operation)) throw new TypeError('OpenSmalltalk Cuis interface operation contains unsafe characters');
-  const exported = (service === 'proof' && ['add', 'factorial'].includes(operation))
+  const exported = (service === 'proof' && ['add', 'echo', 'factorial'].includes(operation))
     || (service === 'json' && operation === 'package-proof')
     || (service === 'text' && operation === 'normalize');
   if (!exported) throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
@@ -150,6 +150,7 @@ function decodeBridgeValue(token) {
 
 function expectedArity(service, operation) {
   if (service === 'proof' && operation === 'add') return 2;
+  if (service === 'proof' && operation === 'echo') return 1;
   if (service === 'proof' && operation === 'factorial') return 1;
   if (service === 'json' && operation === 'package-proof') return 0;
   if (service === 'text' && operation === 'normalize') return 1;
@@ -161,6 +162,155 @@ function encodeHexByte(byte) {
   return hex[byte >> 4] + hex[byte & 0x0f];
 }
 
+// Every bridge method is compiled separately so that one bad method cannot silence the
+// whole bridge: Cuis compiles a doIt as a single unit, so a syntax error anywhere in a
+// large script suppresses all output, including the BOOT lines used to diagnose it.
+const BRIDGE_METHODS = Object.freeze([
+`add: a to: b
+    ^ a + b`,
+// echo exists so every canonical scalar can be round-tripped through the real VM:
+// it is the only exported operation that both decodes and re-encodes an arbitrary Value.
+`echo: aValue
+    ^ aValue`,
+`factorial: n
+    n < 0 ifTrue: [ ^ self error: 'factorial requires a non-negative integer' ].
+    n = 0 ifTrue: [ ^ 1 ].
+    ^ n * (self factorial: n - 1)`,
+`jsonPackageProof
+    | jsonClass parsed rendered reparsed numbers nested |
+    jsonClass := Smalltalk at: #Json.
+    parsed := jsonClass readFrom: '{"numbers":[3,5,8],"ok":true,"nested":{"name":"cuis"}}' readStream.
+    rendered := jsonClass render: parsed.
+    reparsed := jsonClass readFrom: rendered readStream.
+    numbers := reparsed at: 'numbers'.
+    nested := reparsed at: 'nested'.
+    ^ (((numbers at: 1) + (numbers at: 2) + (numbers at: 3)) = 16)
+        and: [ (reparsed at: 'ok') = true
+        and: [ (nested at: 'name') = 'cuis' ]]`,
+// normalize/v1: lowercase, collapse each whitespace run to one space, trim both ends.
+// This is the shared specification the Component lane implements too.
+`normalizeText: aString
+    | outStream pendingSpace startedText |
+    outStream := WriteStream on: (UnicodeString new: aString size).
+    pendingSpace := false.
+    startedText := false.
+    aString asLowercase do: [ :eachChar |
+        (self lagrangeIsWhitespace: eachChar)
+            ifTrue: [ startedText ifTrue: [ pendingSpace := true ] ]
+            ifFalse: [
+                pendingSpace ifTrue: [ outStream nextPut: Character space ].
+                pendingSpace := false.
+                startedText := true.
+                outStream nextPut: eachChar ] ].
+    ^ outStream contents`,
+`lagrangeIsWhitespace: aChar
+    | code |
+    code := aChar codePoint.
+    ^ code = 32 or: [ code >= 9 and: [ code <= 13 ] ]`,
+`lagrangeHexToInteger: hexText
+    | total |
+    total := 0.
+    hexText asUppercase do: [ :eachChar |
+        | digit |
+        digit := eachChar digitValue.
+        (digit < 0 or: [ digit > 15 ]) ifTrue: [ ^ self error: 'invalid hex payload' ].
+        total := total * 16 + digit ].
+    ^ total`,
+`lagrangeIntegerToHex: anInteger digits: digitCount
+    | alphabet outStream remaining slots |
+    alphabet := '0123456789abcdef'.
+    slots := Array new: digitCount.
+    remaining := anInteger.
+    digitCount to: 1 by: -1 do: [ :index |
+        slots at: index put: (alphabet at: (remaining bitAnd: 15) + 1).
+        remaining := remaining bitShift: -4 ].
+    outStream := WriteStream on: (String new: digitCount).
+    slots do: [ :eachChar | outStream nextPut: eachChar ].
+    ^ outStream contents`,
+`lagrangeIsUnreservedByte: aByte
+    (aByte >= 48 and: [ aByte <= 57 ]) ifTrue: [ ^ true ].
+    (aByte >= 65 and: [ aByte <= 90 ]) ifTrue: [ ^ true ].
+    (aByte >= 97 and: [ aByte <= 122 ]) ifTrue: [ ^ true ].
+    ^ aByte = 45 or: [ aByte = 46 or: [ aByte = 95 or: [ aByte = 126 ] ] ]`,
+`lagrangePercentEncode: aString
+    | outStream |
+    outStream := WriteStream on: (String new: 64).
+    aString asUtf8Bytes do: [ :eachByte |
+        (self lagrangeIsUnreservedByte: eachByte)
+            ifTrue: [ outStream nextPut: (Character value: eachByte) ]
+            ifFalse: [
+                outStream nextPut: (Character value: 37).
+                outStream nextPutAll: (self lagrangeIntegerToHex: eachByte digits: 2) asUppercase ] ].
+    ^ outStream contents`,
+// Text is built as a UnicodeString, not a String: Cuis String holds only code points
+// 0-255 and `String fromUtf8Bytes:` silently drops anything above that.
+`lagrangePercentDecode: encodedText
+    | byteStream position eachChar |
+    byteStream := WriteStream on: (ByteArray new: 64).
+    position := 1.
+    [ position <= encodedText size ] whileTrue: [
+        eachChar := encodedText at: position.
+        eachChar codePoint = 37
+            ifTrue: [
+                byteStream nextPut: (self lagrangeHexToInteger: (encodedText copyFrom: position + 1 to: position + 2)).
+                position := position + 3 ]
+            ifFalse: [
+                byteStream nextPut: eachChar codePoint.
+                position := position + 1 ] ].
+    ^ UnicodeString fromUtf8Bytes: byteStream contents`,
+`lagrangeDecode: token
+    | prefix payload |
+    token size < 2 ifTrue: [ ^ self error: 'unsupported bridge value' ].
+    prefix := token copyFrom: 1 to: 2.
+    payload := token copyFrom: 3 to: token size.
+    prefix = 'i:' ifTrue: [ ^ payload asNumber ].
+    prefix = 'b:' ifTrue: [ ^ payload = '1' ].
+    prefix = 'f:' ifTrue: [ ^ Float fromIEEE64Bit: (self lagrangeHexToInteger: payload) ].
+    prefix = 'e:' ifTrue: [ ^ self lagrangePercentDecode: payload ].
+    prefix = 'd:' ifTrue: [ ^ payload base64Decoded ].
+    ^ self error: 'unsupported bridge value'`,
+`lagrangeEncode: aValue
+    aValue isInteger ifTrue: [ ^ 'i:', aValue printString ].
+    aValue == true ifTrue: [ ^ 'b:1' ].
+    aValue == false ifTrue: [ ^ 'b:0' ].
+    aValue isFloat ifTrue: [ ^ 'f:', (self lagrangeIntegerToHex: aValue asIEEE64BitWord digits: 16) ].
+    aValue isString ifTrue: [ ^ 'e:', (self lagrangePercentEncode: aValue) ].
+    (aValue isKindOf: ByteArray) ifTrue: [ ^ 'd:', aValue base64Encoded ].
+    ^ self error: 'unsupported result value'`,
+`lagrangeDispatch: fields
+    | serviceName operation |
+    (fields size >= 4 and: [ (fields at: 1) = 'CALL' ]) ifFalse: [ ^ self error: 'bad request' ].
+    serviceName := fields at: 3.
+    operation := fields at: 4.
+    (serviceName = 'proof' and: [ operation = 'add' ]) ifTrue: [
+        fields size = 6 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self add: (self lagrangeDecode: (fields at: 5)) to: (self lagrangeDecode: (fields at: 6)) ].
+    (serviceName = 'proof' and: [ operation = 'echo' ]) ifTrue: [
+        fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self echo: (self lagrangeDecode: (fields at: 5)) ].
+    (serviceName = 'proof' and: [ operation = 'factorial' ]) ifTrue: [
+        fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self factorial: (self lagrangeDecode: (fields at: 5)) ].
+    (serviceName = 'json' and: [ operation = 'package-proof' ]) ifTrue: [
+        fields size = 4 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self jsonPackageProof ].
+    (serviceName = 'text' and: [ operation = 'normalize' ]) ifTrue: [
+        fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self normalizeText: (self lagrangeDecode: (fields at: 5)) ].
+    ^ self error: 'unknown operation'`,
+]);
+
+function smalltalkStringLiteral(source) {
+  return `'${source.replace(/'/g, "''")}'`;
+}
+
+function bridgeSelector(methodSource) {
+  const header = methodSource.split('\n', 1)[0].trim();
+  const tokens = header.split(/\s+/);
+  if (!tokens[0].endsWith(':')) return tokens[0];
+  return tokens.filter((_, index) => index % 2 === 0).join('');
+}
+
 function packageInstallSource(packages) {
   return packages
     .map(({fileName}) => `output nextPutAll: 'BOOT\tPACKAGE\t${fileName}\tSTART'; newLine; flush.\nCodePackageFile installPackage: DirectoryEntry currentDirectory // '${fileName}'.\noutput nextPutAll: 'BOOT\tPACKAGE\t${fileName}\tDONE'; newLine; flush.`)
@@ -169,7 +319,11 @@ function packageInstallSource(packages) {
 
 function bridgeSource(packages = []) {
   const installPackages = packageInstallSource(packages);
-  return `| input output service done line fields requestId serviceName operation result decode encode readLine |
+  const compileCalls = BRIDGE_METHODS
+    .map((methodSource) => `compileMethod value: ${smalltalkStringLiteral(methodSource)}.`)
+    .join('\n');
+  const selectorList = BRIDGE_METHODS.map((methodSource) => bridgeSelector(methodSource)).join(' ');
+  return `| input output service done line fields requestId callResult readLine compileMethod missing |
 output := StdIOWriteStream stdout.
 output nextPutAll: 'BOOT\tBRIDGE\tSTART'; newLine; flush.
 output nextPutAll: 'BOOT\tBRIDGE\tCOMPILE'; newLine; flush.
@@ -178,12 +332,15 @@ Object subclass: #LagrangeProofService
     classVariableNames: ''
     poolDictionaries: ''
     category: 'Lagrange-Bridge'.
-LagrangeProofService compile: 'add: a to: b\n    ^ a + b'.
-LagrangeProofService compile: 'factorial: n\n    n < 0 ifTrue: [ Error signal: ''factorial requires a non-negative integer'' ].\n    n = 0 ifTrue: [ ^ 1 ].\n    ^ n * (self factorial: n - 1)'.
-LagrangeProofService compile: 'jsonPackageProof\n    | jsonClass parsed rendered reparsed numbers nested |\n    jsonClass := Smalltalk at: #Json.\n    parsed := jsonClass readFrom: ''{"numbers":[3,5,8],"ok":true,"nested":{"name":"cuis"}}'' readStream.\n    rendered := jsonClass render: parsed.\n    reparsed := jsonClass readFrom: rendered readStream.\n    numbers := reparsed at: ''numbers''.\n    nested := reparsed at: ''nested''.\n    ^ (((numbers at: 1) + (numbers at: 2) + (numbers at: 3)) = 16)\n        and: [ (reparsed at: ''ok'') = true\n        and: [ (nested at: ''name'') = ''cuis'' ]]'.
-LagrangeProofService compile: 'normalizeText: aString\n    ^ aString withCuisLineEndings'.
+compileMethod := [ :methodSource |
+    [ LagrangeProofService compile: methodSource ] on: Error do: [ :compileError | nil ] ].
+${compileCalls}
+missing := #(${selectorList}) reject: [ :selector | LagrangeProofService includesSelector: selector ].
+missing isEmpty
+    ifTrue: [ output nextPutAll: 'BOOT\tBRIDGE\tCOMPILED'; newLine; flush ]
+    ifFalse: [
+        output nextPutAll: 'BOOT\tBRIDGE\tUNCOMPILED\t'; nextPutAll: missing printString; newLine; flush ].
 service := LagrangeProofService new.
-output nextPutAll: 'BOOT\tBRIDGE\tCOMPILED'; newLine; flush.
 ${installPackages}
 input := StdIOReadStream stdin.
 readLine := [ | char stream |
@@ -193,148 +350,6 @@ readLine := [ | char stream |
         char = Character lf
     ] whileFalse: [ stream nextPut: char ].
     stream contents ].
-decode := [ :token |
-    (token beginsWith: 'i:')
-        ifTrue: [ (token copyFrom: 3 to: token size) asNumber ]
-        ifFalse: [
-            token = 'b:1'
-                ifTrue: [ true ]
-                ifFalse: [
-                    token = 'b:0'
-                        ifTrue: [ false ]
-                        ifFalse: [
-                            (token beginsWith: 'f:')
-                                ifTrue: [
-                                    | hex bytes result |
-                                    hex := token copyFrom: 3 to: token size.
-                                    bytes := ByteArray new: 8.
-                                    1 to: 8 do: [ :i |
-                                        | hi lo hiVal loVal |
-                                        hi := hex at: (i * 2 - 1).
-                                        lo := hex at: (i * 2).
-                                        hiVal := hi isDigit
-                                            ifTrue: [ hi numericValue - 48 ]
-                                            ifFalse: [ hi isLowercase
-                                                ifTrue: [ hi numericValue - 87 ]
-                                                ifFalse: [ hi numericValue - 55 ] ].
-                                        loVal := lo isDigit
-                                            ifTrue: [ lo numericValue - 48 ]
-                                            ifFalse: [ lo isLowercase
-                                                ifTrue: [ lo numericValue - 87 ]
-                                                ifFalse: [ lo numericValue - 55 ] ].
-                                        bytes at: i put: (hiVal * 16 + loVal) ].
-                                    result := Float new: 8.
-                                    1 to: 8 do: [ :i | result basicAt: i put: (bytes at: i) ].
-                                    result ]
-                                ifFalse: [
-                                    (token beginsWith: 'e:')
-                                        ifTrue: [
-                                            | encoded result pos |
-                                            encoded := token copyFrom: 3 to: token size.
-                                            result := WriteStream on: (String new: 64).
-                                            pos := 1.
-                                            [ pos <= encoded size ] whileTrue: [
-                                                | ch |
-                                                ch := encoded at: pos.
-                                                ch = $%
-                                                    ifTrue: [
-                                                        | hi lo hiVal loVal byte |
-                                                        hi := encoded at: (pos + 1).
-                                                        lo := encoded at: (pos + 2).
-                                                        hiVal := hi isDigit
-                                                            ifTrue: [ hi numericValue - 48 ]
-                                                            ifFalse: [ hi isLowercase
-                                                                ifTrue: [ hi numericValue - 87 ]
-                                                                ifFalse: [ hi numericValue - 55 ] ].
-                                                        loVal := lo isDigit
-                                                            ifTrue: [ lo numericValue - 48 ]
-                                                            ifFalse: [ lo isLowercase
-                                                                ifTrue: [ lo numericValue - 87 ]
-                                                                ifFalse: [ lo numericValue - 55 ] ].
-                                                        byte := hiVal * 16 + loVal.
-                                                        result nextPut: (Character value: byte).
-                                                        pos := pos + 3 ]
-                                                    ifFalse: [
-                                                        result nextPut: ch.
-                                                        pos := pos + 1 ] ].
-                                            result contents ]
-                                        ifFalse: [
-                                            (token beginsWith: 'd:')
-                                                ifTrue: [
-                                                    | b64 encoded table padIdx result |
-                                                    b64 := 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'.
-                                                    encoded := token copyFrom: 3 to: token size.
-                                                    table := Array new: 256 withAll: 0.
-                                                    1 to: b64 size do: [ :i | table at: (b64 codePointAt: i) + 1 put: i - 1 ].
-                                                    padIdx := encoded size.
-                                                    [ padIdx >= 1 and: [ (encoded at: padIdx) = $% ] ] whileTrue: [ padIdx := padIdx - 1 ].
-                                                    result := ByteArray new: (padIdx * 3 / 4) ceiling.
-                                                    1 to: padIdx by: 4 do: [ :i |
-                                                        | a b c d val |
-                                                        a := table at: (encoded codePointAt: i) + 1.
-                                                        b := table at: (encoded codePointAt: i + 1) + 1.
-                                                        c := i + 2 <= padIdx ifTrue: [ table at: (encoded codePointAt: i + 2) + 1 ] ifFalse: [ 0 ].
-                                                        d := i + 3 <= padIdx ifTrue: [ table at: (encoded codePointAt: i + 3) + 1 ] ifFalse: [ 0 ].
-                                                        val := (a bitShift: 18) + (b bitShift: 12) + (c bitShift: 6) + d.
-                                                        result := result, ((ByteArray with: ((val bitShift: -16) bitAnd: 255) with: ((val bitShift: -8) bitAnd: 255) with: (val bitAnd: 255))) ].
-                                                    result ]
-                                                ifFalse: [ Error signal: 'unsupported bridge value' ] ] ] ] ] ].
-encode := [ :value |
-    value isInteger
-        ifTrue: [ 'i:', value printString ]
-        ifFalse: [
-            value == true
-                ifTrue: [ 'b:1' ]
-                ifFalse: [
-                    value == false
-                        ifTrue: [ 'b:0' ]
-                        ifFalse: [
-                            value isFloat
-                                ifTrue: [
-                                    | bytes hex |
-                                    bytes := ByteArray new: 8.
-                                    1 to: 8 do: [ :i | bytes at: i put: (value basicAt: i) ].
-                                    hex := String new: 16.
-                                    1 to: 8 do: [ :i |
-                                        | byte hi lo |
-                                        byte := bytes at: i.
-                                        hi := byte bitShift: -4.
-                                        lo := byte bitAnd: 15.
-                                        hex := hex, (hi < 10
-                                            ifTrue: [ (48 + hi) asCharacter ]
-                                            ifFalse: [ (87 + hi) asCharacter ]).
-                                        hex := hex, (lo < 10
-                                            ifTrue: [ (48 + lo) asCharacter ]
-                                            ifFalse: [ (87 + lo) asCharacter ]) ].
-                                    'f:', hex ]
-                                ifFalse: [
-                                    value isString
-                                        ifTrue: [
-                                            | encoded |
-                                            encoded := String new: 64.
-                                            value do: [ :ch |
-                                                | code |
-                                                code := ch codePoint.
-                                                (code >= 48 and: [ code <= 57 ])
-                                                    ifTrue: [ encoded := encoded, ch asString ]
-                                                    ifFalse: [
-                                                        (code >= 65 and: [ code <= 90 ])
-                                                            ifTrue: [ encoded := encoded, ch asString ]
-                                                            ifFalse: [
-                                                                (code >= 97 and: [ code <= 122 ])
-                                                                    ifTrue: [ encoded := encoded, ch asString ]
-                                                                    ifFalse: [
-                                                                        code = 45 or: [ code = 46 or: [ code = 95 or: [ code = 126 ] ] ]
-                                                                            ifTrue: [ encoded := encoded, ch asString ]
-                                                                            ifFalse: [
-                                                                                | hexStr |
-                                                                                hexStr := (code < 16 ifTrue: [ '0' ] ifFalse: [ '' ]), (code printStringBase: 16).
-                                                                                encoded := encoded, '%', hexStr asUppercase ] ] ] ] ].
-                                            'e:', encoded ]
-                                        ifFalse: [
-                                            value isByteArray
-                                                ifTrue: [ 'd:', value base64Encoded ]
-                                                ifFalse: [ Error signal: 'unsupported result value' ] ] ] ] ] ].
 output
     nextPutAll: 'READY';
     nextPut: Character tab;
@@ -354,41 +369,16 @@ done := false.
                 ifFalse: [
                     requestId := fields size > 1 ifTrue: [ fields at: 2 ] ifFalse: [ 'unknown' ].
                     [
-                        ((fields at: 1) = 'CALL' and: [ fields size >= 4 ])
-                            ifFalse: [ Error signal: 'bad request' ].
-                        serviceName := fields at: 3.
-                        operation := fields at: 4.
-                        (serviceName = 'proof' and: [ operation = 'add' ])
-                            ifTrue: [
-                                fields size = 6 ifFalse: [ Error signal: 'bad arity' ].
-                                result := service
-                                    add: (decode value: (fields at: 5))
-                                    to: (decode value: (fields at: 6)) ]
-                            ifFalse: [
-                                (serviceName = 'proof' and: [ operation = 'factorial' ])
-                                    ifTrue: [
-                                        fields size = 5 ifFalse: [ Error signal: 'bad arity' ].
-                                        result := service factorial: (decode value: (fields at: 5)) ]
-                                    ifFalse: [
-                                        (serviceName = 'json' and: [ operation = 'package-proof' ])
-                                            ifTrue: [
-                                                fields size = 4 ifFalse: [ Error signal: 'bad arity' ].
-                                                result := service jsonPackageProof ]
-                                            ifFalse: [
-                                                (serviceName = 'text' and: [ operation = 'normalize' ])
-                                                    ifTrue: [
-                                                        fields size = 5 ifFalse: [ Error signal: 'bad arity' ].
-                                                        result := service normalizeText: (decode value: (fields at: 5)) ]
-                                                    ifFalse: [ Error signal: 'unknown operation' ] ] ] ].
+                        callResult := service lagrangeDispatch: fields.
                         output
                             nextPutAll: 'OK';
                             nextPut: Character tab;
                             nextPutAll: requestId;
                             nextPut: Character tab;
-                            nextPutAll: (encode value: result);
+                            nextPutAll: (service lagrangeEncode: callResult);
                             newLine;
                             flush
-                    ] on: Error do: [ :error |
+                    ] on: Error do: [ :callError |
                         output
                             nextPutAll: 'ERR';
                             nextPut: Character tab;

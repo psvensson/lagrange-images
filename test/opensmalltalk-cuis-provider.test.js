@@ -9,6 +9,7 @@ import {
   LineProcessRunner,
   booleanValue,
   bytesValue,
+  createCuisStdioBridgeSource,
   createOpenSmalltalkCuisProvider,
   decodeCuisBridgeValue,
   encodeCuisBridgeValue,
@@ -194,6 +195,40 @@ test('OpenSmalltalk Cuis package specs and interfaces are explicit', async () =>
   } finally {
     await rm(root, {recursive: true, force: true});
   }
+});
+
+// A mismatch here only shows up as a hung VM in the integration job, because Cuis compiles
+// the bridge doIt as one unit and a script that never reaches READY produces no output.
+test('Cuis bridge v1 exports exactly the operations the generated Smalltalk dispatches', () => {
+  const source = createCuisStdioBridgeSource([]);
+  const exported = [
+    ['proof', 'add'],
+    ['proof', 'echo'],
+    ['proof', 'factorial'],
+    ['json', 'package-proof'],
+    ['text', 'normalize'],
+  ];
+  // The dispatch method is embedded as a Smalltalk string literal, so its quotes are doubled.
+  for (const [service, operation] of exported) {
+    assert.ok(
+      source.includes(`(serviceName = ''${service}'' and: [ operation = ''${operation}'' ])`),
+      `generated bridge has no dispatch branch for ${service}/${operation}`,
+    );
+  }
+  const dispatched = [...source.matchAll(/\(serviceName = ''(.+?)'' and: \[ operation = ''(.+?)'' \]\)/g)]
+    .map(([, service, operation]) => `${service}/${operation}`);
+  assert.deepEqual(
+    dispatched.sort(),
+    exported.map(([service, operation]) => `${service}/${operation}`).sort(),
+  );
+  // Every dispatched selector must also be in the compile list the bridge verifies at boot.
+  for (const selector of ['add:to:', 'echo:', 'factorial:', 'jsonPackageProof', 'normalizeText:']) {
+    assert.ok(source.includes(selector), `generated bridge never compiles ${selector}`);
+  }
+  assert.ok(
+    source.includes(`nextPutAll: '${CUIS_STDIO_BRIDGE_V1}'`),
+    'bridge must announce its protocol as a quoted Smalltalk string literal',
+  );
 });
 
 test('Cuis bridge v1 Value encoding covers boolean, integer, float64, text and bytes', () => {

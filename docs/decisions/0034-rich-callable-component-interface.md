@@ -138,12 +138,16 @@ The v1 bridge adds transport for:
 canonical Value         v1 wire encoding
     boolean             b:0 / b:1
     integer             i:<decimal>
-    float64             f:<hex-payload>
-    text                t:<length>:<utf8-bytes>
-    bytes               d:<length>:<base64>
+    float64             f:<16 hex digits, big-endian IEEE 754>
+    text                e:<percent-encoded utf8-bytes>
+    bytes               d:<canonical base64>
 ```
 
-The encoding is versioned through the bridge protocol identifier. The length-prefixed forms for text and bytes are delimiter-safe: the bridge reads exactly the declared byte count after the delimiter, avoiding ambiguity from tab or newline characters in content.
+The encoding is versioned through the bridge protocol identifier. Text and bytes are delimiter-safe by construction rather than by length prefix: percent-encoding emits only unreserved ASCII plus `%`, and base64 emits only its own alphabet, so neither can produce the tab or newline that frame the protocol. This keeps the bridge a pure line protocol, so the Smalltalk side never has to count bytes across a stream boundary.
+
+Text is carried through Cuis `UnicodeString`, not `String`. Cuis `String` holds only code points 0-255 and truncates anything above silently, which would corrupt canonical `text` Values at the boundary without any error.
+
+The bridge exports a fixed, closed set of operations; there is no `eval`. Alongside the proof operations (`proof/add`, `proof/factorial`, `json/package-proof`) and `text/normalize`, v1 adds `proof/echo`, which decodes an argument and re-encodes it unchanged. `echo` exists so the integration suite can round-trip every canonical scalar through a real VM and prove both directions of the encoding, rather than leaving the float64/bytes branches as untested code.
 
 The existing v0 encoding remains valid for integer/boolean values. v1 is a strict superset for the values already supported and adds the new types.
 
@@ -154,6 +158,8 @@ The first proof uses a deliberately mundane interface:
 ```text
 normalize(text) -> text
 ```
+
+Two independent implementations only prove anything if they are held to the same written specification, so `normalize` is defined exactly: lowercase the input, replace every run of ASCII whitespace (code points 9-13 and 32) with a single space, and drop leading and trailing whitespace. Nothing else changes.
 
 Two implementations share this interface shape:
 
