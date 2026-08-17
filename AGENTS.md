@@ -232,6 +232,14 @@ pooled instance != activation state
 - The host-import registry is runtime-local and never part of artifact identity. Providers receive only `require`.
 - Keep the jco adapter authority-agnostic: it reports required imports and instantiates with what it is handed.
 
+### Image object projection
+
+- Never name an authority resource by concatenating identifiers. `imageId`/`objectId` do not forbid a separator, so `a/b` + `c` and `a` + `b/c` collide. Build every object resource with `objectResource()` (ADR 0039).
+- `object/read` is whole-object authority. A projection's field mapping is typing policy, not a field-level capability, and does not attenuate anything.
+- A projection never follows a ref: authority for one object must not imply authority for what it points at. A mapped ref slot is rejected.
+- `image-projection-binding/v1` is structural by stable slot ID. Shape identity is not part of compatibility; a nominal restriction would be a later version with an explicit shape edge.
+- The image comes from the binding, never the caller. An object-id argument is lane addressing: not a ref, not a capability, and knowing one grants nothing.
+
 ## Architecture
 
 ```text

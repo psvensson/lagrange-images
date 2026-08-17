@@ -118,6 +118,22 @@ function assertCallableValueType(value, type, label) {
   }
 }
 
+// Canonical Value -> the host representation the composite codec and lane adapters expect.
+// Shared so every lane converts leaves identically; a second copy is a place for them to drift.
+function canonicalToHostLeaf(value, type, label) {
+  const normalized = assertCallableValueType(value, type, label);
+  switch (type) {
+    case 'bool': return normalized.value;
+    case 's32': return Number(BigInt(normalized.value));
+    case 's64': return BigInt(normalized.value);
+    case 'f32': return Math.fround(float64ToNumber(normalized));
+    case 'f64': return float64ToNumber(normalized);
+    case 'string': return normalized.value;
+    case 'list<u8>': return new Uint8Array(Buffer.from(normalized.base64, 'base64'));
+    default: throw new TypeError(`${label} has unsupported leaf type ${type}`);
+  }
+}
+
 function assertCallableArguments(descriptor, args, label = 'callable') {
   if (!Array.isArray(args)) throw new TypeError(`${label} arguments must be an array`);
   if (args.length !== descriptor.parameters.length) {
@@ -159,6 +175,7 @@ export {
   CALLABLE_TYPES,
   assertCallableArguments,
   assertCallableValueType,
+  canonicalToHostLeaf,
   assertImages,
   createCallableInterfaceContent,
   installCallableInterface,

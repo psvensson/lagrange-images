@@ -17,7 +17,7 @@ import {
   resolveBindingDependency,
   resolveCallableInterface,
 } from './binding-artifacts.js';
-import {assertImages} from './interface-artifacts.js';
+import {assertImages, canonicalToHostLeaf} from './interface-artifacts.js';
 import {
   ComponentHostImportRegistry,
   UndeclaredHostImportError,
@@ -49,27 +49,10 @@ function assertWasmComponentArtifact(artifact) {
   return artifact;
 }
 
-// Lowering a canonical Value into what the Component canonical ABI expects. The type has
-// already been validated against the shared interface, so this only converts.
+// Lowering a canonical Value into what the Component canonical ABI expects. The leaf
+// conversion is shared with every other lane so they cannot diverge.
 function toComponentValue(value, type) {
-  switch (type) {
-    case 'bool':
-      return value.value;
-    case 's32':
-      return Number(BigInt(value.value));
-    case 's64':
-      return BigInt(value.value);
-    case 'f32':
-      return Math.fround(float64ToNumber(value));
-    case 'f64':
-      return float64ToNumber(value);
-    case 'string':
-      return value.value;
-    case 'list<u8>':
-      return new Uint8Array(Buffer.from(value.base64, 'base64'));
-    default:
-      throw new TypeError(`unsupported callable type: ${type}`);
-  }
+  return canonicalToHostLeaf(value, type, 'Component argument');
 }
 
 function fromComponentValue(raw, type) {

@@ -22,6 +22,7 @@ artifact's `representation`.
 | `wasm-component-binding/v1` | `installWasmComponentBinding()` | `createWasmComponentBindingV1Executor()` |
 | `wasm-component-binding/v2` | `installWasmComponentBindingV2()` | same executor; adds declared host imports |
 | `foreign-runtime-binding/v1` | `installForeignRuntimeBinding()` | `createForeignRuntimeBindingV1Executor()` |
+| `image-projection-binding/v1` | `installImageProjectionBinding()` | `createImageProjectionBindingV1Executor()` |
 
 The foreign-runtime executors are registered only when `createRuntime()` receives foreign
 runtime definitions, runtimes and definition bindings together. The Component binding
@@ -79,6 +80,7 @@ Not representations — these appear inside artifact content as an `abi` or cont
 | `lagrange-cuis-stdio/v1` | Cuis provider transport (boolean/integer/float64/text/bytes), below the interface layer; `/v0` was integer/boolean only |
 | `cuis-runtime-definition/v0`, `cuis-build/v0` | artifact content contracts |
 | `authority-grant/v0` | exact-match `{operation, resource}` grants; execution-time only, never durable |
+| `object-resource/v0` | injective authority resource name for an object; build only via `objectResource()` |
 | `interface-composite/v0` | schema-directed envelope carrying one composite InterfaceValue as bytes; undecodable without the declared interface type. The Component lane unpacks it; the foreign-runtime lane carries the payload alone, with the host owning the header |
 
 ## Where things live
