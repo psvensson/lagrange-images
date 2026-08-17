@@ -76,7 +76,7 @@ The scalar callable proofs have now done their job. The next interface work shou
 - [x] WASM Component/WIT-style callable artifact contract
 - [x] map the same interface shape to at least two implementation lanes
 - [x] bytes and float64 fidelity through both lanes
-- [ ] transient authority/principal/capability substrate (ADR 0037 decided; unimplemented)
+- [x] transient authority/principal/capability substrate (`require` seam, attenuation, exact-match v0 grants)
 - [ ] capability-aware imported host functions (`wasm-component-binding/v2`)
 - [ ] authorized object projection, then WIT `resource` handles
 - [ ] async foreign callbacks/effects only through explicit contracts (after authority, deliberately)

@@ -1,6 +1,7 @@
 # ADR 0037: transient execution authority
 
-Status: accepted — the decision for principal/capability semantics; deliberately no implementation yet.
+Status: implemented — the authority substrate: transient contexts beside the activation, a check-only require seam, and attenuation on the nested-send path. Capability-bearing host imports remain unimplemented.
+Proven by: test/execution-authority.test.js
 
 ## Problem
 
@@ -385,6 +386,30 @@ provenance and lifetime. A `ref` still never crosses.
 - OIDC/SSO/Keycloak integration; the runtime sees normalized principals only
 - multiple activation results, unchanged from ADR 0035
 - `option`, `result`, variants and tuples, to be added only when a real interface needs one
+
+## Implementation status
+
+Built and proven, all eight first-proof cases plus the algebra and forgery checks:
+
+- `AuthorityService` with `issue`, `attenuate`, `revoke`, `require` and `principalOf`, exact-match
+  v0 grants, and contexts that are empty frozen objects whose records live in a private
+  `WeakMap` — so a context from anywhere else is absent rather than misinterpreted
+- revocation resolved by walking ancestors, so revoking a parent invalidates every context
+  attenuated from it without holding references to children
+- `ActivationExecutor.execute(activation, {depth, authority})`, with `require` in the executor
+  context and nothing else authority-shaped, asserted by enumerating that context's keys
+- `sendMessage(request, {attenuate})`, where the executor states a request and
+  `ActivationExecutor` performs the attenuation, so no executor ever holds a context
+
+Not implemented, deliberately:
+
+- `wasm-component-binding/v2` and capability-bearing Component host imports
+- the foreign-runtime host-call transport, whose semantics decision 12 already fixes
+- authorized object projection and WIT `resource` handles
+
+The proof uses a purpose-built probe executor and a two-line dispatcher rather than a real
+host interface, so authority propagation is established in the substrate before any foreign
+lane is involved. That turned out not to need the language personality at all.
 
 ## Consequence
 

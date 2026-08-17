@@ -6,6 +6,7 @@ import {
 } from './compilation/index.js';
 import {DispatchRegistry, InvocationService} from './dispatch/invocation-service.js';
 import {ActivationExecutor, createDefaultCodeExecutorRegistry} from './execution/executor.js';
+import {createAuthorityService} from './authority/index.js';
 import {
   ForeignRuntimeDefinitionBindingRegistry,
   ForeignRuntimeDefinitionInstanceCache,
@@ -97,7 +98,10 @@ async function createRuntime(options = {}) {
   for (const [representation, executor] of Object.entries(options.codeExecutors ?? {})) {
     codeExecutors.register(representation, executor);
   }
-  const executor = new ActivationExecutor({images, executors: codeExecutors, invocations});
+  // The authority service is a control-plane surface: the embedder may issue and revoke
+  // contexts through `runtime.authority`, and executors never see it.
+  const authority = options.authority ?? createAuthorityService();
+  const executor = new ActivationExecutor({images, executors: codeExecutors, invocations, authority});
 
   return {
     backend,
@@ -116,6 +120,7 @@ async function createRuntime(options = {}) {
     dispatchers,
     invocations,
     codeExecutors,
+    authority,
     executor,
     async close() {
       let runtimeError = null;
@@ -138,6 +143,7 @@ async function createRuntime(options = {}) {
 }
 
 export * from './backend/index.js';
+export * from './authority/index.js';
 export * from './callable/index.js';
 export * from './code/index.js';
 export * from './compilation/index.js';
