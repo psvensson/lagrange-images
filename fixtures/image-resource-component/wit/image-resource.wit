@@ -1,0 +1,30 @@
+package lagrange:proof@0.1.0;
+
+// A WIT resource over an image object. The handle is opaque to the guest: it carries no
+// identity it can read and no authority. Every method is a host call, so every method
+// re-authorizes.
+interface image-objects {
+  record item-record {
+    name: string,
+    quantity: s64,
+    enabled: bool,
+  }
+
+  resource item {
+    snapshot: func() -> item-record;
+  }
+
+  // Prebound on purpose: how a guest discovers image identity is a separate decision, so
+  // v0 takes no locator argument.
+  open-item: func() -> item;
+}
+
+world image-reader {
+  import image-objects;
+
+  export read-once: func() -> string;
+  export read-twice: func() -> string;
+  export two-handles: func() -> string;
+  export drop-then-use-other: func() -> string;
+  export trap-after-read: func() -> string;
+}

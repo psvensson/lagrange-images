@@ -53,12 +53,14 @@ class ComponentHostImportRegistry {
   // Builds the import implementation for one interface. `require` is the only authority-facing
   // thing that crosses, and it is handed in per execution rather than held by the registry,
   // so an implementation cannot outlive or cache the authority of the call that created it.
-  create(specifier, {require}) {
+  async create(specifier, {require}) {
     const id = normalizeHostImportSpecifier(specifier);
     const provider = this.providers.get(id);
     if (!provider) throw new HostImportUnavailableError(id);
     if (typeof require !== 'function') throw new TypeError('host import providers require a require(demand) function');
-    const implementation = provider({require});
+    // Awaited so a provider may resolve its own configuration; `require` is still the only
+    // authority-facing thing that crosses.
+    const implementation = await provider({require});
     if (!implementation || typeof implementation !== 'object') {
       throw new TypeError(`host import provider for ${id} must return an object of functions`);
     }
