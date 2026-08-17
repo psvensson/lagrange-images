@@ -124,7 +124,12 @@ function normalizeEffectSites(value, sendSites, closureSites) {
 
     const site = effect.kind === 'send' ? sendSites[siteIndex] : closureSites[siteIndex];
     if (!site) throw new TypeError(`resumable WASM effect site ${effectIndex} references a missing ${effect.kind} site`);
-    const expectedRequestArity = effect.kind === 'send' ? 1 + site.arity : site.captures.length;
+    // Snapshot captures only. A cell capture occupies no handle position, so counting every
+    // semantic capture here would demand a handle the compiler never emits — and a closure with
+    // one cell capture and no snapshots would fail validation with an off-by-one.
+    const expectedRequestArity = effect.kind === 'send'
+      ? 1 + site.arity
+      : site.captures.filter(({mode}) => mode === 'snapshot').length;
     const requestArity = requireNonNegativeInteger(effect.requestArity, `resumable WASM effect site ${effectIndex} requestArity`);
     if (requestArity !== expectedRequestArity) {
       throw new TypeError(`resumable WASM effect site ${effectIndex} request arity does not match its ${effect.kind} site`);

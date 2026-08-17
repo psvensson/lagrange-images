@@ -14,7 +14,8 @@ import {
   compileWasmModule,
   compileWasmModuleEntries,
 } from './compiler.js';
-import {assertWasmSupportedSemanticRepresentation} from './mutable-lexical-support.js';
+import {LAGRANGE_CODE_V1} from '../code/lagrange-code-v1.js';
+import {installWasmV1BlockTree} from './tree-installer-v1.js';
 import {
   compileResumableWasmModule,
   compileResumableWasmModuleEntries,
@@ -254,10 +255,15 @@ async function installWasmBlockTree({
   const rootMetadata = normalizeMetadata(metadata, 'WASM Block tree metadata');
   const rootRef = normalizeObjectRef(semanticRef, 'root semantic code artifact');
   const semanticArtifact = await images.getCodeArtifact(rootRef.imageId, rootRef.objectId);
-  // Before anything is written, so a refused program installs nothing.
-  if (semanticArtifact) assertWasmSupportedSemanticRepresentation(semanticArtifact.representation);
-  if (!semanticArtifact || semanticArtifact.representation !== LAGRANGE_CODE_V0) {
-    throw new TypeError(`root semantic code artifact must be ${LAGRANGE_CODE_V0}`);
+  if (!semanticArtifact) throw new TypeError(`root semantic code artifact must be ${LAGRANGE_CODE_V0}`);
+  // Dispatch on the root representation, before anything is written. The v1 path is a sibling
+  // implementation rather than a widening of this one: that decision was already made when the
+  // semantic artifact was created, so there is no second "does this need mutable state?" analysis.
+  if (semanticArtifact.representation === LAGRANGE_CODE_V1) {
+    return await installWasmV1BlockTree({images, compilation, semanticRef, id, environment, metadata});
+  }
+  if (semanticArtifact.representation !== LAGRANGE_CODE_V0) {
+    throw new TypeError(`root semantic code artifact must be ${LAGRANGE_CODE_V0} or ${LAGRANGE_CODE_V1}`);
   }
 
   const program = validateTree(parseLagrangeCodeProgram(semanticArtifact));

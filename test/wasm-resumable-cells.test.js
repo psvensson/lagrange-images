@@ -9,6 +9,7 @@ import {
   objectRef,
   textValue,
 } from '../src/runtime.js';
+import {NEUTRAL_EXPRESSION_V1} from '../src/execution/executor.js';
 import {compileResumableWasmV2Module} from '../src/wasm/resumable-compiler-v2.js';
 
 const ABI = 'lagrange-value-handle-resumable/v2';
@@ -16,7 +17,20 @@ const ABI = 'lagrange-value-handle-resumable/v2';
 // The proofs that separate a live cell from a saved Value handle. Each program suspends on a host
 // effect in the middle of its body, so a resume segment runs afterwards; the question in every case
 // is whether lexical state crossed that boundary as a cell or as a snapshot.
-async function installResumableV1Block(runtime, imageId, {id, program, instanceReuse = null}) {
+// A neutral-expression/v1 prototype, because only v1 reads a binding through readBinding and can
+// therefore resolve a captured cell. A v0 prototype would reach the durable {cell: true} record and
+// correctly raise EscapingMutableClosureError instead.
+async function installNeutralPrototype(runtime, imageId, id, program) {
+  const code = await runtime.images.putCodeArtifact(imageId, {
+    id: `${id}:code`,
+    representation: NEUTRAL_EXPRESSION_V1,
+    content: textValue(JSON.stringify(program)),
+  });
+  const block = await runtime.images.putBlock(imageId, {id, code: objectRef(imageId, code.id)});
+  return objectRef(imageId, block.id);
+}
+
+async function installResumableV1Block(runtime, imageId, {id, program, instanceReuse = null, prototypes = []}) {
   const compiled = compileResumableWasmV2Module(program);
   const moduleArtifact = await runtime.images.putCodeArtifact(imageId, {
     id: `${id}:module`,
@@ -43,14 +57,18 @@ async function installResumableV1Block(runtime, imageId, {id, program, instanceR
     id: `${id}:function`,
     representation: WASM_FUNCTION_V1,
     content: moduleRef,
-    derivedFrom: [moduleRef, moduleRef],
+    derivedFrom: [moduleRef, moduleRef, ...prototypes],
     metadata: {
       abi: ABI,
       entry: 'run',
       parameters: compiled.parameterCount,
       captures: compiled.captureIds,
       cellBindings: compiled.cellBindings,
-      closurePrototypes: [],
+      closurePrototypes: compiled.closureSites.map((site, index) => ({
+        blockId: site.blockId,
+        siteIndex: index,
+        derivedFromIndex: 2 + index,
+      })),
     },
   });
   const block = await runtime.images.putBlock(imageId, {id, code: objectRef(imageId, functionArtifact.id)});
@@ -274,6 +292,86 @@ test('two activations of one resumable Block do not share a cell', async () => {
     const stats = runtime.executor.executors.get(WASM_FUNCTION_V1).instancePool.stats();
     assert.equal(stats.created, 1, 'the second activation must reuse the pooled instance');
   });
+});
+
+// Assigning a newly created Block makes Block creation non-tail, which forces the resumable
+// backend; capturing a cell exercises the mixed-mode closure path. The two together are what the
+// quartet above never reached, because none of those programs creates a Block.
+//
+//   | n f |  n := 1.  f := [ n ].  f value
+//
+// A closure site with one cell capture and no snapshots has an ABI request arity of 0, so an
+// executor counting every semantic capture demands one handle too many.
+test('a resumable closure capturing only a cell passes no handles', async () => {
+  await withRuntime(async (runtime) => {
+    const readCell = await installNeutralPrototype(runtime, 'resume', 'reader', {
+      parameters: 0,
+      temporaries: [],
+      body: {op: 'binding', id: 'root:temporary:0'},
+    });
+    const block = await installResumableV1Block(runtime, 'resume', {
+      id: 'cell-closure',
+      prototypes: [readCell],
+      program: {
+        parameters: [],
+        temporaries: [
+          {id: 'root:temporary:0', name: 'n'},
+          {id: 'root:temporary:1', name: 'f'},
+        ],
+        captures: [],
+        body: {
+          op: 'sequence',
+          statements: [
+            {op: 'binding-write', id: 'root:temporary:0', value: {op: 'literal', value: integerValue(1)}},
+            {
+              op: 'binding-write',
+              id: 'root:temporary:1',
+              value: {
+                op: 'block',
+                blockId: 'root/block:0',
+                captures: [{id: 'root:temporary:0', mode: 'cell', name: 'n'}],
+                program: {
+                  parameters: [],
+                  temporaries: [],
+                  captures: [{id: 'root:temporary:0', mode: 'cell', name: 'n'}],
+                  body: {op: 'binding', id: 'root:temporary:0'},
+                },
+              },
+            },
+            send({op: 'binding', id: 'root:temporary:1'}),
+          ],
+        },
+      },
+    });
+    assert.deepEqual(await run(runtime, block, []), integerValue(1));
+  });
+});
+
+test('a resumable closure site with one cell capture declares zero request handles', () => {
+  const compiled = compileResumableWasmV2Module({
+    parameters: [],
+    temporaries: [{id: 'root:temporary:0', name: 'n'}, {id: 'root:temporary:1', name: 'f'}],
+    captures: [],
+    body: {
+      op: 'sequence',
+      statements: [
+        {
+          op: 'binding-write',
+          id: 'root:temporary:1',
+          value: {
+            op: 'block',
+            blockId: 'root/block:0',
+            captures: [{id: 'root:temporary:0', mode: 'cell', name: 'n'}],
+            program: {parameters: [], temporaries: [], captures: [], body: {op: 'literal', value: integerValue(0)}},
+          },
+        },
+        {op: 'binding', id: 'root:temporary:1'},
+      ],
+    },
+  });
+  const closureEffect = compiled.effectSites.find(({kind}) => kind === 'closure');
+  assert.equal(closureEffect.requestArity, 0, 'a cell-only closure passes no Value handles');
+  assert.equal(compiled.closureSites[0].captures.length, 1, 'the semantic capture is still recorded');
 });
 
 test('the resumable v2 executor refuses to run without the synchronous cell operations', async () => {
