@@ -82,6 +82,8 @@ move in. Never move it the other way to make a claim easier to write.
 
 - [0038 — capability-aware Component host imports](0038-capability-aware-component-host-imports.md): `wasm-component-binding/v2` declares which host interfaces may be wired, while every concrete host operation is authorized at use time, so nothing is precomputed and revocation stays live.
 
+- [0039 — authorized object projection](0039-authorized-object-projection.md): make the image a third implementation lane so a projected object crosses as an ordinary composite argument, authorized per object at use time, with the ref never crossing.
+
 ## Reading rule
 
 The current model is summarized in [../architecture.md](../architecture.md) and [../language-platform.md](../language-platform.md). ADRs explain why the model reached that shape and may describe limitations that later ADRs have since extended.
