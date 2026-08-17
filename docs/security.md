@@ -14,7 +14,7 @@ Cluster/service configuration belongs outside images:
 - placement and resource policy
 - secrets used to reach external systems
 
-Images may contain *references* to named resources or capabilities, but not the master credentials that mint them.
+Images may contain *references* to named resources, and capability requirements or policies, but never live authority contexts or grants, and never the master credentials that mint them. Per ADR 0037 an authority context is transient execution state that has no durable representation at all, so a durable "capability" in the graph is a statement about what would be required, never a thing that permits anything.
 
 ## Principals
 

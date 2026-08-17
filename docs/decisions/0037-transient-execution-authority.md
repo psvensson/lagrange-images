@@ -67,21 +67,31 @@ One existing detail reinforces this for free: `execute` ends with `canonicalizeV
 so an execution's result is always a Value. Authority cannot leak back out as a return value
 because there is no Value kind it could inhabit.
 
-### 2. Executors receive an authorization question, not the authority
+### 2. Executors receive a check, not the authority and not a grant
 
 Executors are already handed a per-execution context containing `images`, `lookupBinding`,
 `createClosure` and `sendMessage`. Authority is *not* added to that object.
 
-Instead the context gains a narrow function:
+Instead the context gains one narrow function, closed over the current authority:
 
 ```text
-authorize(demand) -> grant     resolves, or throws
+require(demand) -> void        returns normally, or throws
 ```
 
-closed over the current authority. An executor can ask whether something is permitted; it
-cannot read, store or forward the authority itself. That containment is deliberate: handing an
-executor the authority object would make every executor a potential leak site, and the only
-way to be sure none of them stash it is to never give it to them.
+It is deliberately check-only. An earlier draft had it return a grant, which would have
+created a second representation of authority that could be stored, passed on or outlived the
+check that produced it — the precise thing this ADR exists to prevent. There is nothing to
+stash: the only observable outcome is whether the call threw.
+
+A host import therefore closes over `require`, and each invocation looks like:
+
+```text
+require({operation, resource})     throws if not permitted
+perform the host operation
+```
+
+The executor receives neither the authority nor a reusable authorization token, so no
+executor is a leak site and no intermediate object needs its own lifetime rules.
 
 ### 3. `principal != capability`
 
@@ -93,8 +103,14 @@ capability  = what this execution is allowed to do
 Authorization asks the authority layer. Code that branches on `principal === 'alice'` is
 wrong even when it produces the right answer, because it re-derives rights from identity.
 
-A principal may be readable for audit and diagnostics. Reading it must never be the
-mechanism by which anything is permitted.
+A principal is available to host-side audit and diagnostic infrastructure. It is **not**
+placed in the executor context, and not reachable by a foreign guest.
+
+That is a deliberate second line of defence rather than an inconvenience. If executors could
+read the principal, `principal != capability` would degrade into "every executor can still
+inspect the principal and branch on it", which is the same mistake with extra steps. If some
+guest later genuinely needs caller identity as *information*, that should be an explicitly
+declared host interface subject to the same intersection rule as any other import.
 
 This matches the direction `docs/security.md` already sets: authentication may eventually come
 from OIDC/SSO, while the image runtime sees normalized principals and capabilities.
@@ -119,13 +135,43 @@ interpreted.
 issue({principal, grants})        -> AuthorityContext
 attenuate(context, {grants})      -> AuthorityContext, grants strictly narrowed
 revoke(context)                   -> context and its descendants stop authorizing
-require(context, demand)          -> grant, or throws
+require(context, demand)          -> void, or throws
 ```
 
 `attenuate` can only narrow. There is no operation that widens a context, so escalation is
 impossible by construction rather than by check.
 
-### 6. Absence of authority means no capabilities
+The service is split by trust rather than merely by convention, because whoever may call
+`issue` is by definition an authority root:
+
+```text
+issue / revoke / root grant configuration   trusted host and control-plane API
+require                                     execution-time API
+image code, executors, foreign guests       receive neither the issuer nor a context
+```
+
+The `AuthorityService` itself is never placed in an executor context. Only the closure around
+`require`, and the attenuation machinery that `ActivationExecutor` uses internally, cross that
+seam.
+
+### 6. The v0 grant algebra is deliberately boring
+
+"Attenuate can only narrow" is not implementable without saying what narrower means, so v0
+fixes it at the dullest possible answer: exact-match grants.
+
+```json
+{"operation": "host-value/read", "resource": "public-message"}
+```
+
+`require` matches a demand against granted pairs exactly. `attenuate` selects a subset of
+grants already present in the parent context.
+
+No wildcards, no `*`, no inheritance, no resource trees, no deny rules and no precedence
+order. Every one of those is a place where "narrower" becomes arguable, and none is needed
+until object and project capabilities create real pressure. A richer algebra is a later
+decision that can be made against actual requirements rather than anticipated ones.
+
+### 7. Absence of authority means no capabilities
 
 An execution with no authority context has no host capabilities. It is not an error: every
 lane built so far needs none, so pure Components, scalar WASM, the neutral executor and the
@@ -134,7 +180,7 @@ existing Cuis operations all keep working untouched.
 Anything that requires a capability fails closed. The default is *no rights*, never *all
 rights*, and never *rights inherited from ambient process state*.
 
-### 7. Nested sends inherit, or are explicitly attenuated
+### 8. Nested sends inherit, or are explicitly attenuated
 
 Nested execution already recurses through one seam:
 
@@ -143,10 +189,24 @@ return await this.execute(nested, {depth: depth + 1});
 ```
 
 Authority propagates through that same call. A nested send inherits the current context by
-default; an executor may instead request an attenuated child context. Because `attenuate` only
-narrows, a nested send can lose rights and can never gain them.
+default.
 
-### 8. Guest authority is the intersection of declared imports and caller grants
+An executor that wants a narrower child does not receive one. It states the request, and
+`ActivationExecutor` performs the attenuation itself:
+
+```text
+sendMessage(request, {attenuate: requestedGrants})
+```
+
+`ActivationExecutor` calls `AuthorityService.attenuate(currentContext, ...)` and recursively
+executes under the resulting child. The executor sees only its own request; the child context
+never crosses back out to it. This keeps decision 2 intact — no executor ever holds a context —
+while still making attenuation expressible, and it needs no new seam because the recursive
+send path already exists.
+
+Because `attenuate` only narrows, a nested send can lose rights and can never gain them.
+
+### 9. Guest authority is the intersection of declared imports and caller grants
 
 ```text
 what the implementation declares it may import
@@ -182,7 +242,7 @@ caller authority != ambient guest authority
 
 WASI stays out unless deliberately declared and granted.
 
-### 9. `wasm-component-binding/v2` declares permitted host imports; v1 stays frozen
+### 10. `wasm-component-binding/v2` declares permitted host imports; v1 stays frozen
 
 `wasm-component-binding/v1` has exactly two dependencies — interface and implementation — and
 no host authority surface at all. Adding declared imports to it would let two runtimes read
@@ -192,7 +252,7 @@ one durable representation differently, which is the same argument that produced
 So a new representation declares the host-import interfaces its implementation legitimately
 expects. Declaring is not granting.
 
-### 10. Authority never becomes program data
+### 11. Authority never becomes program data
 
 Stated as the enforceable list, because this is what tests should pin:
 
@@ -202,29 +262,73 @@ Stated as the enforceable list, because this is what tests should pin:
 - none participates in Block identity or any derivation/cache key
 - the graph walker never encounters one, because there is nothing for it to encounter
 
-## The foreign-runtime lane needs a different answer, and this ADR does not have it
+### 12. Authority belongs to the call, never to the runtime instance
 
-Worth stating now rather than discovering during implementation.
+ADR 0036 removed cross-activation contamination for Components by instantiating fresh every
+time. That answer cannot transfer to a long-lived foreign runtime: a Cuis image is
+deliberately shared across activations, and starting a VM per activation would defeat the
+whole foreign-runtime substrate.
 
-ADR 0036 solved cross-activation contamination for Components by instantiating fresh every
-time. That answer does not transfer. A Cuis runtime is deliberately long-lived and shared
-across activations — starting a VM per activation would defeat the entire foreign-runtime
-substrate — so a single live image would span multiple authorities:
+The resolution is one level above the transport, and it is decided here rather than left as
+three plausible futures:
 
 ```text
-activation A (Alice) ---.
-                         >--- one long-lived Cuis image
-activation B (Bob) -----'
+long-lived foreign runtime instance
+    MAY serve calls from many authorities
+
+authority
+    belongs to the individual active call
+    NEVER to the runtime instance
+
+foreign host operation
+    must resolve against that call's execution context
+
+no active call, or no context
+    => no host authority
 ```
 
-Nothing is broken today: the bridge has a closed operation whitelist and no host surface, so
-there is no authority for the image to retain. But capability-aware imports on that lane need
-their own decision, and the plausible shapes differ — threading per-call authority through the
-bridge protocol, or partitioning runtimes by authority, or declaring that this lane simply
-never receives host capabilities.
+This is the ordinary shape of a server process handling requests from Alice and Bob. The
+process is not Alice-authorized or Bob-authorized; each request is. Runtime partitioning by
+authority remains available as an isolation or deployment policy, but it must not become the
+semantic capability model — and declaring that foreign runtimes simply never receive
+capabilities would be needlessly restrictive.
 
-This ADR deliberately does not choose. It records that the Component answer must not be
-assumed to generalize.
+Stated as the two invariants that generalize:
+
+```text
+authority lifetime    == invocation lifetime
+authority ownership   != runtime instance ownership
+```
+
+Those hold for Components, for Cuis, and for a future JVM or remote runtime. *How* a runtime
+makes host calls is lane-specific. *Whose* authority it uses is not.
+
+The Cuis transport remains deferred. A likely shape is request-scoped host-call frames:
+
+```text
+CALL 42 ...
+    Cuis -> HOST_CALL 42 read-value public-message
+    host -> require against call 42's context
+    host -> HOST_OK 42 ...
+```
+
+When `CALL 42` completes, authority 42 ceases to exist. A delayed or background host request
+therefore has no active context and fails closed, which is the same reason async callbacks are
+ordered after this ADR rather than before it.
+
+### 13. Authority-bearing handles need explicit scope, unlike ordinary foreign data
+
+A corollary of decision 12, recorded now because it constrains WIT `resource` later:
+
+```text
+foreign-runtime instance      long-lived
+ordinary foreign data         may survive per that runtime's own semantics
+authority-bearing handle      must carry explicit scope and lifetime
+                              must never silently become runtime-global
+```
+
+A handle that outlives the invocation whose authority created it would reintroduce exactly the
+contamination decision 12 forbids, through a different door.
 
 ## First proof: a narrowly scoped named host resource
 
@@ -272,7 +376,8 @@ provenance and lifetime. A `ref` still never crosses.
 
 ## What is deferred
 
-- the foreign-runtime lane's capability model, per the section above
+- the foreign-runtime lane's host-call *transport*. Its capability semantics are decided in
+  decision 12; only the wire mechanism is open
 - WIT `resource`. It is not a cheap extra composite type: it is identity, ownership, lifetime
   and, here, authority. It belongs with this work, not with the `interface-composite/v0` codec
 - revocation propagation, expiry and cancellation semantics
@@ -287,26 +392,45 @@ The substrate gains authority without the Value model gaining anything. Authorit
 unrepresentable in the durable graph, so the question "could a capability be persisted by
 accident?" has a structural answer rather than a review-discipline answer.
 
+The foreign-runtime lane is decided at the level that generalizes — authority belongs to the
+call, not the instance — while its wire mechanism stays open. That is the right split: the
+semantic rule is what other lanes will have to obey, and it would have been expensive to
+discover it was wrong after building one transport around it.
+
 The risk this ADR accepts is that authority becomes invisible in a different way: a context
 threaded through `execute` is easy to forget to pass, and forgetting fails closed, which is
 safe but can look like a bug. That is the correct direction for the failure to point, and the
 first proof's case 1 pins it deliberately.
+
+The v0 grant algebra will look inadequate the first time a real object capability appears. That
+is intended. Exact-match pairs are the only algebra where "narrower" needs no argument, and
+replacing them later against real requirements is cheaper than defending an anticipated
+hierarchy that turns out to model the wrong thing.
 
 ## Guardrails
 
 ```text
 authority is execution context, not program data
 principal != capability
+principal is not in the executor context
+require is check-only; there is no grant object to stash
 authority context != plain data
 issued context != forgeable object
+issue is a control-plane API; require is an execution-time API
+AuthorityService is never in an executor context
 attenuate narrows only; nothing widens
+attenuation request != child context handed to an executor
+v0 grants are exact-match pairs; no wildcards, trees or deny rules
 absent authority == no capabilities, never all
 declared import != authority
 caller authority != ambient guest authority
 guest authority == declared ∩ granted, checked per concrete resource
 wasm-component-binding/v1 frozen; declared imports are v2
 authority != Value, slot, capture, envelope, metadata or derivation key
-Component per-activation isolation != a foreign-runtime capability model
+authority lifetime == invocation lifetime
+authority ownership != runtime instance ownership
+runtime partitioning == deployment policy, not the capability model
+authority-bearing handle != ordinary foreign data
 WIT resource != another composite type
 callbacks come after authority, not before
 ```

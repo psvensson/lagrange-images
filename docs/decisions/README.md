@@ -78,7 +78,7 @@ move in. Never move it the other way to make a claim easier to write.
 
 - [0036 — foreign Component instance lifetime](0036-foreign-component-instance-lifetime.md): cache transpilation/compilation by artifact identity but instantiate a Component fresh per activation, so guest state and later host authority cannot cross activations.
 
-- [0037 — transient execution authority](0037-transient-execution-authority.md): authority travels beside an activation as execution context rather than inside it; principal is not capability, declared imports are not grants, and guest authority is the intersection of the two.
+- [0037 — transient execution authority](0037-transient-execution-authority.md): authority travels beside an activation as execution context rather than inside it, executors get a check-only `require` rather than a grant, guest authority is the intersection of declared imports and caller grants, and authority belongs to the individual call rather than to a long-lived runtime instance.
 
 ## Reading rule
 
