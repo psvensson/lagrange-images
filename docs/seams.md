@@ -24,6 +24,7 @@ artifact's `representation`.
 | `foreign-runtime-binding/v1` | `installForeignRuntimeBinding()` | `createForeignRuntimeBindingV1Executor()` |
 | `image-projection-binding/v1` | `installImageProjectionBinding()` | `createImageProjectionBindingV1Executor()` |
 | `image-mutation-binding/v1` | `installImageMutationBinding()` | `createImageMutationBindingV1Executor()` |
+| `image-versioned-projection-binding/v1` | `installImageVersionedProjectionBinding()` | `createImageVersionedProjectionBindingV1Executor()` |
 
 The foreign-runtime executors are registered only when `createRuntime()` receives foreign
 runtime definitions, runtimes and definition bindings together. The Component binding

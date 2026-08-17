@@ -1,7 +1,7 @@
 # ADR 0042: authorized object mutation
 
 Status: implemented — `object/write` as a fourth implementation lane, with an object-scoped opaque version token and conflicts translated rather than propagated.
-Proven by: test/image-mutation.test.js
+Proven by: test/image-mutation.test.js, test/versioned-projection.test.js
 
 ## Problem
 
@@ -143,11 +143,18 @@ mutation safe. `VersionConflictError` already behaves this way; this ADR commits
 surfacing it.
 
 **On acquiring the first token.** A successful mutation returns the next token, so subsequent
-mutations chain without a separate lookup. How a caller obtains its *initial* token is a separate
-concern: an ADR 0039 projection returns the projected record and no version, so there is
-presently no foreign-facing way to read one. A future version-aware projection —
-`read-versioned-item(id) -> {version-token, value}` — could provide it without contaminating
-ordinary projection semantics. This ADR does not add one.
+mutations chain without a separate lookup. The *initial* token comes from a sibling
+representation, `image-versioned-projection-binding/v1`:
+
+```text
+read-versioned-item(id) -> {version-token, value}
+```
+
+It uses exactly the object-scoped codec this lane accepts — no second encoding and no
+projection-specific token identity — and takes both halves from one authorized object read, so
+the token always describes the state the value was taken from. Ordinary
+`image-projection-binding/v1` stays frozen and version-free: only interfaces that need a token
+pay for one.
 
 ### 6. State and history mutate atomically, and nothing else does
 
@@ -257,7 +264,6 @@ and a wrong-object or malformed token fails without reading or writing anything.
 - object creation and deletion, as separate authorities
 - shape-changing and behavior-changing writes
 - whole-object writes that supply every slot, needing no read-for-write at all
-- a version-aware projection for acquiring an initial token
 - mutation through a resource handle, which needs an explicit authorized commit operation
 - writing graph edges, which requires `ref` in the callable type language and a decision about
   how narrow authority may not become broad reach

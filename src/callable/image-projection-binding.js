@@ -223,6 +223,7 @@ export {
   IMAGE_PROJECTION_BINDING_V1,
   assertFieldMappingCovers,
   assertProjectionInterface,
+  normalizeProjectionFields,
   projectObjectSlots,
   createImageProjectionBindingV1Executor,
   installImageProjectionBinding,

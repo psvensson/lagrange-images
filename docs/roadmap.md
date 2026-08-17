@@ -82,7 +82,7 @@ The scalar callable proofs have now done their job. The next interface work shou
 - [x] WIT `resource` handles for continuing image access (prebound, activation-scoped)
 - [x] inter-activation survival constraint (ADR 0041): survival is explicit, host-owned and carries no authority
 - [x] authorized object mutation (`object/write`, object-scoped opaque version token)
-- [ ] version-aware projection, to close the optimistic read/modify/write loop
+- [x] version-aware projection, closing the optimistic read/modify/write loop
 - [ ] per-call resource reads once async-capable host imports work; ADR 0040's preloaded record is a tooling limit, not the intended contract and not persistence
 - [ ] async foreign callbacks/effects only through explicit contracts (a future ADR 0041 specialization; the delegated-authority question is open)
 - [x] Component instance lifetime settled: fresh per activation, compilation cached separately
