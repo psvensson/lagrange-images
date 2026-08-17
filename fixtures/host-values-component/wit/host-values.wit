@@ -1,0 +1,14 @@
+package lagrange:proof@0.1.0;
+
+// The first capability-bearing host interface. Nothing here says anything about authority:
+// a WIT import is a static requirement of instantiation, and whether a concrete call is
+// permitted is decided at use time by the host adapter.
+interface host-values {
+  read-value: func(name: string) -> string;
+}
+
+world host-reader {
+  import host-values;
+
+  export read-host-value: func(name: string) -> string;
+}

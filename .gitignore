@@ -149,3 +149,4 @@ UserChanges/
 
 # Rust build output for the committed WASM Component fixture
 fixtures/normalize-component/target/
+fixtures/host-values-component/target/

@@ -77,7 +77,7 @@ The scalar callable proofs have now done their job. The next interface work shou
 - [x] map the same interface shape to at least two implementation lanes
 - [x] bytes and float64 fidelity through both lanes
 - [x] transient authority/principal/capability substrate (`require` seam, attenuation, exact-match v0 grants)
-- [ ] capability-aware imported host functions (`wasm-component-binding/v2`)
+- [x] capability-aware imported host functions (`wasm-component-binding/v2`)
 - [ ] authorized object projection, then WIT `resource` handles
 - [ ] async foreign callbacks/effects only through explicit contracts (after authority, deliberately)
 - [x] Component instance lifetime settled: fresh per activation, compilation cached separately
