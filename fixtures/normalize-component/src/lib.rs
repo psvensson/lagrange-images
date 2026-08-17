@@ -57,6 +57,12 @@ impl Guest for Component {
         }
     }
 
+    /// relabel over a list, so a list whose elements are records is exercised in both
+    /// directions through the same recursion the codec uses.
+    fn relabel_all(items: Vec<Item>) -> Vec<Item> {
+        items.into_iter().map(Self::relabel).collect()
+    }
+
     /// Builds a record from scalars, so a record result is proven independently of a
     /// record argument.
     fn make_item(name: String, quantity: i64) -> Item {

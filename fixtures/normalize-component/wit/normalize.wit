@@ -34,4 +34,8 @@ world normalize {
 
   // scalars in, record out: proves a record result independent of a record argument
   export make-item: func(name: string, quantity: s64) -> item;
+
+  // list of record: the first composite whose element type is itself a composite, so the
+  // codec has to recurse rather than special-case
+  export relabel-all: func(items: list<item>) -> list<item>;
 }

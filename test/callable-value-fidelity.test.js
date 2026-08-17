@@ -230,3 +230,39 @@ test('named records survive the Component lane in both directions', async () => 
     await make.runtime.close();
   }
 });
+
+// The first composite whose element type is itself a composite: the codec has to recurse
+// rather than special-case, on both sides.
+test('list<item> composes a list and a record through the Component lane', async () => {
+  const spec = (text) => text.toLowerCase().replace(/[\t\n\v\f\r ]+/g, ' ').trim();
+  const type = {kind: 'list', element: 'item'};
+  const {runtime, call} = await componentLane({
+    functionName: 'relabel-all', parameters: [type], result: type, id: 'relabel-all', types: ITEM_TYPES,
+  });
+  try {
+    const cases = [
+      [],
+      [{name: '  A  b ', quantity: 1n, enabled: true}],
+      [
+        {name: '', quantity: 9223372036854775807n, enabled: false},
+        {name: '世界 \u{1f600}', quantity: -9223372036854775808n, enabled: true},
+      ],
+      Array.from({length: 300}, (_, i) => ({
+        name: `  Item ${i}  `, quantity: BigInt(i) - 150n, enabled: i % 2 === 0,
+      })),
+    ];
+    for (const input of cases) {
+      const packed = await call([packCompositeValue(input, type, ITEM_TYPES)]);
+      assert.equal(packed.kind, 'bytes');
+      assert.deepEqual(unpackCompositeValue(packed, type, ITEM_TYPES),
+        input.map((item) => ({name: spec(item.name), quantity: item.quantity, enabled: !item.enabled})),
+        `relabel-all disagreed for ${input.length} items`);
+    }
+
+    // A list<item> envelope is not an item envelope, even though item is its element type.
+    await assert.rejects(call([packCompositeValue({name: 'x', quantity: 0n, enabled: true}, 'item', ITEM_TYPES)]),
+      /encoded against a different interface type/);
+  } finally {
+    await runtime.close();
+  }
+});
