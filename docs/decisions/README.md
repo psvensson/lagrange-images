@@ -80,6 +80,8 @@ move in. Never move it the other way to make a claim easier to write.
 
 - [0037 — transient execution authority](0037-transient-execution-authority.md): authority travels beside an activation as execution context rather than inside it, executors get a check-only `require` rather than a grant, guest authority is the intersection of declared imports and caller grants, and authority belongs to the individual call rather than to a long-lived runtime instance.
 
+- [0038 — capability-aware Component host imports](0038-capability-aware-component-host-imports.md): `wasm-component-binding/v2` declares which host interfaces may be wired, while every concrete host operation is authorized at use time, so nothing is precomputed and revocation stays live.
+
 ## Reading rule
 
 The current model is summarized in [../architecture.md](../architecture.md) and [../language-platform.md](../language-platform.md). ADRs explain why the model reached that shape and may describe limitations that later ADRs have since extended.

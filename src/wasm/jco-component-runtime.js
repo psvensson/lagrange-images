@@ -54,7 +54,7 @@ function componentExport(instance, functionName) {
 // activation state, so caching it is safe in exactly the way caching an instance is not.
 async function prepareComponent(component) {
   const {transpile} = await loadJco();
-  const {files} = await transpile(componentBytes(component), {...TRANSPILE_OPTIONS, name: 'component'});
+  const {files, imports} = await transpile(componentBytes(component), {...TRANSPILE_OPTIONS, name: 'component'});
 
   const cores = new Map();
   let entry = null;
@@ -68,7 +68,13 @@ async function prepareComponent(component) {
   // Imported from memory rather than written to disk: an image-resident Component should
   // not have to touch the filesystem to run.
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(entry, 'utf8').toString('base64')}`;
-  return Object.freeze({generated: await import(moduleUrl), cores});
+  return Object.freeze({
+    generated: await import(moduleUrl),
+    cores,
+    // The import specifiers this Component requires in order to instantiate at all. Purely a
+    // linking fact; this runtime knows nothing about whether any of them is permitted.
+    requiredImports: Object.freeze([...(imports ?? [])]),
+  });
 }
 
 function createJcoComponentRuntime({moduleCache = true} = {}) {
@@ -91,21 +97,32 @@ function createJcoComponentRuntime({moduleCache = true} = {}) {
   }
 
   return Object.freeze({
-    async invoke(component, functionName, args) {
+    // What this Component must be given to instantiate. The binding executor uses it to
+    // decide policy; deciding policy is not this layer's job.
+    async requiredImports(component) {
       if (!component || component.kind !== 'code-artifact') {
         throw new TypeError('jco Component runtime requires a code-artifact Component');
       }
+      return (await preparedComponent(component)).requiredImports;
+    },
+
+    async invoke(component, functionName, args, imports = {}) {
+      if (!component || component.kind !== 'code-artifact') {
+        throw new TypeError('jco Component runtime requires a code-artifact Component');
+      }
+      if (!imports || typeof imports !== 'object') throw new TypeError('Component imports must be an object');
       const {generated, cores} = await preparedComponent(component);
 
-      // Fresh instance per activation. The empty import object is also the seam where
-      // capability-aware host imports will eventually attach; today it grants nothing.
+      // Fresh instance per activation, per ADR 0036, now with whatever host implementations
+      // the binding executor assembled. This runtime is deliberately authority-agnostic: it
+      // sees import functions, never grants, contexts or principals.
       const instance = await generated.instantiate(
         async (path) => {
           const module = cores.get(path);
           if (!module) throw new TypeError(`jco requested an unknown core module: ${path}`);
           return module;
         },
-        {},
+        imports,
       );
 
       const exported = componentExport(instance, functionName);

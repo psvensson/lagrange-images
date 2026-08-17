@@ -223,6 +223,15 @@ pooled instance != activation state
 - v0 grants are exact-match `{operation, resource}` pairs. Do not add wildcards, inheritance, resource trees or deny rules without a new decision.
 - Authority belongs to the individual call, never to a long-lived runtime instance. A shared foreign runtime may serve many authorities; a host operation resolves against the active call's context, and no active context means no host authority.
 
+### Component host imports
+
+- A binding declaration decides which host interfaces are *wired*; it never decides authorization (ADR 0038). `undeclared != unauthorized`.
+- An undeclared required import is a linking failure at instantiation. A declared import is present even when the caller holds no grants, and each concrete operation calls `require(demand)` at use time.
+- Never precompute `declared ∩ granted` or enumerate grants. Precomputing would snapshot authority at instantiation and silently defeat revocation.
+- A `wasm-component-binding/v2` declaration carries interface names only: no principal, grants, resources, secrets, service objects or authority contexts.
+- The host-import registry is runtime-local and never part of artifact identity. Providers receive only `require`.
+- Keep the jco adapter authority-agnostic: it reports required imports and instantiates with what it is handed.
+
 ## Architecture
 
 ```text

@@ -6,6 +6,7 @@ import {WASM_CALLABLE_INTERFACE_V1} from '../wasm/foreign-artifacts.js';
 import {createWasmCallableInterfaceV1Executor} from '../wasm/foreign-callable-executor.js';
 import {
   WASM_COMPONENT_BINDING_V1,
+  WASM_COMPONENT_BINDING_V2,
   createWasmComponentBindingV1Executor,
 } from '../callable/wasm-component-binding.js';
 import {
@@ -28,6 +29,7 @@ function createDefaultCodeExecutorRegistry({
   foreignRuntimeDefinitionBindings,
   foreignRuntimeInstanceCache,
   componentRuntime,
+  componentHostImports,
 } = {}) {
   const registry = new CodeExecutorRegistry();
   registry.register(NEUTRAL_EXPRESSION_V0, neutralExpressionV0Executor);
@@ -38,9 +40,12 @@ function createDefaultCodeExecutorRegistry({
   const foreignOptions = {};
   if (foreignWasmModuleCache !== undefined) foreignOptions.moduleCache = foreignWasmModuleCache;
   registry.register(WASM_CALLABLE_INTERFACE_V1, createWasmCallableInterfaceV1Executor(foreignOptions));
-  registry.register(WASM_COMPONENT_BINDING_V1, createWasmComponentBindingV1Executor({
+  const componentBindingExecutor = createWasmComponentBindingV1Executor({
     componentRuntime: componentRuntime ?? null,
-  }));
+    hostImports: componentHostImports ?? null,
+  });
+  registry.register(WASM_COMPONENT_BINDING_V1, componentBindingExecutor);
+  registry.register(WASM_COMPONENT_BINDING_V2, componentBindingExecutor);
 
   const foreignRuntimeConfigured = [
     foreignRuntimeDefinitions,

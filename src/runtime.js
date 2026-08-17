@@ -7,6 +7,7 @@ import {
 import {DispatchRegistry, InvocationService} from './dispatch/invocation-service.js';
 import {ActivationExecutor, createDefaultCodeExecutorRegistry} from './execution/executor.js';
 import {createAuthorityService} from './authority/index.js';
+import {ComponentHostImportRegistry} from './callable/host-import-registry.js';
 import {
   ForeignRuntimeDefinitionBindingRegistry,
   ForeignRuntimeDefinitionInstanceCache,
@@ -85,6 +86,12 @@ async function createRuntime(options = {}) {
   }
   const invocations = new InvocationService({images, dispatchers});
 
+  // Runtime-local: the durable binding says which host interfaces a program may import;
+  // this says which implementation satisfies them in this deployment.
+  const componentHostImports = options.componentHostImports instanceof ComponentHostImportRegistry
+    ? options.componentHostImports
+    : new ComponentHostImportRegistry(Object.entries(options.componentHostImports ?? {}));
+
   const codeExecutors = createDefaultCodeExecutorRegistry({
     wasmModuleCache: options.wasmModuleCache,
     wasmInstancePool: options.wasmInstancePool,
@@ -94,6 +101,7 @@ async function createRuntime(options = {}) {
     foreignRuntimeDefinitionBindings,
     foreignRuntimeInstanceCache,
     componentRuntime: options.componentRuntime,
+    componentHostImports,
   });
   for (const [representation, executor] of Object.entries(options.codeExecutors ?? {})) {
     codeExecutors.register(representation, executor);
@@ -120,6 +128,7 @@ async function createRuntime(options = {}) {
     dispatchers,
     invocations,
     codeExecutors,
+    componentHostImports,
     authority,
     executor,
     async close() {

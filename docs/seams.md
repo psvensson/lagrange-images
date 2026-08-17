@@ -20,6 +20,7 @@ artifact's `representation`.
 | `wasm-callable-interface/v1` | `installWasmScalarCallable()` | `createWasmCallableInterfaceV1Executor()` |
 | `foreign-runtime-callable-interface/v1` | `installForeignRuntimeCallable()` | `createForeignRuntimeCallableInterfaceV1Executor()` |
 | `wasm-component-binding/v1` | `installWasmComponentBinding()` | `createWasmComponentBindingV1Executor()` |
+| `wasm-component-binding/v2` | `installWasmComponentBindingV2()` | same executor; adds declared host imports |
 | `foreign-runtime-binding/v1` | `installForeignRuntimeBinding()` | `createForeignRuntimeBindingV1Executor()` |
 
 The foreign-runtime executors are registered only when `createRuntime()` receives foreign

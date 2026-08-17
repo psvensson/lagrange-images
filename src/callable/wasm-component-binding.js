@@ -18,6 +18,11 @@ import {
   resolveCallableInterface,
 } from './binding-artifacts.js';
 import {assertImages} from './interface-artifacts.js';
+import {
+  ComponentHostImportRegistry,
+  UndeclaredHostImportError,
+  normalizeHostImportSpecifier,
+} from './host-import-registry.js';
 import {isCompositeType} from './type-grammar.js';
 import {packCompositeValue, unpackCompositeValue} from './composite-codec.js';
 import {assertCallableInterfaceArguments, assertCallableInterfaceValue} from './interface-v2-artifacts.js';
@@ -26,6 +31,14 @@ import {assertCallableInterfaceArguments, assertCallableInterfaceValue} from './
 // signature of its own: the shape comes from the interface it depends on, so the same
 // interface artifact can also be bound to a completely different lane.
 const WASM_COMPONENT_BINDING_V1 = 'wasm-component-binding/v1';
+// v2 adds one thing: a declaration of which host interfaces the implementation may import.
+// v1 is frozen and has no host authority surface at all, so a v1 binding can never wire one.
+// Declaring is not granting — see ADR 0038.
+const WASM_COMPONENT_BINDING_V2 = 'wasm-component-binding/v2';
+const WASM_COMPONENT_BINDING_REPRESENTATIONS = Object.freeze([
+  WASM_COMPONENT_BINDING_V1,
+  WASM_COMPONENT_BINDING_V2,
+]);
 const WASM_COMPONENT_IMPLEMENTATION_DEPENDENCY_ROLE = 'implementation';
 
 function assertWasmComponentArtifact(artifact) {
@@ -89,16 +102,54 @@ function fromComponentValue(raw, type) {
   }
 }
 
+function normalizeHostImports(values, label) {
+  if (values === undefined) return Object.freeze([]);
+  if (!Array.isArray(values)) throw new TypeError(`${label} hostImports must be an array`);
+  const seen = new Set();
+  for (const value of values) {
+    const specifier = normalizeHostImportSpecifier(value, `${label} host import`);
+    if (seen.has(specifier)) throw new TypeError(`${label} declares duplicate host import ${specifier}`);
+    seen.add(specifier);
+  }
+  return Object.freeze([...seen].sort());
+}
+
+// The declaration is the entire authority-relevant content of a binding, and it is
+// deliberately just a list of interface names: no principal, no grants, no resources, no
+// secrets and no runtime service. Anything else would put authority into the durable graph.
 function parseWasmComponentBindingArtifact(artifact) {
-  if (!artifact || artifact.kind !== 'code-artifact' || artifact.representation !== WASM_COMPONENT_BINDING_V1) {
-    throw new TypeError(`artifact must be ${WASM_COMPONENT_BINDING_V1}`);
+  const representation = artifact?.representation;
+  if (!artifact || artifact.kind !== 'code-artifact'
+    || !WASM_COMPONENT_BINDING_REPRESENTATIONS.includes(representation)) {
+    throw new TypeError(`artifact must be ${WASM_COMPONENT_BINDING_REPRESENTATIONS.join(' or ')}`);
   }
   assertBindingDependencies(
     artifact,
     [CALLABLE_INTERFACE_DEPENDENCY_ROLE, WASM_COMPONENT_IMPLEMENTATION_DEPENDENCY_ROLE],
-    WASM_COMPONENT_BINDING_V1,
+    representation,
   );
-  return artifact;
+  if (representation === WASM_COMPONENT_BINDING_V1) {
+    return Object.freeze({representation, hostImports: Object.freeze([])});
+  }
+  if (artifact.content?.kind !== 'text') throw new TypeError('WASM Component binding content must be a text Value');
+  let decoded;
+  try {
+    decoded = JSON.parse(artifact.content.value);
+  } catch (error) {
+    throw new TypeError('WASM Component binding content must be valid JSON', {cause: error});
+  }
+  const expected = ['abi', 'hostImports'];
+  const actual = Object.keys(decoded).sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw new TypeError(`${WASM_COMPONENT_BINDING_V2} descriptor must contain exactly ${expected.join(', ')}`);
+  }
+  if (decoded.abi !== WASM_COMPONENT_BINDING_V2) {
+    throw new TypeError(`unsupported WASM Component binding ABI: ${decoded.abi}`);
+  }
+  return Object.freeze({
+    representation,
+    hostImports: normalizeHostImports(decoded.hostImports, WASM_COMPONENT_BINDING_V2),
+  });
 }
 
 async function installWasmComponentBinding({
@@ -140,21 +191,87 @@ async function installWasmComponentBinding({
   return Object.freeze({bindingArtifact, block, interfaceRef});
 }
 
-function createWasmComponentBindingV1Executor({componentRuntime = null} = {}) {
+async function installWasmComponentBindingV2({
+  images,
+  callableInterface,
+  component,
+  hostImports = [],
+  imageId = null,
+  bindingId = randomUUID(),
+  blockId = randomUUID(),
+  bindingMetadata = {},
+  blockMetadata = {},
+} = {}) {
+  const imageService = assertImages(images);
+  const interfaceRef = normalizeObjectRef(callableInterface, 'WASM Component binding interface');
+  const implementationRef = normalizeObjectRef(component, 'WASM Component binding implementation');
+  const implementation = await imageService.getCodeArtifact(implementationRef.imageId, implementationRef.objectId);
+  if (!implementation) {
+    throw new TypeError(`WASM Component not found: ${implementationRef.imageId}/${implementationRef.objectId}`);
+  }
+  assertWasmComponentArtifact(implementation);
+  const targetImageId = imageId ?? interfaceRef.imageId;
+  const declared = normalizeHostImports(hostImports, WASM_COMPONENT_BINDING_V2);
+
+  const bindingArtifact = await imageService.putCodeArtifact(targetImageId, {
+    id: bindingId,
+    representation: WASM_COMPONENT_BINDING_V2,
+    content: textValue(JSON.stringify({abi: WASM_COMPONENT_BINDING_V2, hostImports: declared})),
+    dependencies: [
+      {role: CALLABLE_INTERFACE_DEPENDENCY_ROLE, artifact: interfaceRef},
+      {role: WASM_COMPONENT_IMPLEMENTATION_DEPENDENCY_ROLE, artifact: implementationRef},
+    ],
+    metadata: bindingMetadata,
+  });
+  const block = await imageService.putBlock(targetImageId, {
+    id: blockId,
+    code: objectRef(targetImageId, bindingArtifact.id),
+    environment: null,
+    metadata: blockMetadata,
+  });
+  return Object.freeze({bindingArtifact, block, interfaceRef});
+}
+
+// Assembles the host implementations for one activation.
+//
+// Deliberately NOT `declared ∩ granted`: the concrete resource a guest will ask for is not
+// known until it calls, and precomputing authorization would snapshot it at instantiation and
+// silently defeat revocation. Declaration decides which interfaces are *wired*; every concrete
+// operation calls require() at use time, so the effective intersection happens per call.
+async function assembleHostImports({componentRuntime, hostImports, implementation, declared, require}) {
+  const required = typeof componentRuntime.requiredImports === 'function'
+    ? await componentRuntime.requiredImports(implementation)
+    : [];
+  if (required.length === 0) return {};
+
+  const declaredSet = new Set(declared);
+  const assembled = {};
+  for (const specifier of required) {
+    // Undeclared is a property of the durable binding contract, not of this execution, so it
+    // is a linking failure rather than an authorization failure. undeclared != unauthorized.
+    if (!declaredSet.has(specifier)) throw new UndeclaredHostImportError(specifier);
+    assembled[specifier] = hostImports.create(specifier, {require});
+  }
+  return assembled;
+}
+
+function createWasmComponentBindingV1Executor({componentRuntime = null, hostImports = null} = {}) {
   if (componentRuntime !== null && (typeof componentRuntime !== 'object' || typeof componentRuntime.invoke !== 'function')) {
     throw new TypeError('WASM Component binding executor componentRuntime must implement invoke(component, function, args)');
   }
+  const registry = hostImports ?? new ComponentHostImportRegistry();
   return Object.freeze({
     componentRuntime,
-    async execute({activation, code}, {images}) {
-      if (!code || code.representation !== WASM_COMPONENT_BINDING_V1) {
-        throw new TypeError(`WASM Component binding executor requires ${WASM_COMPONENT_BINDING_V1}`);
+    hostImports: registry,
+    async execute({activation, code}, {images, require}) {
+      if (!code || !WASM_COMPONENT_BINDING_REPRESENTATIONS.includes(code.representation)) {
+        throw new TypeError(`WASM Component binding executor requires ${WASM_COMPONENT_BINDING_REPRESENTATIONS.join(' or ')}`);
       }
-      assertBlockApplicationReceiver(activation, WASM_COMPONENT_BINDING_V1);
+      assertBlockApplicationReceiver(activation, code.representation);
       if (activation.environment !== null) {
-        throw new TypeError(`${WASM_COMPONENT_BINDING_V1} does not accept a lexical environment`);
+        throw new TypeError(`${code.representation} does not accept a lexical environment`);
       }
-      parseWasmComponentBindingArtifact(code);
+      const binding = parseWasmComponentBindingArtifact(code);
 
       const {descriptor} = await resolveCallableInterface(images, code, WASM_COMPONENT_BINDING_V1);
       const args = assertCallableInterfaceArguments(descriptor, activation.arguments, descriptor.function);
@@ -175,7 +292,14 @@ function createWasmComponentBindingV1Executor({componentRuntime = null} = {}) {
       const lowered = descriptor.parameters.map((type, index) => (isCompositeType(type)
         ? unpackCompositeValue(args[index], type, types, `${descriptor.function} argument ${index}`)
         : toComponentValue(args[index], type)));
-      const raw = await componentRuntime.invoke(implementation, descriptor.function, lowered);
+      const imports = await assembleHostImports({
+        componentRuntime,
+        hostImports: registry,
+        implementation,
+        declared: binding.hostImports,
+        require,
+      });
+      const raw = await componentRuntime.invoke(implementation, descriptor.function, lowered, imports);
       if (isCompositeType(descriptor.result)) {
         return packCompositeValue(raw, descriptor.result, types, `${descriptor.function} result`);
       }
@@ -186,7 +310,10 @@ function createWasmComponentBindingV1Executor({componentRuntime = null} = {}) {
 }
 
 export {
+  WASM_COMPONENT_BINDING_REPRESENTATIONS,
   WASM_COMPONENT_BINDING_V1,
+  WASM_COMPONENT_BINDING_V2,
+  installWasmComponentBindingV2,
   WASM_COMPONENT_IMPLEMENTATION_DEPENDENCY_ROLE,
   assertWasmComponentArtifact,
   createWasmComponentBindingV1Executor,
