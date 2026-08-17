@@ -76,7 +76,8 @@ function tokenizeSymmetricSmalltalk(source) {
       index += 1;
       while (isIdentifierPart(source[index])) index += 1;
       const name = source.slice(start, index);
-      if (source[index] === ':') {
+      // `:` only makes a keyword when it is not the start of `:=`.
+      if (source[index] === ':' && source[index + 1] !== '=') {
         index += 1;
         push('keyword', `${name}:`, start);
       } else {
@@ -90,6 +91,13 @@ function tokenizeSymmetricSmalltalk(source) {
       index += 1;
       while (BINARY_SELECTOR_CHARS.has(source[index])) index += 1;
       push('binary', source.slice(start, index), start);
+      continue;
+    }
+
+    if (char === ':' && source[index + 1] === '=') {
+      const start = index;
+      index += 2;
+      push('assign', ':=', start);
       continue;
     }
 

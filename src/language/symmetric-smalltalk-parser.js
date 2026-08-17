@@ -35,14 +35,67 @@ class Parser {
     return this.advance();
   }
 
-  parseSource() {
-    const expression = this.parseExpression();
-    this.expect('eof', 'unexpected trailing input');
-    return expression;
+  peek(offset = 1) {
+    return this.tokens[Math.min(this.index + offset, this.tokens.length - 1)];
   }
 
+  parseSource() {
+    const body = this.parseBody('eof');
+    this.expect('eof', 'unexpected trailing input');
+    return body;
+  }
+
+  // Assignment binds loosest and is right-associative, so `a := b := 1` assigns both and
+  // `x := a foo: b` assigns the whole message result.
   parseExpression() {
+    if (this.current().type === 'identifier' && this.peek().type === 'assign') {
+      const target = this.advance();
+      if (target.value === 'self') {
+        throw new SymmetricSmalltalkSyntaxError('cannot assign to self', target.start);
+      }
+      this.advance();
+      return node('assign', {name: target.value, value: this.parseExpression()});
+    }
     return this.parseKeywordMessage();
+  }
+
+  // `| a b |` declarations followed by `.`-separated statements. A single statement with no
+  // temporaries returns the bare expression, so programs that need none compile to exactly the
+  // artifact they compile to today.
+  parseBody(terminator) {
+    const temporaries = this.parseTemporaries();
+    const statements = [];
+    for (;;) {
+      if (this.current().type === terminator) break;
+      statements.push(this.parseExpression());
+      if (!this.match('.')) break;
+    }
+    if (statements.length === 0) {
+      throw new SymmetricSmalltalkSyntaxError('expected at least one statement', this.current().start);
+    }
+    if (temporaries.length === 0 && statements.length === 1) return statements[0];
+    return node('sequence', {
+      temporaries: Object.freeze(temporaries),
+      statements: Object.freeze(statements),
+    });
+  }
+
+  parseTemporaries() {
+    if (this.current().type !== '|') return [];
+    this.advance();
+    const names = [];
+    while (this.current().type === 'identifier') {
+      const token = this.advance();
+      if (token.value === 'self') {
+        throw new SymmetricSmalltalkSyntaxError('cannot declare a temporary named self', token.start);
+      }
+      if (names.includes(token.value)) {
+        throw new SymmetricSmalltalkSyntaxError(`duplicate temporary ${token.value}`, token.start);
+      }
+      names.push(token.value);
+    }
+    this.expect('|', 'expected | after temporary declarations');
+    return names;
   }
 
   parseKeywordMessage() {
@@ -121,7 +174,7 @@ class Parser {
       parameters.push(nameToken.value);
     }
     if (parameters.length > 0) this.expect('|', 'expected | after block parameters');
-    const body = this.parseExpression();
+    const body = this.parseBody(']');
     const close = this.expect(']', 'expected ]');
     return node('block', {
       parameters: Object.freeze(parameters),

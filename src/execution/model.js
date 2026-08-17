@@ -101,17 +101,30 @@ function normalizeBindings(bindings) {
     if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
       throw new TypeError(`binding ${bindingId} must be an object`);
     }
-    const keys = Object.keys(binding).sort();
-    if (keys.length !== 2 || keys[0] !== 'name' || keys[1] !== 'value') {
-      throw new TypeError(`binding ${bindingId} must contain exactly name and value`);
-    }
     if (binding.name !== null && typeof binding.name !== 'string') {
       throw new TypeError(`binding ${bindingId} name must be text or null`);
     }
-    normalized[bindingId] = Object.freeze({
-      name: binding.name,
-      value: canonicalizeValue(binding.value),
-    });
+    // Three capture dispositions, per ADR 0043. `bound` and `unbound` describe a durable
+    // snapshot; `cell` says no durable snapshot is semantically usable and this binding requires
+    // its live execution cell. That is what makes a later invocation fail correctly: there is no
+    // old value available to helpfully reset from.
+    const keys = Object.keys(binding).sort();
+    if (keys.length === 2 && keys[0] === 'name' && keys[1] === 'value') {
+      normalized[bindingId] = Object.freeze({
+        name: binding.name,
+        value: canonicalizeValue(binding.value),
+      });
+    } else if (keys.length === 2 && keys[0] === 'name' && keys[1] === 'unbound') {
+      if (binding.unbound !== true) throw new TypeError(`binding ${bindingId} unbound must be true`);
+      normalized[bindingId] = Object.freeze({name: binding.name, unbound: true});
+    } else if (keys.length === 2 && keys[0] === 'cell' && keys[1] === 'name') {
+      if (binding.cell !== true) throw new TypeError(`binding ${bindingId} cell must be true`);
+      normalized[bindingId] = Object.freeze({name: binding.name, cell: true});
+    } else {
+      throw new TypeError(
+        `binding ${bindingId} must contain exactly name and one of value, unbound, cell`,
+      );
+    }
   }
   return Object.freeze(normalized);
 }
