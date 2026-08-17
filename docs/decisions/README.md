@@ -76,6 +76,8 @@ move in. Never move it the other way to make a claim easier to write.
 - [0034 — rich callable component interface](0034-rich-callable-component-interface.md): WIT-backed structured callable boundary with Component/WIT WASM lane and Cuis bridge v1, while canonical Value and wasm-scalar-call/v0 remain unchanged.
 - [0035 — interface composite values](0035-interface-composite-values.md): WIT composites become transient ref-free InterfaceValues carried as one schema-directed `interface-composite/v0` bytes Value; `callable-interface/v2` adds a structural type grammar while v1 stays frozen, so no collection Value kind appears and personalities own projection.
 
+- [0036 — foreign Component instance lifetime](0036-foreign-component-instance-lifetime.md): cache transpilation/compilation by artifact identity but instantiate a Component fresh per activation, so guest state and later host authority cannot cross activations.
+
 ## Reading rule
 
 The current model is summarized in [../architecture.md](../architecture.md) and [../language-platform.md](../language-platform.md). ADRs explain why the model reached that shape and may describe limitations that later ADRs have since extended.

@@ -1,3 +1,10 @@
+use std::sync::atomic::{AtomicI64, Ordering};
+
+/// Mutable guest state. Its only purpose is to make instance reuse observable: if an
+/// instance is reused across activations this keeps counting, and if each activation gets a
+/// fresh instance it always answers 1.
+static COUNTER: AtomicI64 = AtomicI64::new(0);
+
 wit_bindgen::generate!({
     world: "normalize",
     path: "wit",
@@ -55,6 +62,11 @@ impl Guest for Component {
             quantity: it.quantity,
             enabled: !it.enabled,
         }
+    }
+
+    /// Increments guest-resident state and returns the new value. See COUNTER.
+    fn bump() -> i64 {
+        COUNTER.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     /// relabel over a list, so a list whose elements are records is exercised in both
