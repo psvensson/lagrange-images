@@ -9,11 +9,17 @@ The top-level README is the quick overview. These docs describe the current mode
 3. [Language platform](language-platform.md) — how Smalltalk, Rust, Java, Lisp and foreign code fit
 4. [Roadmap](roadmap.md) — what exists and what is next
 
+If you are here to change something rather than to understand it, start instead with
+[the runbook](runbook.md) (how to run and debug) and [the seam map](seams.md) (what the
+representations, installers and executors are called).
+
 ## Focused concepts
 
 - [Value/reference/object model](value-model.md) — tagged Values, refs, shapes and generic objects
 - [Security boundary](security.md) — identity vs authority and capability direction
 - [Lagrange integration](lagrange-integration.md) — backend/distributed integration boundary
+- [Runbook](runbook.md) — running the suite, integration assets, debugging silent foreign-runtime failures
+- [Seam map](seams.md) — representations, installers, executors and where code lives
 
 ## Execution and toolchains at a glance
 

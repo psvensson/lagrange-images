@@ -1,6 +1,6 @@
 # ADR 0005: calling convention and neutral executor
 
-Status: accepted for the bootstrap execution substrate.
+Status: accepted — the bootstrap execution substrate.
 
 ## Calling convention
 

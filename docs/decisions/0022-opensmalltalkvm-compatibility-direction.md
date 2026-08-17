@@ -1,6 +1,6 @@
 # ADR 0022: OpenSmalltalkVM compatibility direction
 
-Status: accepted as long-term Smalltalk compatibility direction; implementation has not started.
+Status: accepted — long-term Smalltalk compatibility direction; implementation has not started.
 
 ## Problem
 

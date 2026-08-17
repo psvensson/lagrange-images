@@ -23,7 +23,9 @@
   "scripts": {
     "start": "node src/server.js",
     "demo": "node examples/graph-demo.js",
-    "test": "node --test"
+    "test": "node --test",
+    "integration:setup": "scripts/integration-setup.sh",
+    "test:integration": "bash -c 'source scripts/integration-env.sh && node --test test/opensmalltalk-cuis-real.test.js test/opensmalltalk-cuis-toolchain-real.test.js'"
   },
   "engines": {"node": ">=22"},
   "peerDependencies": {"lagrange-server": ">=0.1.0"},

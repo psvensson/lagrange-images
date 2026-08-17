@@ -1,6 +1,6 @@
 # ADR 0016: artifact graphs, external toolchains and foreign runtimes
 
-Status: accepted as architectural direction. ADR 0017 implements the first artifact-dependency/toolchain-provider substrate; external process/container/runtime integration remains planned.
+Status: accepted — architectural direction. ADR 0017 implements the first artifact-dependency/toolchain-provider substrate; external process/container/runtime integration remains planned.
 
 ## Problem
 

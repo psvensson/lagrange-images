@@ -277,6 +277,17 @@ npm run demo
 npm start
 ```
 
+`npm test` skips the proofs that need a real OpenSmalltalkVM or a real Lagrange backend.
+To run those too:
+
+```sh
+npm run integration:setup   # fetch pinned VM/image fixtures into .integration/
+npm run test:integration
+```
+
+See [docs/runbook.md](docs/runbook.md) for the full picture, including how to debug a
+foreign runtime that produces no output.
+
 The default backend remains the in-memory mock. With `lagrange-server >= 0.1.0`
 installed, select the durable backend through configuration or the environment:
 

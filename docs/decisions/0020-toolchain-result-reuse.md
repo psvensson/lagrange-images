@@ -1,6 +1,6 @@
 # ADR 0020: deterministic toolchain result reuse
 
-Status: accepted for the first external-toolchain result cache.
+Status: accepted — the first external-toolchain result cache.
 
 ## Problem
 

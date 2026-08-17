@@ -1,6 +1,6 @@
 # ADR 0017: artifact dependencies and toolchain providers
 
-Status: accepted for the external-toolchain substrate.
+Status: accepted — the external-toolchain substrate.
 
 ## Problem
 

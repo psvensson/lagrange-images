@@ -1,6 +1,7 @@
 # ADR 0028: foreign-runtime callables as ordinary Blocks
 
-Status: accepted for the first ordinary invocation path over durable foreign-runtime definitions.
+Status: implemented — the first ordinary invocation path over durable foreign-runtime definitions.
+Proven by: test/foreign-runtime-callable.test.js
 
 ## Problem
 

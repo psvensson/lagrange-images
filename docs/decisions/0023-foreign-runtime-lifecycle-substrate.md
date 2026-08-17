@@ -1,6 +1,7 @@
 # ADR 0023: language-neutral foreign runtime lifecycle substrate
 
-Status: accepted and implemented as the first foreign-runtime execution seam.
+Status: implemented — the first foreign-runtime execution seam.
+Proven by: test/foreign-runtime-service.test.js
 
 ## Problem
 

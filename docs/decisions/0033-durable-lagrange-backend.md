@@ -1,8 +1,7 @@
 # 0033 — Durable Lagrange backend
 
-## Status
-
-Accepted.
+Status: implemented.
+Proven by: test/lagrange-backend-real.test.js
 
 ## Context
 

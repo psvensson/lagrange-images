@@ -1,6 +1,6 @@
 # ADR 0009: WASM tail message effects
 
-Status: accepted for the bootstrap WASM backend.
+Status: accepted — the bootstrap WASM backend.
 
 ## Problem
 

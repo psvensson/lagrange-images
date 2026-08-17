@@ -1,6 +1,6 @@
 # ADR 0018: first OCI-backed Cargo/rustc provider
 
-Status: accepted for the first real external-toolchain provider.
+Status: accepted — the first real external-toolchain provider.
 
 ## Problem
 

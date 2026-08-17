@@ -1,8 +1,6 @@
 # 0031 — One runtime and image-service composition path
 
-## Status
-
-Accepted.
+Status: accepted.
 
 ## Context
 

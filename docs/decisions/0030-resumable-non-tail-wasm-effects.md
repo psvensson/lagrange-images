@@ -1,6 +1,6 @@
 # ADR 0030: resumable non-tail host effects in Lagrange WASM
 
-Status: accepted for the first compiler-generated resumable effect path.
+Status: accepted — the first compiler-generated resumable effect path.
 
 ## Problem
 
