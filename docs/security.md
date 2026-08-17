@@ -51,6 +51,8 @@ A reference crossing an image or service boundary should not automatically carry
 
 This is especially important if remote message/call syntax becomes pleasantly similar to local invocation. Convenience must not erase the authority boundary.
 
+ADR 0037 decides how that authority is carried: beside an activation as execution context, never inside it as program data. An authority context is an opaque host-issued object rather than plain data, `principal` is not `capability`, and a foreign guest receives the intersection of what its binding declares it may import and what the current execution is authorized to use. Absence of authority means no capabilities rather than all of them.
+
 ## History
 
 History and source objects can contain sensitive material. Authorization must apply to history, snapshots, debugger state and exports as well as current object state.
