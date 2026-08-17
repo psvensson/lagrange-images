@@ -115,6 +115,26 @@ function assertFieldMappingCovers(record, fields, label) {
   return mapped;
 }
 
+// Shared by the projection executor and the resource provider, so the two cannot diverge on
+// ref rejection, missing slots or leaf typing.
+function projectObjectSlots({object, record, mapped, imageId, objectId}) {
+  const projected = {};
+  for (const field of record.fields) {
+    const slot = mapped.get(field.name);
+    if (!Object.hasOwn(object.slots ?? {}, slot)) {
+      throw new TypeError(`projected object ${imageId}/${objectId} has no slot ${slot} for field ${field.name}`);
+    }
+    const slotValue = canonicalizeValue(object.slots[slot]);
+    // Rejected, never followed: authority for this object must not imply authority for
+    // whatever it points at, and there is no second require on a traversal path.
+    if (isReference(slotValue)) {
+      throw new TypeError(`slot ${slot} holds a reference; ${IMAGE_PROJECTION_BINDING_V1} never follows refs`);
+    }
+    projected[field.name] = canonicalToHostLeaf(slotValue, field.type, `projected field ${field.name}`);
+  }
+  return projected;
+}
+
 async function installImageProjectionBinding({
   images,
   callableInterface,
@@ -190,24 +210,7 @@ function createImageProjectionBindingV1Executor() {
       const object = await images.getObject(imageId, objectId);
       if (!object) throw new TypeError(`projected object not found: ${imageId}/${objectId}`);
 
-      const projected = {};
-      for (const field of record.fields) {
-        const slot = mapped.get(field.name);
-        if (!Object.hasOwn(object.slots ?? {}, slot)) {
-          throw new TypeError(`projected object ${imageId}/${objectId} has no slot ${slot} for field ${field.name}`);
-        }
-        const slotValue = canonicalizeValue(object.slots[slot]);
-        // Rejected, never followed: authority for this object must not imply authority for
-        // whatever it points at, and there is no second require on a traversal path.
-        if (isReference(slotValue)) {
-          throw new TypeError(
-            `slot ${slot} holds a reference; ${IMAGE_PROJECTION_BINDING_V1} never follows refs`,
-          );
-        }
-        projected[field.name] = canonicalToHostLeaf(
-          slotValue, field.type, `projected field ${field.name}`,
-        );
-      }
+      const projected = projectObjectSlots({object, record, mapped, imageId, objectId});
 
       return packCompositeValue(
         projected, descriptor.result, descriptor.types ?? {}, `${descriptor.function} result`,
@@ -218,6 +221,9 @@ function createImageProjectionBindingV1Executor() {
 
 export {
   IMAGE_PROJECTION_BINDING_V1,
+  assertFieldMappingCovers,
+  assertProjectionInterface,
+  projectObjectSlots,
   createImageProjectionBindingV1Executor,
   installImageProjectionBinding,
   parseImageProjectionBindingArtifact,

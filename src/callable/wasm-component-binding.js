@@ -233,7 +233,7 @@ async function assembleHostImports({componentRuntime, hostImports, implementatio
     // Undeclared is a property of the durable binding contract, not of this execution, so it
     // is a linking failure rather than an authorization failure. undeclared != unauthorized.
     if (!declaredSet.has(specifier)) throw new UndeclaredHostImportError(specifier);
-    assembled[specifier] = hostImports.create(specifier, {require});
+    assembled[specifier] = await hostImports.create(specifier, {require});
   }
   return assembled;
 }

@@ -241,6 +241,14 @@ pooled instance != activation state
 - `image-projection-binding/v1` is structural by stable slot ID. Shape identity is not part of compatibility; a nominal restriction would be a later version with an explicit shape edge.
 - The image comes from the binding, never the caller. An object-id argument is lane addressing: not a ref, not a capability, and knowing one grants nothing.
 
+### Foreign resource handles
+
+- A WIT resource handle carries image identity only (ADR 0040). Never put an authority context, principal, grant or cached authorization decision on one, and never treat a handle as a cached `require`: every method re-authorizes.
+- Handle lifetime is the activation, sharing the existing execution-context lifetime record. Do not add a second expiry mechanism. A trapping guest does not drop its handles, so guest `drop` is never the cleanup path.
+- `own` owns the transient handle; `drop` releases it and mutates nothing durable — no deletion, no revocation, no history. Revocation and destruction stay distinct.
+- A handle is lane-local: never a Value, an InterfaceValue or an `interface-composite/v0` payload, never stored in a slot, never returned from an ordinary Block.
+- Handles that outlive an activation need an explicit lease abstraction, not `own<T>`.
+
 ## Architecture
 
 ```text

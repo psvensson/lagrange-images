@@ -1,6 +1,7 @@
 # ADR 0040: activation-scoped image resource handles
 
-Status: accepted — the decision for WIT resources over image objects; deliberately no implementation yet.
+Status: implemented — a prebound WIT resource over an image object: identity only, re-authorized per method, activation-scoped, with `own`/`drop` governing the handle rather than the object.
+Proven by: test/image-resource-handles.test.js
 
 ## Problem
 
@@ -198,6 +199,33 @@ resource-handle arena expires
 
 Case 5 matters more than it looks: it is what distinguishes handle ownership from object
 ownership in observable behaviour rather than only in prose.
+
+## Implementation status
+
+All ten proof cases pass, plus a declared-import case carried over from ADR 0038.
+
+Two findings from implementing, both of which strengthen the lifetime decision rather than
+complicate it:
+
+**A trapping guest does not drop its handles.** The observed sequence for a Component that
+reads successfully and then panics is `open ; snapshot` with no `dispose`. So cleanup cannot
+rely on the guest's `drop` at all, which makes tying the arena to the activation lifetime
+*necessary* rather than merely elegant. Because every method re-runs `require`, and the
+execution context expires with its activation, a leaked handle is dead afterwards through the
+same lifetime record — case 7 is one assertion rather than two parallel mechanisms.
+
+**`snapshot()` is synchronous while image reads are not.** A WIT
+`snapshot: func() -> item-record` must return a value, not a promise, so the object record is
+loaded once when the interface is wired — resolving what this prebound resource is bound to,
+which is configuration resolution rather than an authorized data access — and every
+*observation* is gated by a live `require`. Authorization therefore remains per call, which is
+the security property; only the read itself is not.
+
+Making the read per-call needs async-capable host imports. jco exposes `asyncMode` and
+`asyncImports`, and both transpile, but wiring them for a resource method produced a guest-side
+decode failure in the pinned version, so this is recorded as a finding rather than assumed
+available. It is the one place where the implementation is narrower than the decision, and it
+is bounded: no projected data is observable without a passing `require`.
 
 ## What is deferred
 
