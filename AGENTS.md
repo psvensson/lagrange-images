@@ -219,6 +219,7 @@ pooled instance != activation state
 - Executors receive only a check-only `require(demand)`. Never place an `AuthorityService`, an authority context, a returned grant or a principal into an executor context.
 - Attenuation is requested through `sendMessage(request, {attenuate})` and performed by `ActivationExecutor`; an executor never receives the resulting context. `attenuate` narrows only, so escalation is impossible by construction.
 - Absent authority means no capabilities, never all. New capability-bearing surfaces must fail closed.
+- An execution context does not outlive its activation. Everything handed to an executor expires when that activation finishes, on exceptional exits too, so a retained closure cannot keep authorizing. Any new activation-scoped capability must join that guard rather than escaping it.
 - `issue`, `revoke` and root grant configuration are control-plane APIs. `require` is the execution-time API.
 - v0 grants are exact-match `{operation, resource}` pairs. Do not add wildcards, inheritance, resource trees or deny rules without a new decision.
 - Authority belongs to the individual call, never to a long-lived runtime instance. A shared foreign runtime may serve many authorities; a host operation resolves against the active call's context, and no active context means no host authority.

@@ -1,7 +1,7 @@
 # ADR 0037: transient execution authority
 
 Status: implemented — the authority substrate: transient contexts beside the activation, a check-only require seam, and attenuation on the nested-send path. Capability-bearing host imports remain unimplemented.
-Proven by: test/execution-authority.test.js
+Proven by: test/execution-authority.test.js, test/activation-lifetime.test.js
 
 ## Problem
 
@@ -191,6 +191,13 @@ return await this.execute(nested, {depth: depth + 1});
 
 Authority propagates through that same call. A nested send inherits the current context by
 default.
+
+Each activation has its own lifetime. The execution context — `require`, `sendMessage` and the
+rest — becomes unusable once its activation completes, including on an exceptional exit, so a
+retained closure cannot keep authorizing or executing afterwards. Liveness is a mutable record
+rather than mere stack scoping, so that "active" can later mean "the logical activation is
+still alive" once async activations exist, instead of "a JavaScript frame happens to be on the
+stack".
 
 An executor that wants a narrower child does not receive one. It states the request, and
 `ActivationExecutor` performs the attenuation itself:
@@ -398,6 +405,8 @@ Built and proven, all eight first-proof cases plus the algebra and forgery check
   attenuated from it without holding references to children
 - `ActivationExecutor.execute(activation, {depth, authority})`, with `require` in the executor
   context and nothing else authority-shaped, asserted by enumerating that context's keys
+- the execution context expires with its activation, on normal and exceptional exit alike, so
+  authority lifetime is actually the invocation lifetime rather than only stated to be
 - `sendMessage(request, {attenuate})`, where the executor states a request and
   `ActivationExecutor` performs the attenuation, so no executor ever holds a context
 

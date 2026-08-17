@@ -27,6 +27,18 @@ function assertActivationRequest(activation) {
   return activation;
 }
 
+// ADR 0037 says authority belongs to the individual active call and that its lifetime is the
+// invocation lifetime. Without this the executor context outlives the activation: a retained
+// `require` keeps authorizing, and a retained `sendMessage` keeps executing, long after
+// `execute` returned.
+class ExpiredExecutionContextError extends TypeError {
+  constructor(operation) {
+    super(`${operation} was called after its activation completed; the execution context does not outlive the activation`);
+    this.name = 'ExpiredExecutionContextError';
+    this.operation = operation;
+  }
+}
+
 function assertImages(images) {
   if (!images || typeof images !== 'object') throw new TypeError('images service is required');
   for (const method of ['getBlock', 'getCodeArtifact', 'getLexicalEnvironment', 'putLexicalEnvironment', 'putBlock']) {
@@ -126,28 +138,39 @@ class ActivationExecutor {
     if (!code) throw new TypeError(`activation code artifact not found: ${activation.code.imageId}/${activation.code.objectId}`);
 
     const executor = this.executors.get(code.representation);
-    const result = await executor.execute(
+
+    // A mutable record rather than mere stack scoping, so that "active" can later mean "the
+    // logical activation is still alive" once async activations exist, instead of "a
+    // JavaScript frame happens to be on the stack".
+    const lifetime = {active: true};
+    const whileActive = (operation, implementation) => (...args) => {
+      if (!lifetime.active) throw new ExpiredExecutionContextError(operation);
+      return implementation(...args);
+    };
+
+    try {
+      const result = await executor.execute(
       {activation, code},
       {
         images: this.images,
         // Check-only, and the only authority operation that crosses this seam. There is no
         // grant to return, no context to read, and no principal to branch on. Absent
         // authority fails closed rather than permitting.
-        require: (demand) => {
+        require: whileActive('require', (demand) => {
           if (!this.authority) throw new TypeError('no authority service is configured; this execution has no capabilities');
           if (authority === null) throw new TypeError('no authority context was supplied; this execution has no capabilities');
           return this.authority.require(authority, demand);
-        },
-        lookupBinding: async (bindingId) => {
+        }),
+        lookupBinding: whileActive('lookupBinding', async (bindingId) => {
           if (!activation.environment) throw new TypeError(`lexical binding not found: ${bindingId}`);
           return await this.lookupBinding(activation.environment, bindingId);
-        },
-        createClosure: async (request) => await this.createClosure(request),
+        }),
+        createClosure: whileActive('createClosure', async (request) => await this.createClosure(request)),
         // A nested send inherits the current authority. An executor may ask for a narrower
         // child, but never receives one: the attenuation happens here, so no executor ever
         // holds a context. Since attenuation only narrows, a nested send can lose rights and
         // can never gain them.
-        sendMessage: async (request, {attenuate = null} = {}) => {
+        sendMessage: whileActive('sendMessage', async (request, {attenuate = null} = {}) => {
           if (!this.invocations) throw new TypeError('activation executor has no message runtime');
           if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
           let nestedAuthority = authority;
@@ -158,15 +181,20 @@ class ActivationExecutor {
           }
           const nested = await this.invocations.sendMessage(request);
           return await this.execute(nested, {depth: depth + 1, authority: nestedAuthority});
-        },
+        }),
       },
-    );
-    return canonicalizeValue(result);
+      );
+      return canonicalizeValue(result);
+    } finally {
+      // Also on the exceptional path: a trapping guest must not leave a live context behind.
+      lifetime.active = false;
+    }
   }
 }
 
 export {
   ActivationExecutor,
+  ExpiredExecutionContextError,
   MAX_ACTIVATION_DEPTH,
   assertActivationRequest,
 };
