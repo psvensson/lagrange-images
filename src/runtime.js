@@ -138,6 +138,7 @@ async function createRuntime(options = {}) {
 }
 
 export * from './backend/index.js';
+export * from './callable/index.js';
 export * from './code/index.js';
 export * from './compilation/index.js';
 export * from './dispatch/invocation-service.js';

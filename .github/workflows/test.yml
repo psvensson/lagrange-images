@@ -107,4 +107,5 @@ jobs:
           export LAGRANGE_CUIS_JSON_PACKAGE_PATH="$PWD/.integration/cuis/JSON.pck.st"
           node --test \
             test/opensmalltalk-cuis-real.test.js \
-            test/opensmalltalk-cuis-toolchain-real.test.js
+            test/opensmalltalk-cuis-toolchain-real.test.js \
+            test/two-lane-normalize-real.test.js

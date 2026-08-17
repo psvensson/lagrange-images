@@ -1,6 +1,7 @@
 # ADR 0034: rich callable component interface
 
-Status: accepted for the first WIT-backed structured callable boundary.
+Status: accepted, and implemented. The two-lane proof runs against a real Rust WASM
+Component and a live Cuis image.
 
 ## Problem
 
@@ -23,19 +24,25 @@ image semantics
     canonical Value
         |
         v
-implementation-independent callable interface
-        WIT
-       /   \
-      /     \
-Component    foreign-runtime adapter
-canonical     Cuis stdio v1
-ABI
-      \       /
-       \     /
-     language implementation
+callable-interface/v1          <- one artifact, no implementation, no dependencies
+    WIT type language
+       /            \
+      /              \
+wasm-component-       foreign-runtime-
+  binding/v1            binding/v1      <- implementation bindings
+      |                     |
+Component canonical    Cuis stdio v1
+     ABI                (transport)
+      |                     |
+   Rust/WASM            live Cuis image
 ```
 
-Canonical Values remain the universal image-side boundary. WIT is the implementation-independent interface description. The Component canonical ABI handles WASM-side lifting/lowering through existing tooling. The Cuis adapter handles Cuis-side encoding/decoding through a versioned stdio protocol. Both lanes share one durable callable interface shape.
+Canonical Values remain the universal image-side boundary. The callable interface is the
+implementation-independent description, expressed in WIT's type language. Below it, each
+lane brings its own mechanism: the Component canonical ABI for WASM, a versioned stdio
+protocol for Cuis. Crucially the transport sits *below* the interface and never leaks
+upward — `ForeignRuntimeService` exchanges canonical Values, and the `i:`/`e:`/`d:`
+encoding exists only between the provider and the VM.
 
 ### Canonical Value is unchanged
 
@@ -58,24 +65,51 @@ The existing scalar ABI stays exactly as defined in ADR 0021. It continues to en
 
 The new rich interface is a separate ABI, not an extension of the scalar ABI. Existing scalar callables are unaffected.
 
-### First rich interface: WIT-backed callable
+### First rich interface: an implementation-independent callable contract
 
-Add a WIT-backed callable interface representation alongside the existing scalar and foreign-runtime interfaces:
-
-```text
-wasm-wit-callable-interface/v1
-```
-
-The durable shape mirrors ADR 0021's interface/implementation separation:
+The central decision of this ADR is not "add strings to WASM". It is to settle the
+abstraction that lets Rust/WASM, Cuis, and later Java or Lisp expose the same callable
+interface without that interface belonging to any of them.
 
 ```text
-Block
-  -> wasm-wit-callable-interface/v1
-       dependency(role=implementation)
-          -> wasm-component/v1
+callable-interface/v1
 ```
 
-The interface artifact contains a WIT interface description. The implementation dependency points to a WASM Component binary. They have separate identity, exactly as scalar interface and wasm-binary/v1 already have separate identity.
+A `callable-interface/v1` artifact describes a callable shape and nothing else. It names
+no WASM module, no foreign runtime, no provider and no capability, and it declares **no
+dependencies at all** — implementations point at it, never the reverse. That direction is
+what allows one interface artifact to be shared by any number of lanes.
+
+Implementations attach through separate binding representations:
+
+```text
+                    callable-interface/v1
+                        "normalize"
+                     {parameters, result}
+                      /              \
+                     /                \
+      wasm-component-binding/v1   foreign-runtime-binding/v1
+        dependency(interface)       dependency(interface)
+        dependency(implementation)  dependency(runtime-definition)
+            -> wasm-component/v1        -> cuis-runtime-definition/v1
+                 |                            |
+               Block                        Block
+```
+
+A binding carries no signature of its own. Arity and types come from the interface it
+depends on, so both lanes are type-checked by the same code against the same descriptor.
+What a binding does carry is the part that is meaningless to any other lane: for the
+Component lane, which Component binary; for the foreign-runtime lane, which runtime
+definition and which runtime-specific operation address (`{service, operation}`).
+
+This is deliberately better than giving each lane its own interface representation. Two
+representations holding "essentially the same logical signature" drift, and in practice
+they had already diverged: the existing `foreign-runtime-callable-interface/v1` carries
+only an argument *count* and an opaque record, with no type information whatsoever, so
+"the same interface through two lanes" could not have been more than a coincidence.
+
+`foreign-runtime-callable-interface/v1` and `wasm-callable-interface/v1` are not migrated.
+They remain valid historical contracts for the callables already installed through them.
 
 ### First proof types
 
@@ -96,30 +130,51 @@ Exactly one result value. No WASI or other imported capabilities in the first pr
 
 This deliberately excludes refs, pinned-refs, arrays, records, multiple results, option, result and other WIT composite types. Those belong in a later ADR.
 
-### Component executor uses existing Component tooling
+### The Component lane uses real Component tooling
 
-The executor for `wasm-wit-callable-interface/v1` uses existing WASM Component runtime tooling for canonical lifting and lowering rather than reconstructing the canonical ABI in Lagrange code.
+The `wasm-component-binding/v1` executor performs no canonical ABI work. The proof
+Component is built and run entirely with upstream tooling:
 
-The Component binary is compiled and instantiated through a Component-aware runtime. The runtime handles the canonical ABI: reading arguments from and writing results to the Component's canonical entry points. Lagrange code performs Value encoding before the Component call and Value decoding after, but does not implement the canonical ABI wire format itself.
+```text
+wit/normalize.wit          the interface, in WIT
+   |  wit-bindgen           generates the guest-side canonical ABI glue
+   v
+Rust cdylib -> core wasm
+   |  wasm-tools component new
+   v
+normalize.component.wasm   a real Component
+   |  jco transpile (canonical ABI lifting/lowering)
+   v
+callable from Node
+```
 
-This means:
+Lagrange contributes Value translation on either side of that pipeline and nothing else.
+There is no linear-memory code, no `realloc`, and no pointer/length convention anywhere in
+this repository. Canonical ABI evolution stays upstream's responsibility.
 
-- no home-grown WASM memory protocol
-- no manual linear memory management in Lagrange code
-- canonical ABI evolution is upstream's responsibility
-- the Lagrange side stays focused on Value translation
+Finding on tooling practicality, recorded because it was a real risk: `cargo-component` is
+not required. `wit-bindgen` plus `wasm-tools component new` produces the Component from an
+ordinary cargo build, and `jco` runs it from Node with no native dependency. The awkward
+part is only that a Rust toolchain is needed to *build* the fixture, so the built
+`.wasm` is committed and `fixtures/normalize-component/build.sh` regenerates it.
+
+`jco` is an optional peer dependency. Without it, Component bindings still install and
+still type-check; they simply cannot execute, and say so.
 
 ### Interface identity remains separate from implementation identity
 
 One Component binary may support several callable interfaces:
 
 ```text
-                        -> interface: normalize
-wasm-component/v1 ------+-> interface: transform
-                        `-> interface: validate
+                        -> callable-interface/v1: normalize
+wasm-component/v1 ------+-> callable-interface/v1: transform
+                        `-> callable-interface/v1: validate
 ```
 
-The `wasm-wit-callable-interface/v1` artifact names one callable interface. Multiple interfaces over the same Component use multiple interface artifacts with separate identity, each depending on the same implementation.
+Each callable interface is its own artifact with its own identity. Several interfaces over
+one Component means several interface artifacts and several bindings, all naming the same
+implementation. Symmetrically, one interface may be bound to many implementations — which
+is exactly what the two-lane proof does.
 
 ### Cuis bridge upgrade to v1
 
@@ -163,25 +218,40 @@ Two independent implementations only prove anything if they are held to the same
 
 Two implementations share this interface shape:
 
-1. **Rust Component implementation**: a small Rust function compiled to a WASM Component through the existing Cargo/rustc OCI provider path. The Component exports a `normalize` function that lower/raises strings through the canonical ABI.
+1. **Rust Component implementation**: `fixtures/normalize-component`, a Rust function
+   built with `wit-bindgen` and wrapped by `wasm-tools component new` into a real
+   Component, executed through jco's canonical ABI lifting/lowering.
 
-2. **Cuis implementation**: a Smalltalk method in the Cuis image exposed through the v1 stdio bridge as `text/normalize`.
+2. **Cuis implementation**: a Smalltalk method compiled into the Cuis image and exposed
+   through the v1 stdio bridge as `text/normalize`.
 
-Both are installed as callable Blocks through the same durable interface shape:
+Both are installed as callable Blocks against **the same interface artifact**:
 
 ```text
-Block
-  -> callable interface artifact
-       (interface description: text/normalize, one text parameter, one text result)
-       dependency(role=implementation)
-          -> wasm-component/v1  (Rust lane)
-       -- or --
-          -> runtime-definition artifact  (Cuis lane)
+      callable-interface/v1 "normalize"   (one artifact, one identity)
+             ^                    ^
+             | interface          | interface
+wasm-component-binding/v1   foreign-runtime-binding/v1
+   | implementation             | runtime-definition
+   v                            v
+wasm-component/v1          cuis-runtime-definition/v1
+   |                            |
+ Block                        Block
 ```
 
-A Symmetric Smalltalk program calls both through ordinary Block sends without knowing which implementation lane is behind each Block. The test requires both lanes to produce the same result for the same input.
+The proof is not that two lanes agree on one example. It is that both bindings resolve to
+the identical interface object, are type-checked by the same code against the same
+descriptor, and are invoked by a caller holding nothing but two Block refs. The tests
+assert all three, and additionally that a wrong arity or a bytes-instead-of-text argument
+is rejected identically on both sides — because the rejection comes from the shared
+interface, not from either lane.
 
-This directly satisfies the roadmap goal: *map the same interface shape to at least two implementation lanes*.
+Two levels of proof exist: `test/two-lane-normalize-proof.test.js` runs the real Component
+against a scripted Cuis session and always runs; `test/two-lane-normalize-real.test.js`
+runs the real Component against a live OpenSmalltalkVM and runs in the integration job.
+
+This satisfies the roadmap goal: *map the same interface shape to at least two
+implementation lanes*.
 
 ### What is explicitly deferred
 
@@ -206,17 +276,23 @@ The implementation order is:
 
 1. Write this ADR.
 2. Upgrade the Cuis bridge to v1 with text/bytes/float64 transport and real-VM round-trip tests.
-3. Add the `wasm-wit-callable-interface/v1` executor using Component tooling.
-4. Prove the same `text/normalize` interface through both Rust Component and Cuis lanes.
-5. Write a follow-up ADR for list/record/multiple-result types.
+3. Add `callable-interface/v1` plus the `wasm-component-binding/v1` and
+   `foreign-runtime-binding/v1` implementation bindings.
+4. Prove one `normalize(text) -> text` interface through a real Rust Component and a live
+   Cuis image, invoked as ordinary Blocks.
+5. Add bytes and float64 through both lanes (binary and numeric fidelity, no structure).
+6. Write a follow-up ADR for list/record/multiple-result types.
 
 ## Guardrails
 
 ```text
 canonical Value model unchanged
 wasm-scalar-call/v0 frozen
-wasm-wit-callable-interface != wasm-scalar-call/v0
-wasm-wit-callable-interface != foreign-runtime-callable-interface/v1
+callable-interface/v1 != wasm-scalar-call/v0
+callable-interface/v1 declares no dependencies, ever
+interface != implementation binding
+one interface, many bindings, no lane in the interface
+transport encoding != interface
 Component canonical ABI != Lagrange memory protocol
 Component tooling owns lifting/lowering, not Lagrange code
 interface identity != implementation identity

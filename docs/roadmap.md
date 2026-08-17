@@ -42,13 +42,15 @@ mixed program
         -> foreign WASM Block + live Cuis Block
         -> neutral and resumable Lagrange-WASM executions agree
 
-WIT callable interface (Component lane)
-        -> wasm-component/v1 + wasm-wit-callable-interface/v1
-        -> Component runtime invoke with canonical lifting/lowering
-        -> ordinary callable Block
+implementation-independent callable interface
+        -> callable-interface/v1 (no implementation, no dependencies)
+        -> wasm-component-binding/v1   -> wasm-component/v1
+        -> foreign-runtime-binding/v1  -> cuis-runtime-definition/v1
+        -> both bound to ONE interface artifact, typed by it
 
 two-lane structured interface proof
-        -> same interface shape through Component WIT and live Cuis
+        -> real Rust Component (wit-bindgen + wasm-tools + jco canonical ABI)
+        -> live Cuis image through lagrange-cuis-stdio/v1
         -> identical canonical-Value results from both implementation lanes
 ```
 
@@ -194,14 +196,14 @@ The PR32 mixed expression is no longer a neutral-only proof: the same persistent
 
 ### Rust
 
-Implemented: explicit Cargo graph, Cargo/rustc provider, closed vendored dependencies, toolchain cache, raw WASM import, scalar callable interface, Component/WIT-style callable artifact contract and composition as an ordinary Block.
+Implemented: explicit Cargo graph, Cargo/rustc provider, closed vendored dependencies, toolchain cache, raw WASM import, scalar callable interface, implementation-independent callable contract with a real Component lane, and composition as an ordinary Block.
 
 Next:
 
 - [ ] real pinned-OCI Cargo CI proof
 - [ ] standard package importer
 - [ ] Lagrange Rust SDK/crate for explicit host calls
-- [ ] two-lane structured interface proof through Rust Component + Cuis
+- [x] two-lane structured interface proof through Rust Component + Cuis
 - [ ] portable precompiled WASM/component dependency reuse
 
 ### Java
@@ -314,8 +316,8 @@ Established substrate now includes:
 - generic external toolchains + deterministic reuse
 - Cargo/rustc integration with explicit package inputs
 - foreign-WASM callable interface
-- Component/WIT-style callable artifact contract (`wasm-wit-callable-interface/v1`)
-- two-lane structured interface proof (Component WIT + live Cuis)
+- implementation-independent callable contract (`callable-interface/v1`) with per-lane implementation bindings
+- two-lane structured interface proof (real Rust Component + live Cuis, one shared interface)
 - generic long-lived foreign-runtime lifecycle
 - durable runtime definitions + callable Blocks
 - real OpenSmalltalkVM/Cuis runtime/toolchain/package proofs

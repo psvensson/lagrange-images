@@ -146,3 +146,6 @@ vite.config.ts.timestamp-*
 .integration/
 # Change log the Cuis VM writes beside its working directory during integration runs
 UserChanges/
+
+# Rust build output for the committed WASM Component fixture
+fixtures/normalize-component/target/

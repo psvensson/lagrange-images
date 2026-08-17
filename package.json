@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/runtime.js",
     "./backend": "./src/backend/index.js",
+    "./callable": "./src/callable/index.js",
     "./code": "./src/code/index.js",
     "./compilation": "./src/compilation/index.js",
     "./dispatch": "./src/dispatch/invocation-service.js",
@@ -26,7 +27,14 @@
     "test": "node --test"
   },
   "engines": {"node": ">=22"},
-  "peerDependencies": {"lagrange-server": ">=0.1.0"},
-  "peerDependenciesMeta": {"lagrange-server": {"optional": true}},
+  "peerDependencies": {
+    "@bytecodealliance/jco": ">=1.9.0",
+    "lagrange-server": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@bytecodealliance/jco": {"optional": true},
+    "lagrange-server": {"optional": true}
+  },
+  "devDependencies": {"@bytecodealliance/jco": "^1.29.0"},
   "license": "GPL-3.0"
 }
