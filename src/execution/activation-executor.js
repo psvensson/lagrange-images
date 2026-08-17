@@ -44,8 +44,10 @@ function assertInvocations(invocations) {
 }
 
 class ActivationExecutor {
-  constructor({images, executors = new CodeExecutorRegistry(), invocations = null} = {}) {
+  constructor({images, executors = new CodeExecutorRegistry(), invocations = null, authority = null} = {}) {
     this.images = assertImages(images);
+    // The authority *service*, not a context. Per ADR 0037 it is never handed to an executor.
+    this.authority = authority;
     if (!executors || typeof executors.get !== 'function') {
       throw new TypeError('executors must be a CodeExecutorRegistry-compatible object');
     }
@@ -106,7 +108,9 @@ class ActivationExecutor {
     return objectRef(block.imageId, block.id);
   }
 
-  async execute(activation, {depth = 0} = {}) {
+  // `authorityContext` is execution context in exactly the way `depth` already is: real,
+  // load-bearing, and absent from the durable model. Nothing is added to the activation.
+  async execute(activation, {depth = 0, authority = null} = {}) {
     if (!Number.isInteger(depth) || depth < 0) throw new TypeError('activation depth must be a non-negative integer');
     if (depth > MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
     assertActivationRequest(activation);
@@ -126,16 +130,34 @@ class ActivationExecutor {
       {activation, code},
       {
         images: this.images,
+        // Check-only, and the only authority operation that crosses this seam. There is no
+        // grant to return, no context to read, and no principal to branch on. Absent
+        // authority fails closed rather than permitting.
+        require: (demand) => {
+          if (!this.authority) throw new TypeError('no authority service is configured; this execution has no capabilities');
+          if (authority === null) throw new TypeError('no authority context was supplied; this execution has no capabilities');
+          return this.authority.require(authority, demand);
+        },
         lookupBinding: async (bindingId) => {
           if (!activation.environment) throw new TypeError(`lexical binding not found: ${bindingId}`);
           return await this.lookupBinding(activation.environment, bindingId);
         },
         createClosure: async (request) => await this.createClosure(request),
-        sendMessage: async (request) => {
+        // A nested send inherits the current authority. An executor may ask for a narrower
+        // child, but never receives one: the attenuation happens here, so no executor ever
+        // holds a context. Since attenuation only narrows, a nested send can lose rights and
+        // can never gain them.
+        sendMessage: async (request, {attenuate = null} = {}) => {
           if (!this.invocations) throw new TypeError('activation executor has no message runtime');
           if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
+          let nestedAuthority = authority;
+          if (attenuate !== null) {
+            if (!this.authority) throw new TypeError('cannot attenuate without an authority service');
+            if (authority === null) throw new TypeError('cannot attenuate without an authority context');
+            nestedAuthority = this.authority.attenuate(authority, {grants: attenuate});
+          }
           const nested = await this.invocations.sendMessage(request);
-          return await this.execute(nested, {depth: depth + 1});
+          return await this.execute(nested, {depth: depth + 1, authority: nestedAuthority});
         },
       },
     );

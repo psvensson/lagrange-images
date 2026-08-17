@@ -77,11 +77,13 @@ Not representations — these appear inside artifact content as an `abi` or cont
 | `lagrange-value-handle-resumable/v1` | resumable non-tail effect ABI |
 | `lagrange-cuis-stdio/v1` | Cuis provider transport (boolean/integer/float64/text/bytes), below the interface layer; `/v0` was integer/boolean only |
 | `cuis-runtime-definition/v0`, `cuis-build/v0` | artifact content contracts |
+| `authority-grant/v0` | exact-match `{operation, resource}` grants; execution-time only, never durable |
 | `interface-composite/v0` | schema-directed envelope carrying one composite InterfaceValue as bytes; undecodable without the declared interface type. The Component lane unpacks it; the foreign-runtime lane carries the payload alone, with the host owning the header |
 
 ## Where things live
 
 ```text
+src/authority/       transient execution authority; never durable, never a Value
 src/value/           canonical Values; the smallest thing in the repo, keep it that way
 src/object/          shapes, generic objects, refs
 src/code/            CodeArtifacts and representations
