@@ -1,7 +1,9 @@
 import {randomUUID} from 'node:crypto';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
+import {LAGRANGE_CODE_V1} from '../code/lagrange-code-v1.js';
 import {CompilationService, createDefaultCodeCompilerRegistry} from '../compilation/index.js';
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
+import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
 import {objectRef, textValue} from '../value/index.js';
 import {compileSymmetricSmalltalkSemanticBlock} from './symmetric-smalltalk-semantic.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
@@ -9,9 +11,22 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 const SYMMETRIC_SMALLTALK_SOURCE_V0 = 'symmetric-smalltalk/source-v0';
 const SYMMETRIC_SMALLTALK_SYNTAX_V0 = 'symmetric-smalltalk/syntax-v0';
 
+// The semantic representation is chosen once for the whole tree, so the executable target follows
+// from it rather than being decided independently per node.
+const EXECUTABLE_TARGET = Object.freeze({
+  [LAGRANGE_CODE_V0]: NEUTRAL_EXPRESSION_V0,
+  [LAGRANGE_CODE_V1]: NEUTRAL_EXPRESSION_V1,
+});
+
+function executableTargetFor(representation) {
+  const target = EXECUTABLE_TARGET[representation];
+  if (!target) throw new TypeError(`no executable target for semantic representation ${representation}`);
+  return target;
+}
+
 function compileSymmetricSmalltalkBlock(source, options = {}) {
-  const {syntax, program} = compileSymmetricSmalltalkSemanticBlock(source, options);
-  return Object.freeze({syntax, semanticProgram: program, program});
+  const {syntax, program, representation} = compileSymmetricSmalltalkSemanticBlock(source, options);
+  return Object.freeze({syntax, semanticProgram: program, program, representation});
 }
 
 function directNestedBlocks(expression, result = []) {
@@ -23,6 +38,14 @@ function directNestedBlocks(expression, result = []) {
     case 'send':
       directNestedBlocks(expression.receiver, result);
       for (const argument of expression.arguments) directNestedBlocks(argument, result);
+      return result;
+    // A Block is very often the right-hand side of an assignment or a statement of a sequence, so
+    // omitting these would silently install no prototype for it.
+    case 'binding-write':
+      directNestedBlocks(expression.value, result);
+      return result;
+    case 'sequence':
+      for (const statement of expression.statements) directNestedBlocks(statement, result);
       return result;
     case 'integer-add':
     case 'equals':
@@ -51,14 +74,22 @@ function resolveCompilation(images, compilation) {
   return new CompilationService({images, compilers: createDefaultCodeCompilerRegistry()});
 }
 
-async function installNestedPrototypes({images, compilation, imageId, rootId, parentSemanticRef, program}) {
+async function installNestedPrototypes({
+  images,
+  compilation,
+  imageId,
+  rootId,
+  parentSemanticRef,
+  program,
+  representation,
+}) {
   const prototypes = {};
   for (const nested of directNestedBlocks(program.body)) {
     const suffix = blockSuffix(nested.blockId);
     const semanticArtifact = await images.putCodeArtifact(imageId, {
       id: `${rootId}:semantic:${suffix}`,
       languageId: SYMMETRIC_SMALLTALK_ID,
-      representation: LAGRANGE_CODE_V0,
+      representation,
       content: textValue(JSON.stringify(nested.program)),
       derivedFrom: [parentSemanticRef],
       metadata: {semanticBlockId: nested.blockId},
@@ -70,12 +101,13 @@ async function installNestedPrototypes({images, compilation, imageId, rootId, pa
       rootId,
       parentSemanticRef: objectRef(imageId, semanticArtifact.id),
       program: nested.program,
+      representation,
     });
     const codeArtifact = await compilation.compileArtifact(
       objectRef(imageId, semanticArtifact.id),
       {
         id: `${rootId}:code:${suffix}`,
-        targetRepresentation: NEUTRAL_EXPRESSION_V0,
+        targetRepresentation: executableTargetFor(representation),
         options: {blockPrototypes: childPrototypes},
         metadata: {semanticBlockId: nested.blockId},
       },
@@ -104,7 +136,7 @@ async function installSymmetricSmalltalkBlock({
     throw new TypeError('images service with code-artifact and block persistence is required');
   }
   const compiler = resolveCompilation(images, compilation);
-  const {syntax, semanticProgram} = compileSymmetricSmalltalkBlock(source, {captures});
+  const {syntax, semanticProgram, representation} = compileSymmetricSmalltalkBlock(source, {captures});
 
   const sourceArtifact = await images.putCodeArtifact(imageId, {
     id: `${id}:source`,
@@ -123,7 +155,7 @@ async function installSymmetricSmalltalkBlock({
   const semanticArtifact = await images.putCodeArtifact(imageId, {
     id: `${id}:semantic`,
     languageId: SYMMETRIC_SMALLTALK_ID,
-    representation: LAGRANGE_CODE_V0,
+    representation,
     content: textValue(JSON.stringify(semanticProgram)),
     derivedFrom: [objectRef(imageId, syntaxArtifact.id)],
   });
@@ -135,12 +167,13 @@ async function installSymmetricSmalltalkBlock({
     rootId: id,
     parentSemanticRef: objectRef(imageId, semanticArtifact.id),
     program: semanticProgram,
+    representation,
   });
   const codeArtifact = await compiler.compileArtifact(
     objectRef(imageId, semanticArtifact.id),
     {
       id: `${id}:code`,
-      targetRepresentation: NEUTRAL_EXPRESSION_V0,
+      targetRepresentation: executableTargetFor(representation),
       options: {blockPrototypes},
     },
   );
@@ -153,6 +186,7 @@ async function installSymmetricSmalltalkBlock({
   return Object.freeze({
     syntax,
     semanticProgram,
+    representation,
     sourceArtifact,
     syntaxArtifact,
     semanticArtifact,

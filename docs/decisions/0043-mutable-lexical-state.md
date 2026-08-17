@@ -1,6 +1,6 @@
 # ADR 0043: mutable lexical state and assignment
 
-Status: accepted — the decision for temporaries, sequences and assignment; deliberately no implementation yet.
+Status: accepted — the common lexical-cell substrate and the neutral execution lane are implemented (`test/mutable-lexical-state.test.js`); decision 10 is not satisfied until the Lagrange-WASM lane agrees, so this is not yet `implemented`.
 
 ## Problem
 
@@ -283,6 +283,32 @@ Also required:
   history length across a program that assigns repeatedly
 - invoking a closure that depends on mutable captured state across executions fails explicitly
   rather than resetting it
+
+## Implementation status
+
+The substrate and the neutral lane landed first, deliberately, because decision 10 is a constraint
+on the *pair* of lanes and satisfying it needs a versioned WASM ABI change.
+
+Landed, in `test/mutable-lexical-state.test.js`:
+
+```text
+src/execution/lexical-cells.js      frames, cells, arena — the common layer, not a lane's private one
+lagrange-code/v1                    temporaries, sequences, binding-write, capture modes
+neutral-expression/v1               the executable counterpart; no frame machinery in the IR
+{name, cell: true}                  the third durable capture disposition
+```
+
+The proofs take arithmetic as an ordinary message send to a Block, because `integer-add` is a
+neutral-expression op that no front end emits. Making `+` a compiler primitive would prejudge
+Integer objects, so it stays with the object bootstrap rather than arriving as a side effect of
+needing to count.
+
+Not landed: the Lagrange-WASM lane, which refuses `lagrange-code/v1` explicitly at preflight rather
+than diverging. The finding that makes it a separate change is that **a shared cell cannot be a
+WASM local**: the closure that writes it is a separate activation with its own frame, so the cell
+has to stay host-side behind synchronous `cell_get`/`cell_set` imports over the same arena. That is
+an ABI change, hence `lagrange-value-handle/v1` and `lagrange-value-handle-resumable/v2` with a
+compiler-identity advance.
 
 ## What is deferred
 

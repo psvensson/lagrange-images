@@ -213,6 +213,16 @@ pooled instance != activation state
 - Nested Blocks use automatic lexical capture analysis; captured state is identified by stable binding ID rather than source name.
 - `self` crossing a Block boundary is a lexical capture, not the Block object used as the `value*` message receiver.
 
+### Mutable lexical state
+
+- Assignment mutates an activation-visible cell (ADR 0043). Never a canonical Value, never a Block, and never the durable lexical-environment graph. If an assignment causes a `putLexicalEnvironment` call or a history event, it is wrong.
+- A cell is keyed by (lexical frame, static binding ID), never by binding ID alone. Binding IDs are static slot identity and every compilation unit restarts them at `root:`, so keying by ID alone makes recursion, repeated invocation and unrelated artifacts all share one variable.
+- Frame identity and frame lifetime are different. Different lexical invocation means a different frame; a frame stays reachable after its own call returns if a closure holds one of its cells; the arena dies with the root execution.
+- A live-cell capture persists `{name, cell: true}` and no value, deliberately. Do not add a `snapshot()` route: a durable value would let a later invocation quietly restart a counter, which ADR 0043 rules out in favour of `EscapingMutableClosureError`.
+- `UNBOUND` is a host sentinel. It must never reach `canonicalizeValue` or be observable as a Value, and it is not `nil` — there is no `nil` yet.
+- The lexical substrate lives in the common execution layer (`src/execution/lexical-cells.js`) and both lanes consume it. A second, lane-private implementation of mutable lexical state is the architecture to avoid.
+- `lagrange-code/v0` and `neutral-expression/v0` are frozen closed grammars. New executable semantics get a new version and the front end selects between them from semantic need, not from a syntax check.
+
 ## Authority
 
 - Authority is execution context, never program data (ADR 0037). It is passed as `execute(activation, {authority})` and must never become a Value, a slot, a lexical capture, an `interface-composite/v0` payload, metadata, or part of Block identity or a derivation key.
@@ -236,6 +246,7 @@ pooled instance != activation state
 ### Image object projection
 
 - Never name an authority resource by concatenating identifiers. `imageId`/`objectId` do not forbid a separator, so `a/b` + `c` and `a` + `b/c` collide. Build every object resource with `objectResource()` (ADR 0039).
+- The same rule applies to *every* keyed lookup on a two-part ref, not just to authority names, and it has already been got wrong twice. Image and object ids are arbitrary non-empty text, so NUL is no safer a separator than `/`. For an in-memory map, nest it — `Map<imageId, Map<objectId, …>>` — rather than inventing another encoding to audit. Reach for `objectResource()` only when a single durable string is genuinely required.
 - `object/read` is whole-object authority. A projection's field mapping is typing policy, not a field-level capability, and does not attenuate anything.
 - A projection never follows a ref: authority for one object must not imply authority for what it points at. A mapped ref slot is rejected.
 - `image-projection-binding/v1` is structural by stable slot ID. Shape identity is not part of compatibility; a nominal restriction would be a later version with an explicit shape edge.

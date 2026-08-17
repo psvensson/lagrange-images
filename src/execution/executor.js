@@ -31,6 +31,10 @@ import {
   NEUTRAL_EXPRESSION_V0,
   neutralExpressionV0Executor,
 } from './neutral-expression-v0.js';
+import {
+  NEUTRAL_EXPRESSION_V1,
+  neutralExpressionV1Executor,
+} from './neutral-expression-v1.js';
 
 function createDefaultCodeExecutorRegistry({
   wasmModuleCache,
@@ -45,6 +49,7 @@ function createDefaultCodeExecutorRegistry({
 } = {}) {
   const registry = new CodeExecutorRegistry();
   registry.register(NEUTRAL_EXPRESSION_V0, neutralExpressionV0Executor);
+  registry.register(NEUTRAL_EXPRESSION_V1, neutralExpressionV1Executor);
   const wasmOptions = {};
   if (wasmModuleCache !== undefined) wasmOptions.moduleCache = wasmModuleCache;
   if (wasmInstancePool !== undefined) wasmOptions.instancePool = wasmInstancePool;
@@ -102,3 +107,5 @@ export {ActivationExecutor, ExpiredExecutionContextError, createDefaultCodeExecu
 export * from './block-application.js';
 export * from './executor-registry.js';
 export * from './neutral-expression-v0.js';
+export {NEUTRAL_EXPRESSION_V1, neutralExpressionV1Executor} from './neutral-expression-v1.js';
+export * from './lexical-cells.js';

@@ -1,6 +1,9 @@
 import {LAGRANGE_CODE_V0, lagrangeCodeV0ToNeutralExpressionCompiler} from '../code/lagrange-code-v0.js';
+import {LAGRANGE_CODE_V1, lagrangeCodeV1ToNeutralExpressionCompiler} from '../code/lagrange-code-v1.js';
 import {WASM_MODULE_V1} from '../code/wasm-artifacts.js';
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
+import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
+import {assertWasmSupportedSemanticRepresentation} from '../wasm/mutable-lexical-support.js';
 import {
   WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
   lagrangeCodeGroupToWasmModuleCompiler,
@@ -81,10 +84,23 @@ const reusableLagrangeCodeGroupToWasmCompiler = Object.freeze({
   },
 });
 
+// Registered so the refusal is explicit and reaches the caller before any derived artifact is
+// written. Leaving the pair unregistered would report "no compiler" — true, but it reads like a
+// wiring mistake rather than the deliberate lane gap it is.
+const rejectingLagrangeCodeV1ToWasmCompiler = Object.freeze({
+  identity: 'lagrange-code-v1-to-wasm-module-v1/unsupported',
+  async compile({source}) {
+    assertWasmSupportedSemanticRepresentation(source.representation);
+    throw new TypeError(`unexpected ${LAGRANGE_CODE_V1} WASM compilation request`);
+  },
+});
+
 function createDefaultCodeCompilerRegistry() {
   const registry = new CodeCompilerRegistry();
   registry.register(LAGRANGE_CODE_V0, NEUTRAL_EXPRESSION_V0, lagrangeCodeV0ToNeutralExpressionCompiler);
   registry.register(LAGRANGE_CODE_V0, WASM_MODULE_V1, reusableLagrangeCodeV0ToWasmCompiler);
+  registry.register(LAGRANGE_CODE_V1, NEUTRAL_EXPRESSION_V1, lagrangeCodeV1ToNeutralExpressionCompiler);
+  registry.register(LAGRANGE_CODE_V1, WASM_MODULE_V1, rejectingLagrangeCodeV1ToWasmCompiler);
   return registry;
 }
 
