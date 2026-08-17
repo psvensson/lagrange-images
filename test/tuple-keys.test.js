@@ -6,7 +6,12 @@ import {
   CompilationGroupCompilerRegistry,
   createAuthorityService,
   createCompilationGroup,
+  createRuntime,
+  objectRef,
+  textValue,
 } from '../src/runtime.js';
+import {resolveForeignRuntimeDefinition} from '../src/foreign-runtime/definition-service.js';
+import {resolveArtifactGraph} from '../src/toolchain/toolchain-service.js';
 
 const NUL = String.fromCharCode(0);
 const compiler = Object.freeze({async compile() { return {}; }});
@@ -41,6 +46,17 @@ test('TupleMap delete prunes emptied levels and keeps size honest', () => {
   assert.equal(map.get(['x', 'y', 'z']), 3);
   map.clear();
   assert.equal(map.size, 0);
+});
+
+// The nested representation groups keys by prefix, so this is deliberately NOT Map insertion
+// order. Pinned here so nobody later infers Map-order semantics from the API and builds on it.
+test('TupleMap iteration is prefix-grouped, not insertion-ordered', () => {
+  const map = new TupleMap(2);
+  map.set(['a', '1'], 1);
+  map.set(['b', '1'], 2);
+  map.set(['a', '2'], 3);
+  assert.deepEqual([...map.keys()], [['a', '1'], ['a', '2'], ['b', '1']]);
+  assert.notDeepEqual([...map.keys()], [['a', '1'], ['b', '1'], ['a', '2']]);
 });
 
 test('TupleMap rejects keys of the wrong arity or type', () => {
@@ -114,6 +130,78 @@ test('compiler registries distinguish colliding representation pairs', () => {
   groups.register('p', `q${NUL}r`, compiler);
   assert.equal(groups.has('p', 'r'), false);
   assert.deepEqual(groups.list(), [['p', `q${NUL}r`], [`p${NUL}q`, 'r']]);
+});
+
+// Cycle detection walks a `visiting` set of keys produced by the same helper the caches use. Once
+// that helper returned a tuple, a native Set compared fresh arrays by identity, so `has` never
+// matched. The failure was silent rather than loud: the memo map short-circuits the second visit,
+// so a cyclic graph resolved successfully instead of raising. Neither suite covered cyclic input,
+// so all three CI jobs stayed green through it.
+//
+// `putCodeArtifact` requires every dependency to exist already and refuses to overwrite, so a cycle
+// cannot be built through the image service at all — these walkers are defence-in-depth against a
+// graph reaching them by some other route. That is also why no existing suite covered the case, so
+// the stub drives the walker directly rather than pretending the graph is reachable.
+function cyclicImages(pair) {
+  const [first, second] = pair;
+  const artifacts = new Map([
+    [first, {imageId: 'cyclic', id: first, representation: 'test/artifact-v0', content: textValue(first),
+      dependencies: [{artifact: objectRef('cyclic', second), role: 'test/role'}], derivedFrom: [], metadata: {}}],
+    [second, {imageId: 'cyclic', id: second, representation: 'test/artifact-v0', content: textValue(second),
+      dependencies: [{artifact: objectRef('cyclic', first), role: 'test/role'}], derivedFrom: [], metadata: {}}],
+  ]);
+  return {
+    async getCodeArtifact(imageId, objectId) {
+      return artifacts.get(objectId) ?? null;
+    },
+  };
+}
+
+test('foreign runtime definition resolution still detects a dependency cycle', async () => {
+  await assert.rejects(
+    resolveForeignRuntimeDefinition(cyclicImages(['first', 'second']), objectRef('cyclic', 'first')),
+    /foreign runtime artifact dependency cycle detected/,
+  );
+});
+
+test('toolchain artifact graph resolution still detects a dependency cycle', async () => {
+  await assert.rejects(
+    resolveArtifactGraph(cyclicImages(['first', 'second']), [objectRef('cyclic', 'first')]),
+    /artifact dependency cycle detected/,
+  );
+});
+
+test('a shared dependency is still resolved once rather than reported as a cycle', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    await runtime.images.createImage({id: 'diamond'});
+    const base = await runtime.images.putCodeArtifact('diamond', {
+      id: 'base',
+      representation: 'test/artifact-v0',
+      content: textValue('base'),
+    });
+    const dependency = (id) => ({artifact: objectRef('diamond', id), role: 'test/role'});
+    for (const id of ['left', 'right']) {
+      await runtime.images.putCodeArtifact('diamond', {
+        id,
+        representation: 'test/artifact-v0',
+        content: textValue(id),
+        dependencies: [dependency(base.id)],
+      });
+    }
+    const top = await runtime.images.putCodeArtifact('diamond', {
+      id: 'top',
+      representation: 'test/artifact-v0',
+      content: textValue('top'),
+      dependencies: [dependency('left'), dependency('right')],
+    });
+
+    const graph = await resolveArtifactGraph(runtime.images, [objectRef('diamond', top.id)]);
+    const ids = graph.artifacts.map((node) => node.ref.objectId).sort();
+    assert.deepEqual(ids, ['base', 'left', 'right', 'top']);
+  } finally {
+    await runtime.close();
+  }
 });
 
 test('compilation group member deduplication distinguishes colliding refs', () => {

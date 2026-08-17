@@ -93,8 +93,13 @@ class TupleMap {
     this.#size = 0;
   }
 
-  // Insertion-ordered, like Map, and each key is handed back as its parts rather than as a string
-  // an accidental `split` could re-derive wrongly.
+  // Nested/prefix-grouped, NOT insertion-ordered: the nesting groups every key sharing a prefix,
+  // so setting a/1, b/1, a/2 iterates a/1, a/2, b/1. Preserving global Map order would cost a
+  // parallel index that no consumer here needs. A consumer that requires a particular order must
+  // sort explicitly — the compiler registries do, with `compareTuples`.
+  //
+  // Each key is handed back as its parts, never as a string an accidental `split` could re-derive
+  // wrongly.
   *entries() {
     const walk = function* walk(level, depth, prefix) {
       if (depth === 0) {

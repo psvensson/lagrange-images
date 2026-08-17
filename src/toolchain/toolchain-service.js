@@ -1,4 +1,4 @@
-import {TupleMap} from '../support/tuple-map.js';
+import {TupleMap, TupleSet} from '../support/tuple-map.js';
 import {randomUUID} from 'node:crypto';
 import {normalizeDerivationKeyMaterial} from '../compilation/derivation-cache.js';
 import {normalizeArtifactDependencies} from '../execution/model.js';
@@ -77,7 +77,10 @@ async function resolveArtifactGraph(images, roots) {
   const rootRefs = Object.freeze(roots.map((root, index) => normalizeObjectRef(root, `toolchain root ${index}`)));
   const nodes = [];
   const byKey = new TupleMap(2);
-  const visiting = new Set();
+  // A TupleSet, not a native Set: refKey now returns a fresh array each call, and a native
+  // Set compares those by identity, so `has` would never match and cycle detection would
+  // silently stop working.
+  const visiting = new TupleSet(2);
 
   const visit = async (ref) => {
     const key = refKey(ref);

@@ -1,4 +1,4 @@
-import {TupleMap} from '../support/tuple-map.js';
+import {TupleMap, TupleSet} from '../support/tuple-map.js';
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
 
 const FOREIGN_RUNTIME_DEFINITION_PROTOCOL_V0 = 'lagrange-foreign-runtime-definition/v0';
@@ -53,7 +53,10 @@ async function resolveForeignRuntimeDefinition(images, definition) {
   const rootRef = normalizeObjectRef(definition, 'foreign runtime definition');
   const artifacts = [];
   const byKey = new TupleMap(2);
-  const visiting = new Set();
+  // A TupleSet, not a native Set: refKey now returns a fresh array each call, and a native
+  // Set compares those by identity, so `has` would never match and cycle detection would
+  // silently stop working.
+  const visiting = new TupleSet(2);
 
   const visit = async (ref) => {
     const key = refKey(ref);
