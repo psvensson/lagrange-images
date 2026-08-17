@@ -19,9 +19,25 @@ artifact's `representation`.
 | `wasm-function/v1` | `installWasmBlockTree()` | `createWasmFunctionV1Executor()` |
 | `wasm-callable-interface/v1` | `installWasmScalarCallable()` | `createWasmCallableInterfaceV1Executor()` |
 | `foreign-runtime-callable-interface/v1` | `installForeignRuntimeCallable()` | `createForeignRuntimeCallableInterfaceV1Executor()` |
+| `wasm-component-binding/v1` | `installWasmComponentBinding()` | `createWasmComponentBindingV1Executor()` |
+| `foreign-runtime-binding/v1` | `installForeignRuntimeBinding()` | `createForeignRuntimeBindingV1Executor()` |
 
-The foreign-runtime executor is registered only when `createRuntime()` receives foreign
-runtime definitions, runtimes and definition bindings together.
+The foreign-runtime executors are registered only when `createRuntime()` receives foreign
+runtime definitions, runtimes and definition bindings together. The Component binding
+executor is always registered, but needs a `componentRuntime` to execute anything.
+
+## Interface representations
+
+Neither executable nor an implementation. A binding depends on one of these through an
+`interface` role edge; the interface never points back.
+
+| Representation | Install with | Holds |
+| --- | --- | --- |
+| `callable-interface/v1` | `installCallableInterface()` | a callable shape — name, parameter types, result type — and nothing else |
+
+`wasm-callable-interface/v1` and `foreign-runtime-callable-interface/v1` predate this and
+each embed their own signature. They remain valid for callables already installed through
+them; new work uses `callable-interface/v1` with a binding. See ADR 0034.
 
 ## Implementation representations
 
@@ -31,6 +47,7 @@ an interface or definition artifact.
 | Representation | What it holds |
 | --- | --- |
 | `wasm-binary/v1` | raw imported WASM bytes (Cargo output); not directly executable |
+| `wasm-component/v1` | a compiled WASM Component; says nothing about which interfaces it satisfies |
 | `wasm-module/v1` | WASM using the Lagrange Value-handle ABI |
 | `smalltalk/cuis-image-v1` | a Cuis image |
 | `smalltalk/cuis-changes-v1`, `smalltalk/cuis-sources-v1` | Cuis support files |
@@ -57,7 +74,7 @@ Not representations — these appear inside artifact content as an `abi` or cont
 | `foreign-runtime-value-call/v0` | canonical-Value call into a live foreign runtime |
 | `lagrange-value-handle/v0` | internal WASM Value-handle ABI |
 | `lagrange-value-handle-resumable/v1` | resumable non-tail effect ABI |
-| `lagrange-cuis-stdio/v0` | Cuis provider transport, below the interface layer |
+| `lagrange-cuis-stdio/v1` | Cuis provider transport (boolean/integer/float64/text/bytes), below the interface layer; `/v0` was integer/boolean only |
 | `cuis-runtime-definition/v0`, `cuis-build/v0` | artifact content contracts |
 
 ## Where things live

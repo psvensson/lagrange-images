@@ -9,3 +9,5 @@ export * from './resumable-abi.js';
 export * from './resumable-compiler.js';
 export * from './resumable-executor.js';
 export {installWasmBlockTree} from './tree-installer.js';
+export * from './component-artifacts.js';
+export * from './jco-component-runtime.js';

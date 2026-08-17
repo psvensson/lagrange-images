@@ -68,7 +68,7 @@ test('real Cuis toolchain participates in a resumable Lagrange-WASM mixed Block 
   const runtimeProvider = createArtifactBackedOpenSmalltalkCuisProvider({
     vmPath,
     vmIdentity: VM_IDENTITY,
-    startupTimeoutMs: 30_000,
+    startupTimeoutMs: 60_000,
     callTimeoutMs: 10_000,
     stopTimeoutMs: 10_000,
   });

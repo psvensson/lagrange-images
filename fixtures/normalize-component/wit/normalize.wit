@@ -1,0 +1,5 @@
+package lagrange:proof@0.1.0;
+
+world normalize {
+  export normalize: func(input: string) -> string;
+}

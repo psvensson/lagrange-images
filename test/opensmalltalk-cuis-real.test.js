@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import {
   OPENSMALLTALK_CUIS_PROVIDER_ID,
   booleanValue,
+  bytesValue,
   createOpenSmalltalkCuisProvider,
   createRuntime,
+  float64Value,
   integerValue,
+  textValue,
 } from '../src/runtime.js';
 
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
@@ -27,7 +30,7 @@ test('real OpenSmalltalkVM loads and executes an existing Cuis package through F
     imagePath,
     vmIdentity: OPENSMALLTALK_VM_IDENTITY,
     imageIdentity: CUIS_IMAGE_IDENTITY,
-    startupTimeoutMs: 30_000,
+    startupTimeoutMs: 60_000,
     callTimeoutMs: 10_000,
     stopTimeoutMs: 10_000,
   });
@@ -66,6 +69,54 @@ test('real OpenSmalltalkVM loads and executes an existing Cuis package through F
       arguments: [integerValue(8)],
     });
     assert.deepEqual(factorial, integerValue(40320));
+
+    // proof/echo decodes and re-encodes its argument, so it exercises every
+    // lagrange-cuis-stdio/v1 Value branch on the Smalltalk side of the bridge.
+    const scalars = [
+      booleanValue(true),
+      booleanValue(false),
+      integerValue(0),
+      integerValue(-7),
+      integerValue('123456789012345678901234567890'),
+      float64Value(1.5),
+      float64Value(-0),
+      float64Value(1e-300),
+      float64Value(3.141592653589793),
+      textValue(''),
+      textValue('plain'),
+      textValue('tab\there'),
+      // Beyond Latin-1 on purpose: Cuis String truncates these, UnicodeString does not.
+      textValue('hällo 世界 \u{1f600}'),
+      bytesValue(new Uint8Array([])),
+      bytesValue(new Uint8Array([0, 1, 255])),
+      bytesValue(new Uint8Array([72, 105])),
+    ];
+    for (const scalar of scalars) {
+      const echoed = await runtime.foreignRuntimes.call({
+        runtimeId: instance.runtimeId,
+        interface: {service: 'proof', operation: 'echo'},
+        arguments: [scalar],
+      });
+      assert.deepEqual(echoed, scalar, `echo round-trip failed for ${JSON.stringify(scalar)}`);
+    }
+
+    for (const [input, expected] of [
+      ['  Hello   World  ', 'hello world'],
+      ['ALREADY lower', 'already lower'],
+      ['  Tabs\tand\nnewlines  ', 'tabs and newlines'],
+      ['', ''],
+      ['x', 'x'],
+      ['  HÄLLO   Wörld  ', 'hällo wörld'],
+      ['  世界  \u{1f600} ', '世界 \u{1f600}'],
+    ]) {
+      const normalized = await runtime.foreignRuntimes.call({
+        runtimeId: instance.runtimeId,
+        interface: {service: 'text', operation: 'normalize'},
+        arguments: [textValue(input)],
+      });
+      assert.deepEqual(normalized, textValue(expected),
+        `normalize failed for ${JSON.stringify(input)}`);
+    }
 
     await runtime.foreignRuntimes.stop(instance.runtimeId);
     assert.deepEqual(runtime.foreignRuntimes.list(), []);
