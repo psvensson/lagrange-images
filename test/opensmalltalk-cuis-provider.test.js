@@ -207,6 +207,8 @@ test('Cuis bridge v1 exports exactly the operations the generated Smalltalk disp
     ['proof', 'factorial'],
     ['json', 'package-proof'],
     ['text', 'normalize'],
+    ['bytes', 'reverse'],
+    ['float', 'scale'],
   ];
   // The dispatch method is embedded as a Smalltalk string literal, so its quotes are doubled.
   for (const [service, operation] of exported) {
@@ -222,7 +224,10 @@ test('Cuis bridge v1 exports exactly the operations the generated Smalltalk disp
     exported.map(([service, operation]) => `${service}/${operation}`).sort(),
   );
   // Every dispatched selector must also be in the compile list the bridge verifies at boot.
-  for (const selector of ['add:to:', 'echo:', 'factorial:', 'jsonPackageProof', 'normalizeText:']) {
+  for (const selector of [
+    'add:to:', 'echo:', 'factorial:', 'jsonPackageProof', 'normalizeText:',
+    'reverseBytes:', 'scaleFloat:by:',
+  ]) {
     assert.ok(source.includes(selector), `generated bridge never compiles ${selector}`);
   }
   assert.ok(

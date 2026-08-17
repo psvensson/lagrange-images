@@ -26,7 +26,7 @@
     "demo": "node examples/graph-demo.js",
     "test": "node --test",
     "integration:setup": "scripts/integration-setup.sh",
-    "test:integration": "bash -c 'source scripts/integration-env.sh && node --test test/opensmalltalk-cuis-real.test.js test/opensmalltalk-cuis-toolchain-real.test.js test/two-lane-normalize-real.test.js'"
+    "test:integration": "bash -c 'source scripts/integration-env.sh && node --test test/opensmalltalk-cuis-real.test.js test/opensmalltalk-cuis-toolchain-real.test.js test/two-lane-callable-real.test.js'"
   },
   "engines": {"node": ">=22"},
   "peerDependencies": {

@@ -51,7 +51,7 @@ implementation-independent callable interface
 two-lane structured interface proof
         -> real Rust Component (wit-bindgen + wasm-tools + jco canonical ABI)
         -> live Cuis image through lagrange-cuis-stdio/v1
-        -> identical canonical-Value results from both implementation lanes
+        -> text, bytes, float64 and f32 agree bit for bit across both lanes
 ```
 
 The real PR-only proof builds a Cuis image containing the unchanged upstream JSON package, starts that image without reinstalling JSON, and then runs the mixed Smalltalk orchestration through resumable Lagrange WASM against the same live Cuis runtime.
@@ -72,6 +72,7 @@ The scalar callable proofs have now done their job. The next interface work shou
 - [ ] records/arrays and multiple results
 - [x] WASM Component/WIT-style callable artifact contract
 - [x] map the same interface shape to at least two implementation lanes
+- [x] bytes and float64 fidelity through both lanes
 - [ ] capability-aware imported host functions
 - [ ] async foreign callbacks/effects only through explicit contracts
 - [ ] reusable foreign instance/reset contracts where a toolchain can prove safety
@@ -318,6 +319,7 @@ Established substrate now includes:
 - foreign-WASM callable interface
 - implementation-independent callable contract (`callable-interface/v1`) with per-lane implementation bindings
 - two-lane structured interface proof (real Rust Component + live Cuis, one shared interface)
+- text/bytes/float64/f32 fidelity proven across both lanes
 - generic long-lived foreign-runtime lifecycle
 - durable runtime definitions + callable Blocks
 - real OpenSmalltalkVM/Cuis runtime/toolchain/package proofs

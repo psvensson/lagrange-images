@@ -25,6 +25,27 @@ impl Guest for Component {
         }
         out
     }
+
+    /// Reverses the byte sequence. Chosen because it cannot succeed unless every byte
+    /// value and its position survived the boundary.
+    fn reverse(data: Vec<u8>) -> Vec<u8> {
+        let mut out = data;
+        out.reverse();
+        out
+    }
+
+    /// IEEE 754 double multiplication, which is exactly specified, so any disagreement
+    /// between lanes is a boundary bug rather than a rounding difference.
+    fn scale(value: f64, factor: f64) -> f64 {
+        value * factor
+    }
+
+    /// Returns its argument. The interesting part is the f32 parameter: the value has
+    /// already been rounded to f32 precision by the shared interface, so this proves
+    /// the rounding happened before the lane rather than inside it.
+    fn echo_f32(value: f32) -> f32 {
+        value
+    }
 }
 
 export!(Component);

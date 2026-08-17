@@ -1,5 +1,19 @@
 package lagrange:proof@0.1.0;
 
+// Deliberately mundane operations. Each one exists to prove that a canonical Value
+// survives a round trip through the Component canonical ABI unchanged, not to be useful.
 world normalize {
+  // text fidelity: lowercase, collapse ASCII whitespace runs, trim
   export normalize: func(input: string) -> string;
+
+  // binary fidelity: every byte value and ordering must survive
+  export reverse: func(data: list<u8>) -> list<u8>;
+
+  // numeric fidelity: IEEE 754 double multiply is exactly specified, so both lanes
+  // must agree bit for bit
+  export scale: func(value: f64, factor: f64) -> f64;
+
+  // f32 precision: hyphenated on purpose, so the Component lane's WIT-name-to-export
+  // mapping is exercised rather than assumed
+  export echo-f32: func(value: f32) -> f32;
 }

@@ -1,7 +1,7 @@
 # ADR 0034: rich callable component interface
 
 Status: implemented — the first implementation-independent callable contract, proven through a real Rust WASM Component and a live Cuis image.
-Proven by: test/two-lane-normalize-proof.test.js, test/two-lane-normalize-real.test.js, test/callable-architecture-invariants.test.js
+Proven by: test/two-lane-normalize-proof.test.js, test/two-lane-callable-real.test.js, test/callable-value-fidelity.test.js, test/callable-architecture-invariants.test.js
 
 ## Problem
 
@@ -127,6 +127,36 @@ canonical Value         WIT type
 ```
 
 Exactly one result value. No WASI or other imported capabilities in the first proof.
+`list<u8>` is supported as a parameter and as a result: bytes are a canonical Value, so
+carrying them in only one direction would have been an arbitrary restriction.
+
+### f32 means a float64 rounded to f32 precision
+
+`f32` is the one type in the table whose meaning had to be decided rather than merely
+transported, because the canonical Value model has only `float64`.
+
+The rounding happens in the shared interface, on the way in and on the way out, not in
+either lane. That is what makes the lanes agree by construction rather than by each
+happening to round the same way — and it is why the Cuis lane, whose image has no f32
+notion at all, can satisfy an `f32` interface by echoing a float64 that is already
+f32-precise. A lane that rounds again performs a no-op.
+
+The alternative — letting each lane round — was rejected because it makes the observable
+result depend on which implementation answered, which is exactly what a shared interface
+exists to prevent.
+
+### Numeric and binary fidelity are proven, not assumed
+
+Text alone would not have exercised the boundary. `reverse(list<u8>) -> list<u8>` cannot
+succeed unless every byte value and its position survived, and `scale(f64, f64) -> f64`
+uses IEEE 754 multiplication, which is exactly specified, so any disagreement between
+lanes is a boundary defect rather than a rounding difference. The proofs cover empty and
+2000-byte sequences, all 256 byte values, negative zero, subnormals, overflow to infinity
+and NaN.
+
+This immediately found a real defect: Cuis `ByteArray>>base64Encoded` wraps its output
+with a newline every 72 characters, which silently truncated any payload over 54 bytes on
+a line-framed protocol. The text-only proof could never have caught it.
 
 This deliberately excludes refs, pinned-refs, arrays, records, multiple results, option, result and other WIT composite types. Those belong in a later ADR.
 
@@ -160,6 +190,24 @@ part is only that a Rust toolchain is needed to *build* the fixture, so the buil
 
 `jco` is an optional peer dependency. Without it, Component bindings still install and
 still type-check; they simply cannot execute, and say so.
+
+### Known asymmetry: the interface function name doubles as the Component export name
+
+The Component binding resolves `descriptor.function` against the Component's exports,
+while the foreign-runtime binding carries an explicit `target` record. So the interface's
+function name is lane-neutral in principle but is load-bearing for the Component lane in
+practice.
+
+This is tolerable while a WIT function name and an interface name are the same thing, and
+the `echo-f32` proof deliberately binds one interface to a Component export and to an
+unrelated Cuis operation (`proof/echo`) to show the foreign lane is unaffected. If a
+Component ever needs an export name that differs from its interface name, the fix is an
+optional export override in the Component binding, matching how `target` works — not a
+lane-specific field on the interface.
+
+WIT identifiers are kebab-case and jco emits camelCase, so `echo-f32` resolves to
+`echoF32`. That mapping lives in the jco adapter, because the interface must not know that
+one of its lanes is JavaScript.
 
 ### Interface identity remains separate from implementation identity
 
@@ -257,7 +305,7 @@ implementation lanes*.
 
 The following belong in a later ADR after the first proof is established:
 
-- `list<T>` (including `list<u8>` as a general parameter, not just return type)
+- `list<T>` for any `T` other than `u8`; `list<u8>` is proven in both directions
 - WIT records
 - Multiple results
 - `option<T>`, `result<T, E>` and other WIT composite types
@@ -282,6 +330,10 @@ The implementation order is:
    Cuis image, invoked as ordinary Blocks.
 5. Add bytes and float64 through both lanes (binary and numeric fidelity, no structure).
 6. Write a follow-up ADR for list/record/multiple-result types.
+
+Steps 1-5 are done. Step 6 is the next decision, and it is a decision rather than an
+implementation: it must answer how a WIT record or list relates to the image model and the
+existing `Value[]` activation contract before any code exists.
 
 ## Guardrails
 

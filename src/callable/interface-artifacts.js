@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {VALUE_KIND, canonicalizeValue, textValue} from '../value/index.js';
+import {VALUE_KIND, canonicalizeValue, float64ToNumber, float64Value, textValue} from '../value/index.js';
 
 // A callable interface describes a callable shape and nothing else. It deliberately
 // carries no reference to a WASM module, a foreign runtime, a provider or a capability:
@@ -97,10 +97,16 @@ function assertCallableValueType(value, type, label) {
       if (n < min || n > max) throw new RangeError(`${label} is outside ${type} range`);
       return normalized;
     }
-    case 'f32':
     case 'f64':
-      if (normalized.kind !== VALUE_KIND.FLOAT64) throw new TypeError(`${label} must be a float64 Value for ${type}`);
+      if (normalized.kind !== VALUE_KIND.FLOAT64) throw new TypeError(`${label} must be a float64 Value for f64`);
       return normalized;
+    case 'f32': {
+      if (normalized.kind !== VALUE_KIND.FLOAT64) throw new TypeError(`${label} must be a float64 Value for f32`);
+      // f32 at this boundary means "a float64 restricted to f32 precision". Rounding here,
+      // in the shared interface, is what makes the lanes agree by construction instead of
+      // by each lane happening to round the same way. A lane that rounds again is a no-op.
+      return float64Value(Math.fround(float64ToNumber(normalized)));
+    }
     case 'string':
       if (normalized.kind !== VALUE_KIND.TEXT) throw new TypeError(`${label} must be a text Value for string`);
       return normalized;

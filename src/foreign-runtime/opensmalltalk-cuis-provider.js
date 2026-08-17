@@ -83,7 +83,9 @@ function normalizeInterface(value) {
   if (!SAFE_NAME.test(operation)) throw new TypeError('OpenSmalltalk Cuis interface operation contains unsafe characters');
   const exported = (service === 'proof' && ['add', 'echo', 'factorial'].includes(operation))
     || (service === 'json' && operation === 'package-proof')
-    || (service === 'text' && operation === 'normalize');
+    || (service === 'text' && operation === 'normalize')
+    || (service === 'bytes' && operation === 'reverse')
+    || (service === 'float' && operation === 'scale');
   if (!exported) throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
   return Object.freeze({service, operation});
 }
@@ -154,6 +156,8 @@ function expectedArity(service, operation) {
   if (service === 'proof' && operation === 'factorial') return 1;
   if (service === 'json' && operation === 'package-proof') return 0;
   if (service === 'text' && operation === 'normalize') return 1;
+  if (service === 'bytes' && operation === 'reverse') return 1;
+  if (service === 'float' && operation === 'scale') return 2;
   throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
 }
 
@@ -198,6 +202,14 @@ const BRIDGE_METHODS = Object.freeze([
                 startedText := true.
                 outStream nextPut: eachChar ] ].
     ^ outStream contents`,
+// Mirrors the Component lane's `reverse`: it cannot succeed unless every byte value and
+// its position survived the bridge encoding.
+`reverseBytes: aByteArray
+    ^ aByteArray reversed`,
+// Mirrors the Component lane's `scale`. IEEE 754 double multiply is exactly specified, so
+// the two lanes must agree bit for bit or the boundary lost precision.
+`scaleFloat: aFloat by: aFactor
+    ^ aFloat * aFactor`,
 `lagrangeIsWhitespace: aChar
     | code |
     code := aChar codePoint.
@@ -264,13 +276,17 @@ const BRIDGE_METHODS = Object.freeze([
     prefix = 'e:' ifTrue: [ ^ self lagrangePercentDecode: payload ].
     prefix = 'd:' ifTrue: [ ^ payload base64Decoded ].
     ^ self error: 'unsupported bridge value'`,
+// Cuis `ByteArray>>base64Encoded` wraps its output with a newline every 72 characters,
+// which silently truncates any payload over 54 bytes on a line-framed protocol. The
+// newlines are stripped here so the encoding stays canonical, unwrapped base64.
 `lagrangeEncode: aValue
     aValue isInteger ifTrue: [ ^ 'i:', aValue printString ].
     aValue == true ifTrue: [ ^ 'b:1' ].
     aValue == false ifTrue: [ ^ 'b:0' ].
     aValue isFloat ifTrue: [ ^ 'f:', (self lagrangeIntegerToHex: aValue asIEEE64BitWord digits: 16) ].
     aValue isString ifTrue: [ ^ 'e:', (self lagrangePercentEncode: aValue) ].
-    (aValue isKindOf: ByteArray) ifTrue: [ ^ 'd:', aValue base64Encoded ].
+    (aValue isKindOf: ByteArray) ifTrue: [
+        ^ 'd:', ((aValue base64Encoded copyWithout: Character lf) copyWithout: Character cr) ].
     ^ self error: 'unsupported result value'`,
 `lagrangeDispatch: fields
     | serviceName operation |
@@ -292,6 +308,12 @@ const BRIDGE_METHODS = Object.freeze([
     (serviceName = 'text' and: [ operation = 'normalize' ]) ifTrue: [
         fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self normalizeText: (self lagrangeDecode: (fields at: 5)) ].
+    (serviceName = 'bytes' and: [ operation = 'reverse' ]) ifTrue: [
+        fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self reverseBytes: (self lagrangeDecode: (fields at: 5)) ].
+    (serviceName = 'float' and: [ operation = 'scale' ]) ifTrue: [
+        fields size = 6 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self scaleFloat: (self lagrangeDecode: (fields at: 5)) by: (self lagrangeDecode: (fields at: 6)) ].
     ^ self error: 'unknown operation'`,
 ]);
 
