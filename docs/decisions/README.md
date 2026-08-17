@@ -74,7 +74,7 @@ move in. Never move it the other way to make a claim easier to write.
 - [0028 — foreign runtime callable Blocks](0028-foreign-runtime-callable-blocks.md): place durable foreign-runtime services behind ordinary Block/ActivationExecutor invocation with runtime-local provider binding and lazy instance reuse.
 - [0029 — mixed implementation Block composition](0029-mixed-implementation-block-composition.md): compose foreign WASM and live foreign-runtime Blocks from Symmetric Smalltalk without implementation-specific calls.
 - [0034 — rich callable component interface](0034-rich-callable-component-interface.md): WIT-backed structured callable boundary with Component/WIT WASM lane and Cuis bridge v1, while canonical Value and wasm-scalar-call/v0 remain unchanged.
-- [0035 — interface composite values](0035-interface-composite-values.md): WIT composites become transient ref-free InterfaceValues carried as one schema-directed `interface-composite/v0` bytes Value, so no collection Value kind appears and personalities own projection.
+- [0035 — interface composite values](0035-interface-composite-values.md): WIT composites become transient ref-free InterfaceValues carried as one schema-directed `interface-composite/v0` bytes Value; `callable-interface/v2` adds a structural type grammar while v1 stays frozen, so no collection Value kind appears and personalities own projection.
 
 ## Reading rule
 

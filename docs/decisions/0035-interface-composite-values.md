@@ -70,9 +70,19 @@ consequence of anything below. The canonical Value set stays exactly as ADR 0002
 An `InterfaceValue` is a host-local typed value that exists only inside a callable
 invocation. It may look like `["a", "b", "c"]` or `{name: "Peter", count: 3}`.
 
-It is **not** a Value. It cannot enter the graph, cannot be stored in a slot, cannot appear
-in an activation request, and cannot be persisted. Nothing in the durable model knows the
-type exists.
+It is **not** a Value. It cannot enter the graph, cannot be stored in a slot and cannot
+appear in an activation request.
+
+The precise rule about durability has three parts, because a looser statement would be
+wrong in both directions:
+
+- An InterfaceValue **instance** is never a durable image value or object.
+- Its interface **type** may be durable, in `callable-interface/v2`.
+- Its **packed bytes** may be persisted as ordinary opaque bytes, but persistence grants
+  those bytes no structured image semantics.
+
+Decoding stored bytes later against a matching interface type is a new projection
+operation. It does not retroactively make them a nested canonical Value.
 
 ### 3. InterfaceValues are transient, acyclic and ref-free
 
@@ -116,7 +126,7 @@ The envelope does **not** carry a generic object model. Given
 ```wit
 record person {
     name: string,
-    age: u32,
+    age: s32,
 }
 ```
 
@@ -125,7 +135,7 @@ the payload is not `{"name":"Peter","age":42}` and carries no `"record"`, `"stri
 effectively:
 
 ```text
-length("Peter") "Peter" u32(42)
+length("Peter") "Peter" s32(42)
 ```
 
 and `list<string>` is:
@@ -137,8 +147,17 @@ count (length item)(length item)...
 plus a small version header and a fingerprint of the normalized expected type.
 
 **Decoding is impossible without the declared interface type.** That is the property that
-prevents `interface-composite/v0` from degenerating into the generic nested collection
-Value the substrate rejects. There is deliberately no way to ask "what is in these bytes?"
+prevents `interface-composite/v0` from degenerating into the generic nested collection Value
+the substrate rejects.
+
+Stated as an invariant that can actually be checked, rather than as a claim about
+inspectability — a canonical `bytes` Value can always be read as bytes:
+
+```text
+No generic substrate operation may decode, traverse, query or assign
+structural meaning to interface-composite/v0 without the exact expected
+interface type.
+```
 
 The envelope carries a non-reference type fingerprint only — never a ref to the interface
 artifact. Embedding that ref would hide a graph relationship inside bytes, which is the
@@ -204,13 +223,97 @@ by a capability handle — never a declaration that "image ref" is a foreign int
 
 ### 10. A composite is still exactly one activation result
 
-ADR 0005's *"Execution returns exactly one tagged Value"* is untouched. `tuple<string, s64>`
-and `record result {...}` are each one interface value, hence one packed Value.
+ADR 0005's *"Execution returns exactly one tagged Value"* is untouched. A `record result
+{...}` is one interface value, hence one packed Value, however many fields it has.
 
 This should **not** be described as making multiple results fall out. Lisp multiple values
-are semantically different from a tuple; a Lisp personality may later implement them using a
-composite representation, but the substrate continues to say one Value. That boundary has
-proved extremely useful and this ADR does not spend it.
+are semantically different from a composite; a Lisp personality may later implement them
+over a composite representation, but the substrate continues to say one Value. That boundary
+has proved extremely useful and this ADR does not spend it.
+
+### 11. `callable-interface/v2` is introduced for composites; v1 stays frozen
+
+Composites arrive as a new interface representation rather than as a loosened v1.
+
+```text
+callable-interface/v1   types map directly to one canonical Value
+                        bool / s32 / s64 / f32 / f64 / string / list<u8>
+                        frozen; remains valid forever
+
+callable-interface/v2   introduces the composite type grammar
+                        composites may use interface-composite/v0
+```
+
+The reason is stronger than "records will need it eventually". v1 is a genuinely closed
+contract today: its validator accepts exactly seven types and rejects everything else, so
+`list<string>` is not merely unanticipated by v1, it is **explicitly invalid** under it.
+Admitting it while keeping the `/v1` identity would let two runtimes read the same durable
+representation differently, which is exactly what a version number exists to prevent.
+
+There is a second, more architectural reason. `interface-composite/v0` fingerprints the
+normalized expected type, so type normalization and fingerprinting rules must be settled
+*before* a codec depends on them. Inventing them for `list<string>` and changing them when
+records arrive would invalidate every envelope produced in between.
+
+This is an unusually clean version boundary because it tracks a semantic distinction — "maps
+to one canonical Value" versus "needs a carrier" — rather than a mere JSON-schema change.
+
+### 12. The v2 type grammar is structural, not string expressions
+
+Type positions hold either a string (an atomic primitive, or a named type declared in
+`types`) or a structural object for a type constructor:
+
+```json
+{
+  "abi": "callable-interface/v2",
+  "function": "process",
+  "types": {
+    "item": {
+      "kind": "record",
+      "fields": [
+        {"name": "name", "type": "string"},
+        {"name": "quantity", "type": "s64"},
+        {"name": "enabled", "type": "bool"}
+      ]
+    }
+  },
+  "parameters": [
+    {"kind": "list", "element": "item"}
+  ],
+  "result": "item"
+}
+```
+
+String type *expressions* such as `"list<item>"` are rejected. They would quietly require a
+type-expression parser inside the descriptor, and every future constructor would have to
+extend that grammar. Structurally, `list<string>` is `{"kind":"list","element":"string"}`,
+`list<item>` uses identical machinery, and nesting is naturally recursive.
+
+Note the consequence for v1's spelling: `list<u8>` remains a v1 atomic string because it maps
+directly to canonical `bytes`. Under v2 the same meaning is written
+`{"kind":"list","element":"u8"}` only if `u8` is ever added as a primitive, which this ADR
+does not do. Bytes stay `list<u8>` as an atom.
+
+**The first implemented v2 subset is primitives, `list<T>` and named records.** `option`,
+`result`, variants, tuples, resources and ownership are deliberately left undefined. A future
+v3 is cheap compared with prematurely fixing semantics for any of them.
+
+### 13. Type normalization and fingerprinting
+
+The envelope fingerprint is a SHA-256 over the canonical normalized type schema — never over
+the interface artifact identity, per point 5.
+
+```text
+type-definition names   sorted lexically for hashing
+record fields           retain declared order
+object key order        never semantically significant
+type expressions        normalized recursively
+```
+
+Record field order is preserved because it is part of the type's meaning and of the encoding
+layout. Type-definition names are sorted because the `types` map is a set of declarations,
+not a sequence. Object key order carries no meaning anywhere, so normalization must erase it
+before hashing.
 
 ## The Cuis lane reuses proven bytes transport
 
@@ -232,31 +335,6 @@ This is also the pragmatic choice. PR #39 proved that transport carries arbitrar
 correctly — every byte value, empty payloads and 2000-byte payloads — and found and fixed a
 latent base64 line-wrapping defect while doing so. Building a second nested wire format
 beside it would put the fragile part of the bridge back in play for no gain.
-
-## Open question for review
-
-The interface descriptor's type grammar has to grow, and the descriptor is a versioned
-contract. Currently every type is a plain string from a closed set, which already
-accommodates `list<string>`, but a record needs a name and fields.
-
-The WIT-shaped option is a declared-types section, keeping parameter and result positions as
-type *references*:
-
-```json
-{
-  "abi": "callable-interface/v2",
-  "function": "process",
-  "types": {
-    "item": {"kind": "record", "fields": [["name", "string"], ["quantity", "s64"], ["enabled", "bool"]]}
-  },
-  "parameters": ["list<item>"],
-  "result": "item"
-}
-```
-
-This implies bumping `callable-interface/v1` to `/v2`. That is ordinary contract evolution
-rather than the parallel lane-specific representations ADR 0034 consolidated away, but it is
-a durable representation change and should be agreed before implementation.
 
 ## Proof sequence
 
@@ -287,10 +365,32 @@ one depends on.
 Each step must agree bit for bit between a real Component and a live Cuis image, as ADR
 0034's proofs do.
 
+### Implementation ordering
+
+The first change implements the **final** v2 descriptor machinery, not a list-only extension:
+
+```text
+1. callable-interface/v2 type grammar
+   + canonical type normalization and fingerprint
+   + interface-composite/v0 codec
+   + list<string> through both lanes
+
+2. named record item through both lanes
+
+3. list<item> — the first genuinely recursive composite proof
+```
+
+Settling the grammar, normalization and fingerprint before any codec exists is what makes
+steps 2 and 3 boring, which is the desired outcome for substrate work. Shipping a temporary
+list-only v1 extension first would produce envelopes whose fingerprints stop matching the
+moment records arrive.
+
 ## What is still deferred
 
-- `option<T>`, `result<T, E>` and WIT variants
-- nested `list<list<T>>` beyond what step 3 establishes
+- `option<T>`, `result<T, E>`, WIT variants, tuples, resources and ownership: undefined in
+  v2 on purpose, and a future v3 rather than a v2 extension
+- unsigned primitives (`u8`, `u32`, ...): the primitive set stays signed
+- nested `list<list<T>>` beyond what proof step 3 establishes
 - capability-aware `ref` projection outbound (point 8)
 - WIT `resource` handles for foreign access to image identity (point 9)
 - multiple activation results (point 10 keeps one)
@@ -302,8 +402,9 @@ Composite interface data becomes possible without a generic collection Value, wi
 hidden graph refs, without a second calling convention, and without turning a line-framed
 stdio protocol into a recursive serialization format.
 
-The cost is honest and bounded: one private encoding contract, plus the discipline that its
-bytes are meaningless without a declared type. If that discipline ever slips — if something
+The cost is honest and bounded: one new interface representation, one private encoding
+contract, plus the discipline that the encoding's bytes are meaningless without a declared
+type. `callable-interface/v1` is unaffected and stays valid forever. If that discipline ever slips — if something
 starts inspecting an envelope without its interface type — the substrate has grown a nested
 collection Value by accident, which is exactly the outcome this ADR exists to prevent.
 
@@ -311,17 +412,21 @@ collection Value by accident, which is exactly the outcome this ADR exists to pr
 
 ```text
 canonical VALUE_KIND unchanged
+callable-interface/v1 frozen; composites are v2 only
+v1 type != v2 type grammar
+structural type constructor != string type expression
 InterfaceValue != Value
 InterfaceValue is transient, acyclic, ref-free
 interface-composite/v0 != generic collection encoding
 schema-directed != self-describing
 decoding requires the declared interface type
 type fingerprint != interface artifact ref
+fingerprint over normalized type schema != over artifact identity
 transport != interface
 packed carrier != semantic representation
 personality projection != platform policy
 materialized object graph != transport representation
 ref != authority, and ref never crosses a foreign interface
 activation -> exactly one Value
-tuple != Lisp multiple values
+composite result != Lisp multiple values
 ```
