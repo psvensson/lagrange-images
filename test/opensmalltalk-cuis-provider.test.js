@@ -211,6 +211,7 @@ test('Cuis bridge v1 exports exactly the operations the generated Smalltalk disp
     ['bytes', 'reverse'],
     ['float', 'scale'],
     ['item', 'relabel'],
+    ['item', 'relabel-all'],
     ['item', 'make'],
   ];
   // The dispatch method is embedded as a Smalltalk string literal, so its quotes are doubled.
@@ -233,6 +234,8 @@ test('Cuis bridge v1 exports exactly the operations the generated Smalltalk disp
     'lagrangeDecodeStringList:', 'lagrangeEncodeStringList:',
     'lagrangeDecodeItem:', 'lagrangeEncodeItem:', 'relabelItem:', 'makeItem:quantity:',
     'lagrangeS64At:in:', 'lagrangeWriteS64:on:',
+    'lagrangeDecodeItemFrom:at:', 'lagrangeDecodeItemList:', 'lagrangeEncodeItemList:',
+    'relabelAllItems:', 'lagrangeRelabelItem:',
   ]) {
     assert.ok(source.includes(selector), `generated bridge never compiles ${selector}`);
   }

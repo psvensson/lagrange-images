@@ -238,6 +238,33 @@ test('a Rust Component and a live Cuis image satisfy the same callable interface
       ]),
     });
 
+    // list<item>: a list whose element type is itself a composite, so both lanes must
+    // recurse through the same codec rather than special-case a shape.
+    const LIST_OF_ITEM = {kind: 'list', element: 'item'};
+    const asItemList = (values) => packCompositeValue(values, LIST_OF_ITEM, ITEM_TYPES);
+    INTERFACES.push({
+      id: 'relabel-all', functionName: 'relabel-all', types: ITEM_TYPES,
+      parameters: [LIST_OF_ITEM], result: LIST_OF_ITEM,
+      cuisTarget: {service: 'item', operation: 'relabel-all'},
+      decode: (value) => unpackCompositeValue(value, LIST_OF_ITEM, ITEM_TYPES),
+      cases: [
+        [],
+        [{name: '  A  b ', quantity: 1n, enabled: true}],
+        [
+          {name: '', quantity: 9223372036854775807n, enabled: false},
+          {name: '世界 \u{1f600}', quantity: -9223372036854775808n, enabled: true},
+        ],
+        Array.from({length: 300}, (_, i) => ({
+          name: `  Item ${i}  `, quantity: BigInt(i) - 150n, enabled: i % 2 === 0,
+        })),
+      ].map((input) => [
+        [asItemList(input)],
+        asItemList(input.map((item) => ({
+          name: normalizeSpec(item.name), quantity: item.quantity, enabled: !item.enabled,
+        }))),
+      ]),
+    });
+
     for (const spec of INTERFACES) {
       const install = spec.types === undefined ? installCallableInterface : installCallableInterfaceV2;
       const callableInterface = await install({

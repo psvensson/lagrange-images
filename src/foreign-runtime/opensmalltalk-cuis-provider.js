@@ -87,7 +87,7 @@ function normalizeInterface(value) {
     || (service === 'bytes' && operation === 'reverse')
     || (service === 'float' && operation === 'scale')
     || (service === 'text' && operation === 'normalize-all')
-    || (service === 'item' && ['relabel', 'make'].includes(operation));
+    || (service === 'item' && ['relabel', 'relabel-all', 'make'].includes(operation));
   if (!exported) throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
   return Object.freeze({service, operation});
 }
@@ -162,6 +162,7 @@ function expectedArity(service, operation) {
   if (service === 'float' && operation === 'scale') return 2;
   if (service === 'text' && operation === 'normalize-all') return 1;
   if (service === 'item' && operation === 'relabel') return 1;
+  if (service === 'item' && operation === 'relabel-all') return 1;
   if (service === 'item' && operation === 'make') return 2;
   throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
 }
@@ -274,34 +275,63 @@ const BRIDGE_METHODS = Object.freeze([
 // A record payload is positional in declared field order, which is what schema-directed
 // means: there are no names on the wire. The Array here is this proof service's own
 // representation; a real personality would choose its own.
-`lagrangeDecodeItem: aPayload
+`lagrangeDecodeItemFrom: aPayload at: aPosition
     | position length name quantity enabled |
-    position := 1.
+    position := aPosition.
     length := self lagrangeU32At: position in: aPayload.
     position := position + 4.
+    (position + length - 1) > aPayload size ifTrue: [ ^ self error: 'item payload ended early' ].
     name := UnicodeString fromUtf8Bytes: (aPayload copyFrom: position to: position + length - 1).
     position := position + length.
     quantity := self lagrangeS64At: position in: aPayload.
     position := position + 8.
     enabled := (aPayload at: position) = 1.
-    position + 1 = (aPayload size + 1) ifFalse: [ ^ self error: 'item payload has trailing bytes' ].
-    ^ Array with: name with: quantity with: enabled`,
-`lagrangeEncodeItem: anArray
-    | stream bytes |
-    stream := WriteStream on: (ByteArray new: 32).
+    ^ Array with: (Array with: name with: quantity with: enabled) with: position + 1`,
+`lagrangeDecodeItem: aPayload
+    | decoded |
+    decoded := self lagrangeDecodeItemFrom: aPayload at: 1.
+    (decoded at: 2) = (aPayload size + 1) ifFalse: [ ^ self error: 'item payload has trailing bytes' ].
+    ^ decoded at: 1`,
+`lagrangeDecodeItemList: aPayload
+    | position count items decoded |
+    position := 1.
+    count := self lagrangeU32At: position in: aPayload.
+    position := position + 4.
+    items := OrderedCollection new.
+    count timesRepeat: [
+        decoded := self lagrangeDecodeItemFrom: aPayload at: position.
+        items add: (decoded at: 1).
+        position := decoded at: 2 ].
+    position = (aPayload size + 1) ifFalse: [ ^ self error: 'item list payload has trailing bytes' ].
+    ^ items asArray`,
+`lagrangeEncodeItemOn: aStream item: anArray
+    | bytes |
     bytes := (anArray at: 1) asUtf8Bytes.
-    self lagrangeWriteU32: bytes size on: stream.
-    bytes do: [ :eachByte | stream nextPut: eachByte ].
-    self lagrangeWriteS64: (anArray at: 2) on: stream.
-    stream nextPut: ((anArray at: 3) ifTrue: [ 1 ] ifFalse: [ 0 ]).
+    self lagrangeWriteU32: bytes size on: aStream.
+    bytes do: [ :eachByte | aStream nextPut: eachByte ].
+    self lagrangeWriteS64: (anArray at: 2) on: aStream.
+    aStream nextPut: ((anArray at: 3) ifTrue: [ 1 ] ifFalse: [ 0 ])`,
+`lagrangeEncodeItem: anArray
+    | stream |
+    stream := WriteStream on: (ByteArray new: 32).
+    self lagrangeEncodeItemOn: stream item: anArray.
     ^ stream contents`,
+`lagrangeEncodeItemList: anArray
+    | stream |
+    stream := WriteStream on: (ByteArray new: 64).
+    self lagrangeWriteU32: anArray size on: stream.
+    anArray do: [ :eachItem | self lagrangeEncodeItemOn: stream item: eachItem ].
+    ^ stream contents`,
+`lagrangeRelabelItem: anArray
+    ^ Array
+        with: (self normalizeText: (anArray at: 1))
+        with: (anArray at: 2)
+        with: (anArray at: 3) not`,
 `relabelItem: aPayload
-    | item |
-    item := self lagrangeDecodeItem: aPayload.
-    ^ self lagrangeEncodeItem: (Array
-        with: (self normalizeText: (item at: 1))
-        with: (item at: 2)
-        with: (item at: 3) not)`,
+    ^ self lagrangeEncodeItem: (self lagrangeRelabelItem: (self lagrangeDecodeItem: aPayload))`,
+`relabelAllItems: aPayload
+    ^ self lagrangeEncodeItemList: ((self lagrangeDecodeItemList: aPayload)
+        collect: [ :eachItem | self lagrangeRelabelItem: eachItem ])`,
 `makeItem: aName quantity: aQuantity
     ^ self lagrangeEncodeItem: (Array
         with: (self normalizeText: aName)
@@ -411,6 +441,9 @@ const BRIDGE_METHODS = Object.freeze([
     (serviceName = 'item' and: [ operation = 'relabel' ]) ifTrue: [
         fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self relabelItem: (self lagrangeDecode: (fields at: 5)) ].
+    (serviceName = 'item' and: [ operation = 'relabel-all' ]) ifTrue: [
+        fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self relabelAllItems: (self lagrangeDecode: (fields at: 5)) ].
     (serviceName = 'item' and: [ operation = 'make' ]) ifTrue: [
         fields size = 6 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self makeItem: (self lagrangeDecode: (fields at: 5))

@@ -1,6 +1,7 @@
 # ADR 0035: interface composite values
 
-Status: accepted — the decision for WIT composites; the v2 grammar, codec, list<T> and named records are built, but see Implementation status: list<item> is not yet proven.
+Status: implemented — WIT composites as ephemeral InterfaceValues, carried as schema-directed interface-composite/v0 bytes; callable-interface/v2 adds the composite type grammar.
+Proven by: test/callable-composite-codec.test.js, test/callable-value-fidelity.test.js, test/two-lane-callable-real.test.js
 
 ## Problem
 
@@ -404,25 +405,24 @@ moment records arrive.
 
 ## Implementation status
 
-The status line stays `accepted` rather than `implemented`, because the Cuis lane has no
-record decoder yet. Claiming otherwise would be exactly the overstatement the repository's
-ADR convention exists to prevent.
-
-Built and tested:
+The whole decided subset — primitives, `list<T>` and named records — is built and proven
+through both lanes, so the status is `implemented`.
 
 - `callable-interface/v2` with the structural type grammar, normalization, cycle rejection
   and type fingerprinting
-- the `interface-composite/v0` codec for primitives, `list<T>` (including nesting) and named
-  records, with fingerprint mismatch, ref, bounds and malformed-envelope rejection
+- the `interface-composite/v0` codec, with fingerprint mismatch, ref, bounds and
+  malformed-envelope rejection
 - both bindings accept v1 or v2 interfaces
-- `list<string>` and named records proven in both directions through a real Rust Component
-  and a live Cuis image, producing byte-identical envelopes from two independent
-  implementations
+- `list<string>`, named records in both directions, and `list<item>` all proven through a
+  real Rust Component and a live Cuis image, producing byte-identical envelopes from two
+  independent implementations
 
-Not yet proven end to end:
+`list<item>` is the case that mattered most: its element type is itself a composite, so
+both sides recurse through their own codec rather than special-casing a shape. Neither the
+envelope format nor the type grammar needed anything added to support it, which is the
+evidence that the recursion is real rather than a fixed set of blessed shapes.
 
-- `list<item>`, where a list and a record compose. The Cuis image has a list-of-string
-  decoder and a record decoder but nothing that nests one inside the other yet.
+Everything outside that subset remains deferred, unchanged from the list below.
 
 ## What is still deferred
 

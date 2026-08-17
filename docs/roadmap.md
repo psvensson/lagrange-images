@@ -72,7 +72,7 @@ The scalar callable proofs have now done their job. The next interface work shou
 - [x] `callable-interface/v2` structural type grammar + normalization/fingerprint
 - [x] `interface-composite/v0` codec and `list<string>` through both lanes
 - [x] named records through both lanes, in both directions
-- [ ] `list<item>` — the first recursive composite proof
+- [x] `list<item>` — the first recursive composite proof
 - [x] WASM Component/WIT-style callable artifact contract
 - [x] map the same interface shape to at least two implementation lanes
 - [x] bytes and float64 fidelity through both lanes
@@ -323,6 +323,7 @@ Established substrate now includes:
 - implementation-independent callable contract (`callable-interface/v1`) with per-lane implementation bindings
 - two-lane structured interface proof (real Rust Component + live Cuis, one shared interface)
 - text/bytes/float64/f32 fidelity proven across both lanes
+- composite interface values (`list<T>`, named records, `list<record>`) as ephemeral InterfaceValues carried as schema-directed bytes, with no new canonical Value kind
 - generic long-lived foreign-runtime lifecycle
 - durable runtime definitions + callable Blocks
 - real OpenSmalltalkVM/Cuis runtime/toolchain/package proofs
