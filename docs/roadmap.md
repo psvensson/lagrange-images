@@ -80,9 +80,12 @@ The scalar callable proofs have now done their job. The next interface work shou
 - [x] capability-aware imported host functions (`wasm-component-binding/v2`)
 - [x] authorized object projection (`image-projection-binding/v1`)
 - [x] WIT `resource` handles for continuing image access (prebound, activation-scoped)
-- [ ] async foreign callbacks/effects only through explicit contracts (after authority, deliberately)
+- [x] inter-activation survival constraint (ADR 0041): survival is explicit, host-owned and carries no authority
+- [ ] authorized object mutation (`object/write`) — the next increment, ahead of lifecycle work
+- [ ] per-call resource reads once async-capable host imports work; ADR 0040's preloaded record is a tooling limit, not the intended contract and not persistence
+- [ ] async foreign callbacks/effects only through explicit contracts (a future ADR 0041 specialization; the delegated-authority question is open)
 - [x] Component instance lifetime settled: fresh per activation, compilation cached separately
-- [ ] reusable foreign instance/reset contracts where a toolchain can prove safety
+- [ ] reusable foreign instance/reset contracts (a future ADR 0041 specialization; little pressure, since fresh instantiation costs ~0.85 ms)
 
 Success: a nontrivial external library exposes structured values through an implementation-independent interface usable from multiple language personalities.
 

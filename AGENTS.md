@@ -249,6 +249,15 @@ pooled instance != activation state
 - A handle is lane-local: never a Value, an InterfaceValue or an `interface-composite/v0` payload, never stored in a slot, never returned from an ordinary Block.
 - Handles that outlive an activation need an explicit lease abstraction, not `own<T>`.
 
+### Inter-activation state survival
+
+- An activation is the default lifetime boundary (ADR 0041). State dies with it unless an explicit contract says otherwise; there is no survival by omission, convenience, or a mechanism merely being capable of it.
+- A survival contract must name all eight of: what survives, who owns it, how it is identified, when it expires, how it is explicitly released, how forced cleanup works, whether it is runtime-local or durable, and how a later activation reacquires it. Forced cleanup is mandatory, because a trapping guest drops nothing.
+- Surviving state must never retain an `AuthorityContext`, a `require` or `sendMessage` closure, an activation-scoped handle, a principal, or a cached authorization result.
+- Later use always re-enters through a new activation and re-authorizes there. Never inherit authorization from the activation that created the surviving state.
+- A survival identifier is not a capability: possession must not grant access. Surviving state may remember *what*, never *who-may-do-what*.
+- Do not build a generic lease or survival framework. Component reuse, persistent resources and async callbacks are separate specializations that must each satisfy the constraint their own way.
+
 ## Architecture
 
 ```text

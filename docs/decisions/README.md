@@ -86,6 +86,8 @@ move in. Never move it the other way to make a claim easier to write.
 
 - [0040 — activation-scoped image resource handles](0040-activation-scoped-resource-handles.md): a WIT resource over an image object carries identity only, re-authorizes every method, lives for exactly one activation, and `own`/`drop` govern the handle rather than the object.
 
+- [0041 — inter-activation state survival](0041-inter-activation-state-survival.md): state may outlive an activation only under an explicit host-owned contract, and authority never survives with it; a constraint on future Component reuse, persistent resources and async callbacks rather than a framework for them.
+
 ## Reading rule
 
 The current model is summarized in [../architecture.md](../architecture.md) and [../language-platform.md](../language-platform.md). ADRs explain why the model reached that shape and may describe limitations that later ADRs have since extended.
