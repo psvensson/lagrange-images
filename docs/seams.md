@@ -16,6 +16,7 @@ artifact's `representation`.
 | Representation | Install with | Executed by |
 | --- | --- | --- |
 | `neutral-expression/v0` | — (built by language personalities) | `neutralExpressionV0Executor` |
+| `neutral-expression/v1` | — (built by language personalities) | `neutralExpressionV1Executor`; adds temporaries, sequences and assignment |
 | `wasm-function/v1` | `installWasmBlockTree()` | `createWasmFunctionV1Executor()` |
 | `wasm-callable-interface/v1` | `installWasmScalarCallable()` | `createWasmCallableInterfaceV1Executor()` |
 | `foreign-runtime-callable-interface/v1` | `installForeignRuntimeCallable()` | `createForeignRuntimeCallableInterfaceV1Executor()` |
@@ -67,7 +68,16 @@ an interface or definition artifact.
 | --- | --- |
 | `symmetric-smalltalk/source-v0` | language source text |
 | `symmetric-smalltalk/syntax-v0` | parsed syntax |
-| `lagrange-code/v0` | language-neutral semantic code |
+| `lagrange-code/v0` | language-neutral semantic code; **frozen** — a closed grammar, so new semantics get a new version |
+| `lagrange-code/v1` | adds temporaries, statement sequences, assignment, and captures carrying a `snapshot`/`cell` mode |
+
+The semantic representation is chosen per compilation unit from what the program needs, and
+applies to the whole nested tree: `selectSemanticRepresentation()` returns `lagrange-code/v0`
+unless the source declares a temporary, sequences more than one statement, or assigns. Source
+needing none of that still compiles to exactly the `lagrange-code/v0` artifact it always did.
+`lagrange-code/v1` currently runs on the neutral lane only; the WASM lane refuses it explicitly
+with `WasmMutableLexicalStateUnsupportedError` during preflight, before any derived artifact is
+written.
 
 ## ABI and contract identifiers
 

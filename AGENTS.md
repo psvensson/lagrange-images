@@ -213,6 +213,16 @@ pooled instance != activation state
 - Nested Blocks use automatic lexical capture analysis; captured state is identified by stable binding ID rather than source name.
 - `self` crossing a Block boundary is a lexical capture, not the Block object used as the `value*` message receiver.
 
+### Mutable lexical state
+
+- Assignment mutates an activation-visible cell (ADR 0043). Never a canonical Value, never a Block, and never the durable lexical-environment graph. If an assignment causes a `putLexicalEnvironment` call or a history event, it is wrong.
+- A cell is keyed by (lexical frame, static binding ID), never by binding ID alone. Binding IDs are static slot identity and every compilation unit restarts them at `root:`, so keying by ID alone makes recursion, repeated invocation and unrelated artifacts all share one variable.
+- Frame identity and frame lifetime are different. Different lexical invocation means a different frame; a frame stays reachable after its own call returns if a closure holds one of its cells; the arena dies with the root execution.
+- A live-cell capture persists `{name, cell: true}` and no value, deliberately. Do not add a `snapshot()` route: a durable value would let a later invocation quietly restart a counter, which ADR 0043 rules out in favour of `EscapingMutableClosureError`.
+- `UNBOUND` is a host sentinel. It must never reach `canonicalizeValue` or be observable as a Value, and it is not `nil` — there is no `nil` yet.
+- The lexical substrate lives in the common execution layer (`src/execution/lexical-cells.js`) and both lanes consume it. A second, lane-private implementation of mutable lexical state is the architecture to avoid.
+- `lagrange-code/v0` and `neutral-expression/v0` are frozen closed grammars. New executable semantics get a new version and the front end selects between them from semantic need, not from a syntax check.
+
 ## Authority
 
 - Authority is execution context, never program data (ADR 0037). It is passed as `execute(activation, {authority})` and must never become a Value, a slot, a lexical capture, an `interface-composite/v0` payload, metadata, or part of Block identity or a derivation key.

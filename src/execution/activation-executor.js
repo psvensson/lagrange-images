@@ -1,5 +1,10 @@
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
+import {
+  EscapingMutableClosureError,
+  LexicalCellArena,
+  UnboundBindingError,
+} from './lexical-cells.js';
 
 const MAX_ACTIVATION_DEPTH = 256;
 
@@ -67,7 +72,9 @@ class ActivationExecutor {
     this.invocations = assertInvocations(invocations);
   }
 
-  async lookupBinding(environmentRef, bindingId) {
+  // The durable record rather than its value, because the three capture dispositions of ADR 0043
+  // mean different things and only one of them carries a value at all.
+  async lookupBindingRecord(environmentRef, bindingId) {
     if (typeof bindingId !== 'string' || bindingId.length === 0) {
       throw new TypeError('binding id must be a non-empty string');
     }
@@ -83,15 +90,21 @@ class ActivationExecutor {
       if (!environment) {
         throw new TypeError(`lexical environment not found: ${ref.imageId}/${ref.objectId}`);
       }
-      if (Object.hasOwn(environment.bindings, bindingId)) {
-        return canonicalizeValue(environment.bindings[bindingId].value);
-      }
+      if (Object.hasOwn(environment.bindings, bindingId)) return environment.bindings[bindingId];
       currentRef = environment.parent;
     }
-    throw new TypeError(`lexical binding not found: ${bindingId}`);
+    return null;
   }
 
-  async createClosure({prototype, captures}) {
+  async lookupBinding(environmentRef, bindingId) {
+    const record = await this.lookupBindingRecord(environmentRef, bindingId);
+    if (!record) throw new TypeError(`lexical binding not found: ${bindingId}`);
+    if (record.cell === true) throw new EscapingMutableClosureError(bindingId, record.name);
+    if (record.unbound === true) throw new UnboundBindingError(record.name, bindingId);
+    return canonicalizeValue(record.value);
+  }
+
+  async createClosure({prototype, captures}, cells = null) {
     const prototypeRef = normalizeObjectRef(prototype, 'closure prototype');
     if (!Array.isArray(captures)) throw new TypeError('closure captures must be an array');
     const prototypeBlock = await this.images.getBlock(prototypeRef.imageId, prototypeRef.objectId);
@@ -100,11 +113,23 @@ class ActivationExecutor {
     }
 
     const bindings = {};
+    const capturedCells = new Map();
     for (const capture of captures) {
       if (!capture || typeof capture !== 'object' || Array.isArray(capture)) throw new TypeError('closure capture must be an object');
       if (typeof capture.id !== 'string' || capture.id.length === 0) throw new TypeError('closure capture id must be non-empty text');
       if (typeof capture.name !== 'string' || capture.name.length === 0) throw new TypeError('closure capture name must be non-empty text');
       if (Object.hasOwn(bindings, capture.id)) throw new TypeError(`duplicate closure capture id: ${capture.id}`);
+      if (capture.mode === 'cell') {
+        // The cell of the frame that *declared* the binding, which is what `cells.resolve` walks
+        // to — not whichever frame happens to be running. The durable record says only that a
+        // cell is required: writing the current contents would hand a later invocation an old
+        // value to restart from, which ADR 0043 decision 5 rules out.
+        const cell = cells?.resolve(capture.id) ?? null;
+        if (!cell) throw new EscapingMutableClosureError(capture.id, capture.name);
+        capturedCells.set(capture.id, cell);
+        bindings[capture.id] = {name: capture.name, cell: true};
+        continue;
+      }
       bindings[capture.id] = {name: capture.name, value: canonicalizeValue(capture.value)};
     }
 
@@ -117,12 +142,16 @@ class ActivationExecutor {
       environment: environment ? objectRef(environment.imageId, environment.id) : null,
       metadata: {prototypeBlockId: prototypeRef.objectId},
     });
-    return objectRef(block.imageId, block.id);
+    const blockRef = objectRef(block.imageId, block.id);
+    // Execution-scoped, never durable: this is the only thing that lets a closure created in this
+    // execution reach a live cell, and it dies with the arena.
+    cells?.associate(blockRef, capturedCells);
+    return blockRef;
   }
 
   // `authorityContext` is execution context in exactly the way `depth` already is: real,
   // load-bearing, and absent from the durable model. Nothing is added to the activation.
-  async execute(activation, {depth = 0, authority = null} = {}) {
+  async execute(activation, {depth = 0, authority = null, cellArena = null} = {}) {
     if (!Number.isInteger(depth) || depth < 0) throw new TypeError('activation depth must be a non-negative integer');
     if (depth > MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
     assertActivationRequest(activation);
@@ -138,6 +167,13 @@ class ActivationExecutor {
     if (!code) throw new TypeError(`activation code artifact not found: ${activation.code.imageId}/${activation.code.objectId}`);
 
     const executor = this.executors.get(code.representation);
+
+    // The root execution owns the arena; nested sends share it. That is a lifetime relationship
+    // and nothing more: cells are still reached by frame, so sharing an arena never means sharing
+    // a variable. It is what makes a returned closure keep working for the rest of this execution
+    // while still expiring when the execution does.
+    const arena = cellArena ?? new LexicalCellArena();
+    const cells = arena.activationCells(activation.block);
 
     // A mutable record rather than mere stack scoping, so that "active" can later mean "the
     // logical activation is still alive" once async activations exist, instead of "a
@@ -165,7 +201,31 @@ class ActivationExecutor {
           if (!activation.environment) throw new TypeError(`lexical binding not found: ${bindingId}`);
           return await this.lookupBinding(activation.environment, bindingId);
         }),
-        createClosure: whileActive('createClosure', async (request) => await this.createClosure(request)),
+        // Declared, not initialized: a temporary has no value until it is assigned, and there is
+        // no nil to give it. Reading one before assignment raises rather than defaulting.
+        declareTemporaries: whileActive('declareTemporaries', (temporaries) => {
+          if (!Array.isArray(temporaries)) throw new TypeError('temporaries must be an array');
+          cells.declare(temporaries);
+        }),
+        readBinding: whileActive('readBinding', async (bindingId) => {
+          const cell = cells.resolve(bindingId);
+          if (cell) return cell.read();
+          if (!activation.environment) throw new TypeError(`lexical binding not found: ${bindingId}`);
+          return await this.lookupBinding(activation.environment, bindingId);
+        }),
+        writeBinding: whileActive('writeBinding', async (bindingId, value) => {
+          const cell = cells.resolve(bindingId);
+          if (cell) return cell.write(value);
+          // Assignment reaches cells only. A durable binding is layout plus a snapshot, and ADR
+          // 0043 decision 2 keeps assignment out of the graph entirely.
+          const record = activation.environment
+            ? await this.lookupBindingRecord(activation.environment, bindingId)
+            : null;
+          if (record?.cell === true) throw new EscapingMutableClosureError(bindingId, record.name);
+          if (record) throw new TypeError(`lexical binding ${bindingId} is not an assignable cell`);
+          throw new TypeError(`lexical binding not found: ${bindingId}`);
+        }),
+        createClosure: whileActive('createClosure', async (request) => await this.createClosure(request, cells)),
         // A nested send inherits the current authority. An executor may ask for a narrower
         // child, but never receives one: the attenuation happens here, so no executor ever
         // holds a context. Since attenuation only narrows, a nested send can lose rights and
@@ -180,7 +240,11 @@ class ActivationExecutor {
             nestedAuthority = this.authority.attenuate(authority, {grants: attenuate});
           }
           const nested = await this.invocations.sendMessage(request);
-          return await this.execute(nested, {depth: depth + 1, authority: nestedAuthority});
+          return await this.execute(nested, {
+            depth: depth + 1,
+            authority: nestedAuthority,
+            cellArena: arena,
+          });
         }),
       },
       );

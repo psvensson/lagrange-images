@@ -14,6 +14,7 @@ import {
   compileWasmModule,
   compileWasmModuleEntries,
 } from './compiler.js';
+import {assertWasmSupportedSemanticRepresentation} from './mutable-lexical-support.js';
 import {
   compileResumableWasmModule,
   compileResumableWasmModuleEntries,
@@ -253,6 +254,8 @@ async function installWasmBlockTree({
   const rootMetadata = normalizeMetadata(metadata, 'WASM Block tree metadata');
   const rootRef = normalizeObjectRef(semanticRef, 'root semantic code artifact');
   const semanticArtifact = await images.getCodeArtifact(rootRef.imageId, rootRef.objectId);
+  // Before anything is written, so a refused program installs nothing.
+  if (semanticArtifact) assertWasmSupportedSemanticRepresentation(semanticArtifact.representation);
   if (!semanticArtifact || semanticArtifact.representation !== LAGRANGE_CODE_V0) {
     throw new TypeError(`root semantic code artifact must be ${LAGRANGE_CODE_V0}`);
   }
