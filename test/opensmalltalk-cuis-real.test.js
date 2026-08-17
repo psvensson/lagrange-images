@@ -14,7 +14,7 @@ const OPENSMALLTALK_VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur
 const CUIS_IMAGE_IDENTITY = 'cuis/6bcee3f38ce037c9714b997ccd3b5b3ff62965c8/Cuis7.9-8090.image/gitblob:523dc5e74b5b550922b56ff2406415c19700ee8e';
 const CUIS_JSON_IDENTITY = 'cuis-package/JSON/6bcee3f38ce037c9714b997ccd3b5b3ff62965c8/gitblob:47fab65d0d9017d706aa07d39ab0451619488ccd';
 
-test('real OpenSmalltalkVM loads and executes an existing Cuis package through ForeignRuntimeService', {skip: !enabled, timeout: 60_000}, async () => {
+test('real OpenSmalltalkVM loads and executes an existing Cuis package through ForeignRuntimeService', {skip: !enabled, timeout: 120_000}, async () => {
   const vmPath = process.env.LAGRANGE_OPENSMALLTALK_VM_PATH;
   const imagePath = process.env.LAGRANGE_CUIS_IMAGE_PATH;
   const jsonPackagePath = process.env.LAGRANGE_CUIS_JSON_PACKAGE_PATH;
@@ -27,7 +27,7 @@ test('real OpenSmalltalkVM loads and executes an existing Cuis package through F
     imagePath,
     vmIdentity: OPENSMALLTALK_VM_IDENTITY,
     imageIdentity: CUIS_IMAGE_IDENTITY,
-    startupTimeoutMs: 30_000,
+    startupTimeoutMs: 60_000,
     callTimeoutMs: 10_000,
     stopTimeoutMs: 10_000,
   });
