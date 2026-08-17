@@ -1,3 +1,4 @@
+import {TupleMap} from '../support/tuple-map.js';
 import {assertBlockApplicationReceiver} from '../execution/block-application.js';
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
 import {
@@ -33,17 +34,19 @@ function assertBindings(bindings) {
   return bindings;
 }
 
+// A tuple key, not a joined string: image and object ids are arbitrary non-empty text, so
+// no separator is safe to join on. See src/support/tuple-map.js.
 function definitionInstanceKey(providerId, definition) {
   const id = normalizeForeignRuntimeProviderId(providerId);
   const ref = normalizeObjectRef(definition, 'foreign runtime definition');
-  return `${id}\u0000${ref.imageId}\u0000${ref.objectId}`;
+  return [id, ref.imageId, ref.objectId];
 }
 
 class ForeignRuntimeDefinitionInstanceCache {
   constructor({definitions, bindings} = {}) {
     this.definitions = assertDefinitions(definitions);
     this.bindings = assertBindings(bindings);
-    this.entries = new Map();
+    this.entries = new TupleMap(3);
   }
 
   async get({definition, artifact} = {}) {

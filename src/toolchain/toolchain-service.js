@@ -1,3 +1,4 @@
+import {TupleMap} from '../support/tuple-map.js';
 import {randomUUID} from 'node:crypto';
 import {normalizeDerivationKeyMaterial} from '../compilation/derivation-cache.js';
 import {normalizeArtifactDependencies} from '../execution/model.js';
@@ -38,8 +39,10 @@ function normalizePlainData(value, label) {
   return deepFreeze(structuredClone(value));
 }
 
+// A tuple key, not a joined string: image and object ids are arbitrary non-empty text, so
+// no separator is safe to join on. See src/support/tuple-map.js.
 function refKey(ref) {
-  return `${ref.imageId}\u0000${ref.objectId}`;
+  return [ref.imageId, ref.objectId];
 }
 
 function sameRef(left, right) {
@@ -73,7 +76,7 @@ async function resolveArtifactGraph(images, roots) {
   if (!Array.isArray(roots) || roots.length === 0) throw new TypeError('toolchain roots must be a non-empty array');
   const rootRefs = Object.freeze(roots.map((root, index) => normalizeObjectRef(root, `toolchain root ${index}`)));
   const nodes = [];
-  const byKey = new Map();
+  const byKey = new TupleMap(2);
   const visiting = new Set();
 
   const visit = async (ref) => {

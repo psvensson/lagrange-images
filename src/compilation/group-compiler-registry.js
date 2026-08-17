@@ -1,3 +1,6 @@
+import {TupleMap} from '../support/tuple-map.js';
+import {compareTuples} from './compiler-registry.js';
+
 class CompilationGroupCompilerRegistrationError extends Error {
   constructor(policyId, targetRepresentation) {
     super(`group compiler already registered: ${policyId} -> ${targetRepresentation}`);
@@ -28,11 +31,11 @@ function assertGroupCompiler(compiler) {
   return compiler;
 }
 
-const compilerKey = (policyId, targetRepresentation) => `${policyId}\u0000${targetRepresentation}`;
-
 class CompilationGroupCompilerRegistry {
   constructor(entries = []) {
-    this.compilers = new Map();
+    // Keyed by the (policyId, target) tuple: policy ids and representations are arbitrary
+    // non-empty text, so a joined key is not injective.
+    this.compilers = new TupleMap(2);
     for (const [policyId, targetRepresentation, compiler] of entries) {
       this.register(policyId, targetRepresentation, compiler);
     }
@@ -44,9 +47,10 @@ class CompilationGroupCompilerRegistry {
       throw new TypeError('target representation must be a non-empty string');
     }
     assertGroupCompiler(compiler);
-    const key = compilerKey(policy, targetRepresentation);
-    if (this.compilers.has(key)) throw new CompilationGroupCompilerRegistrationError(policy, targetRepresentation);
-    this.compilers.set(key, compiler);
+    if (this.compilers.has([policy, targetRepresentation])) {
+      throw new CompilationGroupCompilerRegistrationError(policy, targetRepresentation);
+    }
+    this.compilers.set([policy, targetRepresentation], compiler);
     return compiler;
   }
 
@@ -55,7 +59,7 @@ class CompilationGroupCompilerRegistry {
     if (typeof targetRepresentation !== 'string' || targetRepresentation.length === 0) {
       throw new TypeError('target representation must be a non-empty string');
     }
-    const compiler = this.compilers.get(compilerKey(policy, targetRepresentation));
+    const compiler = this.compilers.get([policy, targetRepresentation]);
     if (!compiler) throw new CompilationGroupCompilerNotFoundError(policy, targetRepresentation);
     return compiler;
   }
@@ -65,13 +69,11 @@ class CompilationGroupCompilerRegistry {
     if (typeof targetRepresentation !== 'string' || targetRepresentation.length === 0) {
       throw new TypeError('target representation must be a non-empty string');
     }
-    return this.compilers.has(compilerKey(policy, targetRepresentation));
+    return this.compilers.has([policy, targetRepresentation]);
   }
 
   list() {
-    return [...this.compilers.keys()]
-      .map((key) => key.split('\u0000'))
-      .sort((a, b) => a.join('\u0000').localeCompare(b.join('\u0000')));
+    return [...this.compilers.keys()].sort(compareTuples);
   }
 }
 

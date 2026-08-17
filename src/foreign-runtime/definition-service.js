@@ -1,3 +1,4 @@
+import {TupleMap} from '../support/tuple-map.js';
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
 
 const FOREIGN_RUNTIME_DEFINITION_PROTOCOL_V0 = 'lagrange-foreign-runtime-definition/v0';
@@ -28,8 +29,10 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
+// A tuple key, not a joined string: image and object ids are arbitrary non-empty text, so
+// no separator is safe to join on. See src/support/tuple-map.js.
 function refKey(ref) {
-  return `${ref.imageId}\u0000${ref.objectId}`;
+  return [ref.imageId, ref.objectId];
 }
 
 function runtimeArtifactSnapshot(artifact) {
@@ -49,7 +52,7 @@ async function resolveForeignRuntimeDefinition(images, definition) {
   const service = assertImages(images);
   const rootRef = normalizeObjectRef(definition, 'foreign runtime definition');
   const artifacts = [];
-  const byKey = new Map();
+  const byKey = new TupleMap(2);
   const visiting = new Set();
 
   const visit = async (ref) => {

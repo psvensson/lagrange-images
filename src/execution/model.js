@@ -1,3 +1,4 @@
+import {TupleSet} from '../support/tuple-map.js';
 import {
   canonicalizeValue,
   isObjectRef,
@@ -43,7 +44,7 @@ function normalizeReferenceList(values, label) {
 
 function normalizeArtifactDependencies(values, {imageId = null, artifactId = null} = {}) {
   if (!Array.isArray(values)) throw new TypeError('code artifact dependencies must be an array');
-  const seen = new Set();
+  const seen = new TupleSet(3);
   return Object.freeze(values.map((dependency, index) => {
     exactKeys(dependency, ['artifact', 'role'], `code artifact dependency ${index}`);
     const role = requiredText(dependency.role, `code artifact dependency ${index} role`);
@@ -51,7 +52,7 @@ function normalizeArtifactDependencies(values, {imageId = null, artifactId = nul
     if (imageId !== null && artifactId !== null && artifact.imageId === imageId && artifact.objectId === artifactId) {
       throw new TypeError('code artifact cannot depend on itself');
     }
-    const key = `${role}\u0000${artifact.imageId}\u0000${artifact.objectId}`;
+    const key = [role, artifact.imageId, artifact.objectId];
     if (seen.has(key)) throw new TypeError(`duplicate code artifact dependency: ${role} ${artifact.imageId}/${artifact.objectId}`);
     seen.add(key);
     return Object.freeze({role, artifact});

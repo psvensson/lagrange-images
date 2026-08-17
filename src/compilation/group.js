@@ -1,3 +1,4 @@
+import {TupleSet} from '../support/tuple-map.js';
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
 import {normalizeDerivationKeyMaterial} from './derivation-cache.js';
 import {normalizeRepresentation} from './compiler-registry.js';
@@ -31,9 +32,9 @@ function createCompilationGroup({policyId, targetRepresentation, members, option
   const target = normalizeRepresentation(targetRepresentation, 'compilation group target representation');
   if (!Array.isArray(members) || members.length === 0) throw new TypeError('compilation group members must be a non-empty array');
   const normalizedMembers = Object.freeze(members.map(normalizeMember));
-  const seen = new Set();
+  const seen = new TupleSet(2);
   for (const member of normalizedMembers) {
-    const key = `${member.imageId}\u0000${member.objectId}`;
+    const key = [member.imageId, member.objectId];
     if (seen.has(key)) throw new TypeError(`duplicate compilation group member: ${member.imageId}/${member.objectId}`);
     seen.add(key);
   }
