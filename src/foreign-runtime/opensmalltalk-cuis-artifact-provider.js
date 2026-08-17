@@ -1,3 +1,4 @@
+import {TupleMap} from '../support/tuple-map.js';
 import {createHash} from 'node:crypto';
 import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -50,8 +51,10 @@ function normalizeObjectRef(value, label) {
   return ref;
 }
 
+// A tuple key, not a joined string: image and object ids are arbitrary non-empty text, so
+// no separator is safe to join on. See src/support/tuple-map.js.
 function artifactKey(ref) {
-  return `${ref.imageId}\u0000${ref.objectId}`;
+  return [ref.imageId, ref.objectId];
 }
 
 function artifactIdentity(ref) {
@@ -98,7 +101,7 @@ function normalizeRuntimeDefinitionEnvelope(spec) {
 }
 
 function nodeMap(definition) {
-  const nodes = new Map();
+  const nodes = new TupleMap(2);
   for (const node of definition.artifacts) {
     const key = artifactKey(node.ref);
     if (nodes.has(key)) throw new TypeError(`duplicate foreign runtime definition artifact: ${node.ref.imageId}/${node.ref.objectId}`);

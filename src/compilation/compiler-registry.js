@@ -1,3 +1,14 @@
+import {TupleMap} from '../support/tuple-map.js';
+
+// Ordered by part, so ordering never depends on a separator either.
+function compareTuples(left, right) {
+  for (let index = 0; index < left.length; index += 1) {
+    const order = left[index].localeCompare(right[index]);
+    if (order !== 0) return order;
+  }
+  return 0;
+}
+
 class CodeCompilerRegistrationError extends Error {
   constructor(sourceRepresentation, targetRepresentation) {
     super(`compiler already registered: ${sourceRepresentation} -> ${targetRepresentation}`);
@@ -30,11 +41,11 @@ function assertCompiler(compiler) {
   return compiler;
 }
 
-const compilerKey = (source, target) => `${source}\u0000${target}`;
-
 class CodeCompilerRegistry {
   constructor(entries = []) {
-    this.compilers = new Map();
+    // Keyed by the (source, target) tuple rather than by a joined string. Representations are
+    // arbitrary non-empty text, so no separator is safe to join on: see src/support/tuple-map.js.
+    this.compilers = new TupleMap(2);
     for (const [source, target, compiler] of entries) this.register(source, target, compiler);
   }
 
@@ -42,16 +53,15 @@ class CodeCompilerRegistry {
     const source = normalizeRepresentation(sourceRepresentation, 'source representation');
     const target = normalizeRepresentation(targetRepresentation, 'target representation');
     assertCompiler(compiler);
-    const key = compilerKey(source, target);
-    if (this.compilers.has(key)) throw new CodeCompilerRegistrationError(source, target);
-    this.compilers.set(key, compiler);
+    if (this.compilers.has([source, target])) throw new CodeCompilerRegistrationError(source, target);
+    this.compilers.set([source, target], compiler);
     return compiler;
   }
 
   get(sourceRepresentation, targetRepresentation) {
     const source = normalizeRepresentation(sourceRepresentation, 'source representation');
     const target = normalizeRepresentation(targetRepresentation, 'target representation');
-    const compiler = this.compilers.get(compilerKey(source, target));
+    const compiler = this.compilers.get([source, target]);
     if (!compiler) throw new CodeCompilerNotFoundError(source, target);
     return compiler;
   }
@@ -59,16 +69,17 @@ class CodeCompilerRegistry {
   has(sourceRepresentation, targetRepresentation) {
     const source = normalizeRepresentation(sourceRepresentation, 'source representation');
     const target = normalizeRepresentation(targetRepresentation, 'target representation');
-    return this.compilers.has(compilerKey(source, target));
+    return this.compilers.has([source, target]);
   }
 
   list() {
-    return [...this.compilers.keys()].map((key) => key.split('\u0000')).sort((a, b) => a.join('\u0000').localeCompare(b.join('\u0000')));
+    return [...this.compilers.keys()].sort(compareTuples);
   }
 }
 
 export {
   CodeCompilerNotFoundError,
+  compareTuples,
   CodeCompilerRegistrationError,
   CodeCompilerRegistry,
   assertCompiler,

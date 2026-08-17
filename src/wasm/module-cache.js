@@ -1,15 +1,18 @@
+import {TupleMap} from '../support/tuple-map.js';
 import {assertWasmModuleArtifact} from '../code/wasm-artifacts.js';
 
+// A tuple key, not a joined string: image and object ids are arbitrary non-empty text, so
+// no separator is safe to join on. See src/support/tuple-map.js.
 function moduleCacheKey(artifact) {
   assertWasmModuleArtifact(artifact);
-  return `${artifact.imageId}\u0000${artifact.id}`;
+  return [artifact.imageId, artifact.id];
 }
 
 class WasmModuleCache {
   constructor({compile = (bytes) => WebAssembly.compile(bytes)} = {}) {
     if (typeof compile !== 'function') throw new TypeError('WASM module cache compile must be a function');
     this.compile = compile;
-    this.entries = new Map();
+    this.entries = new TupleMap(2);
     this.hits = 0;
     this.misses = 0;
     this.compilations = 0;

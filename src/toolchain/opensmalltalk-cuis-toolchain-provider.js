@@ -1,3 +1,4 @@
+import {TupleMap} from '../support/tuple-map.js';
 import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
@@ -51,12 +52,16 @@ function bytesArtifact(artifact, label) {
   return Buffer.from(artifact.content.base64, 'base64');
 }
 
+// A tuple key, not a joined string: image and object ids are arbitrary non-empty text, so
+// no separator is safe to join on. See src/support/tuple-map.js.
 function artifactKey(ref) {
-  return `${ref.imageId}\u0000${ref.objectId}`;
+  return [ref.imageId, ref.objectId];
 }
 
 function nodeMap(request) {
-  return new Map(request.artifacts.map((node) => [artifactKey(node.ref), node]));
+  const nodes = new TupleMap(2);
+  for (const node of request.artifacts) nodes.set(artifactKey(node.ref), node);
+  return nodes;
 }
 
 function nodeForDependency(nodes, dependency, label) {
