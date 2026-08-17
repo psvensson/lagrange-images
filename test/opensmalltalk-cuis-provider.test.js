@@ -210,6 +210,8 @@ test('Cuis bridge v1 exports exactly the operations the generated Smalltalk disp
     ['text', 'normalize-all'],
     ['bytes', 'reverse'],
     ['float', 'scale'],
+    ['item', 'relabel'],
+    ['item', 'make'],
   ];
   // The dispatch method is embedded as a Smalltalk string literal, so its quotes are doubled.
   for (const [service, operation] of exported) {
@@ -228,7 +230,9 @@ test('Cuis bridge v1 exports exactly the operations the generated Smalltalk disp
   for (const selector of [
     'add:to:', 'echo:', 'factorial:', 'jsonPackageProof', 'normalizeText:',
     'reverseBytes:', 'scaleFloat:by:', 'normalizeAllTexts:',
-    'lagrangeDecodeStringList:', 'lagrangeEncodeStringList:header:',
+    'lagrangeDecodeStringList:', 'lagrangeEncodeStringList:',
+    'lagrangeDecodeItem:', 'lagrangeEncodeItem:', 'relabelItem:', 'makeItem:quantity:',
+    'lagrangeS64At:in:', 'lagrangeWriteS64:on:',
   ]) {
     assert.ok(source.includes(selector), `generated bridge never compiles ${selector}`);
   }

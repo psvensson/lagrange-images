@@ -71,7 +71,8 @@ The scalar callable proofs have now done their job. The next interface work shou
 - [x] choose explicit string/bytes ABI vs moving directly to Component/WIT values
 - [x] `callable-interface/v2` structural type grammar + normalization/fingerprint
 - [x] `interface-composite/v0` codec and `list<string>` through both lanes
-- [ ] named records, then `list<item>`, through both lanes
+- [x] named records through both lanes, in both directions
+- [ ] `list<item>` — the first recursive composite proof
 - [x] WASM Component/WIT-style callable artifact contract
 - [x] map the same interface shape to at least two implementation lanes
 - [x] bytes and float64 fidelity through both lanes

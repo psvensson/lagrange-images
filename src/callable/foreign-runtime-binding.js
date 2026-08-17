@@ -12,6 +12,8 @@ import {
 } from './binding-artifacts.js';
 import {assertImages} from './interface-artifacts.js';
 import {assertCallableInterfaceArguments, assertCallableInterfaceValue} from './interface-v2-artifacts.js';
+import {compositeEnvelopeOf, compositePayloadOf} from './composite-codec.js';
+import {isCompositeType} from './type-grammar.js';
 
 // Binds a callable-interface/v1 to a live foreign runtime. Like the Component binding it
 // carries no signature: the shape comes from the shared interface. What it does carry is
@@ -151,14 +153,25 @@ function createForeignRuntimeBindingV1Executor({
         FOREIGN_RUNTIME_BINDING_V1,
       );
 
+      const types = descriptor.types ?? {};
+      // Composites travel this lane as the bare payload. The envelope header is the Block
+      // edge's concern, and stripping it here means the runtime never needs to produce a
+      // fingerprint of its own.
+      const wireArguments = descriptor.parameters.map((type, index) => (isCompositeType(type)
+        ? compositePayloadOf(args[index], `${descriptor.function} argument ${index}`)
+        : args[index]));
+
       const instance = await cache.get({definition: definitionRef, artifact: definitionArtifact});
       const result = await runtimes.call({
         runtimeId: instance.runtimeId,
         interface: target,
-        arguments: args,
+        arguments: wireArguments,
       });
+      if (isCompositeType(descriptor.result)) {
+        return compositeEnvelopeOf(result, descriptor.result, types, `${descriptor.function} result`);
+      }
       return assertCallableInterfaceValue(
-        result, descriptor.result, descriptor.types ?? {}, `${descriptor.function} result`,
+        result, descriptor.result, types, `${descriptor.function} result`,
       );
     },
   });

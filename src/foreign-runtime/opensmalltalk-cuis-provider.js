@@ -86,7 +86,8 @@ function normalizeInterface(value) {
     || (service === 'text' && operation === 'normalize')
     || (service === 'bytes' && operation === 'reverse')
     || (service === 'float' && operation === 'scale')
-    || (service === 'text' && operation === 'normalize-all');
+    || (service === 'text' && operation === 'normalize-all')
+    || (service === 'item' && ['relabel', 'make'].includes(operation));
   if (!exported) throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
   return Object.freeze({service, operation});
 }
@@ -160,6 +161,8 @@ function expectedArity(service, operation) {
   if (service === 'bytes' && operation === 'reverse') return 1;
   if (service === 'float' && operation === 'scale') return 2;
   if (service === 'text' && operation === 'normalize-all') return 1;
+  if (service === 'item' && operation === 'relabel') return 1;
+  if (service === 'item' && operation === 'make') return 2;
   throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
 }
 
@@ -212,9 +215,10 @@ const BRIDGE_METHODS = Object.freeze([
 // the two lanes must agree bit for bit or the boundary lost precision.
 `scaleFloat: aFloat by: aFactor
     ^ aFloat * aFactor`,
-// interface-composite/v0 support. The bridge never learns a general nested grammar: each
-// operation knows its own signature, so these helpers decode exactly list<string>.
-// Layout: 'LGIC' | version u8 | fingerprint 32 bytes | u32 count | (u32 length, utf8)*
+// Composite payload support. The host strips the interface-composite/v0 envelope header
+// before the call and stamps it afterwards, so the image never sees a fingerprint and never
+// needs SHA-256. The bridge learns no general nested grammar either: each operation knows
+// its own signature, so these helpers decode exactly the shapes those signatures name.
 `lagrangeU32At: anIndex in: aByteArray
     ^ (((aByteArray at: anIndex) bitShift: 24)
         + ((aByteArray at: anIndex + 1) bitShift: 16)
@@ -225,17 +229,23 @@ const BRIDGE_METHODS = Object.freeze([
     aStream nextPut: ((anInteger bitShift: -16) bitAnd: 255).
     aStream nextPut: ((anInteger bitShift: -8) bitAnd: 255).
     aStream nextPut: (anInteger bitAnd: 255)`,
-`lagrangeEnvelopeHeader: anEnvelope
-    anEnvelope size < 37 ifTrue: [ ^ self error: 'composite envelope too short' ].
-    (((anEnvelope at: 1) = 76 and: [ (anEnvelope at: 2) = 71 ])
-        and: [ (anEnvelope at: 3) = 73 and: [ (anEnvelope at: 4) = 67 ] ])
-            ifFalse: [ ^ self error: 'not a composite envelope' ].
-    (anEnvelope at: 5) = 0 ifFalse: [ ^ self error: 'unsupported composite envelope version' ].
-    ^ anEnvelope copyFrom: 1 to: 37`,
+`lagrangeS64At: anIndex in: aByteArray
+    | unsigned |
+    unsigned := 0.
+    0 to: 7 do: [ :offset | unsigned := (unsigned bitShift: 8) + (aByteArray at: anIndex + offset) ].
+    ^ unsigned >= 9223372036854775808
+        ifTrue: [ unsigned - 18446744073709551616 ]
+        ifFalse: [ unsigned ]`,
+`lagrangeWriteS64: anInteger on: aStream
+    | unsigned |
+    unsigned := anInteger < 0
+        ifTrue: [ anInteger + 18446744073709551616 ]
+        ifFalse: [ anInteger ].
+    7 to: 0 by: -1 do: [ :index |
+        aStream nextPut: ((unsigned bitShift: (index * -8)) bitAnd: 255) ]`,
 `lagrangeDecodeStringList: anEnvelope
     | position count items length |
-    self lagrangeEnvelopeHeader: anEnvelope.
-    position := 38.
+    position := 1.
     count := self lagrangeU32At: position in: anEnvelope.
     position := position + 4.
     items := OrderedCollection new.
@@ -247,14 +257,9 @@ const BRIDGE_METHODS = Object.freeze([
         position := position + length ].
     (position = (anEnvelope size + 1)) ifFalse: [ ^ self error: 'composite envelope has trailing bytes' ].
     ^ items asArray`,
-// The request header is reused rather than recomputed: this image cannot compute SHA-256,
-// and it is only correct because normalize-all has the same argument and result type. An
-// operation whose result type differs will need the host to supply the expected
-// fingerprint.
-`lagrangeEncodeStringList: anArray header: aHeader
+`lagrangeEncodeStringList: anArray
     | stream |
     stream := WriteStream on: (ByteArray new: 64).
-    aHeader do: [ :eachByte | stream nextPut: eachByte ].
     self lagrangeWriteU32: anArray size on: stream.
     anArray do: [ :eachString |
         | bytes |
@@ -262,12 +267,46 @@ const BRIDGE_METHODS = Object.freeze([
         self lagrangeWriteU32: bytes size on: stream.
         bytes do: [ :eachByte | stream nextPut: eachByte ] ].
     ^ stream contents`,
-`normalizeAllTexts: anEnvelope
-    | header normalized |
-    header := self lagrangeEnvelopeHeader: anEnvelope.
-    normalized := (self lagrangeDecodeStringList: anEnvelope)
-        collect: [ :eachString | self normalizeText: eachString ].
-    ^ self lagrangeEncodeStringList: normalized header: header`,
+`normalizeAllTexts: aPayload
+    ^ self lagrangeEncodeStringList: ((self lagrangeDecodeStringList: aPayload)
+        collect: [ :eachString | self normalizeText: eachString ])`,
+// record item { name: string, quantity: s64, enabled: bool }
+// A record payload is positional in declared field order, which is what schema-directed
+// means: there are no names on the wire. The Array here is this proof service's own
+// representation; a real personality would choose its own.
+`lagrangeDecodeItem: aPayload
+    | position length name quantity enabled |
+    position := 1.
+    length := self lagrangeU32At: position in: aPayload.
+    position := position + 4.
+    name := UnicodeString fromUtf8Bytes: (aPayload copyFrom: position to: position + length - 1).
+    position := position + length.
+    quantity := self lagrangeS64At: position in: aPayload.
+    position := position + 8.
+    enabled := (aPayload at: position) = 1.
+    position + 1 = (aPayload size + 1) ifFalse: [ ^ self error: 'item payload has trailing bytes' ].
+    ^ Array with: name with: quantity with: enabled`,
+`lagrangeEncodeItem: anArray
+    | stream bytes |
+    stream := WriteStream on: (ByteArray new: 32).
+    bytes := (anArray at: 1) asUtf8Bytes.
+    self lagrangeWriteU32: bytes size on: stream.
+    bytes do: [ :eachByte | stream nextPut: eachByte ].
+    self lagrangeWriteS64: (anArray at: 2) on: stream.
+    stream nextPut: ((anArray at: 3) ifTrue: [ 1 ] ifFalse: [ 0 ]).
+    ^ stream contents`,
+`relabelItem: aPayload
+    | item |
+    item := self lagrangeDecodeItem: aPayload.
+    ^ self lagrangeEncodeItem: (Array
+        with: (self normalizeText: (item at: 1))
+        with: (item at: 2)
+        with: (item at: 3) not)`,
+`makeItem: aName quantity: aQuantity
+    ^ self lagrangeEncodeItem: (Array
+        with: (self normalizeText: aName)
+        with: aQuantity
+        with: aQuantity > 0)`,
 `lagrangeIsWhitespace: aChar
     | code |
     code := aChar codePoint.
@@ -369,6 +408,13 @@ const BRIDGE_METHODS = Object.freeze([
     (serviceName = 'text' and: [ operation = 'normalize-all' ]) ifTrue: [
         fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self normalizeAllTexts: (self lagrangeDecode: (fields at: 5)) ].
+    (serviceName = 'item' and: [ operation = 'relabel' ]) ifTrue: [
+        fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self relabelItem: (self lagrangeDecode: (fields at: 5)) ].
+    (serviceName = 'item' and: [ operation = 'make' ]) ifTrue: [
+        fields size = 6 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self makeItem: (self lagrangeDecode: (fields at: 5))
+            quantity: (self lagrangeDecode: (fields at: 6)) ].
     (serviceName = 'bytes' and: [ operation = 'reverse' ]) ifTrue: [
         fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self reverseBytes: (self lagrangeDecode: (fields at: 5)) ].
