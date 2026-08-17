@@ -1,6 +1,7 @@
 # ADR 0042: authorized object mutation
 
-Status: accepted — the decision for `object/write`; deliberately no implementation yet.
+Status: implemented — `object/write` as a fourth implementation lane, with an object-scoped opaque version token and conflicts translated rather than propagated.
+Proven by: test/image-mutation.test.js
 
 ## Problem
 
@@ -225,6 +226,31 @@ Case 5 is the one that matters most, and "unchanged" means all of it: the confli
 the stored slots are identical, the stored version has not advanced, and the history stream has
 not grown. Asserting only that an exception occurred would pass while leaving a half-applied
 write behind.
+
+## Implementation status
+
+All fourteen proof cases pass, plus three added while implementing.
+
+Two things were tightened during implementation rather than after:
+
+**The version token is object-scoped.** A token carrying only a backend version would have
+succeeded against a different object sitting at the same version — authority would still have
+prevented an escalation, but the compare-and-set would have failed to represent the caller's
+assumption about *this* object, which is the only reason to supply one. `objectVersionToken`
+therefore embeds the object resource, and `parseObjectVersionToken` requires the expected image
+and object. The scope is object-wide rather than per binding, so a future version-aware
+projection can issue a token any legitimate mutation binding over that object accepts. A test
+creates two objects at the same version and confirms one's token cannot mutate the other.
+
+**The backend conflict error is translated, never propagated.** `VersionConflictError` carries
+`collection`, `key`, `expectedVersion` and `actualVersion`, and puts both numbers in its message,
+so surfacing it — even as a `cause`, which would leave `actualVersion` reachable — would defeat
+the opaque token outright. `ObjectMutationConflictError` carries only the object it was raised
+for, and a test asserts no `cause`, none of those four fields, and no digits in the message.
+
+Order of operations in the lane, all before any fetch: `require` the write, then validate the
+token against the requested image and object. So a caller without `object/write` learns nothing,
+and a wrong-object or malformed token fails without reading or writing anything.
 
 ## What is deferred
 

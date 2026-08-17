@@ -23,6 +23,7 @@ artifact's `representation`.
 | `wasm-component-binding/v2` | `installWasmComponentBindingV2()` | same executor; adds declared host imports |
 | `foreign-runtime-binding/v1` | `installForeignRuntimeBinding()` | `createForeignRuntimeBindingV1Executor()` |
 | `image-projection-binding/v1` | `installImageProjectionBinding()` | `createImageProjectionBindingV1Executor()` |
+| `image-mutation-binding/v1` | `installImageMutationBinding()` | `createImageMutationBindingV1Executor()` |
 
 The foreign-runtime executors are registered only when `createRuntime()` receives foreign
 runtime definitions, runtimes and definition bindings together. The Component binding
@@ -81,6 +82,7 @@ Not representations — these appear inside artifact content as an `abi` or cont
 | `cuis-runtime-definition/v0`, `cuis-build/v0` | artifact content contracts |
 | `authority-grant/v0` | exact-match `{operation, resource}` grants; execution-time only, never durable |
 | `object-resource/v0` | injective authority resource name for an object; build only via `objectResource()` |
+| `object-version/v0` | opaque object-scoped optimistic-concurrency token; build only via `objectVersionToken()` |
 | `interface-composite/v0` | schema-directed envelope carrying one composite InterfaceValue as bytes; undecodable without the declared interface type. The Component lane unpacks it; the foreign-runtime lane carries the payload alone, with the host owning the header |
 
 ## Where things live

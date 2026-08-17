@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {VALUE_KIND, canonicalizeValue, float64ToNumber, float64Value, textValue} from '../value/index.js';
+import {VALUE_KIND, booleanValue, bytesValue, canonicalizeValue, float64ToNumber, float64Value, integerValue, textValue} from '../value/index.js';
 
 // A callable interface describes a callable shape and nothing else. It deliberately
 // carries no reference to a WASM module, a foreign runtime, a provider or a capability:
@@ -134,6 +134,34 @@ function canonicalToHostLeaf(value, type, label) {
   }
 }
 
+// The inverse of canonicalToHostLeaf, kept beside it so the two cannot drift.
+function hostLeafToCanonical(value, type, label) {
+  switch (type) {
+    case 'bool':
+      if (typeof value !== 'boolean') throw new TypeError(`${label} must be a boolean`);
+      return booleanValue(value);
+    case 's32':
+    case 's64': {
+      if (typeof value !== 'bigint' && !(typeof value === 'number' && Number.isInteger(value))) {
+        throw new TypeError(`${label} must be an integer`);
+      }
+      return assertCallableValueType(integerValue(typeof value === 'bigint' ? value : BigInt(value)), type, label);
+    }
+    case 'f32':
+    case 'f64':
+      if (typeof value !== 'number') throw new TypeError(`${label} must be a number`);
+      return assertCallableValueType(float64Value(value), type, label);
+    case 'string':
+      if (typeof value !== 'string') throw new TypeError(`${label} must be a string`);
+      return textValue(value);
+    case 'list<u8>':
+      if (!(value instanceof Uint8Array) && !Array.isArray(value)) throw new TypeError(`${label} must be a byte sequence`);
+      return bytesValue(value instanceof Uint8Array ? value : new Uint8Array(value));
+    default:
+      throw new TypeError(`${label} has unsupported leaf type ${type}`);
+  }
+}
+
 function assertCallableArguments(descriptor, args, label = 'callable') {
   if (!Array.isArray(args)) throw new TypeError(`${label} arguments must be an array`);
   if (args.length !== descriptor.parameters.length) {
@@ -176,6 +204,7 @@ export {
   assertCallableArguments,
   assertCallableValueType,
   canonicalToHostLeaf,
+  hostLeafToCanonical,
   assertImages,
   createCallableInterfaceContent,
   installCallableInterface,

@@ -7,4 +7,5 @@ export * from './host-import-registry.js';
 export * from './wasm-component-binding.js';
 export * from './foreign-runtime-binding.js';
 export * from './image-projection-binding.js';
+export * from './image-mutation-binding.js';
 export * from './image-resource-provider.js';

@@ -258,6 +258,15 @@ pooled instance != activation state
 - A survival identifier is not a capability: possession must not grant access. Surviving state may remember *what*, never *who-may-do-what*.
 - Do not build a generic lease or survival framework. Component reuse, persistent resources and async callbacks are separate specializations that must each satisfy the constraint their own way.
 
+### Object mutation
+
+- `object/write` authorizes causing a mutation; `object/read` authorizes observing state. The host-internal read-for-write a partial mutation needs is not `object/read`, so a write-only capability is real (ADR 0042).
+- Optimistic-concurrency tokens are opaque and **object-scoped**. Build them only with `objectVersionToken()`; an unscoped token would succeed against a different object at the same version. Callers may compare and round-trip tokens, never interpret them.
+- Never propagate the backend `VersionConflictError` outward — it carries `expectedVersion`, `actualVersion`, `collection` and `key`. Translate it, and do not attach it as `cause`.
+- Authorize, then validate the token, then fetch. A caller without authority must learn nothing, including whether the object exists.
+- A mutation never follows or writes through a ref, and v1 cannot create a graph edge at all. Future edge mutation is not assumed to fall under `object/write`.
+- `drop` is never a commit.
+
 ## Architecture
 
 ```text
