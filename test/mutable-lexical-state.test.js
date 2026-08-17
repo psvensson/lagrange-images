@@ -13,7 +13,7 @@ import {
   objectRef,
   textValue,
 } from '../src/runtime.js';
-import {NEUTRAL_EXPRESSION_V1} from '../src/execution/executor.js';
+import {LexicalCellArena, NEUTRAL_EXPRESSION_V1} from '../src/execution/executor.js';
 
 // Symmetric Smalltalk has no arithmetic of its own: `integer-add` is a neutral-expression op that
 // no front end emits, because making `+` a primitive would prejudge Integer objects. So the
@@ -230,6 +230,57 @@ test('separately compiled units with identical binding ids do not collide', asyn
     `, [objectRef('lexical', other.block.id)]);
     assert.deepEqual(result, integerValue(3));
   });
+});
+
+// A Block ref is a two-part identity, and flattening it into one string is not injective for any
+// separator, because object ids are arbitrary non-empty text. Under the old NUL-joined key these two
+// refs produced the same entry, so one closure resolved another closure's captured cells.
+test('closure cell associations key on the ref tuple, not a joined string', () => {
+  const arena = new LexicalCellArena();
+  const frame = arena.allocateFrame();
+  const left = frame.declare('root:temporary:0', 'left');
+  const right = frame.declare('root:temporary:1', 'right');
+  left.write(integerValue(1));
+  right.write(integerValue(2));
+
+  const nul = String.fromCharCode(0);
+  const first = {imageId: `a${nul}b`, objectId: 'c'};
+  const second = {imageId: 'a', objectId: `b${nul}c`};
+  arena.associate(first, new Map([['root:temporary:0', left]]));
+  arena.associate(second, new Map([['root:temporary:1', right]]));
+
+  assert.deepEqual([...arena.capturedCells(first).keys()], ['root:temporary:0']);
+  assert.deepEqual([...arena.capturedCells(second).keys()], ['root:temporary:1']);
+  assert.deepEqual(arena.capturedCells(first).get('root:temporary:0').read(), integerValue(1));
+  assert.deepEqual(arena.capturedCells(second).get('root:temporary:1').read(), integerValue(2));
+  assert.equal(arena.capturedCells({imageId: 'a', objectId: 'c'}), null);
+});
+
+// A lexical environment's parent may live in another image, and image ids are arbitrary non-empty
+// text too, so the joined key collided across the pair below and reported a cycle in a chain of
+// length two. Milder than cell substitution, but the same broken invariant.
+test('lexical environment cycle detection keys on the ref tuple, not a joined string', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    const nul = String.fromCharCode(0);
+    await runtime.images.createImage({id: `a${nul}b`});
+    await runtime.images.createImage({id: 'a'});
+    const parent = await runtime.images.putLexicalEnvironment(`a${nul}b`, {
+      id: 'c',
+      bindings: {'binding-outer': {name: 'outer', value: integerValue(5)}},
+    });
+    const child = await runtime.images.putLexicalEnvironment('a', {
+      id: `b${nul}c`,
+      parent: objectRef(`a${nul}b`, parent.id),
+      bindings: {'binding-inner': {name: 'inner', value: integerValue(6)}},
+    });
+    assert.deepEqual(
+      await runtime.executor.lookupBinding(objectRef('a', child.id), 'binding-outer'),
+      integerValue(5),
+    );
+  } finally {
+    await runtime.close();
+  }
 });
 
 test('reading an unassigned temporary fails explicitly rather than defaulting', async () => {

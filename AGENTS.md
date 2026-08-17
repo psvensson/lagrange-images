@@ -246,6 +246,7 @@ pooled instance != activation state
 ### Image object projection
 
 - Never name an authority resource by concatenating identifiers. `imageId`/`objectId` do not forbid a separator, so `a/b` + `c` and `a` + `b/c` collide. Build every object resource with `objectResource()` (ADR 0039).
+- The same rule applies to *every* keyed lookup on a two-part ref, not just to authority names, and it has already been got wrong twice. Image and object ids are arbitrary non-empty text, so NUL is no safer a separator than `/`. For an in-memory map, nest it — `Map<imageId, Map<objectId, …>>` — rather than inventing another encoding to audit. Reach for `objectResource()` only when a single durable string is genuinely required.
 - `object/read` is whole-object authority. A projection's field mapping is typing policy, not a field-level capability, and does not attenuate anything.
 - A projection never follows a ref: authority for one object must not imply authority for what it points at. A mapped ref slot is rejected.
 - `image-projection-binding/v1` is structural by stable slot ID. Shape identity is not part of compatibility; a nominal restriction would be a later version with an explicit shape edge.

@@ -79,12 +79,20 @@ class ActivationExecutor {
       throw new TypeError('binding id must be a non-empty string');
     }
     let currentRef = environmentRef;
-    const visited = new Set();
+    // Nested by imageId then objectId. Flattening a two-part identity into one string needs a
+    // separator that cannot occur inside either part, and object ids are arbitrary non-empty text,
+    // so no such separator exists — the same non-injectivity that makes object resources encode
+    // each part rather than concatenate them.
+    const visited = new Map();
     while (currentRef) {
       const ref = normalizeObjectRef(currentRef, 'lexical environment');
-      const key = `${ref.imageId}\u0000${ref.objectId}`;
-      if (visited.has(key)) throw new TypeError('lexical environment parent cycle detected');
-      visited.add(key);
+      let visitedObjects = visited.get(ref.imageId);
+      if (!visitedObjects) {
+        visitedObjects = new Set();
+        visited.set(ref.imageId, visitedObjects);
+      }
+      if (visitedObjects.has(ref.objectId)) throw new TypeError('lexical environment parent cycle detected');
+      visitedObjects.add(ref.objectId);
 
       const environment = await this.images.getLexicalEnvironment(ref.imageId, ref.objectId);
       if (!environment) {
