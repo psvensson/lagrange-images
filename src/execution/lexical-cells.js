@@ -53,6 +53,18 @@ class EscapingMutableClosureError extends TypeError {
   }
 }
 
+// Raised when a synchronous cell operation names a binding that is not a cell of this activation.
+// The cell-only accessors deliberately do not fall back to the durable environment: that lookup is
+// asynchronous, so a fallback would be unusable from a WASM import anyway, and offering one would
+// reopen the snapshot channel that ADR 0043 decision 5 closes.
+class MissingLexicalCellError extends TypeError {
+  constructor(id) {
+    super(`lexical binding ${id} is not a cell of this activation`);
+    this.name = 'MissingLexicalCellError';
+    this.bindingId = id;
+  }
+}
+
 class LexicalCell {
   #id;
   #name;
@@ -174,6 +186,7 @@ class ActivationCells {
 export {
   ActivationCells,
   EscapingMutableClosureError,
+  MissingLexicalCellError,
   LexicalCell,
   LexicalCellArena,
   LexicalFrame,

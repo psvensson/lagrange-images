@@ -6,6 +6,10 @@ import {
 } from '../value/index.js';
 
 const WASM_VALUE_HANDLE_ABI_V0 = 'lagrange-value-handle/v0';
+// ADR 0043's lexical cells. v0 stays frozen: it resolves every capture to a Value handle before
+// entry and gives make_block_site one handle per capture, neither of which can express a live
+// cell. v1 adds synchronous cell_get/cell_set and mixed-mode closure sites.
+const WASM_VALUE_HANDLE_ABI_V1 = 'lagrange-value-handle/v1';
 const WASM_IMPORT_MODULE = 'lagrange';
 const WASM_ENTRY_V0 = 'run';
 
@@ -55,6 +59,7 @@ class ValueHandleArena {
 
 export {
   WASM_ENTRY_V0,
+  WASM_VALUE_HANDLE_ABI_V1,
   WASM_IMPORT_MODULE,
   WASM_VALUE_HANDLE_ABI_V0,
   ValueHandleArena,
