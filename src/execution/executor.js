@@ -17,7 +17,7 @@ import {
   IMAGE_PROJECTION_BINDING_V1,
   createImageProjectionBindingV1Executor,
 } from '../callable/image-projection-binding.js';
-import {ActivationExecutor} from './activation-executor.js';
+import {ActivationExecutor, ExpiredExecutionContextError} from './activation-executor.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 import {
   NEUTRAL_EXPRESSION_V0,
@@ -85,7 +85,7 @@ function createDefaultCodeExecutorRegistry({
   return registry;
 }
 
-export {ActivationExecutor, createDefaultCodeExecutorRegistry};
+export {ActivationExecutor, ExpiredExecutionContextError, createDefaultCodeExecutorRegistry};
 export * from './block-application.js';
 export * from './executor-registry.js';
 export * from './neutral-expression-v0.js';
