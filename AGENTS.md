@@ -14,6 +14,8 @@ main -> agent/<task> -> pull request -> GitHub Actions -> squash merge -> main
 - Start each task from current `main` on a fresh `agent/<task>` branch.
 - Keep one semantic task per branch and pull request.
 - Read this file and the relevant design documents before editing.
+- Read [docs/runbook.md](docs/runbook.md) before running or debugging anything, and [docs/seams.md](docs/seams.md) before adding a representation, installer or executor.
+- A green `npm test` is not a green suite: the real foreign-runtime and backend proofs skip silently without their environment. Run `npm run test:integration` when you touch `src/foreign-runtime/`, `src/wasm/` or `src/backend/`.
 - Connected agents use GitHub `create_file` and `update_file` for ordinary text changes on the feature branch.
 - GitHub Actions on the exact PR head is the merge authority. Local checks are supplementary.
 - CI runs for pull requests to `main`, not for each intermediate `agent/**` contents commit; do not add a second noisy push validation path.
@@ -27,6 +29,7 @@ main -> agent/<task> -> pull request -> GitHub Actions -> squash merge -> main
 ## Code
 
 - JavaScript ES modules only; no TypeScript/build step without a concrete need.
+- `src/runtime.js` re-exports its modules with `export *`. A duplicate export name breaks the whole package at import time with an error naming neither file, so grep before adding a shared constant and import an existing one rather than spelling it twice.
 - Prefer Node core modules before dependencies.
 - Keep image semantics language-neutral.
 - Keep language personalities independent of Lagrange storage details.
@@ -220,3 +223,25 @@ Do not reverse the dependency direction. Projects, source, binary dependencies, 
 ## Documentation
 
 When a design is exploratory, say so. Keep current, next and possible-later distinct. Avoid describing planned capabilities as implemented.
+
+### ADR status is a claim, and it is checked
+
+Every ADR's third line is a `Status:` line beginning with one of exactly these tokens:
+
+```text
+proposed      considered, not decided
+accepted      decided; may or may not be built yet
+implemented   built and exercised by tests in this repository
+superseded    replaced; must name the replacing ADR
+```
+
+A free-form sentence may follow the token on the same line.
+
+An `implemented` ADR must also carry a `Proven by:` line listing test paths that exist.
+`test/steering-docs.test.js` enforces both rules, so an ADR cannot claim to be built
+without pointing at the thing that proves it.
+
+This matters because a visiting agent reads ADRs as a description of the code. Writing
+"the executor uses X" when nothing implements X is worse than writing nothing: it converts
+a missing feature into a false belief that costs the next agent a day. If a decision is
+made but unbuilt, `accepted` is the honest token.

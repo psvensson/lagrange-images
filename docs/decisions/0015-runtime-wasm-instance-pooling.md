@@ -1,6 +1,6 @@
 # ADR 0015: runtime-local WASM instance pooling
 
-Status: accepted for the bootstrap WASM executor.
+Status: accepted — the bootstrap WASM executor.
 
 ## Problem
 

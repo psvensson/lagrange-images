@@ -1,6 +1,7 @@
 # ADR 0024: OpenSmalltalkVM + Cuis runtime proof
 
-Status: accepted for the first real foreign-runtime provider proof.
+Status: implemented — the first real foreign-runtime provider proof.
+Proven by: test/opensmalltalk-cuis-real.test.js
 
 ## Problem
 

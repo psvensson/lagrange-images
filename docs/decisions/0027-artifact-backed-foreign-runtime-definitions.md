@@ -1,6 +1,6 @@
 # ADR 0027: artifact-backed foreign runtime definitions
 
-Status: accepted for the first durable foreign-runtime definition path.
+Status: accepted — the first durable foreign-runtime definition path.
 
 ## Problem
 

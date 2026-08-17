@@ -1,6 +1,6 @@
 # ADR 0006: Symmetric Smalltalk seed
 
-Status: accepted for the first language seed.
+Status: accepted — the first language seed.
 
 ## Purpose
 

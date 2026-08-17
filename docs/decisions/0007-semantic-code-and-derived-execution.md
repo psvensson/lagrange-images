@@ -1,6 +1,6 @@
 # ADR 0007: semantic code and derived execution
 
-Status: accepted for the bootstrap compiler architecture.
+Status: accepted — the bootstrap compiler architecture.
 
 ## Decision
 

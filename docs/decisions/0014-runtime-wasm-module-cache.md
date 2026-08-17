@@ -1,6 +1,6 @@
 # ADR 0014: runtime-local compiled WASM module cache
 
-Status: accepted for the bootstrap WASM executor.
+Status: accepted — the bootstrap WASM executor.
 
 ## Problem
 

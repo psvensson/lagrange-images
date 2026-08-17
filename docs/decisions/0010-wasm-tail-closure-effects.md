@@ -1,6 +1,6 @@
 # ADR 0010: WASM tail closure effects
 
-Status: accepted for the bootstrap WASM backend.
+Status: accepted — the bootstrap WASM backend.
 
 ## Problem
 

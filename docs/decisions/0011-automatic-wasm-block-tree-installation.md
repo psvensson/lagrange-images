@@ -1,6 +1,6 @@
 # ADR 0011: automatic WASM Block tree installation
 
-Status: accepted for the bootstrap WASM compiler pipeline.
+Status: accepted — the bootstrap WASM compiler pipeline.
 
 ## Problem
 

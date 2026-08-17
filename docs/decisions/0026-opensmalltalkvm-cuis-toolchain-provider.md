@@ -1,6 +1,7 @@
 # ADR 0026: OpenSmalltalkVM + Cuis as a real toolchain provider
 
-Status: accepted for the first Smalltalk external-toolchain implementation.
+Status: implemented — the first Smalltalk external-toolchain implementation.
+Proven by: test/opensmalltalk-cuis-toolchain-real.test.js
 
 ## Problem
 

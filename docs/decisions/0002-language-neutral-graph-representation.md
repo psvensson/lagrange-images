@@ -1,6 +1,6 @@
 # ADR 0002: language-neutral graph representation
 
-Status: accepted for the bootstrap substrate.
+Status: accepted — the bootstrap substrate.
 
 ## Context
 

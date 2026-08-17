@@ -1,6 +1,6 @@
 # ADR 0019: explicit vendored Cargo dependencies
 
-Status: accepted for the first third-party Cargo dependency slice.
+Status: accepted — the first third-party Cargo dependency slice.
 
 ## Problem
 
