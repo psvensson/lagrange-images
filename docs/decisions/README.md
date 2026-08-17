@@ -2,6 +2,27 @@
 
 ADRs are the detailed design history. Read them by topic rather than as a prerequisite sequence.
 
+## Read the status line first
+
+An ADR records a decision. It is not automatically a description of the code, so every ADR
+declares which it is on its third line:
+
+```text
+Status: proposed | accepted | implemented | superseded by NNNN
+Proven by: <test paths>        (required when the status is "implemented")
+```
+
+- `accepted` means decided. It may not be built.
+- `implemented` means built, and the `Proven by:` tests demonstrate it.
+
+`test/steering-docs.test.js` enforces the vocabulary and checks that every cited test file
+exists, so an ADR cannot claim to be built while pointing at nothing.
+
+Most ADRs here say `accepted` because that is what their text supports on its own. If you
+verify that an accepted ADR is in fact implemented, upgrading its status and adding a
+`Proven by:` line is a welcome change — that is the direction this convention is meant to
+move in. Never move it the other way to make a claim easier to write.
+
 ## Foundation and durable image model
 
 - [0001 — backend boundary](0001-backend-boundary.md): keep image semantics above a small storage seam.

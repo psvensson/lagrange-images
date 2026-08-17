@@ -1,6 +1,6 @@
 # ADR 0013: shared multi-function WASM modules
 
-Status: accepted for the first grouped WASM backend.
+Status: accepted — the first grouped WASM backend.
 
 ## Problem
 

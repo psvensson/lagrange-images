@@ -1,7 +1,7 @@
 # ADR 0034: rich callable component interface
 
-Status: accepted, and implemented. The two-lane proof runs against a real Rust WASM
-Component and a live Cuis image.
+Status: implemented — the first implementation-independent callable contract, proven through a real Rust WASM Component and a live Cuis image.
+Proven by: test/two-lane-normalize-proof.test.js, test/two-lane-normalize-real.test.js, test/callable-architecture-invariants.test.js
 
 ## Problem
 

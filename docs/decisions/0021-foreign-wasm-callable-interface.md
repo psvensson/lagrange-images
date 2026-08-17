@@ -1,6 +1,6 @@
 # ADR 0021: foreign WASM callable interface
 
-Status: accepted for the first executable foreign-WASM boundary.
+Status: accepted — the first executable foreign-WASM boundary.
 
 ## Problem
 

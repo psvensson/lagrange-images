@@ -1,6 +1,6 @@
 # 0001: Keep Lagrange behind an image backend boundary
 
-Status: accepted for bootstrap
+Status: accepted — bootstrap.
 
 ## Context
 

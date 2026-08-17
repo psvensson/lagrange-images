@@ -1,6 +1,6 @@
 # ADR 0008: first WASM backend and Value-handle ABI
 
-Status: accepted for the first WASM backend.
+Status: accepted — the first WASM backend.
 
 ## Purpose
 

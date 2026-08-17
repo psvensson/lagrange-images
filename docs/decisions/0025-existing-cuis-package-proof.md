@@ -1,6 +1,7 @@
 # ADR 0025: Existing Cuis package compatibility proof
 
-Status: accepted for the first upstream-package compatibility proof.
+Status: implemented — the first upstream-package compatibility proof.
+Proven by: test/opensmalltalk-cuis-real.test.js
 
 ## Problem
 

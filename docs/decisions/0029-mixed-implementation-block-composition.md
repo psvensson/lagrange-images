@@ -1,6 +1,7 @@
 # ADR 0029: mixed implementation Block composition
 
-Status: accepted for the first mixed-language execution proof.
+Status: implemented — the first mixed-language execution proof.
+Proven by: test/mixed-language-execution.test.js
 
 ## Problem
 

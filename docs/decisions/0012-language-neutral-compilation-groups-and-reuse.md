@@ -1,6 +1,6 @@
 # ADR 0012: language-neutral compilation groups and derived-artifact reuse
 
-Status: accepted for the compilation substrate.
+Status: accepted — the compilation substrate.
 
 ## Problem
 

@@ -1,6 +1,6 @@
 # ADR 0003: code artifacts and closures
 
-Status: accepted for the bootstrap execution substrate.
+Status: accepted — the bootstrap execution substrate.
 
 ## Decision
 

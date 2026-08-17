@@ -1,6 +1,6 @@
 # ADR 0004: invocation and message dispatch
 
-Status: accepted for the bootstrap execution substrate.
+Status: accepted — the bootstrap execution substrate.
 
 ## Decision
 

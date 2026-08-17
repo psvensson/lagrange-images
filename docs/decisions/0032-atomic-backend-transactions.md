@@ -1,8 +1,7 @@
 # 0032 — Atomic backend transactions for state and history
 
-## Status
-
-Accepted.
+Status: implemented.
+Proven by: test/lagrange-backend.test.js
 
 ## Context
 
