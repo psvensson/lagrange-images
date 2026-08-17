@@ -188,7 +188,7 @@ Implemented:
 
 Next:
 
-- [ ] temporaries, sequences and assignment (ADR 0043 decides the mutable-cell semantics first)
+- [ ] temporaries, sequences and assignment (ADR 0043 decided; unimplemented)
 - [ ] cascades, which are surface syntax rather than a semantic decision
 - [ ] Object/Behavior/Class/Metaclass bootstrap and inheritance
 - [ ] immediate-value objects/primitives
