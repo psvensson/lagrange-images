@@ -69,8 +69,8 @@ The scalar callable proofs have now done their job. The next interface work shou
 - [x] language-level Block sends invoke both foreign WASM and live foreign runtimes
 - [x] one semantic program composes both implementation lanes
 - [x] choose explicit string/bytes ABI vs moving directly to Component/WIT values
-- [ ] `callable-interface/v2` structural type grammar + normalization/fingerprint (ADR 0035 decided; unimplemented)
-- [ ] `interface-composite/v0` codec and `list<string>` through both lanes
+- [x] `callable-interface/v2` structural type grammar + normalization/fingerprint
+- [x] `interface-composite/v0` codec and `list<string>` through both lanes
 - [ ] named records, then `list<item>`, through both lanes
 - [x] WASM Component/WIT-style callable artifact contract
 - [x] map the same interface shape to at least two implementation lanes

@@ -17,7 +17,10 @@ import {
   resolveBindingDependency,
   resolveCallableInterface,
 } from './binding-artifacts.js';
-import {assertCallableArguments, assertCallableValueType, assertImages} from './interface-artifacts.js';
+import {assertImages} from './interface-artifacts.js';
+import {isCompositeType} from './type-grammar.js';
+import {packCompositeValue, unpackCompositeValue} from './composite-codec.js';
+import {assertCallableInterfaceArguments, assertCallableInterfaceValue} from './interface-v2-artifacts.js';
 
 // Binds a callable-interface/v1 to a WASM Component implementation. The binding holds no
 // signature of its own: the shape comes from the interface it depends on, so the same
@@ -154,7 +157,7 @@ function createWasmComponentBindingV1Executor({componentRuntime = null} = {}) {
       parseWasmComponentBindingArtifact(code);
 
       const {descriptor} = await resolveCallableInterface(images, code, WASM_COMPONENT_BINDING_V1);
-      const args = assertCallableArguments(descriptor, activation.arguments, descriptor.function);
+      const args = assertCallableInterfaceArguments(descriptor, activation.arguments, descriptor.function);
       const {artifact: implementation} = await resolveBindingDependency(
         images,
         code,
@@ -166,10 +169,18 @@ function createWasmComponentBindingV1Executor({componentRuntime = null} = {}) {
       if (!componentRuntime) {
         throw new TypeError('no Component runtime registered; pass componentRuntime to createRuntime to execute WASM Component bindings');
       }
-      const lowered = descriptor.parameters.map((type, index) => toComponentValue(args[index], type));
+      // The canonical ABI wants real host values, so a composite is unpacked here. The
+      // envelope exists for the Block edge, not for the lane.
+      const types = descriptor.types ?? {};
+      const lowered = descriptor.parameters.map((type, index) => (isCompositeType(type)
+        ? unpackCompositeValue(args[index], type, types, `${descriptor.function} argument ${index}`)
+        : toComponentValue(args[index], type)));
       const raw = await componentRuntime.invoke(implementation, descriptor.function, lowered);
+      if (isCompositeType(descriptor.result)) {
+        return packCompositeValue(raw, descriptor.result, types, `${descriptor.function} result`);
+      }
       const result = fromComponentValue(raw, descriptor.result);
-      return assertCallableValueType(result, descriptor.result, `${descriptor.function} result`);
+      return assertCallableInterfaceValue(result, descriptor.result, types, `${descriptor.function} result`);
     },
   });
 }

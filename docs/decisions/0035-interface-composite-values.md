@@ -1,6 +1,6 @@
 # ADR 0035: interface composite values
 
-Status: accepted — the decision for WIT composites; deliberately no implementation yet.
+Status: accepted — the decision for WIT composites; the v2 grammar and codec are built, but see Implementation status: records are not yet proven on either lane.
 
 ## Problem
 
@@ -384,6 +384,33 @@ Settling the grammar, normalization and fingerprint before any codec exists is w
 steps 2 and 3 boring, which is the desired outcome for substrate work. Shipping a temporary
 list-only v1 extension first would produce envelopes whose fingerprints stop matching the
 moment records arrive.
+
+## Implementation status
+
+The status line stays `accepted` rather than `implemented`, because the Cuis lane has no
+record decoder yet. Claiming otherwise would be exactly the overstatement the repository's
+ADR convention exists to prevent.
+
+Built and tested:
+
+- `callable-interface/v2` with the structural type grammar, normalization, cycle rejection
+  and type fingerprinting
+- the `interface-composite/v0` codec for primitives, `list<T>` (including nesting) and named
+  records, with fingerprint mismatch, ref, bounds and malformed-envelope rejection
+- both bindings accept v1 or v2 interfaces
+- `list<string>` proven through a real Rust Component and a live Cuis image, producing
+  byte-identical envelopes from two independent implementations
+
+Not yet proven end to end:
+
+- named records through either lane
+- `list<item>` through either lane
+
+The Cuis image cannot compute SHA-256, so `normalizeAllTexts:` reuses the request envelope's
+header rather than recomputing a fingerprint. That is correct only because `normalize-all`
+has the same argument and result type. An operation whose result type differs will need the
+host to supply the expected result fingerprint, which is a known prerequisite for the record
+proof.
 
 ## What is still deferred
 

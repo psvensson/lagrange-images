@@ -33,7 +33,8 @@ Neither executable nor an implementation. A binding depends on one of these thro
 
 | Representation | Install with | Holds |
 | --- | --- | --- |
-| `callable-interface/v1` | `installCallableInterface()` | a callable shape — name, parameter types, result type — and nothing else |
+| `callable-interface/v1` | `installCallableInterface()` | a callable shape whose every type maps directly to one canonical Value; **frozen** |
+| `callable-interface/v2` | `installCallableInterfaceV2()` | the same, plus the composite type grammar: `list<T>` and named records |
 
 `wasm-callable-interface/v1` and `foreign-runtime-callable-interface/v1` predate this and
 each embed their own signature. They remain valid for callables already installed through
@@ -76,6 +77,7 @@ Not representations — these appear inside artifact content as an `abi` or cont
 | `lagrange-value-handle-resumable/v1` | resumable non-tail effect ABI |
 | `lagrange-cuis-stdio/v1` | Cuis provider transport (boolean/integer/float64/text/bytes), below the interface layer; `/v0` was integer/boolean only |
 | `cuis-runtime-definition/v0`, `cuis-build/v0` | artifact content contracts |
+| `interface-composite/v0` | schema-directed envelope carrying one composite InterfaceValue as bytes; undecodable without the declared interface type |
 
 ## Where things live
 
