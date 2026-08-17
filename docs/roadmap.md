@@ -58,7 +58,18 @@ The real PR-only proof builds a Cuis image containing the unchanged upstream JSO
 
 ## Next
 
-### 1. Richer foreign/component interfaces
+### 1. Richer foreign/component interfaces — closed
+
+This arc is finished rather than paused. Structured values, per-activation instance lifetime,
+transient authority, capability-aware host imports, authorized object projection and mutation,
+and activation-scoped resource handles are all implemented and proven through real lanes
+(ADRs 0034-0042). What remains below is deliberately deferred refinement, and none of it
+currently justifies more substrate work.
+
+The highest-leverage gap is now in the first language rather than in the foreign boundary:
+Symmetric Smalltalk still cannot express an ordinary multi-statement program with local mutable
+state. See the Symmetric Smalltalk section.
+
 
 The scalar callable proofs have now done their job. The next interface work should expand useful data without turning the v0 scalar ABI into an ad-hoc memory protocol.
 
@@ -177,7 +188,8 @@ Implemented:
 
 Next:
 
-- [ ] assignments, temporaries, sequences and cascades
+- [ ] temporaries, sequences and assignment (ADR 0043 decides the mutable-cell semantics first)
+- [ ] cascades, which are surface syntax rather than a semantic decision
 - [ ] Object/Behavior/Class/Metaclass bootstrap and inheritance
 - [ ] immediate-value objects/primitives
 - [ ] exception/condition substrate
@@ -271,8 +283,16 @@ Implemented:
 Next:
 
 - [ ] object locator and placement policy
-- [ ] capability handles separate from object refs
-- [ ] capability/principal context on foreign calls
+- [x] capability handles separate from object refs — a WIT `resource` handle carries image
+      identity only, never authority (ADR 0040); a `ref` still never crosses a foreign interface
+- [x] capability/principal context on foreign calls — authority travels beside the activation and
+      every host operation re-authorizes at use time (ADRs 0037, 0038)
+- [ ] per-call authority for the long-lived foreign-runtime transport. ADR 0037 decision 12
+      already fixes the semantics — authority belongs to the call, never to the shared runtime
+      instance — so what remains is only the bridge wire mechanism, likely request-scoped
+      host-call frames
+- [ ] delegated authority for resumed activations, which async callbacks will force (ADR 0037
+      leaves it open on purpose)
 - [ ] local vs remote call semantics
 - [ ] Lagrange WASM placement
 - [ ] OCI foreign-runtime lifecycle/placement
