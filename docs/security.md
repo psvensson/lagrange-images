@@ -14,7 +14,7 @@ Cluster/service configuration belongs outside images:
 - placement and resource policy
 - secrets used to reach external systems
 
-Images may contain *references* to named resources or capabilities, but not the master credentials that mint them.
+Images may contain *references* to named resources, and capability requirements or policies, but never live authority contexts or grants, and never the master credentials that mint them. Per ADR 0037 an authority context is transient execution state that has no durable representation at all, so a durable "capability" in the graph is a statement about what would be required, never a thing that permits anything.
 
 ## Principals
 
@@ -50,6 +50,8 @@ principal -> image capability -> object/project/callable capability -> allowed o
 A reference crossing an image or service boundary should not automatically carry every right held by the sender. Rights should be narrow, delegable where intended, and revocable at an authority layer.
 
 This is especially important if remote message/call syntax becomes pleasantly similar to local invocation. Convenience must not erase the authority boundary.
+
+ADR 0037 decides how that authority is carried: beside an activation as execution context, never inside it as program data. An authority context is an opaque host-issued object rather than plain data, `principal` is not `capability`, and a foreign guest receives the intersection of what its binding declares it may import and what the current execution is authorized to use. Absence of authority means no capabilities rather than all of them.
 
 ## History
 
