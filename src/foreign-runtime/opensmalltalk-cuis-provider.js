@@ -157,11 +157,6 @@ function expectedArity(service, operation) {
   throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
 }
 
-function encodeHexByte(byte) {
-  const hex = '0123456789abcdef';
-  return hex[byte >> 4] + hex[byte & 0x0f];
-}
-
 // Every bridge method is compiled separately so that one bad method cannot silence the
 // whole bridge: Cuis compiles a doIt as a single unit, so a syntax error anywhere in a
 // large script suppresses all output, including the BOOT lines used to diagnose it.
@@ -574,5 +569,4 @@ export {
   createOpenSmalltalkCuisProvider,
   decodeBridgeValue as decodeCuisBridgeValue,
   encodeBridgeValue as encodeCuisBridgeValue,
-  encodeHexByte,
 };
