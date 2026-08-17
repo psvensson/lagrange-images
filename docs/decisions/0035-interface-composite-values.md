@@ -1,6 +1,6 @@
 # ADR 0035: interface composite values
 
-Status: accepted — the decision for WIT composites; the v2 grammar and codec are built, but see Implementation status: records are not yet proven on either lane.
+Status: accepted — the decision for WIT composites; the v2 grammar, codec, list<T> and named records are built, but see Implementation status: list<item> is not yet proven.
 
 ## Problem
 
@@ -321,11 +321,28 @@ The foreign-runtime lane does **not** learn a nested collection grammar:
 
 ```text
 InterfaceValue
-   -> interface-composite/v0 bytes
+   -> interface-composite/v0 payload (header stripped by the host)
    -> existing lagrange-cuis-stdio/v1 bytes transport
    -> Cuis composite decoder
    -> Smalltalk Array
 ```
+
+### The header is the host's concern on a host-controlled transport
+
+The envelope header exists to protect a composite that floats around as an opaque Value. A
+lane whose transport the host controls at both ends does not need it on the wire, so the host
+strips the header before the call and stamps it afterwards.
+
+This is not a weakening. On the way in, the host verifies the incoming fingerprint against
+the declared type before stripping. On the way out, it decodes the returned payload against
+that same declared type, and successfully decoding is what earns the right to stamp the
+type's fingerprint. The host is the side that knows the type, so it is the side entitled to
+assert it.
+
+The practical consequence is large: the Cuis image never computes SHA-256 and therefore has
+no type-dependent limit on which composite operations it can serve. An earlier draft of this
+ADR expected to pass an expected-result fingerprint into the bridge instead; moving the
+header to the host is simpler and removes the problem rather than routing around it.
 
 ADR 0034's `transport != interface` guardrail is the reason. The stdio framing stays
 ignorant of lists and records, and nested framing is solved once as an interface concern
@@ -398,19 +415,14 @@ Built and tested:
 - the `interface-composite/v0` codec for primitives, `list<T>` (including nesting) and named
   records, with fingerprint mismatch, ref, bounds and malformed-envelope rejection
 - both bindings accept v1 or v2 interfaces
-- `list<string>` proven through a real Rust Component and a live Cuis image, producing
-  byte-identical envelopes from two independent implementations
+- `list<string>` and named records proven in both directions through a real Rust Component
+  and a live Cuis image, producing byte-identical envelopes from two independent
+  implementations
 
 Not yet proven end to end:
 
-- named records through either lane
-- `list<item>` through either lane
-
-The Cuis image cannot compute SHA-256, so `normalizeAllTexts:` reuses the request envelope's
-header rather than recomputing a fingerprint. That is correct only because `normalize-all`
-has the same argument and result type. An operation whose result type differs will need the
-host to supply the expected result fingerprint, which is a known prerequisite for the record
-proof.
+- `list<item>`, where a list and a record compose. The Cuis image has a list-of-string
+  decoder and a record decoder but nothing that nests one inside the other yet.
 
 ## What is still deferred
 

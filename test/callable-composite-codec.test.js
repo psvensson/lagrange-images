@@ -8,6 +8,8 @@ import {
   installCallableInterfaceV2,
   normalizeCallableInterfaceV2Descriptor,
   normalizeTypeDeclarations,
+  compositeEnvelopeOf,
+  compositePayloadOf,
   objectRef,
   packCompositeValue,
   parseCallableInterfaceV2Artifact,
@@ -201,4 +203,34 @@ test('v1 and v2 are separate durable representations and v1 stays closed', async
   } finally {
     await runtime.close();
   }
+});
+
+// The payload form is what a lane whose transport the host controls at both ends carries.
+// Stripping the header is why the Cuis image never needs SHA-256.
+test('payload form round-trips and the host owns the header', () => {
+  const value = {name: 'Peter', quantity: 42n, enabled: true};
+  const envelope = packCompositeValue(value, 'item', ITEM_TYPES);
+  const payload = compositePayloadOf(envelope);
+
+  // The payload really is header-free.
+  const envelopeBytes = Buffer.from(envelope.base64, 'base64');
+  const payloadBytes = Buffer.from(payload.base64, 'base64');
+  assert.equal(payloadBytes.length, envelopeBytes.length - 37);
+  assert.ok(!payloadBytes.subarray(0, 4).equals(Buffer.from('LGIC', 'ascii')));
+
+  // The host restamps it, and the result is byte-identical to the original envelope.
+  const restamped = compositeEnvelopeOf(payload, 'item', ITEM_TYPES);
+  assert.deepEqual(restamped, envelope);
+  assert.deepEqual(unpackCompositeValue(restamped, 'item', ITEM_TYPES), value);
+
+  // A payload is only accepted if it actually decodes against the declared type, which is
+  // what earns the right to stamp that type's fingerprint onto it.
+  assert.throws(() => compositeEnvelopeOf(payload, LIST_OF_STRING), /ended early|trailing bytes/);
+  assert.throws(() => compositeEnvelopeOf(bytesValue(new Uint8Array([0, 0, 0, 9])), LIST_OF_STRING),
+    /ended early/);
+
+  // Stamping a list payload as a list yields an envelope the strict decoder accepts.
+  const listPayload = compositePayloadOf(packCompositeValue(['a', 'b'], LIST_OF_STRING));
+  assert.deepEqual(unpackCompositeValue(compositeEnvelopeOf(listPayload, LIST_OF_STRING), LIST_OF_STRING),
+    ['a', 'b']);
 });

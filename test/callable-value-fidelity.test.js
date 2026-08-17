@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {
   WASM_COMPONENT_V1,
   installCallableInterfaceV2,
+  normalizeTypeDeclarations,
   packCompositeValue,
   unpackCompositeValue,
   assertCallableValueType,
@@ -15,6 +16,8 @@ import {
   float64Value,
   installCallableInterface,
   installWasmComponentBinding,
+  integerValue,
+  textValue,
   objectRef,
 } from '../src/runtime.js';
 
@@ -172,5 +175,58 @@ test('list<string> survives the Component lane as an interface-composite/v0 enve
       /encoded against a different interface type/);
   } finally {
     await runtime.close();
+  }
+});
+
+const ITEM_TYPES = normalizeTypeDeclarations({
+  item: {
+    kind: 'record',
+    fields: [
+      {name: 'name', type: 'string'},
+      {name: 'quantity', type: 's64'},
+      {name: 'enabled', type: 'bool'},
+    ],
+  },
+});
+
+test('named records survive the Component lane in both directions', async () => {
+  const spec = (text) => text.toLowerCase().replace(/[\t\n\v\f\r ]+/g, ' ').trim();
+
+  const relabel = await componentLane({
+    functionName: 'relabel', parameters: ['item'], result: 'item', id: 'relabel', types: ITEM_TYPES,
+  });
+  try {
+    const cases = [
+      {name: '  HÄLLO  x ', quantity: 0n, enabled: true},
+      // s64 extremes pass through untouched, so the record proves integer fidelity too.
+      {name: '', quantity: 9223372036854775807n, enabled: false},
+      {name: '世界 \u{1f600}', quantity: -9223372036854775808n, enabled: true},
+      {name: 'a\tb', quantity: -1n, enabled: false},
+    ];
+    for (const input of cases) {
+      const packed = await relabel.call([packCompositeValue(input, 'item', ITEM_TYPES)]);
+      assert.equal(packed.kind, 'bytes');
+      assert.deepEqual(unpackCompositeValue(packed, 'item', ITEM_TYPES), {
+        name: spec(input.name), quantity: input.quantity, enabled: !input.enabled,
+      });
+    }
+  } finally {
+    await relabel.runtime.close();
+  }
+
+  // A record result with no record argument: the lane must produce a valid envelope from
+  // scalars alone.
+  const make = await componentLane({
+    functionName: 'make-item', parameters: ['string', 's64'], result: 'item', id: 'make-item', types: ITEM_TYPES,
+  });
+  try {
+    for (const [name, quantity] of [['  Some  Name ', 3n], ['', 0n], ['X', -7n]]) {
+      const packed = await make.call([textValue(name), integerValue(quantity)]);
+      assert.deepEqual(unpackCompositeValue(packed, 'item', ITEM_TYPES), {
+        name: spec(name), quantity, enabled: quantity > 0n,
+      });
+    }
+  } finally {
+    await make.runtime.close();
   }
 });

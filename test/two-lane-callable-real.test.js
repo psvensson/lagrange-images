@@ -20,6 +20,8 @@ import {
   installCallableInterfaceV2,
   installForeignRuntimeBinding,
   installWasmComponentBinding,
+  integerValue,
+  normalizeTypeDeclarations,
   objectRef,
   packCompositeValue,
   textValue,
@@ -193,6 +195,46 @@ test('a Rust Component and a live Cuis image satisfy the same callable interface
       ].map(([input, output]) => [
         [packCompositeValue(input, LIST_OF_STRING)],
         packCompositeValue(output, LIST_OF_STRING),
+      ]),
+    });
+
+    // Named records through both real lanes, in both directions. make-item is the case that
+    // needed the header to become the host's concern: its result type is a record while its
+    // arguments are scalars, so the image has no incoming header to reuse.
+    const ITEM_TYPES = normalizeTypeDeclarations({
+      item: {
+        kind: 'record',
+        fields: [
+          {name: 'name', type: 'string'},
+          {name: 'quantity', type: 's64'},
+          {name: 'enabled', type: 'bool'},
+        ],
+      },
+    });
+    const asItem = (value) => packCompositeValue(value, 'item', ITEM_TYPES);
+    INTERFACES.push({
+      id: 'relabel', functionName: 'relabel', types: ITEM_TYPES,
+      parameters: ['item'], result: 'item',
+      cuisTarget: {service: 'item', operation: 'relabel'},
+      decode: (value) => unpackCompositeValue(value, 'item', ITEM_TYPES),
+      cases: [
+        {name: '  HÄLLO  x ', quantity: 0n, enabled: true},
+        {name: '', quantity: 9223372036854775807n, enabled: false},
+        {name: '世界 \u{1f600}', quantity: -9223372036854775808n, enabled: true},
+        {name: 'a\tb', quantity: -1n, enabled: false},
+      ].map((input) => [
+        [asItem(input)],
+        asItem({name: normalizeSpec(input.name), quantity: input.quantity, enabled: !input.enabled}),
+      ]),
+    });
+    INTERFACES.push({
+      id: 'make-item', functionName: 'make-item', types: ITEM_TYPES,
+      parameters: ['string', 's64'], result: 'item',
+      cuisTarget: {service: 'item', operation: 'make'},
+      decode: (value) => unpackCompositeValue(value, 'item', ITEM_TYPES),
+      cases: [['  Some  Name ', 3n], ['', 0n], ['X', -7n]].map(([name, quantity]) => [
+        [textValue(name), integerValue(quantity)],
+        asItem({name: normalizeSpec(name), quantity, enabled: quantity > 0n}),
       ]),
     });
 

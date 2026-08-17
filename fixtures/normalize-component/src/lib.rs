@@ -46,6 +46,27 @@ impl Guest for Component {
         values.into_iter().map(Self::normalize).collect()
     }
 
+    /// Normalizes the name and flips the flag. Quantity passes through untouched on
+    /// purpose, so s64 extremes are proven without arithmetic that could overflow
+    /// differently in Rust than in Smalltalk.
+    fn relabel(it: Item) -> Item {
+        Item {
+            name: Self::normalize(it.name),
+            quantity: it.quantity,
+            enabled: !it.enabled,
+        }
+    }
+
+    /// Builds a record from scalars, so a record result is proven independently of a
+    /// record argument.
+    fn make_item(name: String, quantity: i64) -> Item {
+        Item {
+            name: Self::normalize(name),
+            quantity,
+            enabled: quantity > 0,
+        }
+    }
+
     /// Returns its argument. The interesting part is the f32 parameter: the value has
     /// already been rounded to f32 precision by the shared interface, so this proves
     /// the rounding happened before the lane rather than inside it.

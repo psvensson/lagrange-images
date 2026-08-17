@@ -223,6 +223,31 @@ function envelopeFingerprint(envelope) {
   return Buffer.from(envelope.subarray(MAGIC.length + 1, HEADER_LENGTH));
 }
 
+// A lane whose transport the host controls at both ends may carry the payload alone. The
+// header exists to protect an envelope that floats around as an opaque Value; inside such a
+// transport the host has already verified the incoming fingerprint and is the one entitled
+// to assert the outgoing type, because it is the side that knows it.
+//
+// This is what lets the Cuis image handle any composite type without computing SHA-256.
+function compositePayloadOf(value, label = 'composite') {
+  const canonical = canonicalizeValue(value);
+  if (canonical.kind !== VALUE_KIND.BYTES) fail(`${label} must be a bytes Value`);
+  const envelope = Buffer.from(canonical.base64, 'base64');
+  if (envelope.length < HEADER_LENGTH) fail(`${label} envelope is too short`);
+  return bytesValue(new Uint8Array(envelope.subarray(HEADER_LENGTH)));
+}
+
+function compositeEnvelopeOf(payload, type, types = {}, label = 'composite') {
+  const canonical = canonicalizeValue(payload);
+  if (canonical.kind !== VALUE_KIND.BYTES) fail(`${label} payload must be a bytes Value`);
+  const bytes = Buffer.from(canonical.base64, 'base64');
+  // Decoding against the declared type is what earns the right to stamp its fingerprint.
+  const reader = new Reader(bytes);
+  const decoded = readValue(reader, type, types, label, 0);
+  if (!reader.atEnd()) fail(`${label} payload has trailing bytes`);
+  return packCompositeValue(decoded, type, types, label);
+}
+
 function unpackCompositeValue(value, type, types = {}, label = 'composite') {
   const canonical = canonicalizeValue(value);
   if (canonical.kind !== VALUE_KIND.BYTES) {
@@ -255,6 +280,8 @@ export {
   InterfaceCompositeError,
   MAX_LIST_LENGTH,
   MAX_VALUE_DEPTH,
+  compositeEnvelopeOf,
+  compositePayloadOf,
   envelopeFingerprint,
   packCompositeValue,
   unpackCompositeValue,

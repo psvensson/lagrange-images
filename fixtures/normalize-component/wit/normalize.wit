@@ -3,6 +3,14 @@ package lagrange:proof@0.1.0;
 // Deliberately mundane operations. Each one exists to prove that a canonical Value
 // survives a round trip through the Component canonical ABI unchanged, not to be useful.
 world normalize {
+  // A named record, referenced from both a parameter and a result position. WIT requires
+  // type declarations to live in a world or interface, not at package scope.
+  record item {
+    name: string,
+    quantity: s64,
+    enabled: bool,
+  }
+
   // text fidelity: lowercase, collapse ASCII whitespace runs, trim
   export normalize: func(input: string) -> string;
 
@@ -20,4 +28,10 @@ world normalize {
   // first composite: list<string> in and out, so the interface-composite/v0 codec is
   // exercised rather than array iteration
   export normalize-all: func(values: list<string>) -> list<string>;
+
+  // record in, record out: quantity passes through untouched so s64 extremes are proven
+  export relabel: func(it: item) -> item;
+
+  // scalars in, record out: proves a record result independent of a record argument
+  export make-item: func(name: string, quantity: s64) -> item;
 }
