@@ -90,6 +90,8 @@ move in. Never move it the other way to make a claim easier to write.
 
 - [0042 — authorized object mutation](0042-authorized-object-mutation.md): `object/write` as a fourth implementation lane, authorizing the whole object, requiring a caller-supplied expected version, and surfacing conflicts explicitly rather than resolving them.
 
+- [0043 — mutable lexical state and assignment](0043-mutable-lexical-state.md): assignment mutates an activation-scoped binding cell rather than the durable lexical-environment graph, and a closure captures the cell rather than a snapshot.
+
 ## Reading rule
 
 The current model is summarized in [../architecture.md](../architecture.md) and [../language-platform.md](../language-platform.md). ADRs explain why the model reached that shape and may describe limitations that later ADRs have since extended.
