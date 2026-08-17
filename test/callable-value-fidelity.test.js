@@ -5,6 +5,9 @@ import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {
   WASM_COMPONENT_V1,
+  installCallableInterfaceV2,
+  packCompositeValue,
+  unpackCompositeValue,
   assertCallableValueType,
   bytesValue,
   createJcoComponentRuntime,
@@ -20,7 +23,7 @@ const COMPONENT_PATH = join(
   '..', 'fixtures', 'normalize-component', 'normalize.component.wasm',
 );
 
-async function componentLane({functionName, parameters, result, id}) {
+async function componentLane({functionName, parameters, result, id, types = null}) {
   const runtime = await createRuntime({
     backend: {mode: 'mock'},
     componentRuntime: createJcoComponentRuntime(),
@@ -32,13 +35,15 @@ async function componentLane({functionName, parameters, result, id}) {
     content: bytesValue(await readFile(COMPONENT_PATH)),
     languageId: 'rust',
   });
-  const callableInterface = await installCallableInterface({
+  const install = types === null ? installCallableInterface : installCallableInterfaceV2;
+  const callableInterface = await install({
     images: runtime.images,
     imageId: 'demo',
     interfaceId: `${id}-interface`,
     functionName,
     parameters,
     result,
+    ...(types === null ? {} : {types}),
   });
   const binding = await installWasmComponentBinding({
     images: runtime.images,
@@ -128,6 +133,43 @@ test('f32 means a float64 rounded to f32 precision, and the interface does the r
     // The value that comes back is already f32-precise, so re-rounding changes nothing.
     const once = await call([float64Value(0.1)]);
     assert.deepEqual(await call([once]), once, 'f32 rounding must be idempotent');
+  } finally {
+    await runtime.close();
+  }
+});
+
+// The first composite through the Component lane. list<string> rather than list<s32>
+// because it exercises the codec — variable-length elements, Unicode, empty strings, empty
+// lists — instead of mostly testing array iteration.
+test('list<string> survives the Component lane as an interface-composite/v0 envelope', async () => {
+  const type = {kind: 'list', element: 'string'};
+  const {runtime, call} = await componentLane({
+    functionName: 'normalize-all', parameters: [type], result: type, id: 'normalize-all', types: {},
+  });
+  try {
+    const spec = (text) => text.toLowerCase().replace(/[\t\n\v\f\r ]+/g, ' ').trim();
+    const cases = [
+      [],
+      [''],
+      ['  Hello   World  '],
+      ['a', 'B', '  c  '],
+      ['', '', ''],
+      ['  HÄLLO   Wörld  ', '  世界  \u{1f600} '],
+      // Content that looks like the Cuis line protocol must be inert inside an envelope.
+      ['d:looks-like-a-token', 'e:%20also', 'OK\tERR', 'a\nb'],
+      Array.from({length: 500}, (_, i) => `  Item ${i}  `),
+    ];
+    for (const input of cases) {
+      const packed = await call([packCompositeValue(input, type)]);
+      // The Block edge really does carry bytes, not a list.
+      assert.equal(packed.kind, 'bytes');
+      assert.deepEqual(unpackCompositeValue(packed, type), input.map(spec),
+        `normalize-all disagreed for ${JSON.stringify(input).slice(0, 60)}`);
+    }
+
+    // An envelope for the wrong type must be refused before the Component is reached.
+    await assert.rejects(call([packCompositeValue([1n, 2n], {kind: 'list', element: 's64'})]),
+      /encoded against a different interface type/);
   } finally {
     await runtime.close();
   }

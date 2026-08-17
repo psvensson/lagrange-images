@@ -17,10 +17,13 @@ import {
   createJcoComponentRuntime,
   createRuntime,
   installCallableInterface,
+  installCallableInterfaceV2,
   installForeignRuntimeBinding,
   installWasmComponentBinding,
   objectRef,
+  packCompositeValue,
   textValue,
+  unpackCompositeValue,
 } from '../src/runtime.js';
 
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
@@ -166,14 +169,43 @@ test('a Rust Component and a live Cuis image satisfy the same callable interface
       },
     ];
 
+    // The first composite through both real lanes. The Component lane unpacks the envelope
+    // for the canonical ABI; the Cuis lane forwards the envelope bytes untouched and decodes
+    // inside the image, so the stdio framing never learns a nested grammar.
+    const LIST_OF_STRING = {kind: 'list', element: 'string'};
+    const normalizeSpec = (text) => text.toLowerCase().replace(/[\t\n\v\f\r ]+/g, ' ').trim();
+    INTERFACES.push({
+      id: 'normalize-all', functionName: 'normalize-all', types: {},
+      parameters: [LIST_OF_STRING], result: LIST_OF_STRING,
+      cuisTarget: {service: 'text', operation: 'normalize-all'},
+      decode: (value) => unpackCompositeValue(value, LIST_OF_STRING),
+      cases: [
+        [[], []],
+        [[''], ['']],
+        [['  Hello   World  '], ['hello world']],
+        [['a', 'B', '  c  '], ['a', 'b', 'c']],
+        [['  HÄLLO   Wörld  ', '  世界  \u{1f600} '], ['hällo wörld', '世界 \u{1f600}']],
+        // Content that looks like the bridge's own line protocol must be inert.
+        [['d:looks-like-a-token', 'e:%20also', 'OK\tERR', 'a\nb'],
+          ['d:looks-like-a-token', 'e:%20also', 'ok err', 'a b']],
+        [Array.from({length: 500}, (_, i) => `  Item ${i}  `),
+          Array.from({length: 500}, (_, i) => `item ${i}`)],
+      ].map(([input, output]) => [
+        [packCompositeValue(input, LIST_OF_STRING)],
+        packCompositeValue(output, LIST_OF_STRING),
+      ]),
+    });
+
     for (const spec of INTERFACES) {
-      const callableInterface = await installCallableInterface({
+      const install = spec.types === undefined ? installCallableInterface : installCallableInterfaceV2;
+      const callableInterface = await install({
         images: runtime.images,
         imageId: 'proof',
         interfaceId: `${spec.id}-interface`,
         functionName: spec.functionName,
         parameters: spec.parameters,
         result: spec.result,
+        ...(spec.types === undefined ? {} : {types: spec.types}),
       });
       const interfaceRef = objectRef('proof', callableInterface.id);
 
@@ -208,10 +240,12 @@ test('a Rust Component and a live Cuis image satisfy the same callable interface
           const activation = await runtime.invocations.invokeBlock(blockRef, args);
           results.push(await runtime.executor.execute(activation));
         }
-        const shown = JSON.stringify(args).slice(0, 80);
-        assert.deepEqual(results[0], expected, `${spec.id}: Rust Component lane disagreed for ${shown}`);
-        assert.deepEqual(results[1], expected, `${spec.id}: live Cuis lane disagreed for ${shown}`);
-        assert.deepEqual(results[0], results[1], `${spec.id}: lanes disagreed for ${shown}`);
+        const shown = JSON.stringify(args, (_, v) => (typeof v === 'bigint' ? String(v) : v)).slice(0, 70);
+        const seen = spec.decode ? results.map(spec.decode) : results;
+        const want = spec.decode ? spec.decode(expected) : expected;
+        assert.deepEqual(seen[0], want, `${spec.id}: Rust Component lane disagreed for ${shown}`);
+        assert.deepEqual(seen[1], want, `${spec.id}: live Cuis lane disagreed for ${shown}`);
+        assert.deepEqual(results[0], results[1], `${spec.id}: lanes disagreed byte for byte for ${shown}`);
       }
     }
   } finally {

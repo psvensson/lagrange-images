@@ -10,7 +10,8 @@ import {
   resolveBindingDependency,
   resolveCallableInterface,
 } from './binding-artifacts.js';
-import {assertCallableArguments, assertCallableValueType, assertImages} from './interface-artifacts.js';
+import {assertImages} from './interface-artifacts.js';
+import {assertCallableInterfaceArguments, assertCallableInterfaceValue} from './interface-v2-artifacts.js';
 
 // Binds a callable-interface/v1 to a live foreign runtime. Like the Component binding it
 // carries no signature: the shape comes from the shared interface. What it does carry is
@@ -140,7 +141,9 @@ function createForeignRuntimeBindingV1Executor({
       const {descriptor} = await resolveCallableInterface(images, code, FOREIGN_RUNTIME_BINDING_V1);
       // The foreign runtime speaks canonical Values already, so the shared interface is
       // enforced directly on them rather than through a lowering step.
-      const args = assertCallableArguments(descriptor, activation.arguments, descriptor.function);
+      // A composite crosses this lane as the envelope bytes Value itself: the stdio
+      // transport already carries arbitrary bytes, so it never learns a nested grammar.
+      const args = assertCallableInterfaceArguments(descriptor, activation.arguments, descriptor.function);
       const {artifact: definitionArtifact, ref: definitionRef} = await resolveBindingDependency(
         images,
         code,
@@ -154,7 +157,9 @@ function createForeignRuntimeBindingV1Executor({
         interface: target,
         arguments: args,
       });
-      return assertCallableValueType(result, descriptor.result, `${descriptor.function} result`);
+      return assertCallableInterfaceValue(
+        result, descriptor.result, descriptor.types ?? {}, `${descriptor.function} result`,
+      );
     },
   });
 }

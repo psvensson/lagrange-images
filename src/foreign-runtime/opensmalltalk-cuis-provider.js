@@ -85,7 +85,8 @@ function normalizeInterface(value) {
     || (service === 'json' && operation === 'package-proof')
     || (service === 'text' && operation === 'normalize')
     || (service === 'bytes' && operation === 'reverse')
-    || (service === 'float' && operation === 'scale');
+    || (service === 'float' && operation === 'scale')
+    || (service === 'text' && operation === 'normalize-all');
   if (!exported) throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
   return Object.freeze({service, operation});
 }
@@ -158,6 +159,7 @@ function expectedArity(service, operation) {
   if (service === 'text' && operation === 'normalize') return 1;
   if (service === 'bytes' && operation === 'reverse') return 1;
   if (service === 'float' && operation === 'scale') return 2;
+  if (service === 'text' && operation === 'normalize-all') return 1;
   throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
 }
 
@@ -210,6 +212,62 @@ const BRIDGE_METHODS = Object.freeze([
 // the two lanes must agree bit for bit or the boundary lost precision.
 `scaleFloat: aFloat by: aFactor
     ^ aFloat * aFactor`,
+// interface-composite/v0 support. The bridge never learns a general nested grammar: each
+// operation knows its own signature, so these helpers decode exactly list<string>.
+// Layout: 'LGIC' | version u8 | fingerprint 32 bytes | u32 count | (u32 length, utf8)*
+`lagrangeU32At: anIndex in: aByteArray
+    ^ (((aByteArray at: anIndex) bitShift: 24)
+        + ((aByteArray at: anIndex + 1) bitShift: 16)
+        + ((aByteArray at: anIndex + 2) bitShift: 8)
+        + (aByteArray at: anIndex + 3))`,
+`lagrangeWriteU32: anInteger on: aStream
+    aStream nextPut: ((anInteger bitShift: -24) bitAnd: 255).
+    aStream nextPut: ((anInteger bitShift: -16) bitAnd: 255).
+    aStream nextPut: ((anInteger bitShift: -8) bitAnd: 255).
+    aStream nextPut: (anInteger bitAnd: 255)`,
+`lagrangeEnvelopeHeader: anEnvelope
+    anEnvelope size < 37 ifTrue: [ ^ self error: 'composite envelope too short' ].
+    (((anEnvelope at: 1) = 76 and: [ (anEnvelope at: 2) = 71 ])
+        and: [ (anEnvelope at: 3) = 73 and: [ (anEnvelope at: 4) = 67 ] ])
+            ifFalse: [ ^ self error: 'not a composite envelope' ].
+    (anEnvelope at: 5) = 0 ifFalse: [ ^ self error: 'unsupported composite envelope version' ].
+    ^ anEnvelope copyFrom: 1 to: 37`,
+`lagrangeDecodeStringList: anEnvelope
+    | position count items length |
+    self lagrangeEnvelopeHeader: anEnvelope.
+    position := 38.
+    count := self lagrangeU32At: position in: anEnvelope.
+    position := position + 4.
+    items := OrderedCollection new.
+    count timesRepeat: [
+        length := self lagrangeU32At: position in: anEnvelope.
+        position := position + 4.
+        (position + length - 1) > anEnvelope size ifTrue: [ ^ self error: 'composite envelope ended early' ].
+        items add: (UnicodeString fromUtf8Bytes: (anEnvelope copyFrom: position to: position + length - 1)).
+        position := position + length ].
+    (position = (anEnvelope size + 1)) ifFalse: [ ^ self error: 'composite envelope has trailing bytes' ].
+    ^ items asArray`,
+// The request header is reused rather than recomputed: this image cannot compute SHA-256,
+// and it is only correct because normalize-all has the same argument and result type. An
+// operation whose result type differs will need the host to supply the expected
+// fingerprint.
+`lagrangeEncodeStringList: anArray header: aHeader
+    | stream |
+    stream := WriteStream on: (ByteArray new: 64).
+    aHeader do: [ :eachByte | stream nextPut: eachByte ].
+    self lagrangeWriteU32: anArray size on: stream.
+    anArray do: [ :eachString |
+        | bytes |
+        bytes := eachString asUtf8Bytes.
+        self lagrangeWriteU32: bytes size on: stream.
+        bytes do: [ :eachByte | stream nextPut: eachByte ] ].
+    ^ stream contents`,
+`normalizeAllTexts: anEnvelope
+    | header normalized |
+    header := self lagrangeEnvelopeHeader: anEnvelope.
+    normalized := (self lagrangeDecodeStringList: anEnvelope)
+        collect: [ :eachString | self normalizeText: eachString ].
+    ^ self lagrangeEncodeStringList: normalized header: header`,
 `lagrangeIsWhitespace: aChar
     | code |
     code := aChar codePoint.
@@ -308,6 +366,9 @@ const BRIDGE_METHODS = Object.freeze([
     (serviceName = 'text' and: [ operation = 'normalize' ]) ifTrue: [
         fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self normalizeText: (self lagrangeDecode: (fields at: 5)) ].
+    (serviceName = 'text' and: [ operation = 'normalize-all' ]) ifTrue: [
+        fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self normalizeAllTexts: (self lagrangeDecode: (fields at: 5)) ].
     (serviceName = 'bytes' and: [ operation = 'reverse' ]) ifTrue: [
         fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self reverseBytes: (self lagrangeDecode: (fields at: 5)) ].

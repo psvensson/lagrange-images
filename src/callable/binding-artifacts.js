@@ -1,5 +1,5 @@
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
-import {parseCallableInterfaceArtifact} from './interface-artifacts.js';
+import {parseAnyCallableInterfaceArtifact} from './interface-v2-artifacts.js';
 
 // Every implementation binding points at the callable interface it implements through
 // this role. The interface never points back, so one interface artifact can be shared
@@ -33,7 +33,7 @@ async function resolveCallableInterface(images, bindingArtifact, label) {
   const ref = bindingDependencyRef(bindingArtifact, CALLABLE_INTERFACE_DEPENDENCY_ROLE, label);
   const artifact = await images.getCodeArtifact(ref.imageId, ref.objectId);
   if (!artifact) throw new TypeError(`${label} interface not found: ${ref.imageId}/${ref.objectId}`);
-  return Object.freeze({descriptor: parseCallableInterfaceArtifact(artifact), ref});
+  return Object.freeze({descriptor: parseAnyCallableInterfaceArtifact(artifact), ref});
 }
 
 async function resolveBindingDependency(images, bindingArtifact, role, label) {

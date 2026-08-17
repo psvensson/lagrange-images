@@ -16,4 +16,8 @@ world normalize {
   // f32 precision: hyphenated on purpose, so the Component lane's WIT-name-to-export
   // mapping is exercised rather than assumed
   export echo-f32: func(value: f32) -> f32;
+
+  // first composite: list<string> in and out, so the interface-composite/v0 codec is
+  // exercised rather than array iteration
+  export normalize-all: func(values: list<string>) -> list<string>;
 }

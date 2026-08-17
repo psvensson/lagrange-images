@@ -40,6 +40,12 @@ impl Guest for Component {
         value * factor
     }
 
+    /// Applies normalize to every element. The list is the point: arbitrary length,
+    /// variable-length elements, Unicode, empty strings and empty lists all have to survive.
+    fn normalize_all(values: Vec<String>) -> Vec<String> {
+        values.into_iter().map(Self::normalize).collect()
+    }
+
     /// Returns its argument. The interesting part is the f32 parameter: the value has
     /// already been rounded to f32 precision by the shared interface, so this proves
     /// the rounding happened before the lane rather than inside it.
