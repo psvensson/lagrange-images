@@ -412,19 +412,22 @@ class OpenSmalltalkCuisCallError extends Error {
 async function nextMatchingLine(session, predicate, {timeoutMs, action}) {
   const deadline = Date.now() + timeoutMs;
   const boot = [];
+  const allLines = [];
   for (;;) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
-      const suffix = boot.length > 0 ? `; bootstrap: ${boot.join(' -> ')}` : '';
+      const suffix = allLines.length > 0 ? `; saw: ${allLines.join(' -> ')}` : '';
       throw new TypeError(`OpenSmalltalk Cuis timed out waiting for ${action}${suffix}`);
     }
     let line;
     try {
       line = await session.nextLine({timeoutMs: remaining, action});
     } catch (error) {
-      if (boot.length === 0) throw error;
-      throw new TypeError(`${error.message}; bootstrap: ${boot.join(' -> ')}`, {cause: error});
+      const suffix = allLines.length > 0 ? `; saw: ${allLines.join(' -> ')}` : '';
+      if (boot.length === 0 && allLines.length === 0) throw error;
+      throw new TypeError(`${error.message}${suffix}`, {cause: error});
     }
+    allLines.push(line);
     if (line.startsWith('BOOT\t')) boot.push(line);
     if (predicate(line)) return line;
   }
@@ -514,9 +517,11 @@ function createOpenSmalltalkCuisProvider({
           }),
         });
       } catch (error) {
+        const stderrText = session ? session.stderrText() : '';
         if (session) await forceStopSession(session, stopTimeoutMs);
         await rm(workspace, {recursive: true, force: true});
-        throw error;
+        const detail = stderrText.trim().length > 0 ? `; stderr: ${stderrText.trim().slice(0, 500)}` : '';
+        throw new TypeError(`${error.message}${detail}`, {cause: error});
       }
     },
     async call(handle, request) {
