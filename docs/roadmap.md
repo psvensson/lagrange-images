@@ -41,6 +41,15 @@ mixed program
         -> one Symmetric Smalltalk semantic artifact
         -> foreign WASM Block + live Cuis Block
         -> neutral and resumable Lagrange-WASM executions agree
+
+WIT callable interface (Component lane)
+        -> wasm-component/v1 + wasm-wit-callable-interface/v1
+        -> Component runtime invoke with canonical lifting/lowering
+        -> ordinary callable Block
+
+two-lane structured interface proof
+        -> same interface shape through Component WIT and live Cuis
+        -> identical canonical-Value results from both implementation lanes
 ```
 
 The real PR-only proof builds a Cuis image containing the unchanged upstream JSON package, starts that image without reinstalling JSON, and then runs the mixed Smalltalk orchestration through resumable Lagrange WASM against the same live Cuis runtime.
@@ -57,10 +66,10 @@ The scalar callable proofs have now done their job. The next interface work shou
 - [x] `foreign-runtime-callable-interface/v1` over durable runtime definitions
 - [x] language-level Block sends invoke both foreign WASM and live foreign runtimes
 - [x] one semantic program composes both implementation lanes
-- [ ] choose explicit string/bytes ABI vs moving directly to Component/WIT values
+- [x] choose explicit string/bytes ABI vs moving directly to Component/WIT values
 - [ ] records/arrays and multiple results
-- [ ] WASM Component/WIT-style callable artifact contract
-- [ ] map the same interface shape to at least two implementation lanes
+- [x] WASM Component/WIT-style callable artifact contract
+- [x] map the same interface shape to at least two implementation lanes
 - [ ] capability-aware imported host functions
 - [ ] async foreign callbacks/effects only through explicit contracts
 - [ ] reusable foreign instance/reset contracts where a toolchain can prove safety
@@ -185,14 +194,14 @@ The PR32 mixed expression is no longer a neutral-only proof: the same persistent
 
 ### Rust
 
-Implemented: explicit Cargo graph, Cargo/rustc provider, closed vendored dependencies, toolchain cache, raw WASM import, scalar callable interface and composition as an ordinary Block.
+Implemented: explicit Cargo graph, Cargo/rustc provider, closed vendored dependencies, toolchain cache, raw WASM import, scalar callable interface, Component/WIT-style callable artifact contract and composition as an ordinary Block.
 
 Next:
 
 - [ ] real pinned-OCI Cargo CI proof
 - [ ] standard package importer
 - [ ] Lagrange Rust SDK/crate for explicit host calls
-- [ ] Component/WIT-style rich interface proof
+- [ ] two-lane structured interface proof through Rust Component + Cuis
 - [ ] portable precompiled WASM/component dependency reuse
 
 ### Java
@@ -305,6 +314,8 @@ Established substrate now includes:
 - generic external toolchains + deterministic reuse
 - Cargo/rustc integration with explicit package inputs
 - foreign-WASM callable interface
+- Component/WIT-style callable artifact contract (`wasm-wit-callable-interface/v1`)
+- two-lane structured interface proof (Component WIT + live Cuis)
 - generic long-lived foreign-runtime lifecycle
 - durable runtime definitions + callable Blocks
 - real OpenSmalltalkVM/Cuis runtime/toolchain/package proofs

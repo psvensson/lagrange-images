@@ -92,6 +92,7 @@ async function createRuntime(options = {}) {
     foreignRuntimes,
     foreignRuntimeDefinitionBindings,
     foreignRuntimeInstanceCache,
+    componentRuntime: options.componentRuntime,
   });
   for (const [representation, executor] of Object.entries(options.codeExecutors ?? {})) {
     codeExecutors.register(representation, executor);

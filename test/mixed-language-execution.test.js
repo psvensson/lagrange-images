@@ -37,7 +37,7 @@ const I32_ADD_WASM = Buffer.from([
 
 class FakeCuisSession {
   constructor() {
-    this.lines = ['READY\tlagrange-cuis-stdio/v0'];
+    this.lines = ['READY\tlagrange-cuis-stdio/v1'];
   }
 
   async writeLine(line) {

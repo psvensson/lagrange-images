@@ -2,12 +2,13 @@ import {createHash} from 'node:crypto';
 import {copyFile, mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {basename, join, resolve} from 'node:path';
-import {VALUE_KIND, booleanValue, canonicalizeValue, integerValue} from '../value/index.js';
+import {VALUE_KIND, booleanValue, bytesFromBase64, bytesValue, canonicalizeValue, float64FromBits, float64ToNumber, float64Value, integerValue, textValue} from '../value/index.js';
 import {LineProcessRunner} from './line-process-runner.js';
 
 const OPENSMALLTALK_CUIS_PROVIDER_ID = 'smalltalk/opensmalltalk-cuis';
 const OPENSMALLTALK_CUIS_PROVIDER_V0 = 'opensmalltalk-cuis-runtime/v0';
 const CUIS_STDIO_BRIDGE_V0 = 'lagrange-cuis-stdio/v0';
+const CUIS_STDIO_BRIDGE_V1 = 'lagrange-cuis-stdio/v1';
 const SAFE_NAME = /^[A-Za-z][A-Za-z0-9._-]*$/;
 const SAFE_PACKAGE_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.pck\.st$/;
 
@@ -81,15 +82,58 @@ function normalizeInterface(value) {
   if (!SAFE_NAME.test(service)) throw new TypeError('OpenSmalltalk Cuis interface service contains unsafe characters');
   if (!SAFE_NAME.test(operation)) throw new TypeError('OpenSmalltalk Cuis interface operation contains unsafe characters');
   const exported = (service === 'proof' && ['add', 'factorial'].includes(operation))
-    || (service === 'json' && operation === 'package-proof');
+    || (service === 'json' && operation === 'package-proof')
+    || (service === 'text' && operation === 'normalize');
   if (!exported) throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
   return Object.freeze({service, operation});
+}
+
+function percentEncodeUtf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let result = '';
+  for (const byte of bytes) {
+    if ((byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A)
+      || byte === 0x2D || byte === 0x2E || byte === 0x5F || byte === 0x7E) {
+      result += String.fromCharCode(byte);
+    } else {
+      result += `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
+    }
+  }
+  return result;
+}
+
+function percentDecodeUtf8(encoded) {
+  const bytes = [];
+  for (let i = 0; i < encoded.length; i++) {
+    if (encoded[i] === '%' && i + 2 < encoded.length) {
+      bytes.push(parseInt(encoded.substring(i + 1, i + 3), 16));
+      i += 2;
+    } else {
+      bytes.push(encoded.charCodeAt(i));
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+function float64ToHexPayload(value) {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value, false);
+  return view.getBigUint64(0, false).toString(16).padStart(16, '0');
+}
+
+function hexPayloadToFloat64(hex) {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setBigUint64(0, BigInt(`0x${hex}`), false);
+  return view.getFloat64(0, false);
 }
 
 function encodeBridgeValue(input) {
   const value = canonicalizeValue(input);
   if (value.kind === VALUE_KIND.INTEGER) return `i:${value.value}`;
   if (value.kind === VALUE_KIND.BOOLEAN) return `b:${value.value ? '1' : '0'}`;
+  if (value.kind === VALUE_KIND.FLOAT64) return `f:${float64ToHexPayload(float64ToNumber(value))}`;
+  if (value.kind === VALUE_KIND.TEXT) return `e:${percentEncodeUtf8(value.value)}`;
+  if (value.kind === VALUE_KIND.BYTES) return `d:${value.base64}`;
   throw new TypeError(`OpenSmalltalk Cuis bridge does not support ${value.kind} Values yet`);
 }
 
@@ -98,6 +142,9 @@ function decodeBridgeValue(token) {
   if (/^i:-?\d+$/.test(token)) return integerValue(token.slice(2));
   if (token === 'b:1') return booleanValue(true);
   if (token === 'b:0') return booleanValue(false);
+  if (token.startsWith('f:')) return float64Value(hexPayloadToFloat64(token.slice(2)));
+  if (token.startsWith('e:')) return textValue(percentDecodeUtf8(token.slice(2)));
+  if (token.startsWith('d:')) return bytesFromBase64(token.slice(2));
   throw new TypeError(`invalid OpenSmalltalk Cuis bridge Value: ${token}`);
 }
 
@@ -105,7 +152,13 @@ function expectedArity(service, operation) {
   if (service === 'proof' && operation === 'add') return 2;
   if (service === 'proof' && operation === 'factorial') return 1;
   if (service === 'json' && operation === 'package-proof') return 0;
+  if (service === 'text' && operation === 'normalize') return 1;
   throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
+}
+
+function encodeHexByte(byte) {
+  const hex = '0123456789abcdef';
+  return hex[byte >> 4] + hex[byte & 0x0f];
 }
 
 function packageInstallSource(packages) {
@@ -128,6 +181,7 @@ Object subclass: #LagrangeProofService
 LagrangeProofService compile: 'add: a to: b\n    ^ a + b'.
 LagrangeProofService compile: 'factorial: n\n    n < 0 ifTrue: [ Error signal: ''factorial requires a non-negative integer'' ].\n    n = 0 ifTrue: [ ^ 1 ].\n    ^ n * (self factorial: n - 1)'.
 LagrangeProofService compile: 'jsonPackageProof\n    | jsonClass parsed rendered reparsed numbers nested |\n    jsonClass := Smalltalk at: #Json.\n    parsed := jsonClass readFrom: ''{"numbers":[3,5,8],"ok":true,"nested":{"name":"cuis"}}'' readStream.\n    rendered := jsonClass render: parsed.\n    reparsed := jsonClass readFrom: rendered readStream.\n    numbers := reparsed at: ''numbers''.\n    nested := reparsed at: ''nested''.\n    ^ (((numbers at: 1) + (numbers at: 2) + (numbers at: 3)) = 16)\n        and: [ (reparsed at: ''ok'') = true\n        and: [ (nested at: ''name'') = ''cuis'' ]]'.
+LagrangeProofService compile: 'normalizeText: aString\n    ^ aString withCuisLineEndings'.
 service := LagrangeProofService new.
 output nextPutAll: 'BOOT\tBRIDGE\tCOMPILED'; newLine; flush.
 ${installPackages}
@@ -148,7 +202,83 @@ decode := [ :token |
                 ifFalse: [
                     token = 'b:0'
                         ifTrue: [ false ]
-                        ifFalse: [ Error signal: 'unsupported bridge value' ] ] ] ].
+                        ifFalse: [
+                            (token beginsWith: 'f:')
+                                ifTrue: [
+                                    | hex bytes result |
+                                    hex := token copyFrom: 3 to: token size.
+                                    bytes := ByteArray new: 8.
+                                    1 to: 8 do: [ :i |
+                                        | hi lo hiVal loVal |
+                                        hi := hex at: (i * 2 - 1).
+                                        lo := hex at: (i * 2).
+                                        hiVal := hi isDigit
+                                            ifTrue: [ hi numericValue - 48 ]
+                                            ifFalse: [ hi isLowercase
+                                                ifTrue: [ hi numericValue - 87 ]
+                                                ifFalse: [ hi numericValue - 55 ] ].
+                                        loVal := lo isDigit
+                                            ifTrue: [ lo numericValue - 48 ]
+                                            ifFalse: [ lo isLowercase
+                                                ifTrue: [ lo numericValue - 87 ]
+                                                ifFalse: [ lo numericValue - 55 ] ].
+                                        bytes at: i put: (hiVal * 16 + loVal) ].
+                                    result := Float new: 8.
+                                    1 to: 8 do: [ :i | result basicAt: i put: (bytes at: i) ].
+                                    result ]
+                                ifFalse: [
+                                    (token beginsWith: 'e:')
+                                        ifTrue: [
+                                            | encoded result pos |
+                                            encoded := token copyFrom: 3 to: token size.
+                                            result := WriteStream on: (String new: 64).
+                                            pos := 1.
+                                            [ pos <= encoded size ] whileTrue: [
+                                                | ch |
+                                                ch := encoded at: pos.
+                                                ch = $%
+                                                    ifTrue: [
+                                                        | hi lo hiVal loVal byte |
+                                                        hi := encoded at: (pos + 1).
+                                                        lo := encoded at: (pos + 2).
+                                                        hiVal := hi isDigit
+                                                            ifTrue: [ hi numericValue - 48 ]
+                                                            ifFalse: [ hi isLowercase
+                                                                ifTrue: [ hi numericValue - 87 ]
+                                                                ifFalse: [ hi numericValue - 55 ] ].
+                                                        loVal := lo isDigit
+                                                            ifTrue: [ lo numericValue - 48 ]
+                                                            ifFalse: [ lo isLowercase
+                                                                ifTrue: [ lo numericValue - 87 ]
+                                                                ifFalse: [ lo numericValue - 55 ] ].
+                                                        byte := hiVal * 16 + loVal.
+                                                        result nextPut: (Character value: byte).
+                                                        pos := pos + 3 ]
+                                                    ifFalse: [
+                                                        result nextPut: ch.
+                                                        pos := pos + 1 ] ].
+                                            result contents ]
+                                        ifFalse: [
+                                            (token beginsWith: 'd:')
+                                                ifTrue: [
+                                                    | b64 encoded table padIdx result |
+                                                    b64 := 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'.
+                                                    encoded := token copyFrom: 3 to: token size.
+                                                    table := Array new: 256 withAll: 0.
+                                                    1 to: b64 size do: [ :i | table at: (b64 codePointAt: i) + 1 put: i - 1 ].
+                                                    padIdx := encoded size.
+                                                    [ padIdx >= 1 and: [ (encoded at: padIdx) = $% ] ] whileTrue: [ padIdx := padIdx - 1 ].
+                                                    result := ByteArray new: (padIdx * 3 / 4) ceiling.
+                                                    1 to: padIdx by: 4 do: [ :i |
+                                                        | a b c d val |
+                                                        a := table at: (encoded codePointAt: i) + 1.
+                                                        b := table at: (encoded codePointAt: i + 1) + 1.
+                                                        c := i + 2 <= padIdx ifTrue: [ table at: (encoded codePointAt: i + 2) + 1 ] ifFalse: [ 0 ].
+                                                        d := i + 3 <= padIdx ifTrue: [ table at: (encoded codePointAt: i + 3) + 1 ] ifFalse: [ 0 ].
+                                                        val := (a bitShift: 18) + (b bitShift: 12) + (c bitShift: 6) + d.
+                                                        result := result, ((ByteArray with: ((val bitShift: -16) bitAnd: 255) with: ((val bitShift: -8) bitAnd: 255) with: (val bitAnd: 255))) ].
+                                                    result ]
+                                                ifFalse: [ Error signal: 'unsupported bridge value' ] ] ] ] ] ].
 encode := [ :value |
     value isInteger
         ifTrue: [ 'i:', value printString ]
@@ -158,11 +288,57 @@ encode := [ :value |
                 ifFalse: [
                     value == false
                         ifTrue: [ 'b:0' ]
-                        ifFalse: [ Error signal: 'unsupported result value' ] ] ] ].
+                        ifFalse: [
+                            value isFloat
+                                ifTrue: [
+                                    | bytes hex |
+                                    bytes := ByteArray new: 8.
+                                    1 to: 8 do: [ :i | bytes at: i put: (value basicAt: i) ].
+                                    hex := String new: 16.
+                                    1 to: 8 do: [ :i |
+                                        | byte hi lo |
+                                        byte := bytes at: i.
+                                        hi := byte bitShift: -4.
+                                        lo := byte bitAnd: 15.
+                                        hex := hex, (hi < 10
+                                            ifTrue: [ (48 + hi) asCharacter ]
+                                            ifFalse: [ (87 + hi) asCharacter ]).
+                                        hex := hex, (lo < 10
+                                            ifTrue: [ (48 + lo) asCharacter ]
+                                            ifFalse: [ (87 + lo) asCharacter ]) ].
+                                    'f:', hex ]
+                                ifFalse: [
+                                    value isString
+                                        ifTrue: [
+                                            | encoded |
+                                            encoded := String new: 64.
+                                            value do: [ :ch |
+                                                | code |
+                                                code := ch codePoint.
+                                                (code >= 48 and: [ code <= 57 ])
+                                                    ifTrue: [ encoded := encoded, ch asString ]
+                                                    ifFalse: [
+                                                        (code >= 65 and: [ code <= 90 ])
+                                                            ifTrue: [ encoded := encoded, ch asString ]
+                                                            ifFalse: [
+                                                                (code >= 97 and: [ code <= 122 ])
+                                                                    ifTrue: [ encoded := encoded, ch asString ]
+                                                                    ifFalse: [
+                                                                        code = 45 or: [ code = 46 or: [ code = 95 or: [ code = 126 ] ] ]
+                                                                            ifTrue: [ encoded := encoded, ch asString ]
+                                                                            ifFalse: [
+                                                                                | hexStr |
+                                                                                hexStr := (code < 16 ifTrue: [ '0' ] ifFalse: [ '' ]), (code printStringBase: 16).
+                                                                                encoded := encoded, '%', hexStr asUppercase ] ] ] ] ].
+                                            'e:', encoded ]
+                                        ifFalse: [
+                                            value isByteArray
+                                                ifTrue: [ 'd:', value base64Encoded ]
+                                                ifFalse: [ Error signal: 'unsupported result value' ] ] ] ] ] ].
 output
     nextPutAll: 'READY';
     nextPut: Character tab;
-    nextPutAll: '${CUIS_STDIO_BRIDGE_V0}';
+    nextPutAll: '${CUIS_STDIO_BRIDGE_V1}';
     newLine;
     flush.
 done := false.
@@ -198,7 +374,12 @@ done := false.
                                             ifTrue: [
                                                 fields size = 4 ifFalse: [ Error signal: 'bad arity' ].
                                                 result := service jsonPackageProof ]
-                                            ifFalse: [ Error signal: 'unknown operation' ] ] ].
+                                            ifFalse: [
+                                                (serviceName = 'text' and: [ operation = 'normalize' ])
+                                                    ifTrue: [
+                                                        fields size = 5 ifFalse: [ Error signal: 'bad arity' ].
+                                                        result := service normalizeText: (decode value: (fields at: 5)) ]
+                                                    ifFalse: [ Error signal: 'unknown operation' ] ] ] ].
                         output
                             nextPutAll: 'OK';
                             nextPut: Character tab;
@@ -309,7 +490,7 @@ function createOpenSmalltalkCuisProvider({
         });
         await nextMatchingLine(
           session,
-          (line) => line === `READY\t${CUIS_STDIO_BRIDGE_V0}`,
+          (line) => line === `READY\t${CUIS_STDIO_BRIDGE_V1}`,
           {timeoutMs: startupTimeoutMs, action: 'Cuis bridge readiness'},
         );
         return Object.freeze({
@@ -323,7 +504,7 @@ function createOpenSmalltalkCuisProvider({
           metadata: Object.freeze({
             runtime: 'OpenSmalltalkVM',
             image: 'Cuis',
-            bridgeProtocol: CUIS_STDIO_BRIDGE_V0,
+            bridgeProtocol: CUIS_STDIO_BRIDGE_V1,
             vmIdentity: stableVmIdentity,
             imageIdentity: stableImageIdentity,
             packages: spec.packages.map(({identity: packageIdentity, fileName}) => Object.freeze({
@@ -390,6 +571,7 @@ function createOpenSmalltalkCuisProvider({
 
 export {
   CUIS_STDIO_BRIDGE_V0,
+  CUIS_STDIO_BRIDGE_V1,
   OPENSMALLTALK_CUIS_PROVIDER_ID,
   OPENSMALLTALK_CUIS_PROVIDER_V0,
   OpenSmalltalkCuisCallError,
@@ -397,4 +579,5 @@ export {
   createOpenSmalltalkCuisProvider,
   decodeBridgeValue as decodeCuisBridgeValue,
   encodeBridgeValue as encodeCuisBridgeValue,
+  encodeHexByte,
 };

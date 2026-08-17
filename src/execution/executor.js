@@ -4,6 +4,8 @@ import {createForeignRuntimeCallableInterfaceV1Executor} from '../foreign-runtim
 import {createWasmFunctionV1Executor} from '../wasm/function-executor.js';
 import {WASM_CALLABLE_INTERFACE_V1} from '../wasm/foreign-artifacts.js';
 import {createWasmCallableInterfaceV1Executor} from '../wasm/foreign-callable-executor.js';
+import {WASM_WIT_CALLABLE_INTERFACE_V1} from '../wasm/wit-callable-artifacts.js';
+import {createWasmWitCallableInterfaceV1Executor} from '../wasm/wit-callable-executor.js';
 import {ActivationExecutor} from './activation-executor.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 import {
@@ -19,6 +21,7 @@ function createDefaultCodeExecutorRegistry({
   foreignRuntimes,
   foreignRuntimeDefinitionBindings,
   foreignRuntimeInstanceCache,
+  componentRuntime,
 } = {}) {
   const registry = new CodeExecutorRegistry();
   registry.register(NEUTRAL_EXPRESSION_V0, neutralExpressionV0Executor);
@@ -29,6 +32,9 @@ function createDefaultCodeExecutorRegistry({
   const foreignOptions = {};
   if (foreignWasmModuleCache !== undefined) foreignOptions.moduleCache = foreignWasmModuleCache;
   registry.register(WASM_CALLABLE_INTERFACE_V1, createWasmCallableInterfaceV1Executor(foreignOptions));
+  registry.register(WASM_WIT_CALLABLE_INTERFACE_V1, createWasmWitCallableInterfaceV1Executor({
+    componentRuntime: componentRuntime ?? null,
+  }));
 
   const foreignRuntimeConfigured = [
     foreignRuntimeDefinitions,
