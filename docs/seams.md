@@ -80,6 +80,22 @@ representation: v0 keeps the original installer untouched, v1 uses a sibling pla
 `wasm-nested-block-tree/v1` group policy. There is no second "does this need mutable state?"
 analysis at install time — the representation is the source of truth.
 
+## Symmetric Smalltalk kernel
+
+The object graph ADR 0044 dispatches against. `installSmalltalkKernel({images, imageId})` creates it;
+`findSmalltalkKernel({images, imageId})` finds it again from nothing but an image id, because refs
+returned by the installer die with the process while the image survives.
+
+| Identifier | Meaning |
+| --- | --- |
+| `smalltalk-kernel/v1` | both the kernel protocol tag and the well-known object id it lives at |
+| `smalltalk/behavior-shape/v1` | the fixed Behavior shape: name, superclass, methods, instanceShape |
+| `smalltalk/kernel-shape/v1` | the kernel object's shape: the singletons and the kernel classes |
+
+A behavior record means what its own shape says it means: a `smalltalk/behavior-shape/v1` object gets
+ADR 0044 lookup, anything else is a legacy behavior and keeps selector-as-shape-name lookup.
+Installing the kernel reinterprets nothing that already exists. Nothing here dispatches yet.
+
 ## ABI and contract identifiers
 
 Not representations — these appear inside artifact content as an `abi` or contract tag.
