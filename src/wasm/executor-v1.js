@@ -418,7 +418,7 @@ function createWasmFunctionV1CellExecutor({
       // of the ABI — the module knows slot indices, the host owns which cell each one is.
       context.declareTemporaries(descriptor.cellBindings.filter(({source}) => source === 'temporary'));
 
-      const arena = new ValueHandleArena();
+      const arena = new ValueHandleArena({receiverAbsent: activation.receiver === null});
       const receiverHandle = activation.receiver === null ? 0 : arena.put(activation.receiver);
       const argumentHandles = activation.arguments.map((value) => arena.put(value));
       // Snapshot captures are still resolved before entry and passed as handles, exactly as in v0.

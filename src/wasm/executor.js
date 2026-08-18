@@ -329,7 +329,7 @@ function createWasmFunctionV1Executor({
       const closurePrototypes = normalizeClosurePrototypes(code, descriptor, closureSites);
       const compiledModule = await moduleCache.get(moduleArtifact);
 
-      const arena = new ValueHandleArena();
+      const arena = new ValueHandleArena({receiverAbsent: activation.receiver === null});
       const receiverHandle = activation.receiver === null ? 0 : arena.put(activation.receiver);
       const argumentHandles = activation.arguments.map((value) => arena.put(value));
       const captureHandles = [];

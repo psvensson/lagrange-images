@@ -514,7 +514,7 @@ function createResumableWasmFunctionV2Executor({
       // Only temporaries: a cell capture already exists in the frame that declared it.
       context.declareTemporaries(descriptor.cellBindings.filter(({source}) => source === 'temporary'));
 
-      const arena = new ValueHandleArena();
+      const arena = new ValueHandleArena({receiverAbsent: activation.receiver === null});
       const receiverHandle = activation.receiver === null ? 0 : arena.put(activation.receiver);
       const argumentHandles = activation.arguments.map((value) => arena.put(value));
       const captureHandles = [];
