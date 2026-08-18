@@ -118,6 +118,14 @@ function assertFieldMappingCovers(record, fields, label) {
 // Shared by the projection executor and the resource provider, so the two cannot diverge on
 // ref rejection, missing slots or leaf typing.
 function projectObjectSlots({object, record, mapped, imageId, objectId}) {
+  // v1 has no indexed mapping syntax. Returning only named fields for such an object would make a
+  // partial object look complete to foreign code, so indexed objects fail explicitly until a later
+  // interface contract says how an indexed part is represented.
+  if (Object.hasOwn(object, 'indexed')) {
+    throw new TypeError(
+      `${IMAGE_PROJECTION_BINDING_V1} cannot project indexed object ${imageId}/${objectId}; v1 maps named slots only`,
+    );
+  }
   const projected = {};
   for (const field of record.fields) {
     const slot = mapped.get(field.name);
