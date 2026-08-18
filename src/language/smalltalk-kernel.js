@@ -1,4 +1,5 @@
 import {VALUE_KIND, isObjectRef, objectRef, textValue} from '../value/index.js';
+import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 // The Symmetric Smalltalk kernel: the durable object graph ADR 0044 dispatches against.
 //
@@ -347,18 +348,20 @@ async function readBehavior(images, ref) {
   return Object.freeze({record, name, ...refSlots});
 }
 
-// ADR 0044 decision 8's policy half. A bootstrapped image answers its own `nil`; an image with no
-// kernel answers nothing, so a temporary starts UNBOUND exactly as ADR 0043 decided. The lookup is
-// memoized per image because it runs on every activation that declares a temporary.
+// ADR 0044 decision 8's policy half, scoped exactly as the ADR scopes it: ADR 0043 decision 9 is
+// superseded for bootstrapped *Symmetric Smalltalk* execution, so an artifact of any other language
+// gets nothing back and its temporaries start UNBOUND — even in an image that carries a kernel.
+//
+// Deliberately unmemoized. Bootstrap is an installer for an existing image, so a runtime that
+// observed an image before its kernel existed must see the kernel afterwards; caching would make
+// execution depend on what the process happened to observe earlier rather than on current graph
+// state. A cache without an invalidation contract hides later graph changes too, and there is no
+// such contract to write against yet.
 function createSmalltalkTemporaryInitializer() {
-  const byImage = new Map();
-  return async ({images, dispatchImage}) => {
-    if (!dispatchImage) return null;
-    if (!byImage.has(dispatchImage)) {
-      const kernel = await findSmalltalkKernel({images, imageId: dispatchImage});
-      byImage.set(dispatchImage, kernel ? kernel.nil : null);
-    }
-    return byImage.get(dispatchImage);
+  return async ({images, dispatchImage, languageId}) => {
+    if (!dispatchImage || languageId !== SYMMETRIC_SMALLTALK_ID) return null;
+    const kernel = await findSmalltalkKernel({images, imageId: dispatchImage});
+    return kernel ? kernel.nil : null;
   };
 }
 

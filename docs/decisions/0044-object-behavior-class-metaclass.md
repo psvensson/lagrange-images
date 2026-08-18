@@ -270,9 +270,20 @@ ADR 0043 decision 9 carries an explicit supersession note saying it applies to b
 Symmetric Smalltalk execution only, rather than being quietly contradicted by this one.
 
 The split is mechanism from policy. The execution layer gains a `temporaryInitializer` seam and
-resolves it once per activation before either lane runs; the language supplies the policy, answering
-the dispatch image's kernel `nil` or nothing at all. So the execution layer never learns what `nil`
+resolves it once per activation before either lane runs, passing the dispatch image *and the
+artifact's language id*; the language supplies the policy, answering that image's kernel `nil` for a
+Symmetric Smalltalk artifact and nothing otherwise. So the execution layer never learns what `nil`
 is, and no executor learns it independently.
+
+The language id is load-bearing, not decoration. This decision supersedes ADR 0043 decision 9 for
+bootstrapped *Symmetric Smalltalk* execution, so an artifact of another language keeps `UNBOUND`
+temporaries even in an image that carries a kernel. Scoping on the image alone would quietly extend
+one language's semantics to every other.
+
+The lookup is deliberately unmemoized. Bootstrap is an installer for an image that already exists,
+so a runtime that observed an image before its kernel was installed must see the kernel afterwards.
+Caching would make execution depend on what the process happened to observe first rather than on
+current graph state, and a cache without an invalidation contract hides later graph changes too.
 
 ### 9. The bootstrap is an installer, not a hardcoded table
 

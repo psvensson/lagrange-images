@@ -66,8 +66,8 @@ class ActivationExecutor {
   // `temporaryInitializer` is how a language personality says what a declared temporary starts as,
   // without the execution layer learning what `nil` is. The mechanism lives here — one place,
   // before the lanes diverge — while the policy comes from the language: ADR 0044 wires one that
-  // resolves the dispatch image's Smalltalk kernel and answers its `nil`, or nothing when the image
-  // has no kernel, in which case a temporary starts UNBOUND exactly as ADR 0043 decided.
+  // answers the dispatch image's Smalltalk `nil` for Symmetric Smalltalk artifacts, and nothing
+  // otherwise, in which case a temporary starts UNBOUND exactly as ADR 0043 decided.
   constructor({
     images,
     executors = new CodeExecutorRegistry(),
@@ -207,7 +207,14 @@ class ActivationExecutor {
     // Resolved once per activation, before any executor runs, so both lanes see one answer.
     let initialTemporaryContents = UNBOUND;
     if (this.temporaryInitializer) {
-      const initial = await this.temporaryInitializer({images: this.images, dispatchImage: activeDispatchImage});
+      // The artifact's language identity travels with the request, because initialization policy
+      // belongs to a language rather than to an image. The execution layer still knows nothing
+      // about any particular language — only that an artifact has one.
+      const initial = await this.temporaryInitializer({
+        images: this.images,
+        dispatchImage: activeDispatchImage,
+        languageId: code.languageId ?? null,
+      });
       if (initial !== null && initial !== undefined) initialTemporaryContents = canonicalizeValue(initial);
     }
 

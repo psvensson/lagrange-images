@@ -84,8 +84,9 @@ test('assignment still works over a nil-initialized cell', async () => {
   });
 });
 
-// A snapshot capture of a nil-initialized temporary captures the nil ref like any other value.
-test('a snapshot capture after bootstrap captures nil as an ordinary ref', async () => {
+// Not a snapshot capture: Symmetric Smalltalk captures a temporary as a live cell by design
+// (ADR 0043 decision 4). What is shown here is that the shared cell starts holding nil.
+test('a captured temporary initially reads nil through its shared cell', async () => {
   await withRuntime(async (runtime) => {
     const kernel = await bootstrapped(runtime, 'app');
     // `reader` captures `x` as a live cell; reading it before assignment now yields nil rather than
@@ -179,5 +180,58 @@ test('the WASM lane still raises in an unbootstrapped image', async () => {
       runtime.executor.execute(activation),
       (error) => error.name === 'UnboundBindingError',
     );
+  });
+});
+
+// Bootstrap is an installer for an existing image, so a runtime that observed the image before its
+// kernel existed must see the kernel afterwards. Memoizing the lookup made execution depend on what
+// the process happened to observe first rather than on current graph state.
+test('a kernel installed mid-runtime takes effect without a restart', async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'late'});
+    await assert.rejects(
+      evaluate(runtime, 'late', 'before-bootstrap', '[ | x | x ]'),
+      (error) => error.name === 'UnboundBindingError',
+    );
+
+    await installSmalltalkKernel({images: runtime.images, imageId: 'late'});
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'late'});
+
+    const {result} = await evaluate(runtime, 'late', 'after-bootstrap', '[ | x | x ]');
+    assert.deepEqual(result, kernel.nil, 'the same runtime must observe the newly installed kernel');
+  });
+});
+
+// ADR 0044 supersedes ADR 0043 decision 9 for bootstrapped *Symmetric Smalltalk* execution only.
+// An artifact of another language keeps the original semantics even in a bootstrapped image.
+test('a non-Smalltalk artifact keeps UNBOUND temporaries in a bootstrapped image', async () => {
+  await withRuntime(async (runtime) => {
+    await bootstrapped(runtime, 'app');
+    const code = await runtime.images.putCodeArtifact('app', {
+      id: 'other-language-code',
+      languageId: 'some-other-language',
+      representation: 'neutral-expression/v1',
+      content: textValue(JSON.stringify({
+        parameters: 0,
+        temporaries: [{id: 'root:temporary:0', name: 'x'}],
+        body: {op: 'binding', id: 'root:temporary:0'},
+      })),
+    });
+    const block = await runtime.images.putBlock('app', {id: 'other-block', code: objectRef('app', code.id)});
+    const activation = await runtime.invocations.invokeBlock(objectRef('app', block.id), []);
+
+    await assert.rejects(
+      runtime.executor.execute(activation),
+      (error) => error.name === 'UnboundBindingError',
+      'nil initialization is scoped to Symmetric Smalltalk, not to the image',
+    );
+  });
+});
+
+test('a Symmetric Smalltalk artifact in the same image does get nil', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await bootstrapped(runtime, 'app');
+    const {result} = await evaluate(runtime, 'app', 'smalltalk-side', '[ | x | x ]');
+    assert.deepEqual(result, kernel.nil);
   });
 });
