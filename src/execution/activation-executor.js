@@ -4,6 +4,7 @@ import {
   EscapingMutableClosureError,
   LexicalCellArena,
   MissingLexicalCellError,
+  UNBOUND,
   UnboundBindingError,
 } from './lexical-cells.js';
 
@@ -62,7 +63,22 @@ function assertInvocations(invocations) {
 }
 
 class ActivationExecutor {
-  constructor({images, executors = new CodeExecutorRegistry(), invocations = null, authority = null} = {}) {
+  // `temporaryInitializer` is how a language personality says what a declared temporary starts as,
+  // without the execution layer learning what `nil` is. The mechanism lives here — one place,
+  // before the lanes diverge — while the policy comes from the language: ADR 0044 wires one that
+  // answers the dispatch image's Smalltalk `nil` for Symmetric Smalltalk artifacts, and nothing
+  // otherwise, in which case a temporary starts UNBOUND exactly as ADR 0043 decided.
+  constructor({
+    images,
+    executors = new CodeExecutorRegistry(),
+    invocations = null,
+    authority = null,
+    temporaryInitializer = null,
+  } = {}) {
+    if (temporaryInitializer !== null && typeof temporaryInitializer !== 'function') {
+      throw new TypeError('temporaryInitializer must be a function or null');
+    }
+    this.temporaryInitializer = temporaryInitializer;
     this.images = assertImages(images);
     // The authority *service*, not a context. Per ADR 0037 it is never handed to an executor.
     this.authority = authority;
@@ -188,6 +204,20 @@ class ActivationExecutor {
     // inherits what its sender computed. Context, never a field on the activation.
     const activeDispatchImage = dispatchImage ?? activation.block.imageId;
 
+    // Resolved once per activation, before any executor runs, so both lanes see one answer.
+    let initialTemporaryContents = UNBOUND;
+    if (this.temporaryInitializer) {
+      // The artifact's language identity travels with the request, because initialization policy
+      // belongs to a language rather than to an image. The execution layer still knows nothing
+      // about any particular language — only that an artifact has one.
+      const initial = await this.temporaryInitializer({
+        images: this.images,
+        dispatchImage: activeDispatchImage,
+        languageId: code.languageId ?? null,
+      });
+      if (initial !== null && initial !== undefined) initialTemporaryContents = canonicalizeValue(initial);
+    }
+
     // A mutable record rather than mere stack scoping, so that "active" can later mean "the
     // logical activation is still alive" once async activations exist, instead of "a
     // JavaScript frame happens to be on the stack".
@@ -218,7 +248,7 @@ class ActivationExecutor {
         // no nil to give it. Reading one before assignment raises rather than defaulting.
         declareTemporaries: whileActive('declareTemporaries', (temporaries) => {
           if (!Array.isArray(temporaries)) throw new TypeError('temporaries must be an array');
-          cells.declare(temporaries);
+          cells.declare(temporaries, initialTemporaryContents);
         }),
         // Cell-only and synchronous, which `readBinding` cannot be: it falls through to an awaited
         // durable-environment lookup. A WASM import must return a value, not a promise, so the

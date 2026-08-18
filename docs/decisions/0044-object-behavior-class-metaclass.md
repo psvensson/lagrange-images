@@ -1,6 +1,7 @@
 # ADR 0044: Object, Behavior, Class and Metaclass bootstrap
 
-Status: accepted — the object model, with immediate Values dispatching by kind under a transient dispatch image, and `+` as ordinary lookup over a primitive-backed method.
+Status: implemented — the object model, with immediate Values dispatching by kind under a transient dispatch image, `+` as ordinary lookup over a primitive-backed method, and `nil`-initialized temporaries in bootstrapped images.
+Proven by: test/smalltalk-kernel.test.js, test/smalltalk-dispatch.test.js, test/smalltalk-builder-recovery.test.js, test/nil-temporary-initialization.test.js
 
 ## Problem
 
@@ -265,8 +266,25 @@ ADR 0043 decision 10 forbids, and doing it in the common layer is also why this 
 ABI: a cell that starts out holding a `nil` ref is an ordinary bound cell as far as
 `cell_get`/`cell_set` are concerned.
 
-ADR 0043 decision 9 should later carry an explicit note that it is superseded for bootstrapped
-Symmetric Smalltalk execution, rather than being quietly contradicted by this one.
+ADR 0043 decision 9 carries an explicit note that it is superseded for bootstrapped Symmetric
+Smalltalk execution, rather than being quietly contradicted by this one. It continues to apply
+everywhere else.
+
+The split is mechanism from policy. The execution layer gains a `temporaryInitializer` seam and
+resolves it once per activation before either lane runs, passing the dispatch image *and the
+artifact's language id*; the language supplies the policy, answering that image's kernel `nil` for a
+Symmetric Smalltalk artifact and nothing otherwise. So the execution layer never learns what `nil`
+is, and no executor learns it independently.
+
+The language id is load-bearing, not decoration. This decision supersedes ADR 0043 decision 9 for
+bootstrapped *Symmetric Smalltalk* execution, so an artifact of another language keeps `UNBOUND`
+temporaries even in an image that carries a kernel. Scoping on the image alone would quietly extend
+one language's semantics to every other.
+
+The lookup is deliberately unmemoized. Bootstrap is an installer for an image that already exists,
+so a runtime that observed an image before its kernel was installed must see the kernel afterwards.
+Caching would make execution depend on what the process happened to observe first rather than on
+current graph state, and a cache without an invalidation contract hides later graph changes too.
 
 ### 9. The bootstrap is an installer, not a hardcoded table
 

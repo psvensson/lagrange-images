@@ -1,4 +1,5 @@
 import {createBackend} from './backend/create-backend.js';
+import {createSmalltalkTemporaryInitializer} from './language/smalltalk-kernel.js';
 import {
   CompilationService,
   createDefaultCodeCompilerRegistry,
@@ -109,7 +110,14 @@ async function createRuntime(options = {}) {
   // The authority service is a control-plane surface: the embedder may issue and revoke
   // contexts through `runtime.authority`, and executors never see it.
   const authority = options.authority ?? createAuthorityService();
-  const executor = new ActivationExecutor({images, executors: codeExecutors, invocations, authority});
+  const executor = new ActivationExecutor({
+    images,
+    executors: codeExecutors,
+    invocations,
+    authority,
+    // ADR 0044 decision 8. The policy is the language's; the mechanism is the execution layer's.
+    temporaryInitializer: createSmalltalkTemporaryInitializer(),
+  });
 
   return {
     backend,
