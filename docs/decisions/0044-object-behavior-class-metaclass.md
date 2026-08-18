@@ -1,7 +1,6 @@
 # ADR 0044: Object, Behavior, Class and Metaclass bootstrap
 
 Status: accepted — the object model, with immediate Values dispatching by kind under a transient dispatch image, and `+` as ordinary lookup over a primitive-backed method.
-makes `3 + 4` an ordinary message send.
 
 ## Problem
 
@@ -27,8 +26,9 @@ class-side one. `Foo new` is not expressible, because there is no object to send
 ### The immediate-value wall
 
 The sharper problem is that most receivers are not objects at all. The canonical Value set is
-`boolean | integer | float64 | text | bytes | ref | pinned-ref`, and only the two ref kinds can carry
-a `behavior`. So:
+`boolean | integer | float64 | text | bytes | ref | pinned-ref`, and only a stored object carries a
+`behavior` at all — reachable through the unpinned `ref` kind, since `isObjectRef` tests `REF` and
+the dispatcher does not accept `pinned-ref`. So:
 
 ```smalltalk
 3 + 4
@@ -264,7 +264,32 @@ through the kernel object of decision 5a rather than through refs the caller hap
 dispatcher learns nothing about specific classes; it learns only the *rules* in decisions 3, 4 and 5.
 An image without a bootstrap keeps working exactly as it does today.
 
-### 10. Blocks keep their existing special case
+### 10. Installing the kernel never reinterprets an existing behavior record
+
+The legacy convention is not merely code that this ADR replaces — it is **durable graph data**. An
+already-stored object's `behavior` today means "an object whose shape slot names are selectors". If
+installing `SmalltalkKernel` switched how dispatch reads that field, every such object would change
+meaning without a single one of its records changing.
+
+That is migration by interpretation, and decision 8 already forbids it for old `{unbound}` captures.
+It would be incoherent to forbid it there and permit it here.
+
+So the rule is additive, and keyed on what the behavior record *is*:
+
+```text
+behavior with the fixed Behavior shape     ADR 0044 method dictionary + superclass lookup
+legacy behavior object                     existing selector-as-shape-name lookup, unchanged
+installing the kernel                      reinterprets nothing that already exists
+```
+
+The alternative — refusing to bootstrap an image that already holds objects — is worse. It makes the
+bootstrap a one-shot decision taken at image creation, offers no migration path, and would make
+"bootstrap installer" a misnomer for something closer to an image format. Dispatch instead
+recognizes the two shapes and reads each as what it is, which leaves a later explicit migration free
+to rewrite legacy behaviors into Behaviors on purpose, as a change to the records rather than to
+their meaning.
+
+### 11. Blocks keep their existing special case
 
 `resolveMessage` checks for a Block record before it consults generic object behavior, so `value`
 and `value:` are answered without a class. That stays true here. Turning Blocks into ordinary
@@ -327,6 +352,8 @@ Also required:
   position
 - a temporary in a bootstrapped image reads `nil`, while an image without a bootstrap still raises
   `UnboundBindingError`, and a durable `{unbound}` capture written before the bootstrap keeps raising
+- an object stored under the legacy behavior convention keeps dispatching through it after the
+  kernel is installed in its image, with its records untouched and its answers unchanged
 - `+` sent from source, with the method's semantic artifact derived into both a neutral and a WASM
   executable Block, and both proven — not merely one Block reached from two callers
 - both execution lanes agree, per the standing rule, and equivalent failures agree in reason as well
@@ -370,5 +397,7 @@ UNBOUND stays a host sentinel and never becomes a Value
 nil initialization happens once in the common activation layer, not per executor
 an old durable {unbound} record is never reinterpreted as nil
 the bootstrap is an installer; the dispatcher knows rules, not class names
+installing the kernel reinterprets no existing behavior record
+a legacy behavior keeps legacy lookup; migration rewrites records, never meanings
 both lanes agree on results and on failure reasons
 ```
