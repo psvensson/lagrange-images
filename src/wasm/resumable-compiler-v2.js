@@ -8,24 +8,29 @@ import {
   u32,
   vector,
 } from './encoding.js';
-import {LAGRANGE_CODE_V0, parseLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
+import {LAGRANGE_CODE_V1, parseLagrangeCodeV1Program} from '../code/lagrange-code-v1.js';
 import {bytesValue, canonicalizeValue, isReference} from '../value/index.js';
-import {
-  WASM_ENTRY_V0,
-  WASM_IMPORT_MODULE,
-} from './abi.js';
-import {WASM_RESUMABLE_VALUE_HANDLE_ABI_V1} from './resumable-abi.js';
+import {WASM_ENTRY_V0, WASM_IMPORT_MODULE} from './abi.js';
+import {WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1} from './compiler-v1.js';
+import {WASM_RESUMABLE_VALUE_HANDLE_ABI_V2} from './resumable-abi.js';
 
-const BASE_IMPORT_COUNT = 4;
-const WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0 = 'wasm-nested-block-tree/v0';
-
-
-
-
-
-
-
-
+// lagrange-value-handle-resumable/v2: the resumable lane for lagrange-code/v1.
+//
+// The rule the whole design turns on is that **cell identity is never continuation state**.
+//
+//   a Value already read from a cell   may be saved across suspension, because evaluation
+//                                      consumed that read before suspending
+//   a future cell read or write        always goes through cell_get / cell_set
+//
+// So a cell becomes an explicit synchronous CPS operation sitting at its evaluation position,
+// never a `$capture:` parameter threaded through resume entries. The v1 resumable compiler treats
+// every binding as a capture parameter, which is exactly the part that cannot survive mutation.
+//
+// The savedValues machinery is unchanged in spirit: it saves Value handles that have already been
+// computed, not lexical variables.
+const BASE_IMPORT_COUNT_V2 = 6;
+const CELL_GET_IMPORT = 4;
+const CELL_SET_IMPORT = 5;
 
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be a non-empty string`);
@@ -64,10 +69,22 @@ function collectLiteral(literals, value) {
 }
 
 function normalizeCaptureDescriptor(capture, index) {
-  exactKeys(capture, ['id', 'name', 'value'], `WASM closure capture ${index}`);
+  const label = `WASM closure capture ${index}`;
+  const mode = requiredText(capture?.mode, `${label} mode`);
+  if (mode === 'cell') {
+    exactKeys(capture, ['id', 'mode', 'name'], label);
+    return Object.freeze({
+      id: requiredText(capture.id, `${label} id`),
+      name: requiredText(capture.name, `${label} name`),
+      mode: 'cell',
+    });
+  }
+  if (mode !== 'snapshot') throw new TypeError(`${label} mode must be snapshot or cell`);
+  exactKeys(capture, ['id', 'mode', 'name', 'value'], label);
   return Object.freeze({
-    id: requiredText(capture.id, `WASM closure capture ${index} id`),
-    name: requiredText(capture.name, `WASM closure capture ${index} name`),
+    id: requiredText(capture.id, `${label} id`),
+    name: requiredText(capture.name, `${label} name`),
+    mode: 'snapshot',
   });
 }
 
@@ -98,6 +115,8 @@ function collectSendEffect(state, expression) {
   return effectIndex;
 }
 
+// requestArity counts snapshot captures only, exactly as in the simple v1 backend. Saved
+// continuation handles follow the request handles, and the two counts stay separate.
 function collectClosureEffect(state, expression) {
   if (!Array.isArray(expression.captures)) throw new TypeError('WASM nested Block captures must be an array');
   const captures = Object.freeze(expression.captures.map(normalizeCaptureDescriptor));
@@ -110,17 +129,17 @@ function collectClosureEffect(state, expression) {
   state.effects.push({
     kind: 'closure',
     siteIndex,
-    requestArity: captures.length,
+    requestArity: captures.filter(({mode}) => mode === 'snapshot').length,
     savedCount: 0,
     resumeEntry: null,
   });
   return effectIndex;
 }
 
-function lowerSequence(expressions, state, context, index, values, done) {
+function lowerSequenceValues(expressions, state, context, index, values, done) {
   if (index >= expressions.length) return done(values);
   return lowerExpression(expressions[index], state, context, (value) =>
-    lowerSequence(expressions, state, context, index + 1, [...values, value], done));
+    lowerSequenceValues(expressions, state, context, index + 1, [...values, value], done));
 }
 
 function lowerExpression(expression, state, context, continuation) {
@@ -144,10 +163,39 @@ function lowerExpression(expression, state, context, continuation) {
     case 'receiver':
       return continuation('$receiver');
     case 'binding': {
+      // A cell read is a `let` at this evaluation position. Its *result* may then be saved across a
+      // later suspension, which is correct: the read already happened. What must never happen is
+      // the cell itself becoming a continuation parameter.
+      const slot = context.cellSlots.get(expression.id);
+      if (slot !== undefined) {
+        const id = newTemp(state);
+        return {kind: 'let', id, op: 'cell-get', slot, next: continuation(id)};
+      }
       if (!context.captureIds.has(expression.id)) {
-        throw new TypeError(`WASM binding is not declared as a capture: ${expression.id}`);
+        throw new TypeError(`WASM binding is neither a cell nor a snapshot capture: ${expression.id}`);
       }
       return continuation(`$capture:${expression.id}`);
+    }
+    case 'binding-write': {
+      const slot = context.cellSlots.get(expression.id);
+      if (slot === undefined) throw new TypeError(`WASM assignment target is not a cell: ${expression.id}`);
+      // The write node sits after the right-hand side in the continuation. If that side suspends,
+      // splitPlan moves this node into the resume segment, so the cell is written after resumption
+      // with the returned result — never prepared or performed early.
+      return lowerExpression(expression.value, state, context, (value) => {
+        const id = newTemp(state);
+        return {kind: 'let', id, op: 'cell-set', slot, value, next: continuation(id)};
+      });
+    }
+    case 'sequence': {
+      if (!Array.isArray(expression.statements) || expression.statements.length === 0) {
+        throw new TypeError('sequence statements must be a non-empty array');
+      }
+      const last = expression.statements.length - 1;
+      const lowerFrom = (index) => (index === last
+        ? lowerExpression(expression.statements[index], state, context, continuation)
+        : lowerExpression(expression.statements[index], state, context, () => lowerFrom(index + 1)));
+      return lowerFrom(0);
     }
     case 'integer-add':
     case 'equals':
@@ -165,7 +213,7 @@ function lowerExpression(expression, state, context, continuation) {
       }));
     case 'send':
       return lowerExpression(expression.receiver, state, context, (receiver) =>
-        lowerSequence(expression.arguments, state, context, 0, [], (args) => {
+        lowerSequenceValues(expression.arguments, state, context, 0, [], (args) => {
           const resultId = newTemp(state);
           return {
             kind: 'effect',
@@ -175,10 +223,16 @@ function lowerExpression(expression, state, context, continuation) {
             next: continuation(resultId),
           };
         }));
-    case 'block':
+    case 'make-block':
+    case 'block': {
       if (!Array.isArray(expression.captures)) throw new TypeError('WASM nested Block captures must be an array');
       expression.captures.forEach((capture, index) => normalizeCaptureDescriptor(capture, index));
-      return lowerSequence(expression.captures.map(({value}) => value), state, context, 0, [], (captures) => {
+      // Only snapshot captures contribute request handles. A cell capture is reconstructed by the
+      // host from site metadata, so there is no handle position it could arrive through.
+      const snapshotValues = expression.captures
+        .filter(({mode}) => mode === 'snapshot')
+        .map(({value}) => value);
+      return lowerSequenceValues(snapshotValues, state, context, 0, [], (captures) => {
         const resultId = newTemp(state);
         return {
           kind: 'effect',
@@ -188,8 +242,9 @@ function lowerExpression(expression, state, context, continuation) {
           next: continuation(resultId),
         };
       });
+    }
     default:
-      throw new TypeError(`WASM resumable backend does not support semantic op: ${expression.op}`);
+      throw new TypeError(`WASM resumable backend v2 does not support semantic op: ${expression.op}`);
   }
 }
 
@@ -287,6 +342,10 @@ function compilePlan(plan, context) {
         valueCode = [...localGet(plan.left), ...localGet(plan.right), 0x10, ...u32(1)];
       } else if (plan.op === 'equals') {
         valueCode = [...localGet(plan.left), ...localGet(plan.right), 0x10, ...u32(2)];
+      } else if (plan.op === 'cell-get') {
+        valueCode = [0x41, ...s32(plan.slot), 0x10, ...u32(CELL_GET_IMPORT)];
+      } else if (plan.op === 'cell-set') {
+        valueCode = [0x41, ...s32(plan.slot), ...localGet(plan.value), 0x10, ...u32(CELL_SET_IMPORT)];
       } else {
         throw new TypeError(`unknown resumable pure op: ${plan.op}`);
       }
@@ -307,7 +366,7 @@ function compilePlan(plan, context) {
       return [
         ...plan.requestValues.flatMap(localGet),
         ...plan.savedValues.flatMap(localGet),
-        0x10, ...u32(BASE_IMPORT_COUNT + plan.effectIndex),
+        0x10, ...u32(BASE_IMPORT_COUNT_V2 + plan.effectIndex),
         0x0f,
       ];
     case 'return':
@@ -353,7 +412,24 @@ function prepareEntries(entries) {
   return {normalizedEntries, entryNames};
 }
 
-function compileResumableWasmModuleEntries(entries) {
+// Same slot table as the simple v1 backend, and function-local for the same reason: a shared module
+// holds several semantic Blocks whose static binding ids all begin `root:`.
+function cellBindingsOf(program) {
+  const bindings = [];
+  const slots = new Map();
+  const declare = ({id, name}, source) => {
+    if (slots.has(id)) return;
+    slots.set(id, bindings.length);
+    bindings.push(Object.freeze({id, name, source}));
+  };
+  for (const temporary of program.temporaries) declare(temporary, 'temporary');
+  for (const capture of program.captures) {
+    if (capture.mode === 'cell') declare(capture, 'capture');
+  }
+  return {bindings: Object.freeze(bindings), slots};
+}
+
+function compileResumableWasmV2ModuleEntries(entries) {
   const {normalizedEntries, entryNames} = prepareEntries(entries);
   const state = {
     sendSites: [],
@@ -367,14 +443,20 @@ function compileResumableWasmModuleEntries(entries) {
 
   for (const entry of normalizedEntries) {
     const program = entry.program;
-    if (!program || !Array.isArray(program.parameters) || !Array.isArray(program.captures)) {
-      throw new TypeError(`WASM module entry ${entry.entry} program must contain parameters and captures arrays`);
+    if (!program || !Array.isArray(program.parameters) || !Array.isArray(program.captures) || !Array.isArray(program.temporaries)) {
+      throw new TypeError(`WASM module entry ${entry.entry} program must contain parameters, temporaries and captures arrays`);
     }
-    const captureIds = program.captures.map(({id}, index) => requiredText(id, `WASM capture ${index} id`));
+    // Only snapshot captures become entry parameters. Cell captures are reached through the slot
+    // table, so they never appear in a segment signature — root or resume.
+    const captureIds = program.captures
+      .filter(({mode}) => mode !== 'cell')
+      .map(({id}, index) => requiredText(id, `WASM capture ${index} id`));
     if (new Set(captureIds).size !== captureIds.length) throw new TypeError(`WASM module entry ${entry.entry} has duplicate capture ids`);
+    const {bindings: cellBindings, slots: cellSlots} = cellBindingsOf(program);
     const context = {
       parameterCount: program.parameters.length,
       captureIds: new Set(captureIds),
+      cellSlots,
     };
 
     const sendStart = state.sendSites.length;
@@ -400,6 +482,7 @@ function compileResumableWasmModuleEntries(entries) {
       memberIndex: entry.memberIndex,
       parameters: program.parameters.length,
       captures: Object.freeze(captureIds),
+      cellBindings,
       sendSiteIndices: Object.freeze(Array.from(
         {length: state.sendSites.length - sendStart},
         (_, offset) => sendStart + offset,
@@ -450,12 +533,14 @@ function compileResumableWasmModuleEntries(entries) {
     functionImport(WASM_IMPORT_MODULE, 'integer_add', 1),
     functionImport(WASM_IMPORT_MODULE, 'equals', 1),
     functionImport(WASM_IMPORT_MODULE, 'is_true', 0),
+    functionImport(WASM_IMPORT_MODULE, 'cell_get', 0),
+    functionImport(WASM_IMPORT_MODULE, 'cell_set', 1),
     ...effectImports,
   ]);
 
   const firstSegmentTypeIndex = 2 + effectSites.length;
   const functions = vector(compiledSegments.map((_, index) => [...u32(firstSegmentTypeIndex + index)]));
-  const firstFunctionIndex = BASE_IMPORT_COUNT + effectSites.length;
+  const firstFunctionIndex = BASE_IMPORT_COUNT_V2 + effectSites.length;
   const exports = vector(compiledSegments.map(({entry}, index) => functionExport(entry, firstFunctionIndex + index)));
   const code = vector(compiledSegments.map(({body}) => body));
 
@@ -478,71 +563,72 @@ function compileResumableWasmModuleEntries(entries) {
   });
 }
 
-function compileResumableWasmModule(program) {
-  const compiled = compileResumableWasmModuleEntries([{entry: WASM_ENTRY_V0, memberIndex: 0, program}]);
+function compileResumableWasmV2Module(program) {
+  const compiled = compileResumableWasmV2ModuleEntries([{entry: WASM_ENTRY_V0, memberIndex: 0, program}]);
   const descriptor = compiled.functions[0];
   return Object.freeze({
     ...compiled,
     parameterCount: descriptor.parameters,
     captureIds: descriptor.captures,
+    cellBindings: descriptor.cellBindings,
   });
 }
 
-const lagrangeCodeV0ToResumableWasmModuleCompiler = Object.freeze({
+const lagrangeCodeV1ToResumableWasmModuleCompiler = Object.freeze({
   async compile({source}) {
-    if (source.representation !== LAGRANGE_CODE_V0) throw new TypeError(`source must be ${LAGRANGE_CODE_V0}`);
-    const program = parseLagrangeCodeProgram(source);
-    const compiled = compileResumableWasmModule(program);
+    if (source.representation !== LAGRANGE_CODE_V1) throw new TypeError(`source must be ${LAGRANGE_CODE_V1}`);
+    const compiled = compileResumableWasmV2Module(parseLagrangeCodeV1Program(source));
     return Object.freeze({
       languageId: source.languageId,
       content: bytesValue(compiled.bytes),
       metadata: {
-        abi: WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
+        abi: WASM_RESUMABLE_VALUE_HANDLE_ABI_V2,
         entry: WASM_ENTRY_V0,
         parameters: compiled.parameterCount,
         captures: compiled.captureIds,
+        cellBindings: compiled.cellBindings,
         literals: compiled.literals,
         sendSites: compiled.sendSites,
         closureSites: compiled.closureSites,
         effectSites: compiled.effectSites,
         continuations: compiled.continuations,
         functions: compiled.functions,
-        semanticRepresentation: LAGRANGE_CODE_V0,
+        semanticRepresentation: LAGRANGE_CODE_V1,
       },
     });
   },
 });
 
-const lagrangeCodeGroupToResumableWasmModuleCompiler = Object.freeze({
+const lagrangeCodeV1GroupToResumableWasmModuleCompiler = Object.freeze({
   async compile({group, members}) {
-    if (group.policyId !== WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0) {
+    if (group.policyId !== WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1) {
       throw new TypeError(`unsupported WASM compilation group policy: ${group.policyId}`);
     }
     if (group.options?.physicalLayout !== 'shared-module') {
       throw new TypeError('WASM shared-module compiler requires physicalLayout=shared-module');
     }
     const entries = members.map((source, memberIndex) => {
-      if (source.representation !== LAGRANGE_CODE_V0) {
-        throw new TypeError(`WASM group member ${memberIndex} must be ${LAGRANGE_CODE_V0}`);
+      if (source.representation !== LAGRANGE_CODE_V1) {
+        throw new TypeError(`WASM group member ${memberIndex} must be ${LAGRANGE_CODE_V1}`);
       }
       return {
         entry: `run_${memberIndex}`,
         memberIndex,
-        program: parseLagrangeCodeProgram(source),
+        program: parseLagrangeCodeV1Program(source),
       };
     });
-    const compiled = compileResumableWasmModuleEntries(entries);
+    const compiled = compileResumableWasmV2ModuleEntries(entries);
     return Object.freeze({
       content: bytesValue(compiled.bytes),
       metadata: {
-        abi: WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
+        abi: WASM_RESUMABLE_VALUE_HANDLE_ABI_V2,
         literals: compiled.literals,
         sendSites: compiled.sendSites,
         closureSites: compiled.closureSites,
         effectSites: compiled.effectSites,
         continuations: compiled.continuations,
         functions: compiled.functions,
-        semanticRepresentation: LAGRANGE_CODE_V0,
+        semanticRepresentation: LAGRANGE_CODE_V1,
         groupPolicyId: group.policyId,
         physicalLayout: 'shared-module',
       },
@@ -550,16 +636,10 @@ const lagrangeCodeGroupToResumableWasmModuleCompiler = Object.freeze({
   },
 });
 
-function isWasmTailEffectRestrictionError(error) {
-  if (!(error instanceof TypeError)) return false;
-  return error.message.includes('message sends only in tail position')
-    || error.message.includes('nested Block creation only in tail position');
-}
-
 export {
-  compileResumableWasmModule,
-  compileResumableWasmModuleEntries,
-  isWasmTailEffectRestrictionError,
-  lagrangeCodeGroupToResumableWasmModuleCompiler,
-  lagrangeCodeV0ToResumableWasmModuleCompiler,
+  BASE_IMPORT_COUNT_V2,
+  compileResumableWasmV2Module,
+  compileResumableWasmV2ModuleEntries,
+  lagrangeCodeV1GroupToResumableWasmModuleCompiler,
+  lagrangeCodeV1ToResumableWasmModuleCompiler,
 };

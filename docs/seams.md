@@ -75,9 +75,10 @@ The semantic representation is chosen per compilation unit from what the program
 applies to the whole nested tree: `selectSemanticRepresentation()` returns `lagrange-code/v0`
 unless the source declares a temporary, sequences more than one statement, or assigns. Source
 needing none of that still compiles to exactly the `lagrange-code/v0` artifact it always did.
-`lagrange-code/v1` currently runs on the neutral lane only; the WASM lane refuses it explicitly
-with `WasmMutableLexicalStateUnsupportedError` during preflight, before any derived artifact is
-written.
+`lagrange-code/v1` runs on both lanes. `installWasmBlockTree()` dispatches on the root semantic
+representation: v0 keeps the original installer untouched, v1 uses a sibling planner that emits the
+`wasm-nested-block-tree/v1` group policy. There is no second "does this need mutable state?"
+analysis at install time — the representation is the source of truth.
 
 ## ABI and contract identifiers
 
@@ -86,6 +87,8 @@ Not representations — these appear inside artifact content as an `abi` or cont
 | Identifier | Meaning |
 | --- | --- |
 | `wasm-scalar-call/v0` | frozen scalar foreign-WASM ABI: no imports, one scalar result |
+| `lagrange-value-handle/v1` | adds synchronous `cell_get`/`cell_set` and snapshot-counted closure sites (ADR 0043) |
+| `lagrange-value-handle-resumable/v2` | the same, with cells correct across suspension and resumption |
 | `foreign-runtime-value-call/v0` | canonical-Value call into a live foreign runtime |
 | `lagrange-value-handle/v0` | internal WASM Value-handle ABI |
 | `lagrange-value-handle-resumable/v1` | resumable non-tail effect ABI |

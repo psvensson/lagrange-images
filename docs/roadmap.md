@@ -186,15 +186,12 @@ Implemented:
 - captured foreign Blocks via ordinary `value:`/`value:value:` sends
 - mixed foreign-WASM/live-Cuis orchestration
 - resumable non-tail host effects in the Lagrange-WASM lane
+- temporaries, statement sequences and assignment, with mutable lexical cells identical across the
+  neutral executor, ordinary WASM, pooled WASM instances, suspension/resumption and nested closures
+  (ADR 0043)
 
 Next:
 
-- [ ] temporaries, sequences and assignment (ADR 0043): neutral/common substrate implemented, WASM
-      differential completion pending. `lagrange-code/v1` runs on the neutral lane; the WASM lane
-      refuses it explicitly at preflight rather than diverging. Completing it means
-      `lagrange-value-handle/v1` and `lagrange-value-handle-resumable/v2` with synchronous
-      `cell_get`/`cell_set` imports over the same `LexicalCellArena`, because a shared cell cannot
-      live in a WASM local: the closure that writes it is a separate activation with its own frame
 - [ ] `+` and friends as reachable arithmetic. `integer-add` exists in the neutral IR but no front
       end emits it, so ADR 0043's proofs take arithmetic as a message send to a Block. Making `+` a
       primitive would prejudge Integer objects, so this belongs with the object bootstrap

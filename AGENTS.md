@@ -222,6 +222,12 @@ pooled instance != activation state
 - `UNBOUND` is a host sentinel. It must never reach `canonicalizeValue` or be observable as a Value, and it is not `nil` — there is no `nil` yet.
 - The lexical substrate lives in the common execution layer (`src/execution/lexical-cells.js`) and both lanes consume it. A second, lane-private implementation of mutable lexical state is the architecture to avoid.
 - `lagrange-code/v0` and `neutral-expression/v0` are frozen closed grammars. New executable semantics get a new version and the front end selects between them from semantic need, not from a syntax check.
+- A shared cell is never a WASM local, and never continuation state. The closure that writes it is a separate activation with its own frame, so cells live host-side behind synchronous `cell_get`/`cell_set`. A Value already read from a cell may cross a suspension; a future read or write may not.
+- A cell capture occupies no Value-handle position in either WASM ABI. Closure-site arity counts snapshot captures only — that is what makes a cell snapshot structurally unrepresentable rather than merely avoided.
+- Cell slot indices are function-local, resolved through the active function descriptor. A shared module holds several Blocks whose static binding ids all start at `root:`, so a module-global table would confuse unrelated slots.
+- Every WASM metadata normalizer branches on the declared `metadata.abi`. Never teach an old normalizer to accept a new shape; add a sibling that requires the new one.
+- A sibling ABI reader must be no laxer than the one it sits beside. When adding one, port every validation from the frozen reader — duplicate index rejection, non-empty function tables, reference-free metadata — even where another layer happens to catch the case first.
+- The two lanes must agree on *which* failure a program gets, not merely that it fails. An absent cell means `EscapingMutableClosureError` when its binding is a capture and `MissingLexicalCellError` when it is a temporary; the WASM side derives that from `cellBindings.source` rather than consulting the durable record.
 
 ## Authority
 

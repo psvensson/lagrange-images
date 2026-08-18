@@ -1,6 +1,7 @@
 # ADR 0043: mutable lexical state and assignment
 
-Status: accepted — the common lexical-cell substrate and the neutral execution lane are implemented (`test/mutable-lexical-state.test.js`); decision 10 is not satisfied until the Lagrange-WASM lane agrees, so this is not yet `implemented`.
+Status: implemented
+Proven by: test/mutable-lexical-state.test.js, test/mutable-lexical-differential.test.js, test/wasm-lexical-cells.test.js, test/wasm-resumable-cells.test.js
 
 ## Problem
 
@@ -286,29 +287,44 @@ Also required:
 
 ## Implementation status
 
-The substrate and the neutral lane landed first, deliberately, because decision 10 is a constraint
-on the *pair* of lanes and satisfying it needs a versioned WASM ABI change.
-
-Landed, in `test/mutable-lexical-state.test.js`:
+Landed across both execution lanes.
 
 ```text
 src/execution/lexical-cells.js      frames, cells, arena — the common layer, not a lane's private one
 lagrange-code/v1                    temporaries, sequences, binding-write, capture modes
 neutral-expression/v1               the executable counterpart; no frame machinery in the IR
 {name, cell: true}                  the third durable capture disposition
+lagrange-value-handle/v1            synchronous cell_get/cell_set; mixed-mode closure sites
+lagrange-value-handle-resumable/v2  the same, correct across suspension and resumption
+wasm-nested-block-tree/v1           its own group policy, so the v0 tree is untouched
 ```
 
-The proofs take arithmetic as an ordinary message send to a Block, because `integer-add` is a
-neutral-expression op that no front end emits. Making `+` a compiler primitive would prejudge
-Integer objects, so it stays with the object bootstrap rather than arriving as a side effect of
-needing to count.
+Nothing older changed meaning. The v0 compilers emit byte-identical modules, `lagrange-code/v0` and
+`neutral-expression/v0` are untouched closed grammars, and source needing none of these semantics
+still produces exactly its v0 artifact.
 
-Not landed: the Lagrange-WASM lane, which refuses `lagrange-code/v1` explicitly at preflight rather
-than diverging. The finding that makes it a separate change is that **a shared cell cannot be a
-WASM local**: the closure that writes it is a separate activation with its own frame, so the cell
-has to stay host-side behind synchronous `cell_get`/`cell_set` imports over the same arena. That is
-an ABI change, hence `lagrange-value-handle/v1` and `lagrange-value-handle-resumable/v2` with a
-compiler-identity advance.
+Two findings shaped the WASM lane:
+
+**A shared cell cannot be a WASM local.** The closure that writes it is a separate activation with
+its own frame, so a local would give each activation its own copy — the snapshot semantics this ADR
+exists to remove. Cells stay host-side behind synchronous imports.
+
+**Cell identity is never continuation state.** A Value already read from a cell may be saved across
+a suspension, because evaluation consumed that read before suspending; a future read or write always
+goes through `cell_get`/`cell_set`. So an assignment whose right-hand side suspends lowers its write
+into the resume segment and writes only after resumption.
+
+A cell capture occupies no Value-handle position anywhere in either ABI, so there is no channel
+through which a snapshot of a mutable cell could enter a closure.
+
+The proofs are differential: one source compiles to one `lagrange-code/v1` artifact and runs through
+the neutral executor and through the WASM Block tree — simple backend where every effect is in tail
+position, resumable where it is not — and the lanes are compared to each other rather than to
+hardcoded constants.
+
+Arithmetic in the proofs arrives as a message send to a Block, because `integer-add` is a
+neutral-expression op no front end emits. Making `+` a primitive would prejudge Integer objects, so
+it belongs with the object bootstrap.
 
 ## What is deferred
 

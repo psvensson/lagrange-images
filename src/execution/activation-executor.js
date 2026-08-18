@@ -3,6 +3,7 @@ import {CodeExecutorRegistry} from './executor-registry.js';
 import {
   EscapingMutableClosureError,
   LexicalCellArena,
+  MissingLexicalCellError,
   UnboundBindingError,
 } from './lexical-cells.js';
 
@@ -214,6 +215,20 @@ class ActivationExecutor {
         declareTemporaries: whileActive('declareTemporaries', (temporaries) => {
           if (!Array.isArray(temporaries)) throw new TypeError('temporaries must be an array');
           cells.declare(temporaries);
+        }),
+        // Cell-only and synchronous, which `readBinding` cannot be: it falls through to an awaited
+        // durable-environment lookup. A WASM import must return a value, not a promise, so the
+        // WASM lane uses these and never the general ones. Absence raises rather than falling
+        // back, so there is no path by which a durable snapshot could answer a cell read.
+        readCell: whileActive('readCell', (bindingId) => {
+          const cell = cells.resolve(bindingId);
+          if (!cell) throw new MissingLexicalCellError(bindingId);
+          return cell.read();
+        }),
+        writeCell: whileActive('writeCell', (bindingId, value) => {
+          const cell = cells.resolve(bindingId);
+          if (!cell) throw new MissingLexicalCellError(bindingId);
+          return cell.write(value);
         }),
         readBinding: whileActive('readBinding', async (bindingId) => {
           const cell = cells.resolve(bindingId);

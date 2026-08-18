@@ -424,31 +424,55 @@ test('mutable lexical source installs against the neutral v1 lane throughout its
   });
 });
 
-// ADR 0043 decision 10 says both lanes agree or it is not implemented. The neutral substrate landed
-// first, so the WASM lane must refuse rather than diverge — and refuse before writing anything.
-test('the WASM lane refuses lagrange-code/v1 during preflight and writes nothing', async () => {
+// ADR 0043 decision 10: both lanes agree. The WASM lane now installs lagrange-code/v1 through a
+// sibling planner rather than refusing it, and picks the simple or resumable backend by whether the
+// program's effects are in tail position.
+test('the WASM lane installs a lagrange-code/v1 tree and agrees with the neutral lane', async () => {
   await withRuntime(async (runtime) => {
     const installed = await installSymmetricSmalltalkBlock({
       images: runtime.images,
       imageId: 'lexical',
-      id: 'wasm-reject',
-      source: '[ | a | a := 1. a ]',
+      id: 'wasm-v1',
+      source: '[ | a | a := 41. a ]',
     });
     const semanticRef = objectRef('lexical', installed.semanticArtifact.id);
+    assert.deepEqual(await evaluate(runtime, '[ | a | a := 41. a ]', [], 'neutral-v1'), integerValue(41));
 
-    await assert.rejects(
-      installWasmBlockTree({
-        images: runtime.images,
-        compilation: runtime.compilation,
-        semanticRef,
-        id: 'wasm-tree',
-      }),
-      (error) => error.name === 'WasmMutableLexicalStateUnsupportedError'
-        && /lagrange-value-handle\/v1/.test(error.message),
+    const tree = await installWasmBlockTree({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      semanticRef,
+      id: 'wasm-tree',
+    });
+    assert.equal(tree.functionArtifact.metadata.abi, 'lagrange-value-handle/v1');
+    assert.deepEqual(tree.functionArtifact.metadata.cellBindings, [
+      {id: 'root:temporary:0', name: 'a', source: 'temporary'},
+    ]);
+
+    const activation = await runtime.invocations.invokeBlock(
+      objectRef('lexical', tree.block.id),
+      [],
     );
+    assert.deepEqual(await runtime.executor.execute(activation), integerValue(41));
+  });
+});
 
-    assert.equal(await runtime.images.getCodeArtifact('lexical', 'wasm-tree:wasm:module'), null);
-    assert.equal(await runtime.images.getCodeArtifact('lexical', 'wasm-tree:wasm:function'), null);
-    assert.equal(await runtime.images.getBlock('lexical', 'wasm-tree'), null);
+test('a lagrange-code/v0 tree still installs through the untouched v0 path', async () => {
+  await withRuntime(async (runtime) => {
+    const installed = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'lexical',
+      id: 'wasm-v0',
+      source: '[ :x | x ]',
+    });
+    assert.equal(installed.representation, LAGRANGE_CODE_V0);
+    const tree = await installWasmBlockTree({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      semanticRef: objectRef('lexical', installed.semanticArtifact.id),
+      id: 'wasm-tree-v0',
+    });
+    assert.equal(tree.functionArtifact.metadata.abi, 'lagrange-value-handle/v0');
+    assert.equal(Object.hasOwn(tree.functionArtifact.metadata, 'cellBindings'), false);
   });
 });
