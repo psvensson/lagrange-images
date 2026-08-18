@@ -121,6 +121,14 @@ A behavior record means what its own shape says it means: a `smalltalk/behavior-
 ADR 0044 lookup, anything else is a legacy behavior and keeps selector-as-shape-name lookup.
 Installing the kernel reinterprets nothing that already exists.
 
+The same rule now applies to a Behavior's `methods` edge. A `smalltalk/method-dictionary-shape/v1`
+object — local Shape, no `behavior`, one `tally` slot, and an indexed part of `hash, selector, method`
+triples — gets ADR 0049 hashed lookup: one record read, no Shape fetch, and only the pure built-in
+Text hash and equality, so lookup can never re-enter dispatch. Anything else keeps the ADR 0044
+selector-as-shape-name path. Classes created now get the hashed form; existing ones change only
+through `migrateMethodDictionary()`, which seals the legacy dictionary, builds the hashed one at a
+deterministic per-Behavior id, and swaps the `methods` edge with one CAS.
+
 Protocol arrives after identity, per lane, through builders rather than through the bootstrap:
 
 | Installer | Installs |
@@ -131,6 +139,7 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `installSmalltalkAllocationProtocol()` | the `class-of`/`basic-new` primitive Blocks, plus `Object >> class`, `Object >> initialize`, `Class >> basicNew` and `Class >> new` (ADR 0046) |
 | `installSmalltalkEqualityProtocol()` | the `built-in-equals`/`built-in-hash` primitive Blocks, plus `Object >> =` and `Object >> hash` (ADR 0048) |
 | `installSmalltalkDictionaryProtocol()` | the Dictionary/DictionaryTable Shapes, the five Dictionary primitive Blocks, the `Dictionary` class, and `initialize`, `size`, `includesKey:`, `at:`, `at:put:` (ADR 0048) |
+| `migrateMethodDictionary()` | rewrites one Behavior's shape-backed method dictionary into the ADR 0049 hashed form |
 | `installSmalltalkIndexedProtocol()` | `Array`, `Class >> basicNew:`, `Array class >> new:`, and `Array >> size`/`at:`/`at:put:` over four more `smalltalk-kernel-primitive/v1` Blocks (ADR 0047) |
 
 A boolean Value dispatches by bridging to that image's `true`/`false` object, which becomes the

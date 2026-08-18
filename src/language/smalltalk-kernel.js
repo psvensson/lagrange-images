@@ -1,5 +1,12 @@
 import {SHAPE_INDEXED} from '../object/model.js';
 import {VALUE_KIND, isObjectRef, objectRef, textValue} from '../value/index.js';
+import {
+  METHOD_DICTIONARY_SHAPE_ID,
+  buildMethodBuckets,
+  isMethodDictionary,
+  methodDictionaryRecordFields,
+} from './smalltalk-method-dictionary.js';
+import {ensureMethodDictionaryShape} from './smalltalk-method-dictionary-migration.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 // The Symmetric Smalltalk kernel: the durable object graph ADR 0044 dispatches against.
@@ -189,11 +196,65 @@ const classId = (name) => `smalltalk/class/${name}`;
 const metaclassId = (name) => `smalltalk/metaclass/${name}`;
 const methodsId = (ownerId) => `${ownerId}/methods`;
 
+
+// ADR 0049 decision 7: a class defined after this ADR gets the hashed representation immediately.
+//
+// Tolerant of a legacy record at the same id on purpose. Installing this machinery migrates nothing
+// (decision 7), so re-running an installer against an image bootstrapped before it must reuse the
+// legacy dictionary rather than demand it be replaced — that is a job for explicit migration, not a
+// side effect of running the installer again.
+// A record at this deterministic id is reused only when it is *provably* a valid legacy method
+// dictionary. Accepting any non-hashed object would contradict both the ensure-exact-or-create rule
+// and ADR 0049's promise that a class defined now gets the hashed representation: an unrelated
+// squatter would be adopted as the class's method dictionary.
+async function isLegacyMethodDictionary(service, imageId, record) {
+  if (!record || record.kind !== 'object') return false;
+  if (isMethodDictionary(record)) return false;
+  // An empty legacy dictionary is structurally an ordinary empty object, so structure alone cannot
+  // tell one from an unrelated record squatting on this deterministic id. Every legacy dictionary
+  // this substrate ever wrote declares itself one, so the tag is the discriminator — a metadata
+  // *label*, which hides no ref and is exactly what metadata is for.
+  if (record.metadata?.smalltalk !== 'method-dictionary') return false;
+  if (!isObjectRef(record.shape)) return false;
+  const shape = await service.getShape(record.shape.imageId, record.shape.objectId);
+  if (!shape) return false;
+  try {
+    assertUniqueSelectorShape(shape, `method dictionary ${imageId}/${record.id}`);
+  } catch {
+    return false;
+  }
+  // Every declared selector slot must hold a local unpinned Block ref, and the record must hold
+  // nothing else — the same contract the legacy dispatcher reads.
+  const declared = new Set(shape.slots.map(({id}) => id));
+  if (Object.keys(record.slots ?? {}).some((slotId) => !declared.has(slotId))) return false;
+  for (const {id: slotId} of shape.slots) {
+    const method = record.slots?.[slotId];
+    if (!isObjectRef(method) || method.imageId !== imageId) return false;
+  }
+  return true;
+}
+
+async function ensureEmptyMethodDictionary(service, imageId, id, metadata, nilRef) {
+  const existing = await service.getObject(imageId, id);
+  if (await isLegacyMethodDictionary(service, imageId, existing)) return existing;
+  const {buckets} = buildMethodBuckets([]);
+  return await ensureObject(service, imageId, {
+    id,
+    ...methodDictionaryRecordFields({
+      buckets,
+      shapeRef: objectRef(imageId, METHOD_DICTIONARY_SHAPE_ID),
+      nilRef,
+      metadata,
+    }),
+  });
+}
+
 async function installSmalltalkKernel({images, imageId} = {}) {
   const service = assertImages(images);
   requiredText(imageId, 'kernel image id');
   const ref = (objectId) => objectRef(imageId, objectId);
 
+  await ensureMethodDictionaryShape(service, imageId);
   const shapes = {
     behavior: await ensureShape(service, imageId, {id: BEHAVIOR_SHAPE_ID, slots: [...BEHAVIOR_SLOTS]}),
     kernel: await ensureShape(service, imageId, {id: KERNEL_SHAPE_ID, slots: [...KERNEL_SLOTS]}),
@@ -206,12 +267,10 @@ async function installSmalltalkKernel({images, imageId} = {}) {
   // the metaclass knot needs edges pointing at objects that do not exist yet — which `putObject`
   // permits, since it validates the shape but neither `behavior` nor ref-valued slots.
   const putBehavior = async ({id, name, superclassRef, behaviorRef, instanceShapeRef}) => {
-    await ensureObject(service, imageId, {
-      id: methodsId(id),
-      shape: ref(emptyMethodsShapeId),
-      slots: {},
-      metadata: {smalltalk: 'method-dictionary', owner: id},
-    });
+    await ensureEmptyMethodDictionary(
+      service, imageId, methodsId(id), {owner: id}, ref('smalltalk/nil'),
+    );
+    void emptyMethodsShapeId;
     return await ensureObject(service, imageId, {
       id,
       shape: ref(BEHAVIOR_SHAPE_ID),
@@ -380,6 +439,8 @@ function createSmalltalkTemporaryInitializer() {
 
 export {
   BEHAVIOR_SHAPE_ID,
+  ensureEmptyMethodDictionary,
+  isLegacyMethodDictionary,
   createSmalltalkTemporaryInitializer,
   SmalltalkKernelConflictError,
   assertUniqueSelectorShape,

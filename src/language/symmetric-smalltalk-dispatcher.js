@@ -1,6 +1,7 @@
 import {VALUE_KIND, isObjectRef} from '../value/index.js';
 import {findSmalltalkKernel, isBehaviorObject} from './smalltalk-kernel.js';
 import {
+  MethodDictionaryValidationCache,
   SmalltalkDanglingEdgeError,
   behaviorRefFor,
   lookupSelector,
@@ -53,6 +54,10 @@ function resolution(block, effectiveReceiver) {
 }
 
 function createSymmetricSmalltalkDispatcher() {
+  // Per dispatcher, so it lives and dies with the runtime that owns it rather than leaking between
+  // images or across tests. Transient runtime state: never durable, never a Value, and correct to
+  // drop at any moment (ADR 0049 decision 5a).
+  const validationCache = new MethodDictionaryValidationCache();
   return Object.freeze({
     languageId: SYMMETRIC_SMALLTALK_ID,
 
@@ -133,6 +138,7 @@ function createSymmetricSmalltalkDispatcher() {
         selector,
         nilRef: kernel.nil,
         receiverDescription,
+        validationCache,
       });
       // A selector that resolved to a Block ref which does not load is incomplete graph state, not
       // a message the receiver failed to understand.

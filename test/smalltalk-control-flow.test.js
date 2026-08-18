@@ -14,7 +14,7 @@ import {
   textValue,
 } from '../src/runtime.js';
 import {SYMMETRIC_SMALLTALK_ID} from '../src/language/symmetric-smalltalk.js';
-import {SmalltalkMethodRedefinitionError} from '../src/language/smalltalk-class-builder.js';
+import {SmalltalkMethodRedefinitionError, methodBlockRef} from '../src/language/smalltalk-class-builder.js';
 
 // ADR 0045: a boolean Value bridges to the dispatch image's `true`/`false` singleton for the
 // duration of one send, and the conditional it answers is an ordinary method on True or False.
@@ -368,10 +368,10 @@ test('a nil-answering method carries nil as an ordinary captured binding', async
   await withRuntime(async (runtime) => {
     const kernel = await seed(runtime, 'app');
     const falseClass = (await runtime.images.getObject('app', kernel.false.objectId)).behavior;
-    const dictionary = await runtime.images.getObject('app', `${falseClass.objectId}/methods`);
-    const shape = await runtime.images.getShape(dictionary.shape.imageId, dictionary.shape.objectId);
-    const slot = shape.slots.find(({name}) => name === 'ifTrue:');
-    const method = await runtime.images.getBlock('app', dictionary.slots[slot.id].objectId);
+    const ref = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: falseClass, selector: 'ifTrue:',
+    });
+    const method = await runtime.images.getBlock('app', ref.objectId);
 
     assert.ok(method.environment, 'the nil arm must carry a lexical environment');
     const environment = await runtime.images.getLexicalEnvironment(

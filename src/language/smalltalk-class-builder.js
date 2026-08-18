@@ -15,12 +15,24 @@ import {lowerLagrangeCodeV0, normalizeLagrangeCodeProgram} from '../code/lagrang
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {TupleSet} from '../support/tuple-map.js';
 import {sameRef} from './smalltalk-lookup.js';
+import {ensureMethodDictionaryShape} from './smalltalk-method-dictionary-migration.js';
+import {
+  METHOD_DICTIONARY_SHAPE_ID,
+  buildMethodBuckets,
+  entriesFromBuckets,
+  isMethodDictionary,
+  isSealed,
+  lookupSelectorInTable,
+  methodDictionaryRecordFields,
+  validateMethodDictionary,
+} from './smalltalk-method-dictionary.js';
 import {
   BEHAVIOR_SHAPE_ID,
   EMPTY_SHAPE_ID,
   SmalltalkKernelConflictError,
   assertUniqueSelectorShape,
   canonicalJson,
+  ensureEmptyMethodDictionary,
   ensureObject,
   ensureShape,
   findSmalltalkKernel,
@@ -75,6 +87,18 @@ async function requireLocalBehavior(images, imageId, ref, label) {
 // are derived from class and selector, so a redefinition would fail partway through — after new
 // artifacts, before the dictionary swap — leaving the class inconsistent. Rejecting up front is
 // honest; real replacement needs versioned method identity and gets it deliberately later.
+// A visible, retryable stall rather than a silent loss: the caller retries once migration has
+// swapped the Behavior's methods edge, and lands in the hashed dictionary.
+class SmalltalkSealedMethodDictionaryError extends TypeError {
+  constructor(dictionaryRef) {
+    super(
+      `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId} is sealed for migration; `
+      + 'retry once the Behavior points at its hashed dictionary',
+    );
+    this.name = 'SmalltalkSealedMethodDictionaryError';
+  }
+}
+
 class SmalltalkMethodRedefinitionError extends TypeError {
   constructor(classRef, selector) {
     super(
@@ -329,13 +353,29 @@ async function defineMethods({
   const dictionaryRef = behavior.slots['behavior-methods'];
   const existing = await images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
   if (!existing) throw new TypeError(`method dictionary not found: ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
-  const existingShape = await images.getShape(existing.shape.imageId, existing.shape.objectId);
-  if (!existingShape) throw new TypeError(`method dictionary shape not found: ${existing.shape.objectId}`);
 
-  // Validate the stored dictionary against the same global invariant the dispatcher enforces,
-  // rather than letting a Map silently normalize a corrupt one while extending it.
-  assertUniqueSelectorShape(existingShape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
-  const merged = new Map(existingShape.slots.map((slot) => [slot.name, existing.slots[slot.id]]));
+  // ADR 0049 decision 7. A sealed dictionary is mid-migration: the Behavior is about to stop
+  // pointing at it, so writing here would land in a record that is being abandoned. Refusing
+  // explicitly is what turns a lost method into a visible stall the caller can retry.
+  if (isSealed(existing)) throw new SmalltalkSealedMethodDictionaryError(dictionaryRef);
+
+  // Whichever representation the record says it is. Both are readable throughout migration, so a
+  // class that has not been migrated keeps accepting methods exactly as before.
+  const hashed = isMethodDictionary(existing);
+  const dictionaryKernel = await findSmalltalkKernel({images, imageId});
+  if (hashed && !dictionaryKernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  let merged;
+  if (hashed) {
+    const table = validateMethodDictionary(existing, dictionaryRef, dictionaryKernel.nil);
+    merged = new Map(entriesFromBuckets(table.buckets).map(([selector, method]) => [selector.value, method]));
+  } else {
+    const existingShape = await images.getShape(existing.shape.imageId, existing.shape.objectId);
+    if (!existingShape) throw new TypeError(`method dictionary shape not found: ${existing.shape.objectId}`);
+    // Validate the stored dictionary against the same global invariant the dispatcher enforces,
+    // rather than letting a Map silently normalize a corrupt one while extending it.
+    assertUniqueSelectorShape(existingShape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
+    merged = new Map(existingShape.slots.map((slot) => [slot.name, existing.slots[slot.id]]));
+  }
 
   // Preflight covers duplicates *within this call* as well as against what is stored: two new
   // entries naming the same selector would otherwise both pass and the second silently win.
@@ -414,6 +454,22 @@ async function defineMethods({
     merged.set(selector, objectRef(imageId, block.id));
   }
 
+  // ADR 0049: a hashed dictionary carries its selector set in its own indexed part, so there is no
+  // per-selector-set Shape to derive and no new Shape written per method.
+  if (hashed) {
+    const kernel = dictionaryKernel;
+    const {buckets} = buildMethodBuckets([...merged.entries()].map(([selector, method]) => [textValue(selector), method]));
+    return await images.putObject(imageId, {
+      id: dictionaryRef.objectId,
+      ...methodDictionaryRecordFields({
+        buckets,
+        shapeRef: objectRef(imageId, METHOD_DICTIONARY_SHAPE_ID),
+        nilRef: kernel.nil,
+        metadata: existing.metadata,
+      }),
+    }, {expectedVersion: existing._version});
+  }
+
   // The shape id encodes the canonical selector *set*, not its cardinality. Keying on the count
   // would make two unrelated one-selector dictionaries — say a failed `foo` and a later `bar` —
   // want the same durable id and conflict.
@@ -439,6 +495,31 @@ async function defineMethods({
     slots: Object.fromEntries(selectors.map((selector) => [bySelector.get(selector), merged.get(selector)])),
     metadata: existing.metadata,
   }, {expectedVersion: existing._version});
+}
+
+// The Block installed for a selector on a class, read through whichever representation the
+// dictionary actually uses. ADR 0049 makes two of those legal at once, so anything that reaches into
+// a method dictionary should ask rather than assume a layout.
+async function methodBlockRef({images, imageId, classRef, selector} = {}) {
+  const behavior = await readBehavior(images, classRef);
+  const dictionaryRef = behavior.methods;
+  const record = await images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
+  if (!record) throw new TypeError(`method dictionary not found: ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  if (isMethodDictionary(record)) {
+    const table = validateMethodDictionary(record, dictionaryRef, kernel.nil);
+    return lookupSelectorInTable(table, textValue(selector));
+  }
+  // The legacy branch owes the same corruption semantics as dispatch: a missing Shape is a dangling
+  // edge rather than a miss, and duplicate selector names are refused rather than resolved
+  // first-wins. This is now the recommended representation-neutral reader, so it must not be a
+  // laxer way to read the same records.
+  const shape = await images.getShape(record.shape.imageId, record.shape.objectId);
+  if (!shape) throw new TypeError(`method dictionary shape not found: ${record.shape.objectId}`);
+  assertUniqueSelectorShape(shape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
+  const slot = shape.slots.find(({name}) => name === selector);
+  return slot ? record.slots[slot.id] ?? null : null;
 }
 
 // A new class and its metaclass, wired by decision 4's chain rule. The installer applies the same
@@ -581,6 +662,7 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
     ? kernel.nil
     : await requireInstanceShape({images, imageId, instanceShapeRef, superclassRef: superclass, name, nilRef: kernel.nil});
 
+  await ensureMethodDictionaryShape(images, imageId);
   const classObjectId = `smalltalk/class/${name}`;
   const metaclassObjectId = `smalltalk/metaclass/${name}`;
 
@@ -590,12 +672,7 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
     [metaclassObjectId, `${name} class`, superMetaclass, kernel.metaclassClass, kernel.nil],
     [classObjectId, name, superclass, ref(metaclassObjectId), instanceShape],
   ]) {
-    await ensureObject(images, imageId, {
-      id: methodsId(id),
-      shape: ref(EMPTY_SHAPE_ID),
-      slots: {},
-      metadata: {smalltalk: 'method-dictionary', owner: id},
-    });
+    await ensureEmptyMethodDictionary(images, imageId, methodsId(id), {owner: id}, kernel.nil);
     await ensureObject(images, imageId, {
       id,
       shape: ref(BEHAVIOR_SHAPE_ID),
@@ -612,4 +689,12 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
   return Object.freeze({classRef: ref(classObjectId), metaclassRef: ref(metaclassObjectId)});
 }
 
-export {SmalltalkMethodRedefinitionError, defineClass, defineMethods, ensureBlock, ensureCodeArtifact};
+export {
+  SmalltalkMethodRedefinitionError,
+  SmalltalkSealedMethodDictionaryError,
+  defineClass,
+  defineMethods,
+  ensureBlock,
+  methodBlockRef,
+  ensureCodeArtifact,
+};
