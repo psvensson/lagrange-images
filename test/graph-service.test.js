@@ -51,6 +51,51 @@ test('generic objects reject language-specific shortcut fields', async () => {
   );
 });
 
+// ADR 0047 made this asymmetry consequential: `indexed` is optional, so a typo does not merely get
+// dropped — it stores a *different layout* than the caller wrote, and the failure surfaces later, on
+// an object write, naming neither the typo nor the call that made it.
+test('shapes reject unknown input fields rather than silently dropping them', async () => {
+  const backend = new MockBackend();
+  await backend.start();
+  const service = new ImageService({backend});
+  await service.createImage({id: 'demo'});
+
+  await assert.rejects(
+    service.putShape('demo', {id: 'typo', slots: [], indexd: 'values'}),
+    /unknown shape fields: indexd/,
+  );
+  await assert.rejects(
+    service.putShape('demo', {id: 'shortcut', slots: [], classId: 'Thing'}),
+    /unknown shape fields: classId/,
+  );
+});
+
+test('a rejected shape write leaves neither a record nor a history event', async () => {
+  const backend = new MockBackend();
+  await backend.start();
+  const service = new ImageService({backend});
+  await service.createImage({id: 'demo'});
+  const history = await service.history('demo');
+
+  await assert.rejects(service.putShape('demo', {id: 'typo', slots: [], indexd: 'values'}), /unknown shape fields/);
+  assert.equal(await service.getShape('demo', 'typo'), null);
+  assert.deepEqual(await service.history('demo'), history);
+});
+
+test('a valid indexed declaration still round-trips', async () => {
+  const backend = new MockBackend();
+  await backend.start();
+  const service = new ImageService({backend});
+  await service.createImage({id: 'demo'});
+
+  await service.putShape('demo', {id: 'array-shape', slots: [], indexed: 'values'});
+  assert.equal((await service.getShape('demo', 'array-shape')).indexed, 'values');
+
+  // Absence still means `none`, and must not be materialized into the stored record.
+  await service.putShape('demo', {id: 'plain-shape', slots: []});
+  assert.equal(Object.hasOwn(await service.getShape('demo', 'plain-shape'), 'indexed'), false);
+});
+
 test('cycles use references rather than nested records', async () => {
   const backend = new MockBackend();
   await backend.start();
