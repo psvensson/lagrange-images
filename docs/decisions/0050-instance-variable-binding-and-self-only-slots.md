@@ -1,6 +1,6 @@
 # ADR 0050: Class-scoped instance-variable binding and self-only slot access
 
-Status: accepted — an instance-variable name is resolved to a stable Shape slot id by a class-scoped compilation entry point beside the class-independent one, the durable method carries that id rather than the name, and a language-owned primitive reads or writes it only on the method activation's effective Smalltalk `self` and only for a slot its defining Behavior declares.
+Status: accepted — an instance-variable name is resolved to a stable Shape slot id by a class-scoped compilation entry point beside the class-independent one, the durable method carries that id rather than the name, and a language-owned primitive reads or writes it only on the method activation's effective Smalltalk `self` and only for a slot its defining Behavior's visible layout declares, with both facts carried from dispatch to execution by a transient runtime-built envelope.
 
 ## Problem
 
@@ -272,6 +272,58 @@ instances will eventually have, and would reintroduce exactly the distinction AD
 The compiler will of course only ever emit `self` as the target. That is not the point: the check
 exists precisely for the code the compiler did not write.
 
+### 5b. The trusted frame needs a transport, and it is an explicit sidecar
+
+Decisions 5 and 5a leave one thing unsaid, and it is the seam the implementation would otherwise
+improvise. Dispatch is where `definingBehavior` is *known*: `lookupSelector` walks the chain and sees
+which Behavior's dictionary matched. Execution is where it is *needed*. And the only thing crossing
+between them today is the activation request, which decision 5 forbids extending.
+
+Both endpoints already have a transient side channel, so this is a third one rather than a new idea:
+
+```text
+into invocation     sendMessage(input, {dispatchImage})
+into execution      execute(activation, {depth, authority, cellArena, dispatchImage})
+```
+
+So the invocation layer produces, beside the activation request, an explicit transient
+**invocation envelope** carrying the trusted facts of this dispatch — the effective receiver and the
+defining Behavior — and the caller hands it to `execute` the way it already hands over the dispatch
+image. Its exact spelling is implementation detail; its properties are not:
+
+```text
+runtime-created            built by the invocation layer from the *normalized* resolution,
+                           never assembled from anything the guest supplied
+unforgeable by a program   a message-send request cannot carry it; `createMessageSendRequest`
+                           validates exact keys, and the envelope is not one of them
+never durable              no record, no artifact, no Value, no metadata
+never authority            it authorizes nothing; it identifies, and decision 8 still applies
+absent by default          `invokeBlock` produces none, so a directly invoked Block has no frame
+                           and cannot use the slot primitives at all
+```
+
+The trust root is the registered dispatcher, and that is not a new dependency: a dispatcher already
+decides *which Block executes at all*. Believing it about which Behavior supplied that Block adds no
+trust that dispatch did not already require.
+
+Once execution begins the envelope is consumed and the executor owns the frame from then on;
+decision 5a's replace/inherit/restore/none rules operate on executor state, not on a value the guest
+or the language can reach again.
+
+Two shortcuts are ruled out explicitly, because both are tempting and both are wrong:
+
+**Do not reopen the activation request.** Adding `definingBehavior` to it would make a permission
+fact part of the closed activation model that ADR 0005 defined and every executor consumes, and would
+put it within reach of code paths that have nothing to do with Smalltalk methods.
+
+**Do not recover it afterwards by asking which Behavior holds this Block.** This is the shortcut that
+needs no new plumbing, and it is unsound twice over. A Block ref may legitimately appear in more than
+one method dictionary, since durable graph reuse is permitted and nothing forbids installing one Block
+under two classes — so the question has no unique answer. And where it does have one, the answer comes
+from graph data that a forged artifact can arrange, which is precisely the input decision 5 refuses to
+trust. The defining Behavior must be the one that *this dispatch actually walked to*, not one
+reconstructed later from a lookup that corruption can steer.
+
 ### 6. Access is by slot id against the object's *current* Shape
 
 At execution the primitive loads the target, loads its Shape, and requires the slot id to be present
@@ -432,6 +484,14 @@ defining-behavior scope, adversarially
         ancestor-declared slot, and runs correctly on a concrete descendant
     a method defined on a class with no layout and no ancestor layout can name no instance variable
 
+frame transport
+    the defining Behavior reaches execution through the transient envelope, not the activation request
+    a message-send request that tries to carry one is refused
+    invokeBlock produces no envelope, so a directly invoked Block cannot use the slot primitives
+    the envelope appears in no record, artifact, Value or metadata
+    a Block installed in two method dictionaries still resolves by the dispatch that happened,
+        which is why the defining Behavior is never recovered by a later lookup
+
 frame lifetime
     a nested Smalltalk method dispatch replaces the frame; the callee sees its own self
     `aBlock value` inside a method runs aBlock with aBlock's own defining frame, never the caller's
@@ -484,6 +544,9 @@ self-only is necessary and not sufficient: the slot must also be declared by the
 "may this method name this slot" and "does this object have it" are separate checks; never collapse them
 visibility is the defining Behavior's nearest declared layout; a nil layout declares nothing and cancels nothing
 the frame is per method activation and propagates by callee kind, never by nesting depth
+the defining Behavior travels in a runtime-built transient envelope, never in the activation request
+never reconstruct the defining Behavior by asking which dictionary holds a Block; that answer is
+    neither unique nor trustworthy
 an arbitrary Block invoked by a method never borrows the invoker's self
 the self seam is transient, non-durable, never a Value, never authority, never caller-supplied
 resolution finds a binding then checks write legality; it never searches on for something assignable
