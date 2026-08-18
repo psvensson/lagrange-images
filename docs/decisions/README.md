@@ -93,6 +93,7 @@ move in. Never move it the other way to make a claim easier to write.
 - [0043 — mutable lexical state and assignment](0043-mutable-lexical-state.md): assignment mutates an activation-scoped binding cell rather than the durable lexical-environment graph, and a closure captures the cell rather than a snapshot.
 - [0044 — Object, Behavior, Class and Metaclass bootstrap](0044-object-behavior-class-metaclass.md): a Behavior with a fixed shape and a superclass chain, the metaclass knot as a real graph cycle, immediate Values taking their class from their kind, and `+` as an ordinary method over the existing `integer-add` op.
 - [0045 — the Boolean bridge and message-send control flow](0045-boolean-bridge-and-control-flow.md): a boolean Value nominates the `true`/`false` singleton as the effective receiver of one send, so `ifTrue:`/`ifFalse:` are ordinary methods on True and False rather than a compiler or IR primitive.
+- [0046 — allocation, initialization and class introspection](0046-allocation-initialization-and-class-introspection.md): keep `basicNew`, `new` and `class` as ordinary messages backed by language-owned primitive Blocks; an explicit instance Shape defines allocatability and layout, and image-native allocation remains intrinsic language semantics rather than an ADR 0037 capability check.
 
 ## Reading rule
 
