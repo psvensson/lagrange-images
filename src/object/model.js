@@ -1,5 +1,10 @@
 import {canonicalizeValue, isObjectRef, isReference} from '../value/index.js';
 
+const SHAPE_INDEXED = Object.freeze({
+  NONE: 'none',
+  VALUES: 'values',
+});
+
 function normalizeMetadata(metadata, label = 'metadata') {
   const seen = new Set();
   function visit(value, path) {
@@ -48,15 +53,32 @@ function normalizeShapeSlots(slots) {
   });
 }
 
-function createShapeRecord({id, imageId, slots = [], metadata = {}, updatedAt = null}) {
-  return Object.freeze({
+function normalizeShapeIndexed(indexed) {
+  if (indexed !== SHAPE_INDEXED.NONE && indexed !== SHAPE_INDEXED.VALUES) {
+    throw new TypeError(`shape indexed declaration must be ${SHAPE_INDEXED.NONE} or ${SHAPE_INDEXED.VALUES}`);
+  }
+  return indexed;
+}
+
+function shapeIndexedKind(shape) {
+  if (!shape || shape.kind !== 'shape') throw new TypeError('record is not a shape');
+  return normalizeShapeIndexed(Object.hasOwn(shape, 'indexed') ? shape.indexed : SHAPE_INDEXED.NONE);
+}
+
+// ADR 0047 keeps old records exact: absence of `indexed` is interpreted as `none`, but merely
+// reading or rewriting an old Shape does not materialize a new field into its durable form.
+function createShapeRecord(input) {
+  const {id, imageId, slots = [], metadata = {}, updatedAt = null} = input ?? {};
+  const record = {
     kind: 'shape',
     id: requiredText(id, 'shape id'),
     imageId: requiredText(imageId, 'shape imageId'),
     slots: normalizeShapeSlots(slots),
     metadata: normalizeMetadata(metadata, 'shape metadata'),
     updatedAt,
-  });
+  };
+  if (Object.hasOwn(input, 'indexed')) record.indexed = normalizeShapeIndexed(input.indexed);
+  return Object.freeze(record);
 }
 
 function assertShapeRecord(record) {
@@ -86,8 +108,17 @@ function normalizeObjectSlots(slots) {
   return Object.freeze(normalized);
 }
 
-function createObjectRecord({id, imageId, shape, behavior = null, slots = {}, metadata = {}, updatedAt = null}) {
-  return Object.freeze({
+function normalizeIndexedValues(indexed) {
+  if (!Array.isArray(indexed)) throw new TypeError('object indexed part must be an array of canonical Values');
+  return Object.freeze(indexed.map((value) => canonicalizeValue(value)));
+}
+
+// As for Shape, preserving property absence matters: old object records did not carry an indexed
+// part, and loading one must not manufacture one. An explicitly present empty array is different —
+// it is the zero-length indexed part of a Shape that declares `values`.
+function createObjectRecord(input) {
+  const {id, imageId, shape, behavior = null, slots = {}, metadata = {}, updatedAt = null} = input ?? {};
+  const record = {
     kind: 'object',
     id: requiredText(id, 'object id'),
     imageId: requiredText(imageId, 'object imageId'),
@@ -96,7 +127,9 @@ function createObjectRecord({id, imageId, shape, behavior = null, slots = {}, me
     slots: normalizeObjectSlots(slots),
     metadata: normalizeMetadata(metadata, 'object metadata'),
     updatedAt,
-  });
+  };
+  if (Object.hasOwn(input, 'indexed')) record.indexed = normalizeIndexedValues(input.indexed);
+  return Object.freeze(record);
 }
 
 function assertObjectRecord(record) {
@@ -115,15 +148,26 @@ function assertObjectMatchesShape(record, shape) {
   if (missing.length || extra.length) {
     throw new TypeError(`object slots do not match shape ${shape.id}; missing: ${missing.join(', ') || '-'}; extra: ${extra.join(', ') || '-'}`);
   }
+
+  const indexedKind = shapeIndexedKind(shape);
+  const hasIndexed = Object.hasOwn(record, 'indexed');
+  if (indexedKind === SHAPE_INDEXED.VALUES && !hasIndexed) {
+    throw new TypeError(`object does not match shape ${shape.id}; indexed values part is required`);
+  }
+  if (indexedKind === SHAPE_INDEXED.NONE && hasIndexed) {
+    throw new TypeError(`object does not match shape ${shape.id}; shape declares no indexed part`);
+  }
   return record;
 }
 
 export {
+  SHAPE_INDEXED,
   assertObjectMatchesShape,
   assertObjectRecord,
   assertShapeRecord,
   createObjectRecord,
   createShapeRecord,
   normalizeMetadata,
+  shapeIndexedKind,
   shapeSlotIds,
 };
