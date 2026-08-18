@@ -22,6 +22,7 @@ import {
 } from '../src/runtime.js';
 import {SMALLTALK_KERNEL_PRIMITIVE_V1} from '../src/language/smalltalk-primitives.js';
 import {SYMMETRIC_SMALLTALK_ID} from '../src/language/symmetric-smalltalk.js';
+import {methodBlockRef} from '../src/language/smalltalk-class-builder.js';
 
 // ADR 0046: `basicNew`, `new` and `class` as ordinary messages over two language-owned primitive
 // Blocks. What the tests below are really separating:
@@ -804,7 +805,7 @@ test('installing the allocation protocol twice changes nothing', async () => {
 
 test('the primitive Blocks carry the kernel-primitive representation and no environment', async () => {
   await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+    const kernel = await seed(runtime, 'app');
     for (const primitive of ['class-of', 'basic-new']) {
       const block = await runtime.images.getBlock('app', `smalltalk/primitive/${primitive}`);
       assert.equal(block.environment, null);
@@ -814,10 +815,10 @@ test('the primitive Blocks carry the kernel-primitive representation and no envi
     }
     // The methods reach them through explicit captured refs in the ordinary environment graph,
     // never through hidden metadata.
-    const dictionary = await runtime.images.getObject('app', 'smalltalk/class/Object/methods');
-    const shape = await runtime.images.getShape(dictionary.shape.imageId, dictionary.shape.objectId);
-    const slot = shape.slots.find(({name}) => name === 'class');
-    const method = await runtime.images.getBlock('app', dictionary.slots[slot.id].objectId);
+    const ref = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: kernel.objectClass, selector: 'class',
+    });
+    const method = await runtime.images.getBlock('app', ref.objectId);
     const environment = await runtime.images.getLexicalEnvironment(
       method.environment.imageId, method.environment.objectId,
     );

@@ -1,5 +1,10 @@
-import {VALUE_KIND, isObjectRef} from '../value/index.js';
-import {TupleSet} from '../support/tuple-map.js';
+import {VALUE_KIND, isObjectRef, textValue} from '../value/index.js';
+import {TupleMap, TupleSet} from '../support/tuple-map.js';
+import {
+  isMethodDictionary,
+  lookupSelectorInTable,
+  validateMethodDictionary,
+} from './smalltalk-method-dictionary.js';
 import {
   assertUniqueSelectorShape,
   findSmalltalkKernel,
@@ -101,12 +106,46 @@ async function loadBehavior(images, ref, {edge = null, from = null} = {}) {
   }
 }
 
-async function methodAt(images, behavior, selector) {
+// ADR 0049 decision 5a. Whole-table validation is `O(n)`; doing it per send would reinstate exactly
+// the cost this representation removes. It is therefore done once per *record version*.
+//
+// This caches a structural fact about one immutable record version, never a lookup answer, so it
+// cannot mask a method addition or a migration: whatever would change the answer also changes the
+// `_version` in the key. That version component is the invalidation contract ADR 0044 decision 8
+// requires before any durable-graph read may be memoized — without one, this would be forbidden.
+class MethodDictionaryValidationCache {
+  constructor() {
+    this.validated = new TupleMap(3);
+  }
+
+  read(record, ref, nilRef) {
+    const key = [record.imageId, record.id, String(record._version)];
+    const hit = this.validated.get(key);
+    if (hit) return hit;
+    const table = validateMethodDictionary(record, ref, nilRef);
+    this.validated.set(key, table);
+    return table;
+  }
+}
+
+async function methodAt(images, behavior, selector, nilRef, validationCache = null) {
   const dictionaryRef = behavior.methods;
   const dictionary = await images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
   if (!dictionary) {
     throw new SmalltalkDanglingEdgeError('methods', behavior.record, dictionaryRef);
   }
+
+  // ADR 0049 decision 2: a record is read as what its own Shape says it is, so a hashed and a
+  // legacy dictionary can sit in one superclass chain and resolve identically. Installing the new
+  // format reinterprets nothing.
+  if (isMethodDictionary(dictionary)) {
+    const table = validationCache
+      ? validationCache.read(dictionary, dictionaryRef, nilRef)
+      : validateMethodDictionary(dictionary, dictionaryRef, nilRef);
+    // One record read, and no Shape fetch: the selector set is the record's own indexed part.
+    return lookupSelectorInTable(table, textValue(selector));
+  }
+
   const shape = await images.getShape(dictionary.shape.imageId, dictionary.shape.objectId);
   if (!shape) {
     throw new SmalltalkDanglingEdgeError('method dictionary shape', dictionary, dictionary.shape);
@@ -139,7 +178,7 @@ async function methodAt(images, behavior, selector) {
 // Behavior before the chain could reach here, and within one image the two comparisons coincide. It
 // is written this way so that relaxing the locality rule for cross-image inheritance would not
 // silently turn every image's `smalltalk/nil` into a chain terminator.
-async function lookupSelector({images, behaviorRef, selector, nilRef, receiverDescription}) {
+async function lookupSelector({images, behaviorRef, selector, nilRef, receiverDescription, validationCache = null}) {
   const visited = new TupleSet(2);
   let currentRef = behaviorRef;
   let edge = null;
@@ -155,7 +194,7 @@ async function lookupSelector({images, behaviorRef, selector, nilRef, receiverDe
     visited.add(key);
 
     const behavior = await loadBehavior(images, currentRef, {edge, from});
-    const method = await methodAt(images, behavior, selector);
+    const method = await methodAt(images, behavior, selector, nilRef, validationCache);
     if (method) return method;
 
     from = behavior.record;
@@ -205,6 +244,7 @@ async function behaviorRefFor({images, receiver, dispatchImage}) {
 
 export {
   KERNEL_CLASS_FOR_KIND,
+  MethodDictionaryValidationCache,
   SmalltalkDanglingEdgeError,
   SmalltalkKernelMissingError,
   SmalltalkMalformedBehaviorError,

@@ -1,6 +1,7 @@
 # ADR 0049: The hashed MethodDictionary
 
-Status: accepted — selector lookup moves to a fixed-Shape hashed MethodDictionary that is kernel representation rather than a Smalltalk class, uses only the pure built-in Text hash and equality behind per-version structural validation, and arrives by a seal-build-swap migration that cannot lose a concurrent method addition, while the ADR 0044 reader keeps working.
+Status: implemented — selector lookup moves to a fixed-Shape hashed MethodDictionary that is kernel representation rather than a Smalltalk class, uses only the pure built-in Text hash and equality behind per-version structural validation, and arrives by a seal-build-swap migration that cannot lose a concurrent method addition, while the ADR 0044 reader keeps working.
+Proven by: test/hashed-method-dictionary.test.js, test/smalltalk-dispatch.test.js
 
 ## Problem
 

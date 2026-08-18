@@ -12,7 +12,7 @@ import {
   textValue,
 } from '../src/runtime.js';
 import {BEHAVIOR_SHAPE_ID} from '../src/language/smalltalk-kernel.js';
-import {SmalltalkMethodRedefinitionError} from '../src/language/smalltalk-class-builder.js';
+import {SmalltalkMethodRedefinitionError, methodBlockRef} from '../src/language/smalltalk-class-builder.js';
 
 // ADR 0044 dispatch: fixed-Behavior lookup with inheritance, immediate Values taking their class
 // from their kind under a dispatch image, and `+` as an ordinary method.
@@ -327,10 +327,10 @@ test('the same semantic + method runs through both execution lanes', async () =>
         classRef: kernel.integerClass, methods: [plusMethod()], lane,
       });
 
-      const dictionary = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
-      const shape = await runtime.images.getShape(dictionary.shape.imageId, dictionary.shape.objectId);
-      const slot = shape.slots.find(({name}) => name === '+');
-      const methodBlock = await runtime.images.getBlock('app', dictionary.slots[slot.id].objectId);
+      const ref = await methodBlockRef({
+        images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: '+',
+      });
+      const methodBlock = await runtime.images.getBlock('app', ref.objectId);
       const code = await runtime.images.getCodeArtifact(methodBlock.code.imageId, methodBlock.code.objectId);
       assert.equal(
         code.representation,
@@ -483,12 +483,18 @@ test('a method Block that does not load is a dangling edge', async () => {
       classRef: kernel.integerClass,
       methods: [{selector: 'label', program: {parameters: [], captures: [], body: {op: 'literal', value: textValue('x')}}}],
     });
+    // Repoint the installed method at a Block that does not exist, in whichever representation the
+    // dictionary uses.
     const dictionary = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
-    const shape = await runtime.images.getShape(dictionary.shape.imageId, dictionary.shape.objectId);
+    const indexed = [...dictionary.indexed];
+    for (let index = 0; index < indexed.length; index += 3) {
+      if (indexed[index].kind === 'integer') indexed[index + 2] = objectRef('app', 'no-such-block');
+    }
     await runtime.images.putObject('app', {
       id: dictionary.id,
       shape: dictionary.shape,
-      slots: {[shape.slots[0].id]: objectRef('app', 'no-such-block')},
+      slots: dictionary.slots,
+      indexed,
       metadata: dictionary.metadata,
     }, {expectedVersion: dictionary._version});
 
