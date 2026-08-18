@@ -292,6 +292,12 @@ kinds. Deciding that here would expand this ADR into a second one wearing its cl
 settles `Dictionary` against working `Array` machinery, and only then is migrating the dispatch
 dictionary an improvement rather than a trade.
 
+> **Implementation note, corrected by ADR 0049:** this decision described the existing Shape-backed
+> lookup as effectively map-like and deferred migration to avoid replacing it with a linear
+> collection lookup. The implemented dispatcher in fact validates the full Shape and then linearly
+> searches its slots on each lookup, making the existing path O(n) twice per Behavior level. ADR 0049
+> replaces that implementation with hashed lookup.
+
 ## Proof required for implementation
 
 ```text
