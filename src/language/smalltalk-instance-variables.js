@@ -4,8 +4,8 @@ import {
   ensureBlock,
   ensureCodeArtifact,
 } from './smalltalk-class-builder.js';
-import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
-import {sameRef} from './smalltalk-lookup.js';
+import {findSmalltalkKernel} from './smalltalk-kernel.js';
+import {visibleInstanceShape} from './smalltalk-lookup.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
   SMALLTALK_PRIMITIVE,
@@ -66,33 +66,6 @@ async function installSmalltalkInstanceVariableProtocol({images, imageId} = {}) 
   });
 }
 
-// ADR 0050 decision 5, corrected: the defining Behavior's *visible* layout. A `nil` layout declares
-// nothing of its own and cancels nothing above it, so an abstract intermediate class's methods may
-// still name ancestor-declared slots — which is exactly the rule `nearestDeclaredInstanceShape`
-// already encodes for class definition.
-async function visibleInstanceShape({images, classRef, kernel}) {
-  let currentRef = classRef;
-  const visited = new Set();
-  while (currentRef && !sameRef(currentRef, kernel.nil)) {
-    const key = `${currentRef.imageId}/${currentRef.objectId}`;
-    if (visited.has(key)) return null;
-    visited.add(key);
-    const behavior = await readBehavior(images, currentRef);
-    if (!sameRef(behavior.instanceShape, kernel.nil)) {
-      const shape = await images.getShape(behavior.instanceShape.imageId, behavior.instanceShape.objectId);
-      if (!shape) {
-        throw new TypeError(
-          `class ${currentRef.imageId}/${currentRef.objectId} has a dangling instanceShape: `
-          + `${behavior.instanceShape.imageId}/${behavior.instanceShape.objectId}`,
-        );
-      }
-      return shape;
-    }
-    currentRef = behavior.superclass;
-  }
-  return null;
-}
-
 // name -> stable slot id, for the names a method of this class may see. The *name* lives here and in
 // the Shape; the compiled method carries only the id (ADR 0050 decision 2), which is why a rename
 // that preserves the id leaves existing methods working.
@@ -100,7 +73,9 @@ async function instanceVariableBindings({images, imageId, classRef} = {}) {
   requiredText(imageId, 'image id');
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
-  const shape = await visibleInstanceShape({images, classRef, kernel});
+  // The same strict walk the runtime permission check uses, so the binder cannot offer a name
+  // the primitive would then refuse, and neither can report corruption as an unbound name.
+  const shape = await visibleInstanceShape({images, behaviorRef: classRef, nilRef: kernel.nil});
   if (!shape) return Object.freeze({});
   const bindings = {};
   for (const {id, name} of shape.slots) {
@@ -161,5 +136,4 @@ export {
   defineMethodsFromSource,
   installSmalltalkInstanceVariableProtocol,
   instanceVariableBindings,
-  visibleInstanceShape,
 };

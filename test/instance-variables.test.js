@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CompilationService,
+  createDefaultCodeCompilerRegistry,
   createRuntime,
   defineClass,
   defineMethods,
@@ -376,6 +378,66 @@ test('a slot id absent from the current shape fails structurally', async () => {
   });
 });
 
+// One walk, shared by the binder and the runtime permission check, and strict in both. Returning
+// "no layout" for corrupt graph state would present as `unbound Symmetric Smalltalk name` at compile
+// time and as an ordinary denial at runtime — laundering structural failure into a language outcome.
+test('a corrupt layout chain raises rather than reading as no layout', async () => {
+  for (const [label, corrupt] of Object.entries({
+    'superclass cycle': async (runtime, {parent, child}) => {
+      // Both links must declare no layout of their own, or the walk finds one before it can meet
+      // itself — which is also why the walk's own cycle guard is the thing under test here.
+      const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+      for (const [ref, superclass] of [[parent.classRef, child.classRef], [child.classRef, parent.classRef]]) {
+        const record = await runtime.images.getObject('app', ref.objectId);
+        await runtime.images.putObject('app', {
+          id: record.id,
+          shape: record.shape,
+          behavior: record.behavior,
+          slots: {
+            ...record.slots,
+            'behavior-superclass': superclass,
+            'behavior-instance-shape': kernel.nil,
+          },
+          metadata: record.metadata,
+        }, {expectedVersion: record._version});
+      }
+    },
+    'dangling instance shape': async (runtime, {parent}) => {
+      const record = await runtime.images.getObject('app', parent.classRef.objectId);
+      await runtime.images.putObject('app', {
+        id: record.id,
+        shape: record.shape,
+        behavior: record.behavior,
+        slots: {...record.slots, 'behavior-instance-shape': objectRef('app', 'no-such-shape')},
+        metadata: record.metadata,
+      }, {expectedVersion: record._version});
+    },
+  })) {
+    await withRuntime(async (runtime) => {
+      await seed(runtime, 'app');
+      const classes = await parentChild(runtime, 'app');
+      const instance = await newInstance(runtime, 'app', 'corrupt', classes.child.classRef);
+      await corrupt(runtime, classes);
+
+      // The binder must not report corruption as an unbound name...
+      await assert.rejects(
+        defineMethodsFromSource({
+          images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+          classRef: classes.parent.classRef, methods: [{selector: 'later', source: '[ p ]'}],
+        }),
+        (error) => !/unbound Symmetric Smalltalk name/.test(error.message),
+        `${label}: the binder must raise structurally`,
+      );
+      // ...and the runtime check must not report it as an ordinary denial.
+      await assert.rejects(
+        evaluate(runtime, 'app', `corrupt-${label.replace(/\W/g, '')}`, '[ :o | o p ]', [instance]),
+        (error) => !/not declared by/.test(error.message),
+        `${label}: the primitive must raise structurally`,
+      );
+    });
+  }
+});
+
 // --- permission and identity, adversarially --------------------------------------------------------
 
 // A method is ordinary durable data, so the compiler's output is not the only input the runtime sees.
@@ -436,9 +498,13 @@ test('a Parent method cannot name a Child-private slot even on a Child instance'
       evaluate(runtime, 'app', 'peek', '[ :o | o peek ]', [instance]),
       (error) => error.name === 'SmalltalkSlotAccessError' && /not declared by/.test(error.message),
     );
-    // The same method reading a Parent-declared slot is fine, which is what makes this a scope check
-    // rather than a blanket refusal.
-    assert.deepEqual(await evaluate(runtime, 'app', 'p-ok', '[ :o | o p ]', [instance]), integerValue(5) && await evaluate(runtime, 'app', 'p-ok2', '[ :o | o p ]', [instance]));
+    // The same method reading a Parent-*declared* slot on the same instance is fine, which is what
+    // makes this a scope check rather than a blanket refusal.
+    await evaluate(runtime, 'app', 'seed-p', '[ :o | o setP: 12 ]', [instance]);
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'p-ok', '[ :o | o p ]', [instance]),
+      integerValue(12),
+    );
   });
 });
 
@@ -483,21 +549,40 @@ test('a forged write is refused on the same terms as a forged read', async () =>
 
 // --- frame transport and lifetime ------------------------------------------------------------------
 
-test('a directly invoked Block has no frame and cannot use the slot primitives', async () => {
+// The distinction that matters, tested both ways rather than only the failing half: a root method
+// *dispatch* carries its envelope, while `invokeBlock` produces none.
+test('root dispatch carries a frame; invokeBlock does not', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');
     const point = await pointClass(runtime, 'app');
-    const instance = await newInstance(runtime, 'app', 'direct', point.classRef);
+    const instance = await newInstance(runtime, 'app', 'root', point.classRef);
 
-    // invokeBlock produces no envelope, so a direct send to the primitive has no frame at all.
+    // Root dispatch of an ivar-using method, through the ordinary public path.
+    const activation = await runtime.invocations.sendMessage({
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: instance,
+      message: textValue('setX:'),
+      arguments: [integerValue(8)],
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(activation),
+      integerValue(8),
+      'sendMessage -> execute must reach a method with its frame intact',
+    );
+    assert.deepEqual(await evaluate(runtime, 'app', 'root-read', '[ :o | o x ]', [instance]), integerValue(8));
+
+    // A Block invoked directly gets no envelope, so the primitive it calls has no frame.
+    const caller = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'direct-caller',
+      source: '[ :prim :target | prim value: target value: 1 ]',
+    });
     await assert.rejects(
-      runtime.executor.execute(await runtime.invocations.sendMessage({
-        languageId: SYMMETRIC_SMALLTALK_ID,
-        receiver: objectRef('app', READ_PRIMITIVE),
-        message: textValue('value:value:'),
-        arguments: [instance, textValue('point-x')],
-      })),
+      runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', caller.block.id),
+        [objectRef('app', READ_PRIMITIVE), instance],
+      )),
       (error) => error.name === 'SmalltalkSlotFrameMissingError',
+      'invokeBlock produces no envelope',
     );
   });
 });
@@ -620,3 +705,93 @@ test('a slot write whose result feeds another send resumes correctly in WASM', a
     );
   });
 });
+
+// --- recovery ---------------------------------------------------------------------------------------
+
+// ADR 0050 requires every write swept pre-commit and commit-then-lost-ack. #81 adds new publication
+// paths — the v1 neutral and v1 WASM method artifacts, and the primitive installer — none of which
+// the existing v0 builder sweep exercises.
+const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
+
+function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
+  let writes = 0;
+  const wrapped = Object.create(Object.getPrototypeOf(images));
+  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
+    if (typeof images[key] !== 'function' || key === 'constructor') continue;
+    wrapped[key] = (...args) => images[key](...args);
+  }
+  for (const [key, value] of Object.entries(images)) {
+    if (typeof value === 'function') wrapped[key] = (...args) => images[key](...args);
+    else wrapped[key] = value;
+  }
+  for (const method of WRITE_METHODS) {
+    wrapped[method] = async (imageId, input, options) => {
+      writes += 1;
+      const index = writes;
+      if (index === failAt && !commitThenThrow) throw new Error(`injected failure at write ${index}`);
+      const result = await images[method](imageId, input, options);
+      if (index === failAt && commitThenThrow) throw new Error(`injected post-commit failure at write ${index}`);
+      return result;
+    };
+  }
+  return {images: wrapped, writeCount: () => writes};
+}
+
+const servicesFor = (images) => new CompilationService({images, compilers: createDefaultCodeCompilerRegistry()});
+
+// A v1 method: it assigns, so it exercises the representation `defineMethods` could not publish
+// before this PR, in both lanes.
+const IVAR_METHODS = [{selector: 'setX:', source: '[ :v | x := v ]'}, {selector: 'x', source: '[ x ]'}];
+
+async function baseForRecovery(runtime, imageId, lane) {
+  await runtime.images.createImage({id: imageId});
+  await installSmalltalkKernel({images: runtime.images, imageId});
+  const options = {images: runtime.images, compilation: runtime.compilation, imageId, lane};
+  await installSmalltalkAllocationProtocol(options);
+  const shape = objectRef(imageId, (await runtime.images.putShape(imageId, {
+    id: 'rec-shape', slots: [{id: 'point-x', name: 'x'}],
+  })).id);
+  const point = await defineClass({images: runtime.images, imageId, name: 'Point', instanceShapeRef: shape});
+  return point;
+}
+
+async function publishAll(images, compilation, imageId, classRef, lane) {
+  await installSmalltalkInstanceVariableProtocol({images, imageId});
+  await defineMethodsFromSource({images, compilation, imageId, classRef, lane, methods: IVAR_METHODS});
+}
+
+for (const lane of ['neutral', 'wasm']) {
+  test(`every write publishing a ${lane} instance-variable method is recoverable`, async () => {
+    const total = await withRuntime(async (runtime) => {
+      const point = await baseForRecovery(runtime, 'count', lane);
+      const {images, writeCount} = faultingImages(runtime.images);
+      await publishAll(images, servicesFor(images), 'count', point.classRef, lane);
+      return writeCount();
+    });
+    assert.ok(total > 5, `expected several writes in the ${lane} lane, saw ${total}`);
+
+    for (let failAt = 1; failAt <= total; failAt += 1) {
+      for (const commitThenThrow of [false, true]) {
+        await withRuntime(async (runtime) => {
+          const point = await baseForRecovery(runtime, 'app', lane);
+          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+
+          await assert.rejects(
+            publishAll(images, servicesFor(images), 'app', point.classRef, lane),
+            /injected/,
+            `${lane}: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
+          );
+
+          await publishAll(runtime.images, runtime.compilation, 'app', point.classRef, lane);
+          const instance = await newInstance(runtime, 'app', `rec-${lane}-${failAt}-${commitThenThrow}`, point.classRef);
+          await evaluate(runtime, 'app', `rec-set-${lane}-${failAt}-${commitThenThrow}`, '[ :o | o setX: 2 ]', [instance]);
+          assert.deepEqual(
+            await evaluate(runtime, 'app', `rec-get-${lane}-${failAt}-${commitThenThrow}`, '[ :o | o x ]', [instance]),
+            integerValue(2),
+            `${lane}: not usable after retrying past write ${failAt}`,
+          );
+        });
+      }
+    }
+  });
+}

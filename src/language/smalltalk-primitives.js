@@ -37,6 +37,7 @@ import {
   SmalltalkMalformedBehaviorError,
   behaviorRefFor,
   sameRef,
+  visibleInstanceShape,
 } from './smalltalk-lookup.js';
 
 // ADR 0046 introduced the representation for the image operations the shared IR cannot express;
@@ -692,28 +693,6 @@ function sameValueRef(left, right) {
   return JSON.stringify(canonicalizeValue(left)) === JSON.stringify(canonicalizeValue(right));
 }
 
-// The defining Behavior's *visible* layout: its own instance Shape, or the nearest ancestor that
-// declares one. An abstract intermediate class with a nil layout declares nothing of its own and
-// cancels nothing above it, so its methods may still name ancestor-declared slots (ADR 0050
-// decision 5, corrected).
-async function visibleLayoutSlots({images, behaviorRef, nilRef}) {
-  const visited = new TupleSet(2);
-  let currentRef = behaviorRef;
-  while (isObjectRef(currentRef) && !sameRef(currentRef, nilRef)) {
-    const key = [currentRef.imageId, currentRef.objectId];
-    if (visited.has(key)) return new Set();
-    visited.add(key);
-    const behavior = await readBehavior(images, currentRef);
-    if (!sameRef(behavior.instanceShape, nilRef)) {
-      const shape = await images.getShape(behavior.instanceShape.imageId, behavior.instanceShape.objectId);
-      if (!shape) return new Set();
-      return new Set(shape.slots.map(({id}) => id));
-    }
-    currentRef = behavior.superclass;
-  }
-  return new Set();
-}
-
 async function resolveSlotAccess({images, primitiveImage, primitive, target, slotIdValue, context}) {
   const frame = context?.invocationFrame ?? null;
   if (!frame) throw new SmalltalkSlotFrameMissingError(primitive);
@@ -730,8 +709,10 @@ async function resolveSlotAccess({images, primitiveImage, primitive, target, slo
   const kernel = await findSmalltalkKernel({images, imageId: primitiveImage});
   if (!kernel) throw new TypeError(`image ${primitiveImage} has no Smalltalk kernel`);
 
-  const visible = await visibleLayoutSlots({images, behaviorRef: frame.definingBehavior, nilRef: kernel.nil});
-  if (!visible.has(slotIdValue.value)) {
+  // Shared with the binder, and strict: a cycle or a dangling instance Shape raises here rather
+  // than presenting as "this method may not name that slot".
+  const layout = await visibleInstanceShape({images, behaviorRef: frame.definingBehavior, nilRef: kernel.nil});
+  if (!layout?.slots.some(({id}) => id === slotIdValue.value)) {
     throw new SmalltalkSlotAccessError(
       primitive,
       `${slotIdValue.value} is not declared by ${frame.definingBehavior.imageId}/${frame.definingBehavior.objectId}`,

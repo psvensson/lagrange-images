@@ -118,6 +118,16 @@ function assertImageService(images) {
 class InvocationService {
   constructor({images, dispatchers = new DispatchRegistry()} = {}) {
     this.images = assertImageService(images);
+    // ADR 0050 decision 5b's envelope, keyed on the activation this dispatch produced. Keeping it
+    // beside the activation rather than *in* it is the point; keeping it here rather than in a
+    // return value is what lets the ordinary `sendMessage` -> `execute` path carry a frame too,
+    // without every caller learning that frames exist.
+    //
+    // This is not the "ask which dictionary holds this Block" shortcut ADR 0050 rules out: the key
+    // is the object identity of one dispatch's activation, which is process memory rather than graph
+    // data, so durable reuse and forged records cannot steer it. It is weakly held and dies with the
+    // activation.
+    this.invocationFrames = new WeakMap();
     if (!dispatchers || typeof dispatchers.get !== 'function') {
       throw new TypeError('dispatchers must be a DispatchRegistry-compatible object');
     }
@@ -136,10 +146,16 @@ class InvocationService {
   // `dispatchImage` is execution context, exactly as depth and authority are: it never appears on
   // the request, on a Value, or in the durable graph. An immediate receiver carries no image, so
   // this is what says which kernel's Integer applies (ADR 0044 decision 5a).
-  // The activation alone, for every caller that does not need the envelope. Kept as the ordinary
-  // entry point so nothing outside the execution layer has to know a frame exists.
+  // The activation alone, for every caller that does not need the envelope. The frame is still
+  // recorded, so a root `sendMessage` -> `execute` reaches a method with its frame intact.
   async sendMessage(input, options = {}) {
     return (await this.prepareDispatch(input, options)).activation;
+  }
+
+  // The envelope for an activation this service dispatched, or null. `invokeBlock` records none, so
+  // a directly invoked Block has no frame — which is what makes the slot primitives unusable there.
+  frameFor(activation) {
+    return this.invocationFrames.get(activation) ?? null;
   }
 
   // ADR 0050 decision 5b: the activation request *and* the transient envelope beside it. Built here,
@@ -165,6 +181,7 @@ class InvocationService {
         message: request.message,
       },
     });
+    if (resolution.frame) this.invocationFrames.set(activation, resolution.frame);
     return Object.freeze({
       activation,
       frame: resolution.frame ?? null,

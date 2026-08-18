@@ -225,7 +225,11 @@ class ActivationExecutor {
     // The restore case is also what makes decision 10a fail closed for free: the association lives
     // in the arena, the arena dies with the execution, so a closure invoked in a *later* execution
     // finds nothing rather than believing a durable claim.
-    const activeFrame = invocationFrame ?? inheritedFrame ?? arena.frameFor?.(activation.block) ?? null;
+    const activeFrame = invocationFrame
+      ?? this.invocations?.frameFor?.(activation)
+      ?? inheritedFrame
+      ?? arena.frameFor?.(activation.block)
+      ?? null;
 
     // ADR 0044 decision 5a. A root activation dispatches in its own Block's image; a nested one
     // inherits what its sender computed. Context, never a field on the activation.
