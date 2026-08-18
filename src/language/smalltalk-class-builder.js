@@ -12,6 +12,8 @@ import {
 } from '../wasm/resumable-compiler.js';
 import {lowerLagrangeCodeV0, normalizeLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
+import {TupleSet} from '../support/tuple-map.js';
+import {sameRef} from './smalltalk-lookup.js';
 import {
   BEHAVIOR_SHAPE_ID,
   EMPTY_SHAPE_ID,
@@ -442,7 +444,110 @@ async function defineMethods({
 // rule with forward references, because its objects do not resolve until the whole graph exists;
 // here the superclass already resolves, so its metaclass is read from it. Two encodings of one
 // invariant, which is why both are proven rather than only asserted.
-async function defineClass({images, imageId, name, superclassRef = null} = {}) {
+// ADR 0046 decision 4: `instanceShape` is the *complete* immutable layout of an instance, inherited
+// slots included, so allocation never reconstructs it by walking superclasses. Composition is this
+// path's job, and the check is by stable slot **id** — a renamed slot with a preserved id is still
+// the same slot, while two slots sharing a name and differing in id are two different slots.
+// The nearest ancestor that actually declares a layout, which is not always the direct superclass.
+// A non-instantiable class in the middle of a chain — `instanceShape` of `nil` — declares no layout
+// of its own but does not cancel the one above it: its subclasses still inherit every method of
+// every ancestor, so their instances still need every ancestor's slots. Stopping at the direct
+// superclass would let one `nil` link silently erase the invariant for everything below it.
+//
+// `null` means exactly one thing: the walk reached the kernel's `nil` terminator having found no
+// declared layout. Every other outcome raises. A corrupt chain must not be reported as "nothing to
+// inherit", because that is indistinguishable from the legitimate answer and would let a subclass
+// publish while the invariant it claims was never actually checked. Only the *direct* superclass has
+// been validated by the caller, so every ancestor above it is validated here rather than read as a
+// raw record.
+async function nearestDeclaredInstanceShape({images, superclassRef, nilRef, name}) {
+  const visited = new TupleSet(2);
+  let currentRef = superclassRef;
+
+  while (!sameRef(currentRef, nilRef)) {
+    if (!isObjectRef(currentRef)) {
+      throw new TypeError(`defineClass ${name} superclass chain contains a non-ref superclass edge`);
+    }
+    const key = [currentRef.imageId, currentRef.objectId];
+    if (visited.has(key)) {
+      throw new TypeError(
+        `defineClass ${name} superclass chain has a cycle at ${currentRef.imageId}/${currentRef.objectId}; `
+        + 'the inherited instance layout cannot be determined',
+      );
+    }
+    visited.add(key);
+
+    const record = await images.getObject(currentRef.imageId, currentRef.objectId);
+    if (!record) {
+      throw new TypeError(
+        `defineClass ${name} superclass chain has a dangling edge to `
+        + `${currentRef.imageId}/${currentRef.objectId}; the inherited instance layout cannot be determined`,
+      );
+    }
+    let ancestor;
+    try {
+      // readBehavior, not isBehaviorObject: the walk relies on `superclass` and `instanceShape`
+      // being local unpinned refs, which is exactly what it validates.
+      ancestor = await readBehavior(images, currentRef);
+    } catch (error) {
+      throw new TypeError(
+        `defineClass ${name} superclass chain reaches a malformed Behavior at `
+        + `${currentRef.imageId}/${currentRef.objectId}`,
+        {cause: error},
+      );
+    }
+
+    if (!sameRef(ancestor.instanceShape, nilRef)) {
+      const shape = await images.getShape(ancestor.instanceShape.imageId, ancestor.instanceShape.objectId);
+      if (!shape) {
+        throw new TypeError(
+          `defineClass ${name} superclass ${currentRef.imageId}/${currentRef.objectId} has a dangling `
+          + `instanceShape: ${ancestor.instanceShape.imageId}/${ancestor.instanceShape.objectId}`,
+        );
+      }
+      return shape;
+    }
+    currentRef = ancestor.superclass;
+  }
+  return null;
+}
+
+async function requireInstanceShape({images, imageId, instanceShapeRef, superclassRef, name, nilRef}) {
+  if (!isObjectRef(instanceShapeRef) || instanceShapeRef.imageId !== imageId) {
+    throw new TypeError(`defineClass instanceShape must be an unpinned ref in ${imageId}`);
+  }
+  const shape = await images.getShape(instanceShapeRef.imageId, instanceShapeRef.objectId);
+  if (!shape) {
+    throw new TypeError(`defineClass instanceShape not found: ${instanceShapeRef.imageId}/${instanceShapeRef.objectId}`);
+  }
+
+  // Slot ids are identity; slot names are how instance variables will be read. Generic Shapes
+  // deliberately permit duplicate names — `normalizeShapeSlots` checks ids only — so uniqueness is
+  // an instance-shape invariant checked here, exactly as selector uniqueness is a MethodDictionary
+  // invariant rather than a generic Shape one. Without it, a subclass slot named like an inherited
+  // one makes name-based access resolve by position.
+  const names = new Set();
+  for (const {name: slotName} of shape.slots) {
+    if (names.has(slotName)) {
+      throw new TypeError(`defineClass ${name} instance shape declares duplicate slot name: ${slotName}`);
+    }
+    names.add(slotName);
+  }
+
+  const inherited = await nearestDeclaredInstanceShape({images, superclassRef, nilRef, name});
+  if (!inherited) return instanceShapeRef;
+  const declared = new Set(shape.slots.map(({id}) => id));
+  const missing = inherited.slots.map(({id}) => id).filter((id) => !declared.has(id));
+  if (missing.length > 0) {
+    throw new TypeError(
+      `defineClass ${name} instance shape drops inherited slot ids: ${missing.join(', ')}; `
+      + 'an instance shape is the complete layout, including everything inherited',
+    );
+  }
+  return instanceShapeRef;
+}
+
+async function defineClass({images, imageId, name, superclassRef = null, instanceShapeRef = null} = {}) {
   requiredText(name, 'class name');
   requiredText(imageId, 'image id');
   const kernel = await findSmalltalkKernel({images, imageId});
@@ -456,12 +561,21 @@ async function defineClass({images, imageId, name, superclassRef = null} = {}) {
   const superMetaclass = superBehavior.behavior;
   await requireLocalBehavior(images, imageId, superMetaclass, 'defineClass superclass metaclass');
 
+  // Omission keeps the pre-0046 meaning and stores `nil`, so every class already in an image stays
+  // exactly as non-instantiable as it was. Reinterpreting a stored `nil` as the empty Shape would be
+  // migration by interpretation — the same thing decision 8 of ADR 0044 forbids for `{unbound}`.
+  const instanceShape = instanceShapeRef === null
+    ? kernel.nil
+    : await requireInstanceShape({images, imageId, instanceShapeRef, superclassRef: superclass, name, nilRef: kernel.nil});
+
   const classObjectId = `smalltalk/class/${name}`;
   const metaclassObjectId = `smalltalk/metaclass/${name}`;
 
-  for (const [id, behaviorName, superRef, behaviorRef] of [
-    [metaclassObjectId, `${name} class`, superMetaclass, kernel.metaclassClass],
-    [classObjectId, name, superclass, ref(metaclassObjectId)],
+  // The metaclass keeps `nil`: constructing new Class/Metaclass objects from inside Smalltalk is
+  // deferred, so a metaclass is not instantiable.
+  for (const [id, behaviorName, superRef, behaviorRef, shapeRef] of [
+    [metaclassObjectId, `${name} class`, superMetaclass, kernel.metaclassClass, kernel.nil],
+    [classObjectId, name, superclass, ref(metaclassObjectId), instanceShape],
   ]) {
     await ensureObject(images, imageId, {
       id: methodsId(id),
@@ -477,7 +591,7 @@ async function defineClass({images, imageId, name, superclassRef = null} = {}) {
         'behavior-name': textValue(behaviorName),
         'behavior-superclass': superRef,
         'behavior-methods': ref(methodsId(id)),
-        'behavior-instance-shape': kernel.nil,
+        'behavior-instance-shape': shapeRef,
       },
       metadata: {smalltalk: 'behavior', name: behaviorName},
     });
@@ -485,4 +599,4 @@ async function defineClass({images, imageId, name, superclassRef = null} = {}) {
   return Object.freeze({classRef: ref(classObjectId), metaclassRef: ref(metaclassObjectId)});
 }
 
-export {SmalltalkMethodRedefinitionError, defineClass, defineMethods};
+export {SmalltalkMethodRedefinitionError, defineClass, defineMethods, ensureBlock, ensureCodeArtifact};

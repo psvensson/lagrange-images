@@ -18,4 +18,6 @@ export {createDefaultLanguagePlatform};
 export * from './smalltalk-kernel.js';
 export * from './smalltalk-class-builder.js';
 export * from './smalltalk-control-flow.js';
+export * from './smalltalk-allocation.js';
+export * from './smalltalk-primitives.js';
 export * from './smalltalk-lookup.js';

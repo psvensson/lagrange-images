@@ -196,16 +196,18 @@ Implemented:
   object as the effective receiver of one send, and `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:` and
   `ifFalse:ifTrue:` are methods on True and False, proven in both execution lanes including a
   non-tail block invocation (ADR 0045)
+- allocation and class introspection as ordinary message sends: `basicNew`, `new`, `initialize` and
+  `class` are methods over two language-owned primitive Blocks, instance layout is explicit durable
+  class data, and instances get fresh opaque identities with every slot starting at that image's
+  `nil` (ADR 0046)
 
-The three ADRs above are one arc: 0043 gave the language state, 0044 gave it objects, and 0045 let
-objects themselves supply control flow. That is the point at which "symmetric Smalltalk" stops being
-architectural scaffolding and starts being visible in ordinary programs.
+The four ADRs above are one arc: 0043 gave the language state, 0044 gave it objects, 0045 let objects
+themselves supply control flow, and 0046 let a program make objects of its own. That is the point at
+which "symmetric Smalltalk" stops being architectural scaffolding and starts being visible in
+ordinary programs.
 
 Next, ordered by architectural pressure rather than convenience:
 
-- [ ] allocation: `basicNew`, `new`, `class`, instance shape, identity generation, and above all
-      whether allocation is authority-governed. This is the next genuinely architectural question;
-      ADR 0044 deferred `Point new` precisely because two undesigned primitives were hiding in it
 - [ ] basic collections, at which point a MethodDictionary can stop being represented by a Shape
 - [ ] exception/condition substrate, including how unwinding crosses resumable WASM suspension
 - [ ] the rest of the boolean protocol — `not`, `and:`, `or:` — which runs ADR 0045's bridge
@@ -213,6 +215,8 @@ Next, ordered by architectural pressure rather than convenience:
       or the singleton
 - [ ] primitive-backed methods beyond `+`. ADR 0044 decides how immediate Values dispatch and how
       a primitive-backed method is written; the remaining work is which primitives the kernel needs
+- [ ] instance-variable read/write and source-level class definition, which is what makes allocated
+      objects useful from source rather than only from a host-side inspection
 - [ ] cascades, and `true`/`false`/`nil` as source literals — both surface syntax rather than
       semantic decisions, and both cheap once the decisions above are made
 - [ ] REPL/workspace, once conditionals, allocation and a few collections make interactive

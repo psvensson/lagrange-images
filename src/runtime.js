@@ -1,6 +1,10 @@
 import {createBackend} from './backend/create-backend.js';
 import {createSmalltalkTemporaryInitializer} from './language/smalltalk-kernel.js';
 import {
+  SMALLTALK_KERNEL_PRIMITIVE_V1,
+  createSmalltalkKernelPrimitiveV1Executor,
+} from './language/smalltalk-primitives.js';
+import {
   CompilationService,
   createDefaultCodeCompilerRegistry,
   createDefaultCompilationGroupCompilerRegistry,
@@ -104,8 +108,27 @@ async function createRuntime(options = {}) {
     componentRuntime: options.componentRuntime,
     componentHostImports,
   });
+  // ADR 0046 decision 2a. A language-owned executor is registered here, by the composition root, and
+  // never inside `createDefaultCodeExecutorRegistry` — `src/language` already imports
+  // `src/execution`, so registering it there would close a dependency cycle that the `export *`
+  // barrel turns into an import-time failure naming neither file. This is the same route ADR 0044
+  // decision 8's `temporaryInitializer` takes just below: language-owned execution policy enters
+  // through composition, so execution never depends on language.
   for (const [representation, executor] of Object.entries(options.codeExecutors ?? {})) {
     codeExecutors.register(representation, executor);
+  }
+  // Registered only if the embedder did not supply their own, the same way the Symmetric Smalltalk
+  // dispatcher is registered above. Registering unconditionally would make an explicit override a
+  // hard `ExecutorRegistrationError` from `createRuntime` itself rather than a supported choice.
+  if (!codeExecutors.has(SMALLTALK_KERNEL_PRIMITIVE_V1)) {
+    codeExecutors.register(
+      SMALLTALK_KERNEL_PRIMITIVE_V1,
+      createSmalltalkKernelPrimitiveV1Executor(
+        // Object identity is runtime machinery rather than durable class semantics, so it is
+        // injectable — a test has to be able to force a collision.
+        options.smalltalkObjectIds === undefined ? {} : {newObjectId: options.smalltalkObjectIds},
+      ),
+    );
   }
   // The authority service is a control-plane surface: the embedder may issue and revoke
   // contexts through `runtime.authority`, and executors never see it.
