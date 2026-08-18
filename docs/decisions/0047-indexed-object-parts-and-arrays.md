@@ -209,8 +209,10 @@ Array >> at:      1-based, because Smalltalk is, and the method says so
 
 Teaching the graph one language's indexing convention would be the same mistake as teaching
 `lagrange-code` what `nil` means. Bounds are checked by the primitive — an out-of-range index is an
-explicit failure, never a silent `nil` — and the language method decides what "in range" means in
-its own terms.
+explicit failure, never a silent `nil`. The current primitive failure reports the translated 0-based
+position because no language-level exception/condition translation layer exists yet; translating that
+failure back into Smalltalk's 1-based terms belongs with that later mechanism, not in the generic
+indexed primitive.
 
 ### 8. `at:` and `at:put:` are ordinary messages over language-owned primitives
 
@@ -312,7 +314,7 @@ Array
     at:put: then at: answers the stored Value, including a ref element
     basicNew on an indexed class answers a zero-length Array
     basicNew: on a non-indexed class fails, distinctly from "not instantiable"
-    an out-of-range at: and at:put: fail explicitly, in Smalltalk's 1-based terms
+    an out-of-range at: and at:put: fail explicitly; the current primitive failure reports the translated 0-based position
     a subclass may not drop its superclass's indexed declaration (ADR 0046 decision 4, extended)
 
 boundaries
@@ -336,6 +338,8 @@ both lanes
 - growing, copying and streaming as primitives rather than as methods
 - typed or byte-specialized indexed storage, and any sparse representation
 - element-wise `Array >> =` and `hash`
+- Smalltalk-level 1-based bounds conditions/error reporting; the indexed primitive remains 0-based,
+  and language-facing translation belongs with the deferred exceptions/conditions mechanism
 - projecting or mutating an indexed part across a callable interface
 - `String` as an indexed collection of Characters; `text` remains a canonical Value and this ADR does
   not relate the two
@@ -355,7 +359,7 @@ Array is fixed-size; growth is a method above it, never a property of storage
 basicNew on an indexed class means length 0; basicNew: supplies N; basicNew: on a plain class fails
 every indexed element begins as that image's nil; UNBOUND never appears in object storage
 the object model is 0-based and language-neutral; Array >> at: is 1-based because Smalltalk is
-bounds are checked; an out-of-range index fails explicitly and never answers nil
+bounds are checked; an out-of-range index fails explicitly and never answers nil; current primitive error text is 0-based
 at:/at:put:/size are ordinary messages over language-owned primitives, image-local per ADR 0046
 indexed mutation is intrinsic image-native semantics, not an ADR 0037 capability check
 Array equality is identity; a container must not turn the structural equals op into deep equality
