@@ -70,9 +70,14 @@ class LexicalCell {
   #name;
   #contents = UNBOUND;
 
-  constructor(id, name) {
+  // `initialContents` is how ADR 0044 decision 8 arrives: in a bootstrapped image a declared
+  // temporary starts holding that image's `nil` ref, and elsewhere it starts UNBOUND exactly as
+  // before. A cell holding nil is an ordinary bound cell — nothing downstream distinguishes it,
+  // which is why this needs no new WASM ABI.
+  constructor(id, name, initialContents = UNBOUND) {
     this.#id = id;
     this.#name = name ?? null;
+    this.#contents = initialContents === UNBOUND ? UNBOUND : canonicalizeValue(initialContents);
   }
 
   get id() { return this.#id; }
@@ -100,8 +105,8 @@ class LexicalCell {
 class LexicalFrame {
   #cells = new Map();
 
-  declare(id, name) {
-    if (!this.#cells.has(id)) this.#cells.set(id, new LexicalCell(id, name));
+  declare(id, name, initialContents = UNBOUND) {
+    if (!this.#cells.has(id)) this.#cells.set(id, new LexicalCell(id, name, initialContents));
     return this.#cells.get(id);
   }
 
@@ -168,8 +173,10 @@ class ActivationCells {
     this.#captured = captured;
   }
 
-  declare(temporaries) {
-    for (const {id, name} of temporaries) this.#frame.declare(id, name);
+  // One place, before the neutral and WASM lanes diverge. Four executors independently learning
+  // about `nil` is the lane-dependent-semantics mistake ADR 0043 decision 10 forbids.
+  declare(temporaries, initialContents = UNBOUND) {
+    for (const {id, name} of temporaries) this.#frame.declare(id, name, initialContents);
   }
 
   // This activation's own slot first, then a captured cell — never the other way round, so a

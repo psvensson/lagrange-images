@@ -347,8 +347,24 @@ async function readBehavior(images, ref) {
   return Object.freeze({record, name, ...refSlots});
 }
 
+// ADR 0044 decision 8's policy half. A bootstrapped image answers its own `nil`; an image with no
+// kernel answers nothing, so a temporary starts UNBOUND exactly as ADR 0043 decided. The lookup is
+// memoized per image because it runs on every activation that declares a temporary.
+function createSmalltalkTemporaryInitializer() {
+  const byImage = new Map();
+  return async ({images, dispatchImage}) => {
+    if (!dispatchImage) return null;
+    if (!byImage.has(dispatchImage)) {
+      const kernel = await findSmalltalkKernel({images, imageId: dispatchImage});
+      byImage.set(dispatchImage, kernel ? kernel.nil : null);
+    }
+    return byImage.get(dispatchImage);
+  };
+}
+
 export {
   BEHAVIOR_SHAPE_ID,
+  createSmalltalkTemporaryInitializer,
   SmalltalkKernelConflictError,
   assertUniqueSelectorShape,
   canonicalJson,

@@ -208,6 +208,15 @@ sequence is not expressible, which avoids deciding what it would return.
 
 ### 9. Reading an unassigned temporary is an error, because there is no `nil` yet
 
+> **Superseded for bootstrapped Symmetric Smalltalk execution by ADR 0044 decision 8.** There is a
+> `nil` now, so in an image carrying a Smalltalk kernel a declared temporary starts holding that
+> image's `nil` ref. The decision below still governs every other case: an image without a kernel
+> initializes to `UNBOUND` and raises exactly as described here, and a durable `{unbound}` capture
+> written before a bootstrap keeps its meaning forever rather than being reinterpreted.
+>
+> The sentence that dated this decision is its own: *"Rather than invent one here."* The reason was
+> the absence of `nil`, and only that absence.
+
 Smalltalk temporaries begin as `nil`. There is no `nil` to begin as: the canonical Value set is
 `boolean | integer | float64 | text | bytes | ref | pinned-ref`, deliberately, and `nil` is a
 personality concept that does not exist in this personality yet — verified, not assumed.
@@ -352,6 +361,6 @@ escaping mutable closures are unsupported, not silently reset
 persistence of cells would be an ADR 0041 survival mechanism, not a side effect
 assignment is an expression
 a sequence yields its last expression
-unassigned temporary != nil; there is no nil yet
+unassigned temporary != nil where there is no nil (see decision 9's supersession note)
 both execution paths agree, or it is not implemented
 ```

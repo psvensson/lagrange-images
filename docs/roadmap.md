@@ -186,6 +186,9 @@ Implemented:
 - captured foreign Blocks via ordinary `value:`/`value:value:` sends
 - mixed foreign-WASM/live-Cuis orchestration
 - resumable non-tail host effects in the Lagrange-WASM lane
+- Object/Behavior/Class/Metaclass with inheritance, the metaclass knot as durable graph data,
+  immediate Values dispatching by kind under a transient dispatch image, `3 + 4` as an ordinary
+  message send, and `nil`-initialized temporaries in bootstrapped images (ADR 0044)
 - temporaries, statement sequences and assignment, with mutable lexical cells identical across the
   neutral executor, ordinary WASM, pooled WASM instances, suspension/resumption and nested closures
   (ADR 0043)
@@ -193,10 +196,6 @@ Implemented:
 Next:
 
 - [ ] cascades, which are surface syntax rather than a semantic decision
-- [ ] Object/Behavior/Class/Metaclass bootstrap and inheritance (ADR 0044 accepted). Landing order:
-      kernel/bootstrap installer -> dispatch-image context -> behavior lookup and inheritance ->
-      metaclass graph -> immediate dispatch and `+` -> `nil` initialization. `nil` goes last because
-      it is the only step that deliberately changes an already-implemented ADR 0043 behaviour
 - [ ] primitive-backed methods beyond `+`. ADR 0044 decides how immediate Values dispatch and how
       a primitive-backed method is written; the remaining work is which primitives the kernel needs
 - [ ] exception/condition substrate
