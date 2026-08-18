@@ -192,12 +192,13 @@ Implemented:
 
 Next:
 
-- [ ] `+` and friends as reachable arithmetic. `integer-add` exists in the neutral IR but no front
-      end emits it, so ADR 0043's proofs take arithmetic as a message send to a Block. Making `+` a
-      primitive would prejudge Integer objects, so this belongs with the object bootstrap
 - [ ] cascades, which are surface syntax rather than a semantic decision
-- [ ] Object/Behavior/Class/Metaclass bootstrap and inheritance
-- [ ] immediate-value objects/primitives
+- [ ] Object/Behavior/Class/Metaclass bootstrap and inheritance (ADR 0044 accepted). Landing order:
+      kernel/bootstrap installer -> dispatch-image context -> behavior lookup and inheritance ->
+      metaclass graph -> immediate dispatch and `+` -> `nil` initialization. `nil` goes last because
+      it is the only step that deliberately changes an already-implemented ADR 0043 behaviour
+- [ ] primitive-backed methods beyond `+`. ADR 0044 decides how immediate Values dispatch and how
+      a primitive-backed method is written; the remaining work is which primitives the kernel needs
 - [ ] exception/condition substrate
 - [ ] REPL/workspace
 - [ ] bootstrap image
