@@ -213,6 +213,18 @@ pooled instance != activation state
 - Nested Blocks use automatic lexical capture analysis; captured state is identified by stable binding ID rather than source name.
 - `self` crossing a Block boundary is a lexical capture, not the Block object used as the `value*` message receiver.
 
+### Object model
+
+- The kernel is durable graph data found through `findSmalltalkKernel`, never refs a caller kept. Bootstrap state that lives only in a returned object dies with the process while the image survives (ADR 0044).
+- A behavior record means what its own shape says. `smalltalk/behavior-shape/v1` gets ADR 0044 lookup; anything else is a legacy behavior and keeps its old lookup. Installing the kernel must never change what an already-stored record means — that is migration by interpretation, and it is forbidden here for the same reason it is forbidden for durable `{unbound}` captures.
+- Selector-name uniqueness is a MethodDictionary invariant, not a generic Shape one. `normalizeShapeSlots` rejects duplicate slot *ids* and says nothing about names, so a `find`-based selector lookup would otherwise resolve by position.
+- The metaclass chain is derived from the class chain (`C class superclass == S class`, with `Object class superclass == Class`), never written out per class, so the two hierarchies cannot drift apart.
+- `putObject` validates the shape but neither `behavior` nor ref-valued slots, which is what lets the bootstrap create objects in any order and close the metaclass cycle. Do not add validation there without providing another way to build that cycle.
+- Bootstrap writes are ensure-exact-or-create. `putObject` is an upsert and would silently replace an existing record; `putShape` is create-once and would reject a retry after a partial install. One rule covers both: an exact existing record is reused, a differing one is rejected, and an absent one is created — which is what makes installation safe to retry.
+- A shape or slot reference is identity only together with its `imageId`. Cross-image refs are legal, so another image's `smalltalk/behavior-shape/v1` must not be mistaken for this image's.
+- Structural validation and graph resolution are separate concerns. `readBehavior` checks that a record is a well-formed Behavior; it does not check that its `superclass` or `methods` refs resolve, because the metaclass cycle depends on forward references being writable. Dispatch must therefore keep three failures distinct: a malformed Behavior, a dangling superclass or method-dictionary edge (corrupt or incomplete graph state), and an ordinary selector miss.
+- Lookup terminates by comparing a full ref against the current kernel's `nil`, never `objectId === 'smalltalk/nil'`. `nil` is the right object for absence in both the superclass and instanceShape roles; comparing by object id alone would reintroduce the cross-image identity bug class.
+
 ### Mutable lexical state
 
 - Assignment mutates an activation-visible cell (ADR 0043). Never a canonical Value, never a Block, and never the durable lexical-environment graph. If an assignment causes a `putLexicalEnvironment` call or a history event, it is wrong.

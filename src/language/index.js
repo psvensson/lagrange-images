@@ -15,3 +15,4 @@ export * from './symmetric-smalltalk-parser.js';
 export * from './symmetric-smalltalk-semantic.js';
 export * from './symmetric-smalltalk-tokenizer.js';
 export {createDefaultLanguagePlatform};
+export * from './smalltalk-kernel.js';
