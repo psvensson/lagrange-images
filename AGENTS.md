@@ -267,6 +267,21 @@ pooled instance != activation state
 - A Block executor that is not a `lagrange-code` lane asserts direct invocation with `assertBlockApplicationReceiver`. Without it, a primitive Block ref written into a method-dictionary slot runs as a method with `self` silently discarded.
 - Image-native allocation is not an ADR 0037 capability check. Closure materialization already creates durable records without a grant, so gating only `basicNew` would leave a no-authority program able to evaluate blocks but unable to construct objects. Exposing object creation to foreign code is a separate authorized boundary.
 
+### Equality, hashing and Dictionary
+
+- `=` and `hash` are Smalltalk methods over language-owned primitives (ADR 0048). The `lagrange-code` `equals` op stays frozen and language-neutral; never redefine it to mean a Smalltalk send, and never let a container that exposes its elements turn it into deep object equality.
+- The default relation is identity for refs — no record is read, so `_version`, Shape, behavior and slots never participate — and value equality for immediates, including exact Integer/Float equivalence derived from the Float's own value rather than from JavaScript's safe-integer range.
+- The built-in hash is a **durable contract**: deterministic SHA-256 over a domain-tagged normal form, truncated to a non-negative 63-bit Integer. Bucket placement in stored tables depends on it, so replacing the algorithm is a migration decision, not an optimization. Equality and the hash share one normal form so `a = b => a hash = b hash` holds by construction rather than by maintaining two functions in parallel.
+- NaN is the one deliberate split: stable hash, but unequal to itself. Dictionary does not repair a key whose own equality relation rejects it.
+- A published `DictionaryTable` is immutable by language contract. A mutation builds a complete next snapshot, publishes it under fresh identity, and compare-and-sets the single `table` ref — so a reader sees one complete mapping or the other, never a half-published one.
+- Bucket occupancy is the **hash** cell, not the key cell. That is what keeps `nil` a legal key instead of a stolen sentinel.
+- General Dictionary lookup must really send `hash` and `=`, or user overrides are silently bypassed. Both results are type-checked before anything is published; a broken override fails the operation rather than corrupting a table.
+- User `hash`/`=` code runs between the read and the write, so **every** exit from the operation is conditioned on the version observed before it ran — including the same-value no-op, which is a claim about durable state and would otherwise report false success over a mutation the user's own `hash` performed. A conflict is surfaced rather than retried — a retry would re-execute that user code and could duplicate its effects. A failed swap leaves an unreachable table, which is garbage, not corruption.
+- Reinsertion after growth places entries by their **stored** hashes. Re-sending `hash` during a resize would run user code inside an internal operation, and a key whose hash had since changed would silently relocate.
+- Image-native Dictionary mutation is not an ADR 0037 capability check, for the same reason `basicNew` and `at:put:` are not.
+- A durable algorithm is pinned by **fixed vectors**, never by a self-comparison. `builtInHash(x) === builtInHash(x)` stays green if the digest, domain string, byte order or truncation changes — each of which relocates every key in every stored table.
+- Rediscovering a record at a deterministic id validates the whole immutable definition, not one field. Carrying the right Shape is not the same as being that class; adopting a differently-defined Behavior then publishes methods onto it. Mutable parts — method dictionaries — are excluded, because their own installer owns their exactness.
+
 ### Mutable lexical state
 
 - Assignment mutates an activation-visible cell (ADR 0043). Never a canonical Value, never a Block, and never the durable lexical-environment graph. If an assignment causes a `putLexicalEnvironment` call or a history event, it is wrong.
