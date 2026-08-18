@@ -1,6 +1,7 @@
 # ADR 0047: Indexed object parts and fixed-size Arrays
 
-Status: accepted — Shapes declare an optional indexed canonical-Value part, objects carry one only when their Shape permits it, indexed refs are first-class graph edges everywhere, and `Array` is a fixed-size class over that part with `at:`/`at:put:` as ordinary messages.
+Status: implemented — Shapes declare an optional indexed canonical-Value part, objects carry one only when their Shape permits it, indexed refs are first-class graph edges everywhere, and `Array` is a fixed-size class over that part with `at:`/`at:put:` as ordinary messages.
+Proven by: test/indexed-objects-and-arrays.test.js, test/steering-docs.test.js
 
 ## Problem
 
@@ -296,7 +297,7 @@ object model
     a Shape declaring indexed: values accepts an object with an indexed part
     a Shape declaring none rejects an object carrying one
     a Shape declaring values rejects an object carrying no indexed part at all
-    an existing Shape with no indexed field still means none, and its objects still store
+    an existing Shape with no indexed field still means none, and its objects still store no indexed part
     indexed elements are canonical Values, refs and pinned refs included
 
 graph edges
