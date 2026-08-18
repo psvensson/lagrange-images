@@ -220,8 +220,10 @@ pooled instance != activation state
 - Selector-name uniqueness is a MethodDictionary invariant, not a generic Shape one. `normalizeShapeSlots` rejects duplicate slot *ids* and says nothing about names, so a `find`-based selector lookup would otherwise resolve by position.
 - The metaclass chain is derived from the class chain (`C class superclass == S class`, with `Object class superclass == Class`), never written out per class, so the two hierarchies cannot drift apart.
 - `putObject` validates the shape but neither `behavior` nor ref-valued slots, which is what lets the bootstrap create objects in any order and close the metaclass cycle. Do not add validation there without providing another way to build that cycle.
-- Bootstrap writes are ensure-exact-or-create, never blind upserts. `putObject` and `putShape` upsert, so a plain write would silently replace an existing record and a retry after a partial install would trip over its own output. Absent creates with `expectedVersion: 0`; identical reuses; different fails.
+- Bootstrap writes are ensure-exact-or-create. `putObject` is an upsert and would silently replace an existing record; `putShape` is create-once and would reject a retry after a partial install. One rule covers both: an exact existing record is reused, a differing one is rejected, and an absent one is created — which is what makes installation safe to retry.
 - A shape or slot reference is identity only together with its `imageId`. Cross-image refs are legal, so another image's `smalltalk/behavior-shape/v1` must not be mistaken for this image's.
+- Structural validation and graph resolution are separate concerns. `readBehavior` checks that a record is a well-formed Behavior; it does not check that its `superclass` or `methods` refs resolve, because the metaclass cycle depends on forward references being writable. Dispatch must therefore keep three failures distinct: a malformed Behavior, a dangling superclass or method-dictionary edge (corrupt or incomplete graph state), and an ordinary selector miss.
+- Lookup terminates by comparing a full ref against the current kernel's `nil`, never `objectId === 'smalltalk/nil'`. `nil` is the right object for absence in both the superclass and instanceShape roles; comparing by object id alone would reintroduce the cross-image identity bug class.
 
 ### Mutable lexical state
 

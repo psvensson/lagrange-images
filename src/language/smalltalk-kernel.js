@@ -66,14 +66,14 @@ function methodDictionarySlots(selectors) {
   });
 }
 
-// Bootstrap must be safe on a populated image and restartable after a partial failure. `putObject`
-// and `putShape` are upserts, so installing with a plain write would silently overwrite an existing
-// `smalltalk/nil` or `Integer` — and a naive retry after a half-finished install would trip over the
-// records it already wrote.
+// Bootstrap must be safe on a populated image and restartable after a partial failure. The two
+// record kinds fail differently on their own: `putObject` is an upsert, so a plain write would
+// silently replace an existing `smalltalk/nil` or `Integer`; `putShape` is create-once, so a retry
+// after a half-finished install would be rejected by the shapes it had already written.
 //
-// So every write is ensure-exact-or-create:
+// One rule covers both. Every bootstrap write is ensure-exact-or-create:
 //
-//   absent                  -> create with expectedVersion 0
+//   absent                  -> create
 //   present and identical   -> reuse, write nothing
 //   present and different   -> fail, overwrite nothing
 class SmalltalkKernelConflictError extends TypeError {
@@ -97,13 +97,15 @@ function canonicalJson(value) {
 
 async function ensureShape(service, imageId, desired) {
   const existing = await service.getShape(imageId, desired.id);
-  if (!existing) return await service.putShape(imageId, desired, {expectedVersion: 0});
+  if (!existing) return await service.putShape(imageId, desired);
   if (canonicalJson({slots: desired.slots}) !== canonicalJson({slots: existing.slots})) {
     throw new SmalltalkKernelConflictError('shape', imageId, desired.id);
   }
   return existing;
 }
 
+// `putObject` does take expectedVersion, and 0 means "must not already exist" — belt and braces
+// alongside the existence check above, against a concurrent writer.
 async function ensureObject(service, imageId, desired) {
   const existing = await service.getObject(imageId, desired.id);
   const projection = (record) => canonicalJson({
