@@ -12,6 +12,9 @@ function referencesOfRecord(record) {
     const refs = [record.shape];
     if (record.behavior) refs.push(record.behavior);
     for (const value of Object.values(record.slots)) refs.push(...referencesOfValue(value));
+    // ADR 0047: an indexed Value is just as much graph as a named-slot Value. Omitting this walk
+    // would make a ref durable and readable while invisible to every graph operation built here.
+    for (const value of record.indexed ?? []) refs.push(...referencesOfValue(value));
     return refs;
   }
   if (record?.kind === 'code-artifact') {

@@ -230,6 +230,9 @@ function createImageMutationBindingV1Executor() {
           shape: object.shape,
           behavior: object.behavior,
           slots,
+          // Mutation v1 still maps named slots only, but an indexed part is part of the same object
+          // record and therefore must survive a whole-record rewrite byte-for-byte in meaning.
+          ...(Object.hasOwn(object, 'indexed') ? {indexed: object.indexed} : {}),
           metadata: object.metadata,
         }, {expectedVersion});
       } catch (error) {

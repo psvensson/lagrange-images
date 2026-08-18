@@ -26,7 +26,7 @@ artifact's `representation`.
 | `image-projection-binding/v1` | `installImageProjectionBinding()` | `createImageProjectionBindingV1Executor()` |
 | `image-mutation-binding/v1` | `installImageMutationBinding()` | `createImageMutationBindingV1Executor()` |
 | `image-versioned-projection-binding/v1` | `installImageVersionedProjectionBinding()` | `createImageVersionedProjectionBindingV1Executor()` |
-| `smalltalk-kernel-primitive/v1` | `installSmalltalkAllocationProtocol()` | `createSmalltalkKernelPrimitiveV1Executor()`, registered by `createRuntime()` |
+| `smalltalk-kernel-primitive/v1` | `installSmalltalkAllocationProtocol()`, `installSmalltalkIndexedProtocol()` | `createSmalltalkKernelPrimitiveV1Executor()`, registered by `createRuntime()` |
 
 The foreign-runtime executors are registered only when `createRuntime()` receives foreign
 runtime definitions, runtimes and definition bindings together. The Component binding
@@ -38,6 +38,8 @@ executor is always registered, but needs a `componentRuntime` to execute anythin
 it instead, the same way it supplies `createSmalltalkTemporaryInitializer()` — language-owned
 execution policy enters through composition, and execution never depends on language (ADR 0046
 decision 2a). "Registered" in the table above therefore means *registered by the assembled runtime*.
+ADR 0047 extends this existing primitive family with `basic-new-sized`, `indexed-size`, `indexed-at`
+and `indexed-at-put`; it does not add an executor representation or a dispatcher/compiler ABI.
 
 ## Interface representations
 
@@ -88,6 +90,20 @@ representation: v0 keeps the original installer untouched, v1 uses a sibling pla
 `wasm-nested-block-tree/v1` group policy. There is no second "does this need mutable state?"
 analysis at install time — the representation is the source of truth.
 
+## Generic object layout
+
+A Shape may declare `indexed: none | values`. Absence is the pre-ADR-0047 form and means `none`;
+reading an old Shape or Object does not materialize a new field. An Object whose Shape declares
+`values` carries an `indexed` array of canonical Values, possibly empty, and a Shape declaring
+`none` forbids one. Named slots and the indexed part are both durable graph state: refs and pinned
+refs in either place are graph edges and must be visited by `referencesOfRecord()`.
+
+The indexed part is language-neutral and 0-based. It is not `interface-composite/v0`: composites are
+ref-free transient boundary data, while indexed object state exists specifically to hold durable
+Values including refs. The v1 projection/mutation field maps remain named-slot-only. Projection
+refuses an indexed object rather than returning a partial view; mutation preserves the indexed part
+when it rewrites the containing record.
+
 ## Symmetric Smalltalk kernel
 
 The object graph ADR 0044 dispatches against. `installSmalltalkKernel({images, imageId})` creates it;
@@ -99,6 +115,7 @@ returned by the installer die with the process while the image survives.
 | `smalltalk-kernel/v1` | both the kernel protocol tag and the well-known object id it lives at |
 | `smalltalk/behavior-shape/v1` | the fixed Behavior shape: name, superclass, methods, instanceShape |
 | `smalltalk/kernel-shape/v1` | the kernel object's shape: the singletons and the kernel classes |
+| `smalltalk/array-instance-shape/v1` | `Array`'s zero-named-slot, indexed-Values instance layout |
 
 A behavior record means what its own shape says it means: a `smalltalk/behavior-shape/v1` object gets
 ADR 0044 lookup, anything else is a legacy behavior and keeps selector-as-shape-name lookup.
@@ -112,6 +129,7 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `defineMethods()` | methods from semantic `lagrange-code/v0` programs, optionally with captures |
 | `installSmalltalkControlFlow()` | `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:` on True and False (ADR 0045) |
 | `installSmalltalkAllocationProtocol()` | the `class-of`/`basic-new` primitive Blocks, plus `Object >> class`, `Object >> initialize`, `Class >> basicNew` and `Class >> new` (ADR 0046) |
+| `installSmalltalkIndexedProtocol()` | `Array`, `Class >> basicNew:`, `Array class >> new:`, and `Array >> size`/`at:`/`at:put:` over four more `smalltalk-kernel-primitive/v1` Blocks (ADR 0047) |
 
 A boolean Value dispatches by bridging to that image's `true`/`false` object, which becomes the
 send's `effectiveReceiver` — the optional second key of a dispatch resolution. Every other immediate
@@ -119,7 +137,12 @@ Value still takes its class from its kind.
 
 A class is instantiable when its `instanceShape` is a Shape ref; `nil` there means not instantiable,
 and an empty Shape is a valid zero-slot layout. `defineClass()` still stores `nil` when no
-`instanceShapeRef` is supplied, so no class written before ADR 0046 changes meaning.
+`instanceShapeRef` is supplied, so no class written before ADR 0046 changes meaning. Instance Shapes
+are complete inherited layouts: a subclass may add indexed storage, but once an ancestor declares
+`indexed: values`, a concrete descendant may not drop it. `Array` is fixed-size: `basicNew` gives its
+zero-length form, `basicNew:` establishes the length and fills every element with that image's `nil`.
+The object model remains 0-based; ordinary Smalltalk `at:`/`at:put:` methods translate their 1-based
+indices before invoking the language-owned primitives.
 
 ## ABI and contract identifiers
 

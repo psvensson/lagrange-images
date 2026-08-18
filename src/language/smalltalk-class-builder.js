@@ -1,5 +1,6 @@
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
+import {SHAPE_INDEXED, shapeIndexedKind} from '../object/model.js';
 import {
   assembleWasmFunctionArtifact,
   describeWasmFunctionArtifact,
@@ -542,6 +543,18 @@ async function requireInstanceShape({images, imageId, instanceShapeRef, supercla
     throw new TypeError(
       `defineClass ${name} instance shape drops inherited slot ids: ${missing.join(', ')}; `
       + 'an instance shape is the complete layout, including everything inherited',
+    );
+  }
+  // ADR 0047 extends the same complete-layout rule to the indexed declaration. A subclass may add
+  // indexed storage to a non-indexed ancestor, but once inherited it remains part of every concrete
+  // descendant layout, including across a nil-instanceShape class skipped by the ancestor walk.
+  if (
+    shapeIndexedKind(inherited) === SHAPE_INDEXED.VALUES
+    && shapeIndexedKind(shape) !== SHAPE_INDEXED.VALUES
+  ) {
+    throw new TypeError(
+      `defineClass ${name} instance shape drops the inherited indexed values declaration; `
+      + 'an instance shape is the complete layout, including indexed storage',
     );
   }
   return instanceShapeRef;
