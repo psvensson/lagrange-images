@@ -1,3 +1,4 @@
+import {SHAPE_INDEXED} from '../object/model.js';
 import {VALUE_KIND, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
@@ -96,10 +97,19 @@ function canonicalJson(value) {
   return JSON.stringify(value ?? null);
 }
 
+function shapeLayoutProjection(record) {
+  return canonicalJson({
+    slots: record.slots ?? [],
+    indexed: Object.hasOwn(record, 'indexed') ? record.indexed : SHAPE_INDEXED.NONE,
+  });
+}
+
 async function ensureShape(service, imageId, desired) {
   const existing = await service.getShape(imageId, desired.id);
   if (!existing) return await service.putShape(imageId, desired);
-  if (canonicalJson({slots: desired.slots}) !== canonicalJson({slots: existing.slots})) {
+  // ADR 0047: indexed is declared layout just like named slots. Absence remains the old `none`
+  // meaning, but a values Shape must never compare equal to a pre-0047/no-indexed Shape by accident.
+  if (shapeLayoutProjection(desired) !== shapeLayoutProjection(existing)) {
     throw new SmalltalkKernelConflictError('shape', imageId, desired.id);
   }
   return existing;
@@ -113,6 +123,9 @@ async function ensureObject(service, imageId, desired) {
     shape: record.shape ?? null,
     behavior: record.behavior ?? null,
     slots: record.slots ?? {},
+    // Unlike Shape, object absence is not equivalent to an empty indexed part: a values Shape
+    // requires the property even when its length is zero. Exactness therefore preserves absence.
+    indexed: Object.hasOwn(record, 'indexed') ? record.indexed : null,
     metadata: record.metadata ?? {},
   });
   if (!existing) return await service.putObject(imageId, desired, {expectedVersion: 0});
