@@ -97,6 +97,7 @@ move in. Never move it the other way to make a claim easier to write.
 - [0047 — indexed object parts and Arrays](0047-indexed-object-parts-and-arrays.md): Shapes declare an optional indexed canonical-Value part, indexed refs are first-class graph edges everywhere, and `Array` is a fixed-size class over that part with growth left to ordinary Smalltalk above it.
 - [0048 — Smalltalk equality, hashing and durable Dictionary](0048-smalltalk-equality-hashing-and-dictionary.md): define stable default `=`/`hash` semantics and a copy-on-write hashed Dictionary whose immutable table snapshots are suitable for a later O(1)-ish MethodDictionary fast path without recursive Smalltalk execution during dispatch.
 - [0049 — the hashed MethodDictionary](0049-hashed-method-dictionary.md): selector lookup moves to a fixed-Shape hashed MethodDictionary that is kernel representation rather than a Smalltalk class, uses only the pure built-in Text hash and equality so dispatch can never re-enter itself, and arrives by explicit per-Behavior migration.
+- [0050 — class-scoped instance-variable binding and self-only slot access](0050-instance-variable-binding-and-self-only-slots.md): an instance-variable name is bound to a stable Shape slot id by a class-scoped binder, the durable method carries the id rather than the name, and a language-owned primitive proves at execution that the slot belongs to the activation's effective Smalltalk `self`.
 
 ## Reading rule
 
