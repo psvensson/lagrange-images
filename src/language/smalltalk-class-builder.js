@@ -1,7 +1,16 @@
-import {createHash} from 'node:crypto';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
-import {assembleWasmFunctionArtifact} from '../wasm/compiler.js';
+import {
+  assembleWasmFunctionArtifact,
+  describeWasmFunctionArtifact,
+  moduleFunctionDescriptor,
+} from '../wasm/compiler.js';
+import {compileWasmModule} from '../wasm/compiler.js';
+import {
+  compileResumableWasmModule,
+  isWasmTailEffectRestrictionError,
+} from '../wasm/resumable-compiler.js';
+import {lowerLagrangeCodeV0, normalizeLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
 import {isObjectRef, objectRef, textValue} from '../value/index.js';
 import {
   BEHAVIOR_SHAPE_ID,
@@ -74,14 +83,11 @@ class SmalltalkMethodRedefinitionError extends TypeError {
   }
 }
 
-// Create-once artifacts, made retry-safe: an identical artifact left by a partial run is reused
-// rather than rewritten, and a differing one is refused rather than clobbered.
-async function ensureCodeArtifact(images, imageId, desired) {
-  const existing = await images.getCodeArtifact(imageId, desired.id);
-  if (!existing) return await images.putCodeArtifact(imageId, desired);
-  // dependencies and derivedFrom are durable semantic and provenance edges, so an artifact that
-  // differs there is not the same artifact.
-  const projection = (record) => canonicalJson({
+// One definition of "exact" for a code artifact, used by every reuse decision here. Representation,
+// content, provenance and metadata all participate: matching provenance is not matching output, so
+// an artifact with the right `derivedFrom` but stale content is stale, not reusable.
+function codeArtifactProjection(record) {
+  return canonicalJson({
     representation: record.representation ?? null,
     languageId: record.languageId ?? null,
     content: record.content ?? null,
@@ -89,7 +95,14 @@ async function ensureCodeArtifact(images, imageId, desired) {
     derivedFrom: record.derivedFrom ?? [],
     metadata: record.metadata ?? {},
   });
-  if (projection(desired) !== projection(existing)) {
+}
+
+// Create-once artifacts, made retry-safe: an identical artifact left by a partial run is reused
+// rather than rewritten, and a differing one is refused rather than clobbered.
+async function ensureCodeArtifact(images, imageId, desired) {
+  const existing = await images.getCodeArtifact(imageId, desired.id);
+  if (!existing) return await images.putCodeArtifact(imageId, desired);
+  if (codeArtifactProjection(desired) !== codeArtifactProjection(existing)) {
     throw new SmalltalkKernelConflictError('code artifact', imageId, desired.id);
   }
   return existing;
@@ -111,24 +124,26 @@ async function ensureBlock(images, imageId, desired) {
 
 // The neutral lane has the same shape of problem as the WASM one: compileArtifact writes its
 // deterministic output unconditionally, so a failure after it but before the dictionary swap makes
-// an exact retry of the same selector collide with its own output. Reuse is exact on the same terms
-// — right representation, and provenance naming this semantic artifact.
+// an exact retry of the same selector collide with its own output.
+//
+// Reuse compares the *whole* artifact against a freshly derived one rather than trusting
+// representation plus a provenance edge, which would let stale content through.
 async function ensureNeutralCode({images, compilation, imageId, id, semanticRef}) {
   const codeId = `${id}:code`;
   const existing = await images.getCodeArtifact(imageId, codeId);
-  if (existing) {
-    const derivedFromSemantic = (existing.derivedFrom ?? [])
-      .some((edge) => edge.imageId === semanticRef.imageId && edge.objectId === semanticRef.objectId);
-    if (existing.representation !== NEUTRAL_EXPRESSION_V0 || !derivedFromSemantic) {
-      throw new SmalltalkKernelConflictError('code artifact', imageId, codeId);
-    }
-    return objectRef(imageId, existing.id);
+  if (!existing) {
+    const code = await compilation.compileArtifact(semanticRef, {id: codeId, targetRepresentation: NEUTRAL_EXPRESSION_V0});
+    return objectRef(imageId, code.id);
   }
-  const code = await compilation.compileArtifact(semanticRef, {
-    id: codeId,
-    targetRepresentation: NEUTRAL_EXPRESSION_V0,
-  });
-  return objectRef(imageId, code.id);
+  // Derive under a scratch id so the comparison is against what a fresh compile actually produces.
+  const probeId = `${codeId}:probe`;
+  const fresh = await images.getCodeArtifact(imageId, probeId)
+    ?? await compilation.compileArtifact(semanticRef, {id: probeId, targetRepresentation: NEUTRAL_EXPRESSION_V0});
+  const rebase = (record) => ({...record, derivedFrom: record.derivedFrom ?? []});
+  if (codeArtifactProjection(rebase(fresh)) !== codeArtifactProjection(rebase(existing))) {
+    throw new SmalltalkKernelConflictError('code artifact', imageId, codeId);
+  }
+  return objectRef(imageId, existing.id);
 }
 
 // The WASM function artifact is deterministic and written unconditionally by the assembler, so a
@@ -149,13 +164,19 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
 
   const existing = await images.getCodeArtifact(imageId, functionId);
   if (existing) {
-    const derivedFromSemantic = (existing.derivedFrom ?? [])
-      .some((edge) => edge.imageId === semanticRef.imageId && edge.objectId === semanticRef.objectId);
-    const pointsAtModule = isObjectRef(existing.content)
-      && existing.content.imageId === moduleRef.imageId
-      && existing.content.objectId === moduleRef.objectId;
-    const sameEntry = existing.metadata?.entry === moduleArtifact.metadata?.entry;
-    if (existing.representation !== WASM_FUNCTION_V1 || !derivedFromSemantic || !pointsAtModule || !sameEntry) {
+    // The description the assembler would write, compared in full — ABI, parameters, captures,
+    // closure prototypes and every provenance edge, not just module and entry.
+    const semantic = await images.getCodeArtifact(semanticRef.imageId, semanticRef.objectId);
+    const expected = describeWasmFunctionArtifact({
+      functionId,
+      languageId: semantic?.languageId ?? null,
+      semanticRef,
+      moduleRef,
+      moduleArtifact,
+      descriptor: moduleFunctionDescriptor(moduleArtifact, moduleArtifact.metadata.entry),
+      closurePrototypes: [],
+    });
+    if (codeArtifactProjection(expected) !== codeArtifactProjection(existing)) {
       throw new SmalltalkKernelConflictError('wasm function artifact', imageId, functionId);
     }
     return objectRef(imageId, existing.id);
@@ -169,6 +190,19 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
     entry: moduleArtifact.metadata.entry,
   });
   return objectRef(imageId, functionArtifact.id);
+}
+
+// Is the selector already bound to exactly this definition? The Block id is deterministic from
+// class and selector, so identity is: the dictionary points at that Block, the Block was installed
+// for this lane, and its semantic artifact holds this program.
+async function isSameInstalledMethod({images, imageId, classRef, selector, program, lane, installed}) {
+  const id = methodId(classRef.objectId, selector);
+  if (!isObjectRef(installed) || installed.imageId !== imageId || installed.objectId !== id) return false;
+  const block = await images.getBlock(imageId, id);
+  if (!block || block.metadata?.lane !== lane) return false;
+  const semantic = await images.getCodeArtifact(imageId, `${id}:semantic`);
+  if (!semantic || semantic.representation !== LAGRANGE_CODE_V0) return false;
+  return semantic.content?.value === JSON.stringify(program);
 }
 
 // Adding a method rewrites the dictionary and its shape, per ADR 0044 decision 2 — visible,
@@ -200,17 +234,48 @@ async function defineMethods({
 
   // Preflight covers duplicates *within this call* as well as against what is stored: two new
   // entries naming the same selector would otherwise both pass and the second silently win.
+  // Plan every method before publishing any of it. The `:semantic` artifact is create-once at a
+  // deterministic id, so writing it before the body has been validated would let a bad program
+  // occupy that selector's id permanently — correcting the program and retrying would then be a
+  // conflict rather than a fix. Validation is pure, so it costs nothing to do first.
   const incoming = new Set();
-  for (const {selector} of methods) {
+  const alreadyInstalled = new Set();
+  for (const {selector, program} of methods) {
     requiredText(selector, 'selector');
     if (incoming.has(selector)) {
       throw new TypeError(`defineMethods declares ${selector} twice in one call`);
     }
     incoming.add(selector);
-    if (merged.has(selector)) throw new SmalltalkMethodRedefinitionError(classRef, selector);
+    if (merged.has(selector)) {
+      // A lost acknowledgement leaves the dictionary already updated while the caller believes it
+      // failed, so an identical definition must be an idempotent success. Only a different program
+      // or lane for an existing selector is replacement.
+      if (await isSameInstalledMethod({images, imageId, classRef, selector, program, lane, installed: merged.get(selector)})) {
+        alreadyInstalled.add(selector);
+        continue;
+      }
+      throw new SmalltalkMethodRedefinitionError(classRef, selector);
+    }
+    normalizeLagrangeCodeProgram(program);
+    // Walks the body, so an unknown op is rejected here rather than during compilation — after the
+    // create-once `:semantic` artifact has already claimed the selector's deterministic id.
+    lowerLagrangeCodeV0(program, {});
+    // Lane restrictions are part of validity too, and the backends decide them from the program
+    // alone — so a program the WASM lane cannot compile is rejected before anything is written.
+    if (lane === 'wasm') {
+      try {
+        compileWasmModule(program);
+      } catch (error) {
+        if (!isWasmTailEffectRestrictionError(error)) throw error;
+        compileResumableWasmModule(program);
+      }
+    }
   }
 
+  if (alreadyInstalled.size === methods.length) return existing;
+
   for (const {selector, program} of methods) {
+    if (alreadyInstalled.has(selector)) continue;
     const id = methodId(classRef.objectId, selector);
     const semantic = await ensureCodeArtifact(images, imageId, {
       id: `${id}:semantic`,
@@ -241,10 +306,10 @@ async function defineMethods({
   // what is meant to be the same canonical selector set.
   const selectors = [...merged.keys()].sort();
   const slots = methodDictionarySlots(selectors);
-  const fingerprint = createHash('sha256')
-    .update(JSON.stringify(selectors))
-    .digest('base64url')
-    .slice(0, 16);
+  // Injective, not probabilistic: this is durable identity, and the canonical selector array
+  // encodes directly. A truncated digest would make two distinct selector sets collide with some
+  // small probability, which is not a property durable ids should have.
+  const fingerprint = Buffer.from(JSON.stringify(selectors), 'utf8').toString('base64url');
   const shape = await ensureShape(images, imageId, {
     id: `${methodsId(classRef.objectId)}/shape/${fingerprint}`,
     slots,

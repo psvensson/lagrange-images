@@ -401,20 +401,30 @@ test('defineClass validates its superclass before writing anything', async () =>
   });
 });
 
-// Add-only for this landing: the method artifacts are create-once with ids derived from class and
-// selector, so a redefinition would fail partway through and leave the class inconsistent.
-test('redefining a selector is refused up front rather than failing partway', async () => {
+// Add-only, with one deliberate exception: an *identical* definition is idempotent, because a lost
+// acknowledgement can leave the dictionary updated while the caller believes the call failed. A
+// different program or lane for an existing selector is replacement, and replacement needs
+// versioned method identity it does not have yet.
+test('an identical definition is idempotent and a different one is refused', async () => {
   await withRuntime(async (runtime) => {
     const kernel = await seed(runtime, 'app');
-    const define = () => defineMethods({
+    const define = (methods) => defineMethods({
       images: runtime.images, compilation: runtime.compilation, imageId: 'app',
-      classRef: kernel.integerClass, methods: [plusMethod()],
+      classRef: kernel.integerClass, methods,
     });
-    await define();
+    await define([plusMethod()]);
     const dictionary = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
-    await assert.rejects(define(), (error) => error instanceof SmalltalkMethodRedefinitionError);
-    const after = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
-    assert.equal(after._version, dictionary._version, 'a refused redefinition must not touch the dictionary');
+
+    await define([plusMethod()]);
+    const unchanged = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
+    assert.equal(unchanged._version, dictionary._version, 'an identical definition must write nothing');
+
+    await assert.rejects(
+      define([plusMethod(99)]),
+      (error) => error instanceof SmalltalkMethodRedefinitionError,
+    );
+    const afterRefusal = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
+    assert.equal(afterRefusal._version, dictionary._version, 'a refused redefinition must not touch the dictionary');
   });
 });
 

@@ -392,6 +392,32 @@ function moduleFunctionDescriptor(moduleArtifact, entry) {
   };
 }
 
+function describeWasmFunctionArtifact({
+  functionId,
+  languageId,
+  semanticRef,
+  moduleRef,
+  moduleArtifact,
+  descriptor,
+  closurePrototypes,
+  prototypeRefs = [],
+}) {
+  return Object.freeze({
+    id: functionId,
+    languageId,
+    representation: WASM_FUNCTION_V1,
+    content: moduleRef,
+    derivedFrom: [semanticRef, moduleRef, ...prototypeRefs],
+    metadata: {
+      abi: moduleArtifact.metadata.abi,
+      entry: descriptor.entry,
+      parameters: descriptor.parameters,
+      captures: descriptor.captures,
+      closurePrototypes,
+    },
+  });
+}
+
 async function assembleWasmFunctionArtifact({
   images,
   semanticRef,
@@ -438,20 +464,20 @@ async function assembleWasmFunctionArtifact({
   }
   if (prototypes.size > 0) throw new TypeError(`unused WASM Block prototype: ${prototypes.keys().next().value}`);
 
-  const functionArtifact = await images.putCodeArtifact(semanticRef.imageId, {
-    id: functionId,
+  // The complete wasm-function/v1 contract, in one place. A caller deciding whether an existing
+  // artifact may be reused compares against this same description, so "exact" cannot drift apart
+  // from what assembly would actually write.
+  const input = describeWasmFunctionArtifact({
+    functionId,
     languageId: semantic.languageId,
-    representation: WASM_FUNCTION_V1,
-    content: normalizedModuleRef,
-    derivedFrom: [semanticRef, normalizedModuleRef, ...prototypeRefs],
-    metadata: {
-      abi: moduleArtifact.metadata.abi,
-      entry: descriptor.entry,
-      parameters: descriptor.parameters,
-      captures: descriptor.captures,
-      closurePrototypes,
-    },
+    semanticRef,
+    moduleRef: normalizedModuleRef,
+    moduleArtifact,
+    descriptor,
+    closurePrototypes,
+    prototypeRefs,
   });
+  const functionArtifact = await images.putCodeArtifact(semanticRef.imageId, input);
   return Object.freeze({moduleArtifact, functionArtifact});
 }
 
@@ -481,6 +507,8 @@ async function compileWasmFunctionArtifact({
 export {
   WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
   assembleWasmFunctionArtifact,
+  describeWasmFunctionArtifact,
+  moduleFunctionDescriptor,
   compileWasmFunctionArtifact,
   compileWasmModule,
   compileWasmModuleEntries,
