@@ -8,6 +8,7 @@ import {
   textValue,
 } from '../src/runtime.js';
 import {ImageService} from '../src/image/graph-image-service.js';
+import {TupleSet} from '../src/support/tuple-map.js';
 import {
   BEHAVIOR_SHAPE_ID,
   SMALLTALK_KERNEL_OBJECT_ID,
@@ -38,9 +39,11 @@ const nameOf = async (images, ref) => (await readBehavior(images, ref)).name.val
 async function superclassChain(images, ref) {
   const names = [];
   let current = ref;
-  const seen = new Set();
+  // A TupleSet, not a joined string: image and object ids are arbitrary non-empty text, so this is
+  // the same non-injectivity PR #61 removed everywhere else.
+  const seen = new TupleSet(2);
   while (names.length < 16) {
-    const key = `${current.imageId} ${current.objectId}`;
+    const key = [current.imageId, current.objectId];
     if (seen.has(key)) throw new Error('superclass cycle');
     seen.add(key);
     const behavior = await readBehavior(images, current);
@@ -238,5 +241,126 @@ test('installing the kernel leaves legacy behavior dispatch unchanged', async ()
     const stored = await runtime.images.getObject('boot', 'EchoBehavior');
     assert.equal(stored.shape.objectId, 'echo-behavior-shape');
     assert.equal(stored._version, 1);
+  });
+});
+
+// Bootstrap must be safe on a populated image and restartable after a partial failure, because
+// putObject and putShape are upserts: a plain write would silently replace an existing
+// `smalltalk/nil` or `Integer`.
+test('installing twice is a no-op rather than an overwrite', async () => {
+  await withRuntime(async (runtime) => {
+    await installSmalltalkKernel({images: runtime.images, imageId: 'boot'});
+    const first = await runtime.images.getObject('boot', 'smalltalk/nil');
+    const firstKernel = await runtime.images.getObject('boot', SMALLTALK_KERNEL_OBJECT_ID);
+
+    await installSmalltalkKernel({images: runtime.images, imageId: 'boot'});
+    const second = await runtime.images.getObject('boot', 'smalltalk/nil');
+    const secondKernel = await runtime.images.getObject('boot', SMALLTALK_KERNEL_OBJECT_ID);
+
+    assert.equal(second._version, first._version, 'a reinstall must not rewrite existing records');
+    assert.equal(secondKernel._version, firstKernel._version);
+  });
+});
+
+test('installation resumes after a partial failure', async () => {
+  await withRuntime(async (runtime) => {
+    // Stop the installer once the shapes and singletons exist but no classes do.
+    const failing = {
+      ...runtime.images,
+      putShape: (...args) => runtime.images.putShape(...args),
+      getShape: (...args) => runtime.images.getShape(...args),
+      getObject: (...args) => runtime.images.getObject(...args),
+      putObject: async (imageId, input, options) => {
+        if (String(input.id).startsWith('smalltalk/metaclass/')) throw new Error('backend went away');
+        return await runtime.images.putObject(imageId, input, options);
+      },
+    };
+    await assert.rejects(
+      installSmalltalkKernel({images: failing, imageId: 'boot'}),
+      /backend went away/,
+    );
+    assert.notEqual(await runtime.images.getObject('boot', 'smalltalk/nil'), null);
+    assert.equal(await runtime.images.getObject('boot', SMALLTALK_KERNEL_OBJECT_ID), null);
+
+    // A plain retry now succeeds, reusing what is already there.
+    await installSmalltalkKernel({images: runtime.images, imageId: 'boot'});
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'boot'});
+    assert.equal(kernel.protocol, SMALLTALK_KERNEL_PROTOCOL_V1);
+  });
+});
+
+test('a conflicting object at a kernel id is refused, not overwritten', async () => {
+  await withRuntime(async (runtime) => {
+    const shape = await runtime.images.putShape('boot', {id: 'squatter-shape', slots: []});
+    await runtime.images.putObject('boot', {
+      id: 'smalltalk/nil',
+      shape: objectRef('boot', shape.id),
+      slots: {},
+      metadata: {mine: 'not the kernel'},
+    });
+    await assert.rejects(
+      installSmalltalkKernel({images: runtime.images, imageId: 'boot'}),
+      (error) => error.name === 'SmalltalkKernelConflictError' && /refusing to overwrite/.test(error.message),
+    );
+    const survived = await runtime.images.getObject('boot', 'smalltalk/nil');
+    assert.equal(survived.metadata.mine, 'not the kernel');
+  });
+});
+
+// Cross-image shape refs are legal, so an object id alone is not identity.
+test('a foreign behavior shape does not make a record a Behavior', async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'other'});
+    await installSmalltalkKernel({images: runtime.images, imageId: 'other'});
+    const shapeOfOther = objectRef('other', BEHAVIOR_SHAPE_ID);
+    await runtime.images.putObject('boot', {
+      id: 'foreign-shaped',
+      shape: shapeOfOther,
+      slots: {
+        'behavior-name': textValue('Impostor'),
+        'behavior-superclass': objectRef('other', 'smalltalk/nil'),
+        'behavior-methods': objectRef('other', 'smalltalk/nil'),
+        'behavior-instance-shape': objectRef('other', 'smalltalk/nil'),
+      },
+    });
+    const record = await runtime.images.getObject('boot', 'foreign-shaped');
+    assert.equal(record.shape.objectId, BEHAVIOR_SHAPE_ID);
+    assert.equal(isBehaviorObject(record), false, 'the shape must be local to count');
+  });
+});
+
+test('a kernel object without the kernel shape is refused', async () => {
+  await withRuntime(async (runtime) => {
+    const shape = await runtime.images.putShape('boot', {id: 'wrong-kernel-shape', slots: []});
+    await runtime.images.putObject('boot', {
+      id: SMALLTALK_KERNEL_OBJECT_ID,
+      shape: objectRef('boot', shape.id),
+      slots: {},
+      metadata: {protocol: SMALLTALK_KERNEL_PROTOCOL_V1},
+    });
+    await assert.rejects(
+      findSmalltalkKernel({images: runtime.images, imageId: 'boot'}),
+      /does not have shape smalltalk\/kernel-shape\/v1/,
+    );
+  });
+});
+
+test('readBehavior rejects a malformed fixed-shape record before dispatch relies on it', async () => {
+  await withRuntime(async (runtime) => {
+    await installSmalltalkKernel({images: runtime.images, imageId: 'boot'});
+    await runtime.images.putObject('boot', {
+      id: 'bent-behavior',
+      shape: objectRef('boot', BEHAVIOR_SHAPE_ID),
+      slots: {
+        'behavior-name': objectRef('boot', 'smalltalk/nil'),
+        'behavior-superclass': objectRef('boot', 'smalltalk/nil'),
+        'behavior-methods': objectRef('boot', 'smalltalk/nil'),
+        'behavior-instance-shape': objectRef('boot', 'smalltalk/nil'),
+      },
+    });
+    await assert.rejects(
+      readBehavior(runtime.images, objectRef('boot', 'bent-behavior')),
+      /name must be a text Value/,
+    );
   });
 });

@@ -220,6 +220,8 @@ pooled instance != activation state
 - Selector-name uniqueness is a MethodDictionary invariant, not a generic Shape one. `normalizeShapeSlots` rejects duplicate slot *ids* and says nothing about names, so a `find`-based selector lookup would otherwise resolve by position.
 - The metaclass chain is derived from the class chain (`C class superclass == S class`, with `Object class superclass == Class`), never written out per class, so the two hierarchies cannot drift apart.
 - `putObject` validates the shape but neither `behavior` nor ref-valued slots, which is what lets the bootstrap create objects in any order and close the metaclass cycle. Do not add validation there without providing another way to build that cycle.
+- Bootstrap writes are ensure-exact-or-create, never blind upserts. `putObject` and `putShape` upsert, so a plain write would silently replace an existing record and a retry after a partial install would trip over its own output. Absent creates with `expectedVersion: 0`; identical reuses; different fails.
+- A shape or slot reference is identity only together with its `imageId`. Cross-image refs are legal, so another image's `smalltalk/behavior-shape/v1` must not be mistaken for this image's.
 
 ### Mutable lexical state
 

@@ -1,4 +1,4 @@
-import {objectRef, textValue} from '../value/index.js';
+import {VALUE_KIND, isObjectRef, objectRef, textValue} from '../value/index.js';
 
 // The Symmetric Smalltalk kernel: the durable object graph ADR 0044 dispatches against.
 //
@@ -66,12 +66,72 @@ function methodDictionarySlots(selectors) {
   });
 }
 
+// Bootstrap must be safe on a populated image and restartable after a partial failure. `putObject`
+// and `putShape` are upserts, so installing with a plain write would silently overwrite an existing
+// `smalltalk/nil` or `Integer` — and a naive retry after a half-finished install would trip over the
+// records it already wrote.
+//
+// So every write is ensure-exact-or-create:
+//
+//   absent                  -> create with expectedVersion 0
+//   present and identical   -> reuse, write nothing
+//   present and different   -> fail, overwrite nothing
+class SmalltalkKernelConflictError extends TypeError {
+  constructor(kind, imageId, objectId) {
+    super(`${kind} ${imageId}/${objectId} already exists and differs from the kernel definition; refusing to overwrite it`);
+    this.name = 'SmalltalkKernelConflictError';
+    this.imageId = imageId;
+    this.objectId = objectId;
+  }
+}
+
+// Key order is not part of a record's meaning, so compare a canonical projection rather than
+// whatever order the caller or the backend happened to produce.
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+async function ensureShape(service, imageId, desired) {
+  const existing = await service.getShape(imageId, desired.id);
+  if (!existing) return await service.putShape(imageId, desired, {expectedVersion: 0});
+  if (canonicalJson({slots: desired.slots}) !== canonicalJson({slots: existing.slots})) {
+    throw new SmalltalkKernelConflictError('shape', imageId, desired.id);
+  }
+  return existing;
+}
+
+async function ensureObject(service, imageId, desired) {
+  const existing = await service.getObject(imageId, desired.id);
+  const projection = (record) => canonicalJson({
+    shape: record.shape ?? null,
+    behavior: record.behavior ?? null,
+    slots: record.slots ?? {},
+    metadata: record.metadata ?? {},
+  });
+  if (!existing) return await service.putObject(imageId, desired, {expectedVersion: 0});
+  if (projection(desired) !== projection(existing)) {
+    throw new SmalltalkKernelConflictError('object', imageId, desired.id);
+  }
+  return existing;
+}
+
 function assertImages(images) {
   if (!images || typeof images !== 'object') throw new TypeError('images service is required');
   for (const method of ['putShape', 'getShape', 'putObject', 'getObject']) {
     if (typeof images[method] !== 'function') throw new TypeError(`images service must implement ${method}`);
   }
   return images;
+}
+
+// Cross-image shape and slot references are legal, so an object id alone is not identity. Another
+// image may hold its own `smalltalk/behavior-shape/v1`, and treating a ref to it as this image's
+// kernel shape would misclassify a foreign record.
+function isLocalRef(value, imageId, objectId) {
+  return isObjectRef(value) && value.imageId === imageId && (objectId === undefined || value.objectId === objectId);
 }
 
 function requiredText(value, label) {
@@ -105,9 +165,9 @@ async function installSmalltalkKernel({images, imageId} = {}) {
   const ref = (objectId) => objectRef(imageId, objectId);
 
   const shapes = {
-    behavior: await service.putShape(imageId, {id: BEHAVIOR_SHAPE_ID, slots: [...BEHAVIOR_SLOTS]}),
-    kernel: await service.putShape(imageId, {id: KERNEL_SHAPE_ID, slots: [...KERNEL_SLOTS]}),
-    empty: await service.putShape(imageId, {id: EMPTY_SHAPE_ID, slots: []}),
+    behavior: await ensureShape(service, imageId, {id: BEHAVIOR_SHAPE_ID, slots: [...BEHAVIOR_SLOTS]}),
+    kernel: await ensureShape(service, imageId, {id: KERNEL_SHAPE_ID, slots: [...KERNEL_SLOTS]}),
+    empty: await ensureShape(service, imageId, {id: EMPTY_SHAPE_ID, slots: []}),
   };
   // Every kernel method dictionary starts empty; methods arrive with the classes that need them.
   const emptyMethodsShapeId = `${EMPTY_SHAPE_ID}`;
@@ -116,13 +176,13 @@ async function installSmalltalkKernel({images, imageId} = {}) {
   // the metaclass knot needs edges pointing at objects that do not exist yet — which `putObject`
   // permits, since it validates the shape but neither `behavior` nor ref-valued slots.
   const putBehavior = async ({id, name, superclassRef, behaviorRef, instanceShapeRef}) => {
-    await service.putObject(imageId, {
+    await ensureObject(service, imageId, {
       id: methodsId(id),
       shape: ref(emptyMethodsShapeId),
       slots: {},
       metadata: {smalltalk: 'method-dictionary', owner: id},
     });
-    return await service.putObject(imageId, {
+    return await ensureObject(service, imageId, {
       id,
       shape: ref(BEHAVIOR_SHAPE_ID),
       behavior: behaviorRef,
@@ -144,7 +204,7 @@ async function installSmalltalkKernel({images, imageId} = {}) {
     ['true', 'True', 'smalltalk/true'],
     ['false', 'False', 'smalltalk/false'],
   ]) {
-    singletons[slotName] = await service.putObject(imageId, {
+    singletons[slotName] = await ensureObject(service, imageId, {
       id: objectId,
       shape: ref(EMPTY_SHAPE_ID),
       behavior: ref(classId(className)),
@@ -181,7 +241,7 @@ async function installSmalltalkKernel({images, imageId} = {}) {
     });
   }
 
-  const kernel = await service.putObject(imageId, {
+  const kernel = await ensureObject(service, imageId, {
     id: SMALLTALK_KERNEL_OBJECT_ID,
     shape: ref(KERNEL_SHAPE_ID),
     behavior: ref(classId('Object')),
@@ -222,10 +282,18 @@ async function findSmalltalkKernel({images, imageId} = {}) {
       `object ${imageId}/${SMALLTALK_KERNEL_OBJECT_ID} does not declare ${SMALLTALK_KERNEL_PROTOCOL_V1}`,
     );
   }
+  // Declaring the protocol is not enough: the record must actually have the kernel shape, in this
+  // image, and every slot must be an unpinned local ref. Otherwise a partially-written or
+  // deliberately-shaped impostor would be handed to the dispatcher.
+  if (!isLocalRef(record.shape, imageId, KERNEL_SHAPE_ID)) {
+    throw new TypeError(`Smalltalk kernel ${imageId}/${record.id} does not have shape ${KERNEL_SHAPE_ID}`);
+  }
   const slots = {};
   for (const {id, name} of KERNEL_SLOTS) {
     const value = record.slots[id];
-    if (!value) throw new TypeError(`Smalltalk kernel is missing ${name}`);
+    if (!isLocalRef(value, imageId)) {
+      throw new TypeError(`Smalltalk kernel slot ${name} must be an unpinned ref in ${imageId}`);
+    }
     slots[name] = value;
   }
   return Object.freeze({protocol: SMALLTALK_KERNEL_PROTOCOL_V1, ref: objectRef(imageId, record.id), record, ...slots});
@@ -235,24 +303,37 @@ async function findSmalltalkKernel({images, imageId} = {}) {
 // Behavior gets ADR 0044 lookup; anything else is a legacy behavior and keeps legacy lookup.
 // Installing the kernel therefore reinterprets nothing that already exists.
 function isBehaviorObject(record) {
-  return Boolean(record) && record.kind === 'object' && record.shape?.objectId === BEHAVIOR_SHAPE_ID;
+  return Boolean(record)
+    && record.kind === 'object'
+    && isLocalRef(record.shape, record.imageId, BEHAVIOR_SHAPE_ID);
 }
 
 async function readBehavior(images, ref) {
   const record = await assertImages(images).getObject(ref.imageId, ref.objectId);
   if (!record) throw new TypeError(`behavior not found: ${ref.imageId}/${ref.objectId}`);
   if (!isBehaviorObject(record)) throw new TypeError(`not a ${BEHAVIOR_SHAPE_ID} behavior: ${ref.objectId}`);
-  return Object.freeze({
-    record,
-    name: record.slots['behavior-name'],
-    superclass: record.slots['behavior-superclass'],
-    methods: record.slots['behavior-methods'],
-    instanceShape: record.slots['behavior-instance-shape'],
-  });
+  // The next change makes this part of dispatch, so the slot types are checked here rather than
+  // trusted there.
+  const name = record.slots['behavior-name'];
+  if (name?.kind !== VALUE_KIND.TEXT) throw new TypeError(`behavior ${ref.objectId} name must be a text Value`);
+  const refSlots = {};
+  for (const [slotId, label] of [
+    ['behavior-superclass', 'superclass'],
+    ['behavior-methods', 'methods'],
+    ['behavior-instance-shape', 'instanceShape'],
+  ]) {
+    const value = record.slots[slotId];
+    if (!isLocalRef(value, record.imageId)) {
+      throw new TypeError(`behavior ${ref.objectId} ${label} must be an unpinned ref in ${record.imageId}`);
+    }
+    refSlots[label] = value;
+  }
+  return Object.freeze({record, name, ...refSlots});
 }
 
 export {
   BEHAVIOR_SHAPE_ID,
+  SmalltalkKernelConflictError,
   BEHAVIOR_SLOTS,
   EMPTY_SHAPE_ID,
   KERNEL_SHAPE_ID,

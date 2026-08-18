@@ -98,6 +98,12 @@ than looping, exactly as lexical-environment lookup already does. Cycle detectio
 
 ### 4. A Class is a Behavior; a Metaclass is the Behavior of a Class
 
+The v1 hierarchy is deliberately minimal — `Object` with the kernel classes directly beneath it, and
+no `Number`, `Magnitude`, `Behavior` or `ClassDescription` layers. This is Symmetric Smalltalk's
+kernel, not a transcription of an existing class library, and each intermediate class should arrive
+when it earns its semantics. Deepening it later is an explicit graph migration that rewrites
+superclass edges with history, not a reinterpretation of stored records.
+
 The Smalltalk twist arrives now rather than later, because retrofitting it means rewriting the
 `behavior` pointer of every class that already exists.
 
@@ -177,8 +183,13 @@ binding dies with the process while the image survives:
 ```text
 SmalltalkKernel        one per bootstrapped image, at a known protocol location
     nil  true  false
+    objectClass  classClass  metaclassClass
     booleanClass  integerClass  floatClass  textClass  byteArrayClass
 ```
+
+`objectClass`, `classClass` and `metaclassClass` are part of the protocol rather than conveniences:
+they anchor the metaclass graph of decision 4 and are what makes the knot verifiable from an image
+id alone. A kernel that named only the immediate-value classes could be read without being checked.
 
 The dispatcher knows the kernel protocol and where to find it. It never knows an `Integer` object id,
 and it holds no bootstrap state of its own.
@@ -350,6 +361,10 @@ Also required:
   selector it also implements
 - a MethodDictionary shape with two slots named alike is rejected, rather than one winning by
   position
+- installing twice rewrites nothing, a half-finished install resumes on retry, and a conflicting
+  record at a kernel id is refused rather than overwritten
+- a `smalltalk/behavior-shape/v1` shape ref belonging to *another* image does not make a record a
+  Behavior
 - a temporary in a bootstrapped image reads `nil`, while an image without a bootstrap still raises
   `UnboundBindingError`, and a durable `{unbound}` capture written before the bootstrap keeps raising
 - an object stored under the legacy behavior convention keeps dispatching through it after the
@@ -397,6 +412,8 @@ UNBOUND stays a host sentinel and never becomes a Value
 nil initialization happens once in the common activation layer, not per executor
 an old durable {unbound} record is never reinterpreted as nil
 the bootstrap is an installer; the dispatcher knows rules, not class names
+bootstrap writes are ensure-exact-or-create; never blind upserts over an image
+a shape or slot ref is identity only with its imageId; object id alone is not
 installing the kernel reinterprets no existing behavior record
 a legacy behavior keeps legacy lookup; migration rewrites records, never meanings
 both lanes agree on results and on failure reasons
