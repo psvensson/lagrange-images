@@ -5,6 +5,7 @@ import {
   OBJECT_WRITE_OPERATION,
   SHAPE_INDEXED,
   SmalltalkIndexedBoundsError,
+  SmalltalkKernelConflictError,
   SmalltalkNotIndexedError,
   SmalltalkNotInstantiableError,
   SmalltalkPrimitiveLocalityError,
@@ -15,6 +16,8 @@ import {
   createRuntime,
   createShapeRecord,
   defineClass,
+  ensureObject,
+  ensureShape,
   findSmalltalkKernel,
   installCallableInterfaceV2,
   installImageMutationBinding,
@@ -113,6 +116,30 @@ test('indexed layout is exact while pre-0047 record absence still means none', (
     id: 'extra', imageId: 'app', shape: objectRef('app', 'legacy'), slots: {}, indexed: [],
   });
   assert.throws(() => assertObjectMatchesShape(extraIndexed, legacyShape), /declares no indexed part/);
+});
+
+test('Smalltalk ensure-exact helpers include indexed layout and contents in identity', async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'app'});
+    await runtime.images.putShape('app', {id: 'claimed-shape', slots: []});
+    await assert.rejects(
+      ensureShape(runtime.images, 'app', {id: 'claimed-shape', slots: [], indexed: SHAPE_INDEXED.VALUES}),
+      SmalltalkKernelConflictError,
+    );
+
+    const valuesShape = await runtime.images.putShape('app', {
+      id: 'values-shape', slots: [], indexed: SHAPE_INDEXED.VALUES,
+    });
+    await runtime.images.putObject('app', {
+      id: 'claimed-object', shape: objectRef('app', valuesShape.id), slots: {}, indexed: [integerValue(1)],
+    });
+    await assert.rejects(
+      ensureObject(runtime.images, 'app', {
+        id: 'claimed-object', shape: objectRef('app', valuesShape.id), slots: {}, indexed: [integerValue(2)],
+      }),
+      SmalltalkKernelConflictError,
+    );
+  });
 });
 
 test('refs held only in indexed elements are first-class graph edges', () => {
@@ -298,15 +325,17 @@ for (const lane of ['neutral', 'wasm']) {
       );
 
       // The visible Smalltalk contract is 1..size: zero and size+1 both fail, for reads and writes.
-      for (const source of [
-        '[ :a | a at: 0 ]',
-        '[ :a | a at: 4 ]',
-        '[ :a :v | a at: 0 put: v ]',
-        '[ :a :v | a at: 4 put: v ]',
-      ]) {
-        const args = source.includes(':v') ? [array, kernel.true] : [array];
-        await assert.rejects(run(runtime, imageId, `bounds-${lane}-${source.length}-${args.length}-${Math.random()}`, source, args),
-          SmalltalkIndexedBoundsError);
+      const boundsCases = [
+        {source: '[ :a | a at: 0 ]', args: [array]},
+        {source: '[ :a | a at: 4 ]', args: [array]},
+        {source: '[ :a :v | a at: 0 put: v ]', args: [array, kernel.true]},
+        {source: '[ :a :v | a at: 4 put: v ]', args: [array, kernel.true]},
+      ];
+      for (const [caseIndex, {source, args}] of boundsCases.entries()) {
+        await assert.rejects(
+          run(runtime, imageId, `bounds-${lane}-${caseIndex}`, source, args),
+          SmalltalkIndexedBoundsError,
+        );
       }
 
       // Equal contents do not create value equality. Arrays retain object identity, and this
