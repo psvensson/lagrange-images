@@ -266,8 +266,9 @@ ADR 0043 decision 10 forbids, and doing it in the common layer is also why this 
 ABI: a cell that starts out holding a `nil` ref is an ordinary bound cell as far as
 `cell_get`/`cell_set` are concerned.
 
-ADR 0043 decision 9 carries an explicit supersession note saying it applies to bootstrapped
-Symmetric Smalltalk execution only, rather than being quietly contradicted by this one.
+ADR 0043 decision 9 carries an explicit note that it is superseded for bootstrapped Symmetric
+Smalltalk execution, rather than being quietly contradicted by this one. It continues to apply
+everywhere else.
 
 The split is mechanism from policy. The execution layer gains a `temporaryInitializer` seam and
 resolves it once per activation before either lane runs, passing the dispatch image *and the
