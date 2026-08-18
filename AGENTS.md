@@ -238,6 +238,18 @@ pooled instance != activation state
 - A publication sequence is proven recoverable by enumerating its writes, not by probing a few. `test/smalltalk-builder-recovery.test.js` interrupts at every write in both lanes, including a commit-then-throw that models a lost acknowledgement — after which an identical request must be idempotent, not a redefinition error.
 - "Exact" for a code artifact includes `dependencies` and `derivedFrom`. Those are durable semantic and provenance edges, so an artifact differing there is a different artifact.
 
+### Boolean bridge and control flow
+
+- A boolean Value is never boxed and never gains graph identity. Symmetric Smalltalk nominates the dispatch image's `true`/`false` object as the *effective receiver* of one send (ADR 0045); the request still carries the boolean, and the same boolean comes back out.
+- The bridge belongs to one dispatcher. Another language personality dispatching the same Value receives the boolean, so never move this into the invocation service or the Value layer.
+- `effectiveReceiver` is an optional second key on a dispatch resolution, must be an unpinned object ref, and is transient in exactly the way the dispatch image is — it reaches an activation and never a record. Absence is the only spelling of "the original receiver".
+- The bridge never changes the dispatch image. An immediate receiver's dispatch image is the sender's, and the nominated singleton lives in that image by construction.
+- Control flow is dispatch, not syntax. The compiler recognizes no conditional selector, and the `if` op keeps its boolean-Value condition for other producers. Lowering `ifTrue:` to `if` would be a deliberate, named change — not an optimisation to slip in.
+- `nil` on an untaken branch is an ordinary captured ref in the method's lexical environment. Do not add a Smalltalk `nil` operation to `lagrange-code`: absence is a language's answer, and the common IR is shared with every other personality.
+- A method that carries captures adds a `putLexicalEnvironment` to the publication sequence, so it is written ensure-exact-or-create and enumerated by the recovery sweep like every other write there. `metadata` is a durable field of that record, so "exact" includes it — an environment matching only in its bindings is a different environment, exactly as it is for objects, Blocks and CodeArtifacts.
+- The semantic program names captures but not their values, so a lost-acknowledgement check must compare the environment this definition *would* write: the Block points at the deterministic id, and that record satisfies the whole contract. A capture-free method carries no environment at all — accepting an arbitrary empty one makes two different Blocks the same method.
+- A lexical environment is keyed by capture id, so matching capture *counts* is not matching bindings. Duplicate ids collapse into one binding and silently drop a value — and in the WASM lane two parameter positions then resolve to the same binding. Every path that builds an environment rejects a duplicate id, not only `createClosure`.
+
 ### Mutable lexical state
 
 - Assignment mutates an activation-visible cell (ADR 0043). Never a canonical Value, never a Block, and never the durable lexical-environment graph. If an assignment causes a `putLexicalEnvironment` call or a history event, it is wrong.

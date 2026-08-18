@@ -44,6 +44,14 @@ async function legacyLookup(images, behavior, selector) {
   return blockRef;
 }
 
+// ADR 0045 decision 7: the key is present only when the language actually nominates a different
+// receiver, so an ordinary send produces exactly the `{block}` resolution it always has.
+function resolution(block, effectiveReceiver) {
+  return effectiveReceiver
+    ? Object.freeze({block, effectiveReceiver})
+    : Object.freeze({block});
+}
+
 function createSymmetricSmalltalkDispatcher() {
   return Object.freeze({
     languageId: SYMMETRIC_SMALLTALK_ID,
@@ -80,16 +88,25 @@ function createSymmetricSmalltalkDispatcher() {
         );
       }
 
-      const {record: receiver, behavior} = await behaviorRefFor({
+      // ADR 0045 decision 2: for a boolean receiver this answers the dispatch image's `true`/`false`
+      // singleton, which then behaves exactly like an ordinary object receiver.
+      const {behavior, effectiveReceiver} = await behaviorRefFor({
         images,
         receiver: request.receiver,
         dispatchImage,
       });
+      // What the method actually runs against, and therefore what every failure below should name.
+      // Describing the original boolean here would report `undefined/undefined` for a bridged send
+      // and, worse, would hide which singleton failed to understand the selector.
+      const activeReceiver = effectiveReceiver ?? request.receiver;
+      const receiverDescription = isObjectRef(activeReceiver)
+        ? `${activeReceiver.imageId}/${activeReceiver.objectId}`
+        : `a ${activeReceiver.kind} Value`;
       if (!behavior) {
         throw new TypeError(
-          isObjectRef(request.receiver)
-            ? `Symmetric Smalltalk receiver has no behavior: ${request.receiver.imageId}/${request.receiver.objectId}`
-            : `Symmetric Smalltalk cannot dispatch a ${request.receiver.kind} Value`,
+          isObjectRef(activeReceiver)
+            ? `Symmetric Smalltalk receiver has no behavior: ${receiverDescription}`
+            : `Symmetric Smalltalk cannot dispatch a ${activeReceiver.kind} Value`,
         );
       }
 
@@ -101,7 +118,7 @@ function createSymmetricSmalltalkDispatcher() {
       // ADR 0044 decision 10. A behavior record means what its own shape says it means, so
       // installing a kernel reinterprets nothing that already exists.
       if (!isBehaviorObject(behaviorRecord)) {
-        return Object.freeze({block: await legacyLookup(images, behaviorRecord, selector)});
+        return resolution(await legacyLookup(images, behaviorRecord, selector), effectiveReceiver);
       }
 
       const kernel = await findSmalltalkKernel({images, imageId: behavior.imageId});
@@ -115,15 +132,13 @@ function createSymmetricSmalltalkDispatcher() {
         behaviorRef: behavior,
         selector,
         nilRef: kernel.nil,
-        receiverDescription: receiver
-          ? `${request.receiver.imageId}/${request.receiver.objectId}`
-          : `a ${request.receiver.kind} Value`,
+        receiverDescription,
       });
       // A selector that resolved to a Block ref which does not load is incomplete graph state, not
       // a message the receiver failed to understand.
       const method = await images.getBlock(blockRef.imageId, blockRef.objectId);
       if (!method) throw new SmalltalkDanglingEdgeError('method', behavior, blockRef);
-      return Object.freeze({block: blockRef});
+      return resolution(blockRef, effectiveReceiver);
     },
   });
 }

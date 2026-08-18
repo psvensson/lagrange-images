@@ -94,7 +94,19 @@ returned by the installer die with the process while the image survives.
 
 A behavior record means what its own shape says it means: a `smalltalk/behavior-shape/v1` object gets
 ADR 0044 lookup, anything else is a legacy behavior and keeps selector-as-shape-name lookup.
-Installing the kernel reinterprets nothing that already exists. Nothing here dispatches yet.
+Installing the kernel reinterprets nothing that already exists.
+
+Protocol arrives after identity, per lane, through builders rather than through the bootstrap:
+
+| Installer | Installs |
+| --- | --- |
+| `defineClass()` | a class and its metaclass, wired by the ADR 0044 chain rule |
+| `defineMethods()` | methods from semantic `lagrange-code/v0` programs, optionally with captures |
+| `installSmalltalkControlFlow()` | `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:` on True and False (ADR 0045) |
+
+A boolean Value dispatches by bridging to that image's `true`/`false` object, which becomes the
+send's `effectiveReceiver` — the optional second key of a dispatch resolution. Every other immediate
+Value still takes its class from its kind.
 
 ## ABI and contract identifiers
 

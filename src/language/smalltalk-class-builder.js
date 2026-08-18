@@ -11,7 +11,7 @@ import {
   isWasmTailEffectRestrictionError,
 } from '../wasm/resumable-compiler.js';
 import {lowerLagrangeCodeV0, normalizeLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
-import {isObjectRef, objectRef, textValue} from '../value/index.js';
+import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {
   BEHAVIOR_SHAPE_ID,
   EMPTY_SHAPE_ID,
@@ -108,6 +108,94 @@ async function ensureCodeArtifact(images, imageId, desired) {
   return existing;
 }
 
+// ADR 0045 decision 6. A method may carry captures, which is how a kernel method names an object —
+// `nil`, for the untaken arm of a one-arm conditional — without the common IR learning what that
+// object means. The durable side is an ordinary lexical environment, so neither lane needs a change:
+// the neutral executor resolves a `binding` through it, and the WASM lane reads the same bindings to
+// fill its trailing capture parameters.
+//
+// Order is part of the contract, not a convenience. The WASM lane derives capture parameter
+// positions from `program.captures`, so requiring the supplied values to match that list exactly —
+// same ids, same names, same order — makes a mismatch a builder error rather than a silently
+// misaddressed local.
+function normalizeMethodCaptures(selector, program, captures) {
+  if (!Array.isArray(captures)) throw new TypeError(`method ${selector} captures must be an array`);
+  const declared = program?.captures ?? [];
+  if (captures.length !== declared.length) {
+    throw new TypeError(
+      `method ${selector} declares ${declared.length} captures but supplies ${captures.length} values`,
+    );
+  }
+  // Matching counts is not matching bindings. The environment is keyed by capture id, so two
+  // captures sharing an id collapse into one binding — the earlier value is lost, and in the WASM
+  // lane two distinct parameter positions resolve to the same binding. `createClosure` refuses this
+  // for a closure; the builder has to refuse it for a method.
+  const seen = new Set();
+  for (const {id} of declared) {
+    if (seen.has(id)) throw new TypeError(`method ${selector} declares duplicate capture id: ${id}`);
+    seen.add(id);
+  }
+  return captures.map((capture, index) => {
+    if (!capture || typeof capture !== 'object' || Array.isArray(capture)) {
+      throw new TypeError(`method ${selector} capture ${index} must be an object`);
+    }
+    const {id, name} = declared[index];
+    if (capture.id !== id || capture.name !== name) {
+      throw new TypeError(
+        `method ${selector} capture ${index} must be ${id}/${name}, matching the semantic program`,
+      );
+    }
+    return Object.freeze({id, name, value: canonicalizeValue(capture.value)});
+  });
+}
+
+function environmentBindings(captures) {
+  return Object.fromEntries(captures.map(({id, name, value}) => [id, {name, value}]));
+}
+
+// The complete durable description of a method's capture environment, written once here so that the
+// write and every later exactness check compare the same contract rather than two similar subsets.
+// A capture-free method has no environment at all — `null`, never an empty one.
+function describeMethodEnvironment({methodObjectId, selector, captures}) {
+  if (captures.length === 0) return null;
+  return {
+    id: `${methodObjectId}:environment`,
+    bindings: environmentBindings(captures),
+    metadata: {smalltalk: 'method-environment', selector},
+  };
+}
+
+// "Exact" for a lexical environment, to the same standard as `codeArtifactProjection`: `metadata` is
+// a durable field of the record, so an environment differing only there is a different environment.
+// Comparing bindings alone would let a squatter with the right bindings and foreign metadata pass as
+// identical, which is precisely the blind spot the ensure-exact-or-create rule exists to remove.
+function lexicalEnvironmentProjection(record) {
+  return canonicalJson({
+    parent: record.parent ?? null,
+    bindings: record.bindings ?? {},
+    metadata: record.metadata ?? {},
+  });
+}
+
+function sameOptionalRef(left, right) {
+  const from = left ?? null;
+  const to = right ?? null;
+  if (from === null || to === null) return from === to;
+  return isObjectRef(from) && isObjectRef(to) && from.imageId === to.imageId && from.objectId === to.objectId;
+}
+
+// `putLexicalEnvironment` is an upsert with a layout-compatibility check, so a plain write would
+// quietly replace the bindings of an existing method environment. Same rule as everywhere else in
+// this sequence: reuse an identical record, refuse a differing one, create an absent one.
+async function ensureLexicalEnvironment(images, imageId, desired) {
+  const existing = await images.getLexicalEnvironment(imageId, desired.id);
+  if (!existing) return await images.putLexicalEnvironment(imageId, desired, {expectedVersion: 0});
+  if (lexicalEnvironmentProjection(desired) !== lexicalEnvironmentProjection(existing)) {
+    throw new SmalltalkKernelConflictError('lexical environment', imageId, desired.id);
+  }
+  return existing;
+}
+
 async function ensureBlock(images, imageId, desired) {
   const existing = await images.getBlock(imageId, desired.id);
   if (!existing) return await images.putBlock(imageId, desired);
@@ -195,14 +283,28 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
 // Is the selector already bound to exactly this definition? The Block id is deterministic from
 // class and selector, so identity is: the dictionary points at that Block, the Block was installed
 // for this lane, and its semantic artifact holds this program.
-async function isSameInstalledMethod({images, imageId, classRef, selector, program, lane, installed}) {
+async function isSameInstalledMethod({images, imageId, classRef, selector, program, captures, lane, installed}) {
   const id = methodId(classRef.objectId, selector);
   if (!isObjectRef(installed) || installed.imageId !== imageId || installed.objectId !== id) return false;
   const block = await images.getBlock(imageId, id);
   if (!block || block.metadata?.lane !== lane) return false;
   const semantic = await images.getCodeArtifact(imageId, `${id}:semantic`);
   if (!semantic || semantic.representation !== LAGRANGE_CODE_V0) return false;
-  return semantic.content?.value === JSON.stringify(program);
+  if (semantic.content?.value !== JSON.stringify(program)) return false;
+  // The semantic program names its captures but does not contain their values, so two definitions
+  // differing only in what `nil` they capture would otherwise look identical here and the second
+  // would be silently accepted as already installed.
+  //
+  // Identity is the environment this definition *would* write, not merely an environment whose
+  // bindings happen to match: the Block must point at the deterministic id, and that record must
+  // satisfy the whole contract. A capture-free method must therefore carry no environment at all —
+  // accepting an arbitrary empty one would call two different Blocks the same method.
+  const expected = describeMethodEnvironment({methodObjectId: id, selector, captures});
+  if (!sameOptionalRef(block.environment, expected ? objectRef(imageId, expected.id) : null)) return false;
+  if (!expected) return true;
+  const environment = await images.getLexicalEnvironment(imageId, expected.id);
+  if (!environment) return false;
+  return lexicalEnvironmentProjection(environment) === lexicalEnvironmentProjection(expected);
 }
 
 // Adding a method rewrites the dictionary and its shape, per ADR 0044 decision 2 — visible,
@@ -240,17 +342,22 @@ async function defineMethods({
   // conflict rather than a fix. Validation is pure, so it costs nothing to do first.
   const incoming = new Set();
   const alreadyInstalled = new Set();
-  for (const {selector, program} of methods) {
+  const capturesBySelector = new Map();
+  for (const {selector, program, captures = []} of methods) {
     requiredText(selector, 'selector');
     if (incoming.has(selector)) {
       throw new TypeError(`defineMethods declares ${selector} twice in one call`);
     }
     incoming.add(selector);
+    capturesBySelector.set(selector, normalizeMethodCaptures(selector, program, captures));
     if (merged.has(selector)) {
       // A lost acknowledgement leaves the dictionary already updated while the caller believes it
       // failed, so an identical definition must be an idempotent success. Only a different program
       // or lane for an existing selector is replacement.
-      if (await isSameInstalledMethod({images, imageId, classRef, selector, program, lane, installed: merged.get(selector)})) {
+      if (await isSameInstalledMethod({
+        images, imageId, classRef, selector, program,
+        captures: capturesBySelector.get(selector), lane, installed: merged.get(selector),
+      })) {
         alreadyInstalled.add(selector);
         continue;
       }
@@ -289,9 +396,16 @@ async function defineMethods({
     const codeRef = lane === 'wasm'
       ? await ensureWasmFunction({images, compilation, imageId, id, semanticRef: objectRef(imageId, semantic.id)})
       : await ensureNeutralCode({images, compilation, imageId, id, semanticRef: objectRef(imageId, semantic.id)});
+    // Written before the Block, because `putBlock` requires the environment it points at to resolve.
+    const captures = capturesBySelector.get(selector);
+    const desiredEnvironment = describeMethodEnvironment({methodObjectId: id, selector, captures});
+    const environment = desiredEnvironment === null
+      ? null
+      : await ensureLexicalEnvironment(images, imageId, desiredEnvironment);
     const block = await ensureBlock(images, imageId, {
       id,
       code: codeRef,
+      environment: environment ? objectRef(imageId, environment.id) : null,
       metadata: {smalltalk: 'method', selector, lane},
     });
     merged.set(selector, objectRef(imageId, block.id));
