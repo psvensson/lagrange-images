@@ -1,6 +1,6 @@
 # ADR 0050: Class-scoped instance-variable binding and self-only slot access
 
-Status: accepted — an instance-variable name is resolved to a stable Shape slot id by a class-scoped binder above the class-independent parser, the durable method carries that id rather than the name, and a language-owned primitive reads or writes it only on the method activation's effective Smalltalk `self`.
+Status: accepted — an instance-variable name is resolved to a stable Shape slot id by a class-scoped compilation entry point beside the class-independent one, the durable method carries that id rather than the name, and a language-owned primitive reads or writes it only on the method activation's effective Smalltalk `self` and only for a slot its defining Behavior declares.
 
 ## Problem
 
@@ -76,6 +76,20 @@ bind with the defining class   classRef + its complete instance Shape
 lagrange-code/v0
 ```
 
+Concretely, this is a **sibling compilation entry point**, not a wrapper around a class-independent
+resolver. `compileSymmetricSmalltalkSemanticBlock` already performs name resolution itself and
+already rejects an unbound root name at that moment; there is no later stage where an unresolved name
+survives for someone else to bind. `defineMethods` receives a semantic program well after that point
+and must keep doing so.
+
+```text
+Block:   parse -> compile (class-independent)              -> semantic program
+Method:  parse -> compile *with the defining class*        -> semantic program -> defineMethods
+```
+
+The ordinary Block compiler is unchanged, and neither entry point acquires ambient class state: the
+class arrives as an argument to the method path, exactly as `captures` already arrives today.
+
 This is also the seed of an eventual method-definition syntax, which remains deferred: today methods
 arrive as hand-written semantic programs, and the binder is what a source-level `Point >> x` would
 run through when it exists.
@@ -118,6 +132,22 @@ x := 5      "lexical cell assignment if x is lexical;
              otherwise instance-slot mutation on self"
 ```
 
+One consequence has to be stated, because getting it wrong would quietly widen what assignment
+means. Resolution finds the binding *first* and checks write legality *second*; it never keeps
+searching for something assignable. So a parameter named `x` shadows an instance variable named `x`
+for writes as well as reads, and `x := 5` still fails as "cannot assign to parameter x" — it must not
+fall through to the instance variable:
+
+```text
+parameter x        shadows, and assignment stays illegal
+capture x          shadows, and assignment stays illegal unless the capture is a mutable cell
+temporary x        shadows, and assignment is an ordinary cell write
+none of those      the instance variable, if the defining class declares one
+```
+
+The instance-variable fallback is consulted at exactly the point where resolution currently raises
+`unbound Symmetric Smalltalk name`, and nowhere earlier. That keeps every existing write-legality
+rule intact by construction rather than by re-stating it.
 ### 4. No generic object-slot operation; the primitives are language-owned
 
 `lagrange-code` gains nothing. No `get-object-slot`, no generic field access on a Value, no
@@ -144,11 +174,61 @@ artifact — which the graph permits, since a method is ordinary durable data �
 primitive Block and read the private state of any object of any class.
 
 So the primitive must be able to prove its target is the receiver of the method activation that
-invoked it:
+invoked it. That is necessary, and it is **not sufficient**.
+
+Consider a forged method installed on `Parent` that names a slot id declared only by `Child`:
 
 ```text
-target == the effective Smalltalk self of the invoking method activation
+Parent >> peek        primitiveInstanceSlotRead value: self value: 'child-secret'
+
+aChild peek           self really is self               ✓ passes the receiver check
+                      Child's Shape really has the slot ✓ passes the layout check
+                      and Parent has just read Child-private state
 ```
+
+Both checks succeed and encapsulation is still broken, because a method may only name state that the
+class it was *defined in* declares. So the frame carries two facts, and the primitive requires both:
+
+```text
+self              the effective Smalltalk receiver of the invoking method activation
+definingBehavior  the Behavior whose method dictionary supplied the running method
+
+require   target is that self
+require   the slot id is declared by definingBehavior.instanceShape
+```
+
+The object's *current* Shape remains a second, independent structural check (decision 6). The two
+answer different questions — "may this method name this slot" versus "does this object have it" —
+and collapsing them is precisely how the `Parent`/`Child` hole opens.
+
+`lookupSelector` already walks the superclass chain and knows which Behavior's dictionary matched, so
+the dispatcher can report it. It rides the resolution alongside ADR 0045's `effectiveReceiver` and
+becomes transient frame state; it does **not** become a field of the activation record, which stays
+the closed structure ADR 0005 defined.
+
+A method defined on a class whose `instanceShape` is `nil` can therefore name no instance variable at
+all, which is the right answer: such a class declares no state.
+
+### 5a. The frame belongs to a method activation, and is not blindly inherited
+
+A frame that propagated through every nested send the way `depth` and the dispatch image do would
+hand an arbitrary Block the invoker's `self`, which is the same hole from a different direction.
+Propagation is therefore by callee kind, not by nesting:
+
+```text
+a Smalltalk method dispatch      REPLACES the frame — new self, new definingBehavior
+a kernel-primitive Block send    INHERITS the invoking frame — this is how the primitive sees it
+a lexical closure activation     RESTORES the frame captured where the closure was created
+anything else                    NO frame; the slot primitives are unusable there
+```
+
+The third rule is what makes decision 10's lexical `self` correct, and the fourth is what stops a
+method from lending its identity to a Block it merely happens to invoke: `aBlock value` inside a
+method must run `aBlock` with the frame `aBlock` was created in, never with the caller's.
+
+An activation with no frame is not a lesser one — every existing execution path has no frame and is
+unaffected. It simply cannot use the slot primitives, which is correct, because nothing outside a
+Smalltalk method has a `self` whose state these operations are about.
 
 That fact is not available to a primitive executor today: an executor sees its own activation, whose
 receiver is the primitive Block itself, and its arguments, which are just Values. ADR 0050 therefore
@@ -272,6 +352,7 @@ inconvenient to obtain. Staging is permitted; a hole is not.
 binding
     a method reading x compiles to a semantic artifact containing the stable slot id, not the name
     a parameter or temporary named x shadows an instance variable named x, for read and for assignment
+    assigning to a shadowing parameter still fails as a parameter assignment, never as an ivar write
     a name matching neither is still an unbound-name compile failure
     binding needs the defining class; the block compiler still compiles a Block with no class
 
@@ -293,6 +374,19 @@ self-only, adversarially
     the same forgery is refused for write as well as read
     the check uses the ADR 0045 effective receiver, not the wire-level request receiver
     the seam is transient: it appears in no record, no artifact and no Value
+
+defining-behavior scope, adversarially
+    a method defined on Parent naming a slot declared only by Child is refused when a Child
+        instance runs it, even though the target is genuinely self and the Shape genuinely has it
+    a Parent method still reaches Parent-declared slots on a Child instance
+    a Child method reaches both its own and inherited slots
+    a method defined on a class whose instanceShape is nil can name no instance variable
+
+frame lifetime
+    a nested Smalltalk method dispatch replaces the frame; the callee sees its own self
+    `aBlock value` inside a method runs aBlock with aBlock's own defining frame, never the caller's
+    a closure created in a method restores that method's frame when activated
+    an activation with no frame cannot use the slot primitives at all
 
 blocks
     the semantic rule holds, or a staged implementation fails explicitly rather than reading
@@ -332,7 +426,12 @@ lexical bindings shadow instance variables, for reads and for assignment alike
 no generic object-slot op in lagrange-code, and no slot access on the executor context
 the slot primitives are language-owned and reached as ordinary captured Block sends
 self-only is proved at execution, not arranged by the compiler
+self-only is necessary and not sufficient: the slot must also be declared by the defining Behavior
+"may this method name this slot" and "does this object have it" are separate checks; never collapse them
+the frame is per method activation and propagates by callee kind, never by nesting depth
+an arbitrary Block invoked by a method never borrows the invoker's self
 the self seam is transient, non-durable, never a Value, never authority, never caller-supplied
+resolution finds a binding then checks write legality; it never searches on for something assignable
 self means the ADR 0045 effective receiver, not the wire-level request receiver
 a slot id absent from the target's current Shape is structural failure, never nil and never a new slot
 a write preserves shape, behavior, other slots, the indexed part and metadata
