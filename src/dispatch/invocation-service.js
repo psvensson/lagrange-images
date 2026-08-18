@@ -82,11 +82,14 @@ class InvocationService {
     });
   }
 
-  async sendMessage(input) {
+  // `dispatchImage` is execution context, exactly as depth and authority are: it never appears on
+  // the request, on a Value, or in the durable graph. An immediate receiver carries no image, so
+  // this is what says which kernel's Integer applies (ADR 0044 decision 5a).
+  async sendMessage(input, {dispatchImage = null} = {}) {
     const request = createMessageSendRequest(input);
     const dispatcher = this.dispatchers.get(request.languageId);
     const resolution = normalizeDispatchResolution(
-      await dispatcher.resolveMessage(request, {images: this.images}),
+      await dispatcher.resolveMessage(request, {images: this.images, dispatchImage}),
     );
 
     return await this.prepareActivation({

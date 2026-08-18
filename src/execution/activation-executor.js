@@ -160,7 +160,7 @@ class ActivationExecutor {
 
   // `authorityContext` is execution context in exactly the way `depth` already is: real,
   // load-bearing, and absent from the durable model. Nothing is added to the activation.
-  async execute(activation, {depth = 0, authority = null, cellArena = null} = {}) {
+  async execute(activation, {depth = 0, authority = null, cellArena = null, dispatchImage = null} = {}) {
     if (!Number.isInteger(depth) || depth < 0) throw new TypeError('activation depth must be a non-negative integer');
     if (depth > MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
     assertActivationRequest(activation);
@@ -183,6 +183,10 @@ class ActivationExecutor {
     // while still expiring when the execution does.
     const arena = cellArena ?? new LexicalCellArena();
     const cells = arena.activationCells(activation.block);
+
+    // ADR 0044 decision 5a. A root activation dispatches in its own Block's image; a nested one
+    // inherits what its sender computed. Context, never a field on the activation.
+    const activeDispatchImage = dispatchImage ?? activation.block.imageId;
 
     // A mutable record rather than mere stack scoping, so that "active" can later mean "the
     // logical activation is still alive" once async activations exist, instead of "a
@@ -262,11 +266,17 @@ class ActivationExecutor {
             if (authority === null) throw new TypeError('cannot attenuate without an authority context');
             nestedAuthority = this.authority.attenuate(authority, {grants: attenuate});
           }
-          const nested = await this.invocations.sendMessage(request);
+          // An object receiver dispatches in its own image; an immediate one has none, so the
+          // sender's dispatch image carries through unchanged.
+          const nextDispatchImage = isObjectRef(request.receiver)
+            ? request.receiver.imageId
+            : activeDispatchImage;
+          const nested = await this.invocations.sendMessage(request, {dispatchImage: nextDispatchImage});
           return await this.execute(nested, {
             depth: depth + 1,
             authority: nestedAuthority,
             cellArena: arena,
+            dispatchImage: nextDispatchImage,
           });
         }),
       },
