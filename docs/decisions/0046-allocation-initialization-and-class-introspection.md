@@ -1,6 +1,6 @@
 # ADR 0046: Allocation, initialization and class introspection
 
-Status: accepted — `basicNew`, `new` and `class` stay ordinary Smalltalk messages; allocation and class lookup use language-owned primitive Blocks behind those methods, instance shape is explicit durable class data, and image-native allocation is not an ADR 0037 capability check.
+Status: accepted — `basicNew`, `new` and `class` stay ordinary Smalltalk messages; allocation and class lookup use language-owned primitive Blocks registered at the composition root and image-local by one rule, instance shape is explicit durable class data, and image-native allocation is not an ADR 0037 capability check.
 
 ## Problem
 
@@ -110,6 +110,42 @@ The primitive Blocks themselves are implementation artifacts of the language ker
 not object identity, and not hidden metadata. Methods reach them through explicit captured refs in
 the ordinary lexical-environment graph.
 
+### 2a. The primitive executor is registered at the composition root, never by the execution layer
+
+A representation needs an executor registered for it, and where that registration lives is an
+architectural decision rather than a wiring detail.
+
+`smalltalk-kernel-primitive/v1` is registered by `createRuntime()`. It is **not** registered by
+`createDefaultCodeExecutorRegistry()`, and `src/execution` gains no import of `src/language`.
+
+The reason is a dependency direction that is already load-bearing. `src/language` imports
+`src/execution` today — the compiler and the class builder both name `NEUTRAL_EXPRESSION_V0` — so
+registering a language-owned executor inside the default execution registry would close a cycle
+between the two. With `src/runtime.js` re-exporting every module through `export *`, such a cycle
+surfaces as an import-time failure that names neither file.
+
+There is already a precedent for the correct route, and this ADR follows it rather than inventing
+one. ADR 0044 decision 8 put `nil`-initialization *policy* in the language and had `createRuntime()`
+hand it to the execution layer as `temporaryInitializer`. The execution layer never learned what
+`nil` is. The same shape applies here:
+
+```text
+language-owned policy      supplied by the composition root      execution stays language-neutral
+temporaryInitializer       createRuntime()                       ADR 0044 decision 8
+kernel-primitive executor  createRuntime()                       this ADR
+```
+
+That is the general precedent this decision means to set: **language-owned execution policy enters
+through composition, never by making execution depend on language.** A future personality needing its
+own executor takes the same route.
+
+One consequence is explicit rather than left to be discovered by a failing suite.
+`test/steering-docs.test.js` currently checks the `docs/seams.md` executable-representation table
+against `createDefaultCodeExecutorRegistry()` alone, in both directions, so a composition-root
+representation would be reported as documented-but-unregistered. "Registered executable
+representation" must therefore mean *registered by the assembled runtime*, not *registered by the
+default execution registry*. The check stays two-way; only its notion of the registry widens.
+
 ### 3. An allocatable class is a fixed-shape Behavior with a non-`nil` `instanceShape`
 
 ADR 0044 already gave every Behavior this slot:
@@ -194,6 +230,18 @@ language-neutral object record every other graph operation sees.
 All slots begin as `nil`, including inherited slots. `UNBOUND` is lexical-cell machinery and never
 appears in object slots.
 
+Completeness is not this ADR's choice to make. `assertObjectMatchesShape` already rejects an object
+whose slot set differs from its Shape in either direction — missing ids and extra ids are both
+errors — so a partially populated instance is not a representable record. `basicNew` is therefore
+not choosing between "leave slots out" and "fill them in":
+
+```text
+which slots       forced by the object model      every id in the Shape, exactly
+which Value       decided by this ADR             that image's nil
+```
+
+The only open question was what fills the required slots, and the answer is the image's `nil`.
+
 The primitive validates before writing:
 
 - receiver is an unpinned local ref in the primitive Block's image
@@ -213,9 +261,28 @@ The allocation primitive chooses a fresh host-generated opaque object id, with `
 v1 default. The identity generator is runtime machinery, not durable class semantics; tests may inject
 a deterministic generator.
 
-Creation uses create-once storage semantics. A candidate id that already exists is never overwritten.
-A genuine identity collision chooses another fresh candidate rather than treating the existing object
-as an idempotent retry.
+**The primitive owns the candidate id.** It mints the id itself and passes it explicitly, with
+create-once storage semantics — `putObject(..., {expectedVersion: 0})`. It must never let the image
+service generate one internally, even though `putObject` will do so for a caller that omits `id`:
+an id the primitive never saw cannot be preserved across a retry, which makes decision 7's
+"retry the same candidate" unimplementable rather than merely unimplemented.
+
+A candidate id that already exists is never overwritten. A genuine identity collision chooses another
+fresh candidate rather than treating the existing object as an idempotent retry.
+
+Three superficially similar retries are therefore distinguished, and the distinction is the whole
+point:
+
+```text
+known collision before creation succeeded   -> choose a fresh candidate
+unknown outcome, retry of the same host op  -> reuse the same candidate
+a new Smalltalk basicNew send               -> always choose a fresh candidate
+```
+
+The middle row is what keeps a transport-level retry from minting one object per attempt; the first
+keeps a collision from adopting somebody else's object; the third is what `basicNew` means. Retry
+safety here is a property of the whole publication path, not of whichever helper happens to be
+inspected — the same rule the method-installation sequence already lives under.
 
 This is deliberately different from bootstrap and method installation. Those operations describe a
 named durable thing and therefore use deterministic ids plus ensure-exact-or-create. `basicNew`
@@ -350,12 +417,40 @@ retroactively treating this one primitive as special.
 Storage quotas and resource limits are also not authority grants. They may reject allocation for
 operational reasons without changing who is semantically permitted to execute `basicNew`.
 
-### 11. Allocation stays in the receiver class's image
+### 11. Both primitives are image-local, under one rule
 
-The primitive Block is image-local, and its class argument must be a ref in that same image.
-`instanceShape` and `nil` are already local under ADR 0044.
+Locality is a single rule applying equally to both primitives, not an allocation-specific precaution.
+It has one definition:
 
-Therefore one allocation produces one object in one image:
+```text
+primitive image = activation.block.imageId
+```
+
+The primitive Block's own image, never the sender's and never a ref's. That is also the only image
+identity available to an executor without new plumbing: an executor receives the activation and a
+context of image/send/binding operations, and the dispatch image is deliberately not among them.
+
+```text
+class-of
+    object/ref inputs must belong to the primitive image
+    immediate Values resolve their classes from the primitive image's kernel
+
+basic-new
+    the class ref, its instance Shape, nil, and the created object
+    all belong to the primitive image
+```
+
+So a foreign primitive Block fails for **either** primitive. The `class-of` half matters as much as
+the allocation half and is easier to get wrong: a method that captured another image's `class-of`
+would quietly answer that image's `Integer`, `True` or `Text` for a locally dispatched send. That is
+the cross-image identity bug class this substrate rejects everywhere else — a shape or slot reference
+is identity only together with its `imageId` — and it would be silent rather than a failure.
+
+The rule is what makes the answer correct rather than coincidental: a method found in image `I`
+captures `I`'s primitive Block, so the primitive image is the image whose kernel should answer.
+Validating locality is what keeps that from being an assumption.
+
+For allocation the consequence is one object in one image:
 
 ```text
 class.imageId == shape.imageId == nil.imageId == newObject.imageId
@@ -365,8 +460,8 @@ No cross-image Shape, superclass walk or remote instance construction is hidden 
 A send to a class object in another image already changes the dispatch image to that receiver's image;
 if that image has the allocation protocol installed, its own primitive performs the allocation there.
 
-This does not decide cross-image inheritance or distributed routing. It simply keeps allocation's
-graph mutation local to the class whose layout defines the object.
+This does not decide cross-image inheritance or distributed routing. It simply keeps both primitives'
+meaning local to the image that defines it.
 
 ### 12. Allocation protocol installation is separate from kernel bootstrap
 
@@ -390,6 +485,11 @@ semantic methods, derived per lane:
 The primitive Blocks are lane-independent host implementations. The methods that call them are still
 derived into neutral and WASM executable Blocks from the same semantic definitions, and both lanes
 must be proven.
+
+Installing the protocol writes durable records into an image; registering the executor that runs the
+primitive representation is separate runtime composition, per decision 2a. An image may hold the
+protocol while a given process has not registered the executor — that fails as an unregistered
+representation, which is the ordinary and correct outcome rather than a special case.
 
 This mirrors ADR 0045's installer-not-bootstrap rule: bootstrap establishes identity; protocol is an
 explicit later layer.
@@ -454,7 +554,14 @@ both execution lanes
 primitive boundary
     direct basic-new primitive call validates receiver locality/Behavior/instanceShape
     primitive Blocks from another image cannot allocate this image's class
+    a foreign class-of fails rather than answering the foreign image's Integer/True/Text
+    both primitives derive their image from activation.block.imageId, not from the sender
     pinned refs remain unsupported
+
+composition boundary
+    smalltalk-kernel-primitive/v1 is registered by createRuntime(), not by the default execution registry
+    src/execution imports nothing from src/language
+    the executable-representation steering check covers composition-root registrations
 
 authority boundary
     pure image-native new succeeds with no authority context
@@ -487,6 +594,7 @@ and the write sequence is covered by the recovery sweep rather than sampled at c
 ```text
 new/basicNew/class are messages; the compiler and dispatcher know no selector special case
 host-sensitive Smalltalk semantics live behind language-owned primitive Blocks, not Smalltalk ops in lagrange-code
+language-owned execution policy enters through the composition root; execution never imports language
 primitive Blocks are explicit graph refs captured by methods, never hidden metadata
 instanceShape nil means non-instantiable; empty Shape means a valid zero-slot layout
 instanceShape is the complete immutable instance layout; allocation never reconstructs it from superclasses
@@ -500,7 +608,11 @@ class returns graph behavior for refs and the image's class semantics for immedi
 ADR 0045 remains load-bearing: true class == True and false class == False without boxing the boolean Value
 image-native allocation is not an ADR 0037 capability check; external object creation is a separate future boundary
 ref != authority remains true; lack of an allocation grant is a language-boundary decision, not ref-derived permission
-allocation is image-local to the receiver class and its instance Shape
+both primitives are image-local by one rule: the primitive image is activation.block.imageId
+a foreign class-of fails; it never answers another image's Integer, True or Text
+every required Shape slot is filled because the object model forces it; this ADR only chooses nil
+the allocation primitive mints its own candidate id and writes create-once; putObject never mints it
+known collision -> fresh candidate; unknown outcome of one host op -> same candidate; new send -> fresh candidate
 bootstrap creates identity; allocation/class protocol is installed explicitly afterwards
 old instanceShape == nil records are never reinterpreted as empty Shapes
 ```
