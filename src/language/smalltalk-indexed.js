@@ -1,4 +1,4 @@
-import {SHAPE_INDEXED, shapeIndexedKind} from '../object/model.js';
+import {SHAPE_INDEXED} from '../object/model.js';
 import {integerValue, objectRef, textValue} from '../value/index.js';
 import {
   defineClass,
@@ -95,7 +95,7 @@ async function ensureArrayShape(images, imageId) {
   if (!existing) return await images.putShape(imageId, desired);
   const layout = (shape) => canonicalJson({
     slots: shape.slots,
-    indexed: shapeIndexedKind(shape),
+    indexed: Object.hasOwn(shape, 'indexed') ? shape.indexed : SHAPE_INDEXED.NONE,
   });
   if (layout(existing) !== layout(desired)) {
     throw new SmalltalkKernelConflictError('shape', imageId, desired.id);
