@@ -72,6 +72,11 @@ class ImageService {
 
   async putShape(imageId, input) {
     await this.getImage(imageId);
+    // The write seam is where every other record kind rejects unknown input fields, and Shape was
+    // the one that did not. That was survivable while every Shape field was mandatory; ADR 0047's
+    // optional `indexed` made a typo silently store a *different layout* and fail at a distance, on
+    // the later object write, naming neither the typo nor this call.
+    assertAllowedFields(input, new Set(['id', 'slots', 'indexed', 'metadata']), 'shape');
     const id = input.id ?? randomUUID();
     const at = this.now();
     const shape = createShapeRecord({
