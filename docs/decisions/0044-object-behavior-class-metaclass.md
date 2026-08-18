@@ -1,6 +1,6 @@
 # ADR 0044: Object, Behavior, Class and Metaclass bootstrap
 
-Status: implemented — the object model, with immediate Values dispatching by kind under a transient dispatch image, `+` as ordinary lookup over a primitive-backed method, and `nil`-initialized temporaries in bootstrapped images.
+Status: implemented — the object model, with immediate Values dispatching by kind under a transient dispatch image (the `boolean` kind since superseded by ADR 0045), `+` as ordinary lookup over a primitive-backed method, and `nil`-initialized temporaries in bootstrapped images.
 Proven by: test/smalltalk-kernel.test.js, test/smalltalk-dispatch.test.js, test/smalltalk-builder-recovery.test.js, test/nil-temporary-initialization.test.js
 
 ## Problem
@@ -158,6 +158,11 @@ is a dispatch rule, not a change to the Value set: no Value gains a field, nothi
 `canonicalizeValue` is untouched. The canonical Value model stays exactly as it has been for eleven
 ADRs.
 
+The `boolean` row is **superseded by ADR 0045**, which bridges a boolean Value to the dispatch
+image's `true`/`false` object and resolves that object's behavior edge instead. `Boolean` is still
+where shared boolean protocol lives — `True` and `False` inherit from it — but a boolean is no longer
+dispatched as a classless immediate. The other four kinds are unchanged.
+
 Note also that only the **unpinned** `ref` kind dispatches today: `isObjectRef` tests `REF`, and
 `pinned-ref` is a distinct kind that the dispatcher does not accept. This ADR does not change that.
 Dispatch against a pinned historical ref is deferred explicitly rather than left ambiguous, because
@@ -237,6 +242,9 @@ They are ordinary objects with a shape carrying no slots, reachable by well-know
 The canonical `boolean` Value and the `true`/`false` objects remain distinct things. A boolean Value
 is what `if` and `is_true` consume; the objects are what `ifTrue:` is sent to. Bridging them is
 deferred (see below), because conflating them would decide the Boolean protocol as a side effect.
+
+**ADR 0045 settles that bridge**, and settles it without conflating anything: the boolean Value is
+unchanged, and Symmetric Smalltalk nominates the singleton as the effective receiver of one send.
 
 ### 8. An unassigned temporary now reads as `nil`
 
@@ -394,8 +402,8 @@ Also required:
 
 ## What is deferred
 
-- `ifTrue:`/`ifFalse:` and the bridge between the `boolean` Value and the `True`/`False` objects.
-  That is a protocol decision, and decision 7 deliberately stops short of it
+- ~~`ifTrue:`/`ifFalse:` and the bridge between the `boolean` Value and the `True`/`False`
+  objects~~ — decided in ADR 0045
 - collections, and therefore a MethodDictionary that is not a shape
 - `doesNotUnderstand:` as a reified message; for now a missing selector is an explicit failure
 - `new`/`basicNew`, which need an allocation semantic operation, and with it the question of whether
@@ -434,7 +442,7 @@ a method is semantic first; executable Blocks are derived from it
 an immediate Value gets its class from its kind, and gains no field
 the Value set is unchanged: no boxing, no nil kind, no collection kind
 `+` is a method whose body is integer-add, never a compiler primitive
-nil, true and false are objects; a boolean Value is not the true object
+nil, true and false are objects; a boolean Value is not the true object (ADR 0045 bridges, never conflates)
 UNBOUND stays a host sentinel and never becomes a Value
 nil initialization happens once in the common activation layer, not per executor
 an old durable {unbound} record is never reinterpreted as nil

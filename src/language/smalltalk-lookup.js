@@ -67,8 +67,12 @@ class SmalltalkKernelMissingError extends TypeError {
 
 // Decision 5: an immediate Value has no `behavior` field, so its class comes from its kind. Which
 // image's class is a question the dispatch image answers.
+//
+// `boolean` is deliberately absent. ADR 0045 supersedes its row: a boolean Value bridges to the
+// dispatch image's `true`/`false` singleton and then resolves that object's behavior edge like any
+// other object receiver. `Boolean` is still reached — `True` and `False` inherit from it — but not
+// by dispatching a classless immediate through it.
 const KERNEL_CLASS_FOR_KIND = Object.freeze({
-  [VALUE_KIND.BOOLEAN]: 'booleanClass',
   [VALUE_KIND.INTEGER]: 'integerClass',
   [VALUE_KIND.FLOAT64]: 'floatClass',
   [VALUE_KIND.TEXT]: 'textClass',
@@ -163,20 +167,40 @@ async function lookupSelector({images, behaviorRef, selector, nilRef, receiverDe
 }
 
 // The class a receiver dispatches through, and the image that answers "which Integer?".
+//
+// `effectiveReceiver` is non-null only where the language nominates a different receiver from the
+// one the message was sent to. That is the ADR 0045 boolean bridge and, today, nothing else.
 async function behaviorRefFor({images, receiver, dispatchImage}) {
   if (isObjectRef(receiver)) {
     const record = await images.getObject(receiver.imageId, receiver.objectId);
     if (!record) {
       throw new TypeError(`Symmetric Smalltalk receiver not found: ${receiver.imageId}/${receiver.objectId}`);
     }
-    return {record, behavior: record.behavior};
+    return {record, behavior: record.behavior, effectiveReceiver: null};
+  }
+  // ADR 0045 decisions 2 and 3. A boolean Value is not boxed and gains nothing; for the duration of
+  // this one send the dispatch image's `true` or `false` object *is* the receiver, so the method's
+  // `self` is genuinely the singleton and lookup starts at `True` or `False` rather than at a class
+  // chosen from a kind.
+  if (receiver.kind === VALUE_KIND.BOOLEAN) {
+    const kernel = await findSmalltalkKernel({images, imageId: dispatchImage});
+    if (!kernel) throw new SmalltalkKernelMissingError(dispatchImage, receiver.kind);
+    const singleton = receiver.value ? kernel.true : kernel.false;
+    const record = await images.getObject(singleton.imageId, singleton.objectId);
+    if (!record) {
+      throw new TypeError(
+        `Symmetric Smalltalk kernel singleton ${singleton.imageId}/${singleton.objectId} not found; `
+        + 'the object graph is incomplete',
+      );
+    }
+    return {record, behavior: record.behavior, effectiveReceiver: singleton, kernel};
   }
   // Decision 5a: an immediate Value carries no image, so the sender's dispatch image supplies one.
   const slotName = KERNEL_CLASS_FOR_KIND[receiver.kind];
-  if (!slotName) return {record: null, behavior: null};
+  if (!slotName) return {record: null, behavior: null, effectiveReceiver: null};
   const kernel = await findSmalltalkKernel({images, imageId: dispatchImage});
   if (!kernel) throw new SmalltalkKernelMissingError(dispatchImage, receiver.kind);
-  return {record: null, behavior: kernel[slotName], kernel};
+  return {record: null, behavior: kernel[slotName], effectiveReceiver: null, kernel};
 }
 
 export {

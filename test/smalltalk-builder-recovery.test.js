@@ -30,7 +30,22 @@ const PLUS = {
   },
 };
 
-const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject'];
+// A capture-bearing method, per ADR 0045 decision 6: the nil arm of a one-arm conditional names
+// `nil` through a lexical environment, which adds a write to this publication sequence. A sequence
+// is proven recoverable by enumerating its writes, so the new write is enumerated too.
+const NIL_CAPTURE = Object.freeze({id: 'smalltalk/control-flow/nil', name: 'nil'});
+
+const capturing = (imageId) => ({
+  selector: 'answerNil',
+  program: {
+    parameters: [],
+    captures: [{...NIL_CAPTURE}],
+    body: {op: 'binding', id: NIL_CAPTURE.id},
+  },
+  captures: [{...NIL_CAPTURE, value: objectRef(imageId, 'smalltalk/nil')}],
+});
+
+const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
 
 // Wraps an ImageService so the Nth write throws, and records what each write was.
 function faultingImages(images, {failAt = null, commitThenThrow = false, log = []} = {}) {
@@ -84,14 +99,14 @@ async function callPlus(runtime, imageId, id) {
 }
 
 // How many writes one clean `defineMethods` performs, so the sweep knows where to stop.
-async function writeCountFor(lane) {
+async function writeCountFor(lane, methodsFor = () => [PLUS]) {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   try {
     const kernel = await freshImage(runtime, 'count');
     const {images, writeCount} = faultingImages(runtime.images);
     await defineMethods({
       images, compilation: servicesFor(images), imageId: 'count',
-      classRef: kernel.integerClass, methods: [PLUS], lane,
+      classRef: kernel.integerClass, methods: methodsFor('count'), lane,
     });
     return writeCount();
   } finally {
@@ -99,43 +114,71 @@ async function writeCountFor(lane) {
   }
 }
 
+// `+` is the plain case; `answerNil` is the capture-bearing one, so the sweep covers the
+// lexical-environment write and the Block that points at it as well as the artifacts.
+const RECOVERY_CASES = [
+  {label: 'plain', methods: () => [PLUS], call: callPlus, expected: integerValue(7)},
+  {
+    label: 'capturing',
+    methods: (imageId) => [PLUS, capturing(imageId)],
+    call: async (runtime, imageId, id) => {
+      const kernel = await findSmalltalkKernel({images: runtime.images, imageId});
+      const installed = await installSymmetricSmalltalkBlock({
+        images: runtime.images, imageId, id, source: '[ :n | n answerNil ]',
+      });
+      const activation = await runtime.invocations.invokeBlock(
+        objectRef(imageId, installed.block.id), [integerValue(1)],
+      );
+      const result = await runtime.executor.execute(activation);
+      assert.deepEqual(result, kernel.nil);
+      return result;
+    },
+    expected: null,
+  },
+];
+
 for (const lane of ['neutral', 'wasm']) {
-  test(`every write in a ${lane} defineMethods is recoverable by an identical retry`, async () => {
-    const total = await writeCountFor(lane);
-    assert.ok(total > 3, `expected several writes in the ${lane} lane, saw ${total}`);
+  for (const {label, methods, call, expected} of RECOVERY_CASES) {
+    test(`every write in a ${label} ${lane} defineMethods is recoverable by an identical retry`, async () => {
+      const total = await writeCountFor(lane, methods);
+      assert.ok(total > 3, `expected several writes in the ${lane} lane, saw ${total}`);
 
-    for (let failAt = 1; failAt <= total; failAt += 1) {
-      for (const commitThenThrow of [false, true]) {
-        const runtime = await createRuntime({backend: {mode: 'mock'}});
-        try {
-          const kernel = await freshImage(runtime, 'app');
-          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+      for (let failAt = 1; failAt <= total; failAt += 1) {
+        for (const commitThenThrow of [false, true]) {
+          const runtime = await createRuntime({backend: {mode: 'mock'}});
+          try {
+            const kernel = await freshImage(runtime, 'app');
+            const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
 
-          await assert.rejects(
-            defineMethods({
-              images, compilation: servicesFor(images), imageId: 'app',
-              classRef: kernel.integerClass, methods: [PLUS], lane,
-            }),
-            /injected/,
-            `${lane} lane: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
-          );
+            await assert.rejects(
+              defineMethods({
+                images, compilation: servicesFor(images), imageId: 'app',
+                classRef: kernel.integerClass, methods: methods('app'), lane,
+              }),
+              /injected/,
+              `${lane} lane: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
+            );
 
-          // The identical operation, retried against a clean service, must complete.
-          await defineMethods({
-            images: runtime.images, compilation: runtime.compilation, imageId: 'app',
-            classRef: kernel.integerClass, methods: [PLUS], lane,
-          });
-          assert.deepEqual(
-            await callPlus(runtime, 'app', `retry-${lane}-${failAt}-${commitThenThrow}`),
-            integerValue(7),
-            `${lane} lane: not callable after retrying past write ${failAt} (commitThenThrow=${commitThenThrow})`,
-          );
-        } finally {
-          await runtime.close();
+            // The identical operation, retried against a clean service, must complete.
+            await defineMethods({
+              images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+              classRef: kernel.integerClass, methods: methods('app'), lane,
+            });
+            const result = await call(runtime, 'app', `retry-${label}-${lane}-${failAt}-${commitThenThrow}`);
+            if (expected !== null) {
+              assert.deepEqual(
+                result,
+                expected,
+                `${lane} lane: not callable after retrying past write ${failAt} (commitThenThrow=${commitThenThrow})`,
+              );
+            }
+          } finally {
+            await runtime.close();
+          }
         }
       }
-    }
-  });
+    });
+  }
 }
 
 // A lost acknowledgement on the final dictionary swap is the case where the caller believes it

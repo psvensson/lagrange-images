@@ -61,6 +61,48 @@ test('message dispatch resolves language semantics to a block, then uses common 
   });
 });
 
+// ADR 0045 decision 7. The generic seam, independent of any language: a resolution may nominate the
+// object that actually receives the message, and absence of the key means the original receiver.
+test('a resolution may nominate the object that actually receives the message', async (t) => {
+  const runtime = await seedRuntime(t, {
+    'test-language': {
+      async resolveMessage() {
+        return {block: objectRef('demo', 'block'), effectiveReceiver: objectRef('demo', 'stand-in')};
+      },
+    },
+  });
+
+  const activation = await runtime.invocations.sendMessage({
+    languageId: 'test-language',
+    receiver: integerValue(41),
+    message: textValue('anything'),
+  });
+  assert.deepEqual(
+    activation.receiver,
+    objectRef('demo', 'stand-in'),
+    'the activation receives the nominated object, not the Value the message was sent to',
+  );
+});
+
+test('an effective receiver must be an unpinned object ref', async (t) => {
+  const runtime = await seedRuntime(t, {
+    'test-language': {
+      async resolveMessage() {
+        return {block: objectRef('demo', 'block'), effectiveReceiver: integerValue(1)};
+      },
+    },
+  });
+
+  await assert.rejects(
+    runtime.invocations.sendMessage({
+      languageId: 'test-language',
+      receiver: integerValue(41),
+      message: textValue('anything'),
+    }),
+    /effectiveReceiver must be an unpinned object ref/,
+  );
+});
+
 test('message send fails clearly when no language dispatcher is registered', async (t) => {
   const runtime = await seedRuntime(t);
 

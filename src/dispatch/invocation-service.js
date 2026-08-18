@@ -28,15 +28,35 @@ function createMessageSendRequest({languageId, receiver, message, arguments: arg
   });
 }
 
+// ADR 0045 decision 7. A resolution names the Block to activate and, optionally, the object that
+// should actually receive it. The key is absent for every send in the substrate today; a language
+// personality uses it when the thing a message was sent to and the thing that runs the method are
+// deliberately different — as a Symmetric Smalltalk boolean Value and its `true`/`false` singleton
+// are.
+//
+// An unpinned object ref, and nothing else. The purpose is to nominate an *object* as the effective
+// receiver; permitting an immediate Value would let a personality substitute one Value for another
+// with nothing to detect it. Relaxing this later is easy, and discovering it after the fact is not.
 function normalizeDispatchResolution(resolution) {
   if (!resolution || typeof resolution !== 'object' || Array.isArray(resolution)) {
     throw new TypeError('message dispatcher must return a resolution object');
   }
-  if (!sameKeys(resolution, ['block'])) {
-    throw new TypeError('message dispatcher resolution must contain exactly block');
+  if (!sameKeys(resolution, ['block']) && !sameKeys(resolution, ['block', 'effectiveReceiver'])) {
+    throw new TypeError('message dispatcher resolution must contain block, and may contain effectiveReceiver');
+  }
+  const block = normalizeObjectRef(resolution.block, 'message dispatcher block');
+  if (!Object.hasOwn(resolution, 'effectiveReceiver')) return Object.freeze({block, effectiveReceiver: null});
+  // Present but empty is a caller mistake, not a second way to spell the default: absence is the
+  // only way to say "the original receiver".
+  if (resolution.effectiveReceiver === null || resolution.effectiveReceiver === undefined) {
+    throw new TypeError(
+      'message dispatcher effectiveReceiver must be an unpinned object ref; '
+      + 'omit the key to keep the original receiver',
+    );
   }
   return Object.freeze({
-    block: normalizeObjectRef(resolution.block, 'message dispatcher block'),
+    block,
+    effectiveReceiver: normalizeObjectRef(resolution.effectiveReceiver, 'message dispatcher effectiveReceiver'),
   });
 }
 
@@ -95,7 +115,10 @@ class InvocationService {
     return await this.prepareActivation({
       block: resolution.block,
       arguments: request.arguments,
-      receiver: request.receiver,
+      // The effective receiver is what the method's `self` is. It is transient in exactly the way
+      // the dispatch image is: it reaches the activation and nothing else — no request field, no
+      // Value, no durable record.
+      receiver: resolution.effectiveReceiver ?? request.receiver,
       dispatch: {
         languageId: request.languageId,
         message: request.message,

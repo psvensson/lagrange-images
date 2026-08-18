@@ -186,20 +186,37 @@ Implemented:
 - captured foreign Blocks via ordinary `value:`/`value:value:` sends
 - mixed foreign-WASM/live-Cuis orchestration
 - resumable non-tail host effects in the Lagrange-WASM lane
-- Object/Behavior/Class/Metaclass with inheritance, the metaclass knot as durable graph data,
-  immediate Values dispatching by kind under a transient dispatch image, `3 + 4` as an ordinary
-  message send, and `nil`-initialized temporaries in bootstrapped images (ADR 0044)
 - temporaries, statement sequences and assignment, with mutable lexical cells identical across the
   neutral executor, ordinary WASM, pooled WASM instances, suspension/resumption and nested closures
   (ADR 0043)
+- Object/Behavior/Class/Metaclass with inheritance, the metaclass knot as durable graph data,
+  immediate Values dispatching by kind under a transient dispatch image, `3 + 4` as an ordinary
+  message send, and `nil`-initialized temporaries in bootstrapped images (ADR 0044)
+- conditionals as ordinary message sends: a boolean Value nominates that image's `true`/`false`
+  object as the effective receiver of one send, and `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:` and
+  `ifFalse:ifTrue:` are methods on True and False, proven in both execution lanes including a
+  non-tail block invocation (ADR 0045)
 
-Next:
+The three ADRs above are one arc: 0043 gave the language state, 0044 gave it objects, and 0045 let
+objects themselves supply control flow. That is the point at which "symmetric Smalltalk" stops being
+architectural scaffolding and starts being visible in ordinary programs.
 
-- [ ] cascades, which are surface syntax rather than a semantic decision
+Next, ordered by architectural pressure rather than convenience:
+
+- [ ] allocation: `basicNew`, `new`, `class`, instance shape, identity generation, and above all
+      whether allocation is authority-governed. This is the next genuinely architectural question;
+      ADR 0044 deferred `Point new` precisely because two undesigned primitives were hiding in it
+- [ ] basic collections, at which point a MethodDictionary can stop being represented by a Shape
+- [ ] exception/condition substrate, including how unwinding crosses resumable WASM suspension
+- [ ] the rest of the boolean protocol — `not`, `and:`, `or:` — which runs ADR 0045's bridge
+      backwards: a boolean-*answering* method has to decide whether it answers the canonical Value
+      or the singleton
 - [ ] primitive-backed methods beyond `+`. ADR 0044 decides how immediate Values dispatch and how
       a primitive-backed method is written; the remaining work is which primitives the kernel needs
-- [ ] exception/condition substrate
-- [ ] REPL/workspace
+- [ ] cascades, and `true`/`false`/`nil` as source literals — both surface syntax rather than
+      semantic decisions, and both cheap once the decisions above are made
+- [ ] REPL/workspace, once conditionals, allocation and a few collections make interactive
+      Symmetric Smalltalk genuinely useful
 - [ ] bootstrap image
 
 The PR32 mixed expression is no longer a neutral-only proof: the same persistent semantic artifact now compiles to resumable WASM and produces the same result.
