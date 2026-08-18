@@ -227,7 +227,9 @@ pooled instance != activation state
 - The dispatch image is execution context, threaded through `execute` and `sendMessage` beside `depth` and `authority`. It never appears on a request, a Value, or in the durable graph.
 - Decision 10 preserves how a legacy behavior *fails*, not only how it succeeds. A selector miss on a legacy behavior still raises the pre-0044 `TypeError` with its original wording; only fixed-shape Behaviors get the ADR 0044 error classes.
 - Invariants enforced by a builder must also be checked when the data is read. Generic graph writes can produce a MethodDictionary shape with duplicate selector names, and a `find` over that resurrects first-wins lookup — the defect decision 2 exists to remove.
-- Anything with deterministic durable ids writes ensure-exact-or-create, not just the kernel installer. `defineClass` and `defineMethods` derive ids from class and selector, so a plain write would silently replace an existing class or method.
+- Anything with deterministic durable ids writes ensure-exact-or-create, not just the kernel installer. `defineClass` and `defineMethods` derive ids from class and selector, so a plain write would silently replace an existing class or method. Retry-safety has to cover *every* write in the sequence, including ones made by a helper you call: `compileWasmFunctionArtifact` writes its function artifact unconditionally, so the caller must reuse an existing one rather than collide with its own earlier output.
+- A durable id derived from a collection must encode the collection, not its size. A MethodDictionary shape keyed on selector count makes an abandoned `foo` conflict with a later, unrelated `bar`.
+- "Exact" for a code artifact includes `dependencies` and `derivedFrom`. Those are durable semantic and provenance edges, so an artifact differing there is a different artifact.
 
 ### Mutable lexical state
 

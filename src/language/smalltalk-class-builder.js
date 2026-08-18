@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
 import {compileWasmFunctionArtifact} from '../wasm/compiler.js';
@@ -6,13 +7,15 @@ import {
   BEHAVIOR_SHAPE_ID,
   EMPTY_SHAPE_ID,
   SmalltalkKernelConflictError,
+  assertUniqueSelectorShape,
   canonicalJson,
   ensureObject,
   ensureShape,
   findSmalltalkKernel,
-  isBehaviorObject,
   methodDictionarySlots,
+  readBehavior,
 } from './smalltalk-kernel.js';
+import {WASM_FUNCTION_V1} from '../code/wasm-artifacts.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 // Installing methods onto a class, and defining new classes with their metaclasses.
@@ -42,8 +45,16 @@ async function requireLocalBehavior(images, imageId, ref, label) {
   }
   const record = await images.getObject(ref.imageId, ref.objectId);
   if (!record) throw new TypeError(`${label} not found: ${ref.imageId}/${ref.objectId}`);
-  if (!isBehaviorObject(record)) {
-    throw new TypeError(`${label} is not a ${BEHAVIOR_SHAPE_ID} Behavior: ${ref.imageId}/${ref.objectId}`);
+  // readBehavior, not merely isBehaviorObject: carrying the fixed shape is weaker than satisfying
+  // the contract the dispatcher relies on, and the builder should reject anything the dispatcher
+  // would later refuse.
+  try {
+    await readBehavior(images, ref);
+  } catch (error) {
+    throw new TypeError(
+      `${label} is not a well-formed ${BEHAVIOR_SHAPE_ID} Behavior: ${ref.imageId}/${ref.objectId}`,
+      {cause: error},
+    );
   }
   return record;
 }
@@ -68,10 +79,14 @@ class SmalltalkMethodRedefinitionError extends TypeError {
 async function ensureCodeArtifact(images, imageId, desired) {
   const existing = await images.getCodeArtifact(imageId, desired.id);
   if (!existing) return await images.putCodeArtifact(imageId, desired);
+  // dependencies and derivedFrom are durable semantic and provenance edges, so an artifact that
+  // differs there is not the same artifact.
   const projection = (record) => canonicalJson({
     representation: record.representation ?? null,
     languageId: record.languageId ?? null,
     content: record.content ?? null,
+    dependencies: record.dependencies ?? [],
+    derivedFrom: record.derivedFrom ?? [],
     metadata: record.metadata ?? {},
   });
   if (projection(desired) !== projection(existing)) {
@@ -92,6 +107,31 @@ async function ensureBlock(images, imageId, desired) {
     throw new SmalltalkKernelConflictError('block', imageId, desired.id);
   }
   return existing;
+}
+
+// compileWasmFunctionArtifact writes its deterministic wasm-function/v1 with an unconditional
+// putCodeArtifact, so a failure after that write but before the dictionary swap would make an exact
+// retry collide with its own output. Reuse an existing function only when its provenance matches
+// this semantic artifact; anything else is a conflict rather than something to overwrite.
+async function ensureWasmFunction({images, compilation, imageId, id, semanticRef}) {
+  const functionId = `${id}:wasm:function`;
+  const existing = await images.getCodeArtifact(imageId, functionId);
+  if (existing) {
+    const derivedFromSemantic = (existing.derivedFrom ?? [])
+      .some((edge) => edge.imageId === semanticRef.imageId && edge.objectId === semanticRef.objectId);
+    if (existing.representation !== WASM_FUNCTION_V1 || !derivedFromSemantic) {
+      throw new SmalltalkKernelConflictError('wasm function artifact', imageId, functionId);
+    }
+    return objectRef(imageId, existing.id);
+  }
+  const {functionArtifact} = await compileWasmFunctionArtifact({
+    images,
+    compilation,
+    semanticRef,
+    moduleId: `${id}:wasm:module`,
+    functionId,
+  });
+  return objectRef(imageId, functionArtifact.id);
 }
 
 // Adding a method rewrites the dictionary and its shape, per ADR 0044 decision 2 — visible,
@@ -116,9 +156,20 @@ async function defineMethods({
   const existingShape = await images.getShape(existing.shape.imageId, existing.shape.objectId);
   if (!existingShape) throw new TypeError(`method dictionary shape not found: ${existing.shape.objectId}`);
 
+  // Validate the stored dictionary against the same global invariant the dispatcher enforces,
+  // rather than letting a Map silently normalize a corrupt one while extending it.
+  assertUniqueSelectorShape(existingShape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
   const merged = new Map(existingShape.slots.map((slot) => [slot.name, existing.slots[slot.id]]));
+
+  // Preflight covers duplicates *within this call* as well as against what is stored: two new
+  // entries naming the same selector would otherwise both pass and the second silently win.
+  const incoming = new Set();
   for (const {selector} of methods) {
     requiredText(selector, 'selector');
+    if (incoming.has(selector)) {
+      throw new TypeError(`defineMethods declares ${selector} twice in one call`);
+    }
+    incoming.add(selector);
     if (merged.has(selector)) throw new SmalltalkMethodRedefinitionError(classRef, selector);
   }
 
@@ -134,16 +185,7 @@ async function defineMethods({
     // ADR 0044 decision 6: one semantic method, an executable Block derived per lane. The WASM
     // lane's Block points at a wasm-function/v1, not at the module it references.
     const codeRef = lane === 'wasm'
-      ? await (async () => {
-        const {functionArtifact} = await compileWasmFunctionArtifact({
-          images,
-          compilation,
-          semanticRef: objectRef(imageId, semantic.id),
-          moduleId: `${id}:wasm:module`,
-          functionId: `${id}:wasm:function`,
-        });
-        return objectRef(imageId, functionArtifact.id);
-      })()
+      ? await ensureWasmFunction({images, compilation, imageId, id, semanticRef: objectRef(imageId, semantic.id)})
       : objectRef(imageId, (await compilation.compileArtifact(objectRef(imageId, semantic.id), {
         id: `${id}:code`,
         targetRepresentation: NEUTRAL_EXPRESSION_V0,
@@ -156,10 +198,17 @@ async function defineMethods({
     merged.set(selector, objectRef(imageId, block.id));
   }
 
+  // The shape id encodes the canonical selector *set*, not its cardinality. Keying on the count
+  // would make two unrelated one-selector dictionaries — say a failed `foo` and a later `bar` —
+  // want the same durable id and conflict.
   const selectors = [...merged.keys()];
   const slots = methodDictionarySlots(selectors);
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify([...selectors].sort()))
+    .digest('base64url')
+    .slice(0, 16);
   const shape = await ensureShape(images, imageId, {
-    id: `${methodsId(classRef.objectId)}/shape/${selectors.length}`,
+    id: `${methodsId(classRef.objectId)}/shape/${fingerprint}`,
     slots,
   });
   const bySelector = new Map(slots.map((slot) => [slot.name, slot.id]));

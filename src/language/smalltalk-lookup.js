@@ -1,6 +1,7 @@
 import {VALUE_KIND, isObjectRef} from '../value/index.js';
 import {TupleSet} from '../support/tuple-map.js';
 import {
+  assertUniqueSelectorShape,
   findSmalltalkKernel,
   isBehaviorObject,
   readBehavior,
@@ -106,19 +107,17 @@ async function methodAt(images, behavior, selector) {
   if (!shape) {
     throw new SmalltalkDanglingEdgeError('method dictionary shape', dictionary, dictionary.shape);
   }
-  // Uniqueness is enforced when a dictionary is built, but generic graph writes can produce a
-  // shape with duplicate slot names, and a `find` over that would resurrect first-wins lookup —
-  // the exact defect ADR 0044 decision 2 exists to remove. So it is checked here too, on the data
-  // as it actually is rather than as the builder intended.
-  const matches = shape.slots.filter(({name}) => name === selector);
-  if (matches.length > 1) {
-    throw new SmalltalkMalformedBehaviorError(
-      dictionaryRef,
-      new TypeError(`method dictionary declares ${matches.length} slots named ${selector}`),
-    );
+  // The invariant is that selector names are globally unique in a dictionary, so the whole shape is
+  // validated rather than only the selector being sent. Checking one name would leave a corrupt
+  // dictionary usable for every other selector.
+  try {
+    assertUniqueSelectorShape(shape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
+  } catch (error) {
+    throw new SmalltalkMalformedBehaviorError(dictionaryRef, error);
   }
-  if (matches.length === 0) return null;
-  const method = dictionary.slots[matches[0].id];
+  const slot = shape.slots.find(({name}) => name === selector);
+  if (!slot) return null;
+  const method = dictionary.slots[slot.id];
   if (!isObjectRef(method)) {
     throw new SmalltalkMalformedBehaviorError(
       dictionaryRef,

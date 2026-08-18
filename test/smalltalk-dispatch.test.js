@@ -395,7 +395,7 @@ test('defineClass validates its superclass before writing anything', async () =>
         images: runtime.images, imageId: 'app', name: 'Bad',
         superclassRef: objectRef('app', 'NotABehavior'),
       }),
-      /is not a smalltalk\/behavior-shape\/v1 Behavior/,
+      /is not a well-formed smalltalk\/behavior-shape\/v1 Behavior/,
     );
     assert.equal(await runtime.images.getObject('app', 'smalltalk/class/Bad'), null);
   });
@@ -460,7 +460,7 @@ test('a duplicate selector in stored data is rejected rather than resolved by po
 
     await assert.rejects(
       evaluate(runtime, 'app', 'dup-selector', '[ :x | x label ]', [integerValue(1)]),
-      (error) => error.name === 'SmalltalkMalformedBehaviorError' && /2 slots named label/.test(error.message),
+      (error) => error.name === 'SmalltalkMalformedBehaviorError' && /duplicate selector: label/.test(error.message),
     );
   });
 });
@@ -514,6 +514,186 @@ test('a legacy selector miss keeps its pre-0044 failure identity', async () => {
         [objectRef('app', 'legacy-miss-receiver-object')]),
       (error) => error.name === 'TypeError'
         && error.message === 'Symmetric Smalltalk message not understood: nope',
+    );
+  });
+});
+
+// compileWasmFunctionArtifact writes its deterministic function artifact unconditionally, so a
+// failure between that write and the dictionary swap used to make an exact retry collide with its
+// own output.
+test('the WASM lane survives a failure after its function artifact is written', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const methodObjectId = `${kernel.integerClass.objectId}/method/Kw`;
+
+    // Fail once the wasm function exists but before the Block is published.
+    const failing = {
+      ...runtime.images,
+      getCodeArtifact: (...args) => runtime.images.getCodeArtifact(...args),
+      getObject: (...args) => runtime.images.getObject(...args),
+      getShape: (...args) => runtime.images.getShape(...args),
+      getBlock: (...args) => runtime.images.getBlock(...args),
+      putShape: (...args) => runtime.images.putShape(...args),
+      putObject: (...args) => runtime.images.putObject(...args),
+      putCodeArtifact: (...args) => runtime.images.putCodeArtifact(...args),
+      putBlock: async () => { throw new Error('interrupted before the Block'); },
+    };
+    await assert.rejects(
+      defineMethods({
+        images: failing, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass, methods: [plusMethod()], lane: 'wasm',
+      }),
+      /interrupted before the Block/,
+    );
+    assert.notEqual(await runtime.images.getCodeArtifact('app', `${methodObjectId}:wasm:function`), null);
+    assert.equal(await runtime.images.getBlock('app', methodObjectId), null);
+
+    // The exact retry must reuse that function artifact rather than collide with it.
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+      classRef: kernel.integerClass, methods: [plusMethod()], lane: 'wasm',
+    });
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'retried-wasm', '[ :a :b | a + b ]', [integerValue(3), integerValue(4)]),
+      integerValue(7),
+    );
+  });
+});
+
+// Shape identity from the selector set, not its cardinality: a failed `foo` leaving a one-selector
+// shape must not conflict with a later, unrelated `bar`.
+test('an abandoned dictionary shape does not block a different selector of the same size', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const literal = (text) => ({parameters: [], captures: [], body: {op: 'literal', value: textValue(text)}});
+
+    const failing = {
+      ...runtime.images,
+      getCodeArtifact: (...a) => runtime.images.getCodeArtifact(...a),
+      getObject: (...a) => runtime.images.getObject(...a),
+      getShape: (...a) => runtime.images.getShape(...a),
+      getBlock: (...a) => runtime.images.getBlock(...a),
+      putCodeArtifact: (...a) => runtime.images.putCodeArtifact(...a),
+      putBlock: (...a) => runtime.images.putBlock(...a),
+      putShape: (...a) => runtime.images.putShape(...a),
+      putObject: async (imageId, input, options) => {
+        if (input.id.endsWith('/methods')) throw new Error('interrupted before the dictionary');
+        return await runtime.images.putObject(imageId, input, options);
+      },
+    };
+    await assert.rejects(
+      defineMethods({
+        images: failing, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass, methods: [{selector: 'foo', program: literal('foo')}],
+      }),
+      /interrupted before the dictionary/,
+    );
+
+    // A different single selector wants a different shape id, so this must simply work.
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+      classRef: kernel.integerClass, methods: [{selector: 'bar', program: literal('bar')}],
+    });
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'bar-send', '[ :x | x bar ]', [integerValue(1)]),
+      textValue('bar'),
+    );
+  });
+});
+
+test('defineMethods rejects the same selector twice in one call, before writing', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const dictionary = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
+    await assert.rejects(
+      defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass,
+        methods: [
+          {selector: 'dup', program: {parameters: [], captures: [], body: {op: 'literal', value: textValue('a')}}},
+          {selector: 'dup', program: {parameters: [], captures: [], body: {op: 'literal', value: textValue('b')}}},
+        ],
+      }),
+      /declares dup twice in one call/,
+    );
+    const after = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
+    assert.equal(after._version, dictionary._version);
+  });
+});
+
+test('defineMethods refuses to extend a dictionary that already violates uniqueness', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const dictionary = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
+    const corrupt = await runtime.images.putShape('app', {
+      id: 'corrupt-extend-shape',
+      slots: [{id: 'a', name: 'x'}, {id: 'b', name: 'x'}],
+    });
+    await runtime.images.putObject('app', {
+      id: dictionary.id,
+      shape: objectRef('app', corrupt.id),
+      slots: {a: objectRef('app', 'anything'), b: objectRef('app', 'anything')},
+      metadata: dictionary.metadata,
+    }, {expectedVersion: dictionary._version});
+
+    await assert.rejects(
+      defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass,
+        methods: [{selector: 'fresh', program: {parameters: [], captures: [], body: {op: 'literal', value: textValue('f')}}}],
+      }),
+      /duplicate selector: x/,
+    );
+  });
+});
+
+test('the builder rejects a Behavior the dispatcher would refuse', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const behavior = await runtime.images.getObject('app', kernel.integerClass.objectId);
+    // Carries the fixed shape, but its name slot holds a ref where text is promised.
+    await runtime.images.putObject('app', {
+      id: behavior.id, shape: behavior.shape, behavior: behavior.behavior,
+      slots: {...behavior.slots, 'behavior-name': objectRef('app', 'smalltalk/nil')},
+      metadata: behavior.metadata,
+    }, {expectedVersion: behavior._version});
+
+    await assert.rejects(
+      defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass, methods: [plusMethod()],
+      }),
+      /is not a well-formed/,
+    );
+  });
+});
+
+test('a code artifact differing only in provenance is not treated as exact', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const methodObjectId = `${kernel.integerClass.objectId}/method/bGFiZWw`;
+    const program = {parameters: [], captures: [], body: {op: 'literal', value: textValue('x')}};
+    // Same representation and content, different derivedFrom.
+    const decoy = await runtime.images.putCodeArtifact('app', {
+      id: 'decoy',
+      representation: 'lagrange-code/v0',
+      content: textValue(JSON.stringify(program)),
+    });
+    await runtime.images.putCodeArtifact('app', {
+      id: `${methodObjectId}:semantic`,
+      languageId: 'symmetric-smalltalk',
+      representation: 'lagrange-code/v0',
+      content: textValue(JSON.stringify(program)),
+      derivedFrom: [objectRef('app', decoy.id)],
+      metadata: {smalltalk: 'method', selector: 'label'},
+    });
+
+    await assert.rejects(
+      defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass, methods: [{selector: 'label', program}],
+      }),
+      (error) => error.name === 'SmalltalkKernelConflictError',
     );
   });
 });

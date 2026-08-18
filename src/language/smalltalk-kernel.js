@@ -121,6 +121,20 @@ async function ensureObject(service, imageId, desired) {
   return existing;
 }
 
+// The global invariant, checked against stored data rather than assumed from how it was built.
+// Generic graph writes can produce a dictionary shape with duplicate selector names, and any
+// name-based lookup over that resolves by position — the first-wins defect ADR 0044 decision 2
+// exists to remove. Validating the *whole* shape rather than only the selector being sent is what
+// makes the invariant global rather than incidental to the send.
+function assertUniqueSelectorShape(shape, label) {
+  const seen = new Set();
+  for (const {name} of shape.slots) {
+    if (seen.has(name)) throw new TypeError(`${label} declares duplicate selector: ${name}`);
+    seen.add(name);
+  }
+  return shape;
+}
+
 function assertImages(images) {
   if (!images || typeof images !== 'object') throw new TypeError('images service is required');
   for (const method of ['putShape', 'getShape', 'putObject', 'getObject']) {
@@ -336,6 +350,7 @@ async function readBehavior(images, ref) {
 export {
   BEHAVIOR_SHAPE_ID,
   SmalltalkKernelConflictError,
+  assertUniqueSelectorShape,
   canonicalJson,
   ensureObject,
   ensureShape,
