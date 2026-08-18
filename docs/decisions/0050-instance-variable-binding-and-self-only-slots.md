@@ -206,8 +206,26 @@ the dispatcher can report it. It rides the resolution alongside ADR 0045's `effe
 becomes transient frame state; it does **not** become a field of the activation record, which stays
 the closed structure ADR 0005 defined.
 
-A method defined on a class whose `instanceShape` is `nil` can therefore name no instance variable at
-all, which is the right answer: such a class declares no state.
+"Declared by" means the defining Behavior's **visible layout**, not its own `instanceShape` slot
+alone. A `nil` layout in the middle of a chain declares nothing of its own and cancels nothing above
+it — that is exactly the rule ADR 0049's implementation already encodes in
+`nearestDeclaredInstanceShape`, and it exists because an abstract intermediate class's *methods* are
+still inherited by concrete descendants:
+
+```text
+A          instanceShape {a}
+B          instanceShape nil        abstract; declares no layout of its own
+C          instanceShape {a, c}     concrete
+
+B >> bump      may name `a`         it is ancestor-declared, and every concrete
+                                    descendant of B carries it
+B >> peek      may not name `c`     C-private, exactly as decision 5's Parent/Child case
+```
+
+So the permission check walks from the defining Behavior to the nearest ancestor that declares a
+layout, and the binder resolves names against the same view. A class with no layout *and* no ancestor
+with one — `Object`, for instance — can then name no instance variable at all, which remains the
+right answer for a class that genuinely declares no state.
 
 ### 5a. The frame belongs to a method activation, and is not blindly inherited
 
@@ -346,6 +364,36 @@ not implemented in the first landing, it must raise explicitly. It must never fa
 Block as the target, and it must never skip decision 5's check because the enclosing self was
 inconvenient to obtain. Staging is permitted; a hole is not.
 
+### 10a. An ivar-using closure does not survive its execution
+
+Decision 10's frame restore works because the frame is still there. A closure can outlive it.
+
+ADR 0043 makes a *mutable-cell* capture unsupported across executions and says so with a named error,
+but an immutable capture is different: a closure whose captures are all snapshots is an ordinary
+durable Block plus lexical environment, and a later execution can invoke it perfectly well. So an
+ivar-using closure that escapes has a frame that is simply gone.
+
+The tempting repair is to persist `definingBehavior` as an ordinary captured ref. That must not
+happen, and the reason is decision 5's reason: a lexical environment and a semantic artifact are
+durable, forgeable graph data. A persisted defining Behavior is a claim the runtime cannot check,
+which is exactly the forged-artifact vector the whole self-only design exists to close. Making the
+frame durable would hand an attacker the one fact the check depends on.
+
+So the boundary is drawn narrowly and honestly:
+
+```text
+ivar-using closure, same execution      the transient frame is restored; ordinary behavior
+ivar-using closure, later execution     explicitly unsupported, and fails closed
+```
+
+The failure is a named, distinguishable error in the shape ADR 0043 already established for escaping
+mutable cells — not `nil`, not an unbound name, and not a silent read of the wrong object.
+
+Cross-execution access to private slots from a closure is a real capability and a real question, and
+it needs a durable provenance or authenticity decision of its own: something that can *prove* which
+class a stored method body belongs to, rather than believing a ref it carries. That decision is
+deferred rather than smuggled in here, because getting it wrong quietly is worse than not having it.
+
 ## Proof required for implementation
 
 ```text
@@ -380,7 +428,9 @@ defining-behavior scope, adversarially
         instance runs it, even though the target is genuinely self and the Shape genuinely has it
     a Parent method still reaches Parent-declared slots on a Child instance
     a Child method reaches both its own and inherited slots
-    a method defined on a class whose instanceShape is nil can name no instance variable
+    a method on an abstract intermediate class with a nil layout may still name an
+        ancestor-declared slot, and runs correctly on a concrete descendant
+    a method defined on a class with no layout and no ancestor layout can name no instance variable
 
 frame lifetime
     a nested Smalltalk method dispatch replaces the frame; the callee sees its own self
@@ -391,6 +441,8 @@ frame lifetime
 blocks
     the semantic rule holds, or a staged implementation fails explicitly rather than reading
         the Block or skipping the self check
+    an ivar-using closure invoked in a *later* execution fails closed with a named error
+    no defining Behavior is ever written into a durable environment or artifact to make that work
 
 boundaries
     a slot write succeeds with no authority context at all
@@ -413,6 +465,8 @@ both lanes
 - class variables, class instance variables and pool dictionaries
 - a second object-mutation model with different retry behavior from ADR 0047's indexed `at:put:`
 - reading another object's state at all, including a same-class sibling; that is reflection
+- cross-execution private-slot access from an escaped closure, which needs a durable provenance or
+  authenticity decision able to prove which class a stored method body belongs to
 - the legacy shape-backed MethodDictionary reader, which stays until a real old image needs
   migrating or an explicit compatibility cutoff is decided
 
@@ -428,6 +482,7 @@ the slot primitives are language-owned and reached as ordinary captured Block se
 self-only is proved at execution, not arranged by the compiler
 self-only is necessary and not sufficient: the slot must also be declared by the defining Behavior
 "may this method name this slot" and "does this object have it" are separate checks; never collapse them
+visibility is the defining Behavior's nearest declared layout; a nil layout declares nothing and cancels nothing
 the frame is per method activation and propagates by callee kind, never by nesting depth
 an arbitrary Block invoked by a method never borrows the invoker's self
 the self seam is transient, non-durable, never a Value, never authority, never caller-supplied
@@ -440,4 +495,6 @@ the internal _version is runtime machinery, never a program-supplied authorizati
 named-slot mutation shares indexed at:put:'s conflict semantics; change them together or not at all
 declaring a layout never generates protocol; accessors are written, not implied
 instance-variable access is lexically bound to self, Blocks included; staging must fail closed
+an ivar-using closure works within its execution and fails closed after it; the frame is never made durable
+a persisted defining Behavior would be forgeable data, which is the vector self-only exists to close
 ```
