@@ -1,6 +1,7 @@
 # ADR 0046: Allocation, initialization and class introspection
 
-Status: accepted — `basicNew`, `new` and `class` stay ordinary Smalltalk messages; allocation and class lookup use language-owned primitive Blocks registered at the composition root and image-local by one rule, instance shape is explicit durable class data, and image-native allocation is not an ADR 0037 capability check.
+Status: implemented — `basicNew`, `new` and `class` stay ordinary Smalltalk messages; allocation and class lookup use language-owned primitive Blocks registered at the composition root and image-local by one rule, instance shape is explicit durable class data, and image-native allocation is not an ADR 0037 capability check.
+Proven by: test/smalltalk-allocation.test.js, test/steering-docs.test.js
 
 ## Problem
 
@@ -440,11 +441,23 @@ basic-new
     all belong to the primitive image
 ```
 
-So a foreign primitive Block fails for **either** primitive. The `class-of` half matters as much as
-the allocation half and is easier to get wrong: a method that captured another image's `class-of`
-would quietly answer that image's `Integer`, `True` or `Text` for a locally dispatched send. That is
-the cross-image identity bug class this substrate rejects everywhere else — a shape or slot reference
-is identity only together with its `imageId` — and it would be silent rather than a failure.
+A foreign primitive Block therefore fails for **either** primitive whenever its input is a ref: a
+`class-of` or `basic-new` handed a local object cannot be answered by another image's primitive.
+
+An immediate Value is the one case where the rule does not produce a failure, and the difference is
+worth stating precisely rather than glossing. An integer, text or boolean carries no image, so there
+is no foreign ref to reject; a foreign `class-of` answers from *its own* kernel, exactly as the rule
+above says. That is correct — the primitive's image is what decides — but it means a method that
+captured another image's `class-of` would quietly answer that image's `Integer`, `True` or `Text`
+instead of the local class, with no error anywhere. That is the cross-image identity bug class this
+substrate rejects everywhere else — a shape or slot reference is identity only together with its
+`imageId` — and here it is silent by construction.
+
+The defence is therefore locality of the *capture*, not a runtime check that cannot exist: a method
+installed in image `I` captures `I`'s primitive Blocks, which the protocol installer guarantees
+because it writes both Blocks and the methods that name them into one image. The proof obligation is
+correspondingly two-sided — a foreign primitive must fail on a ref input, and must answer from its
+own kernel on an immediate one.
 
 The rule is what makes the answer correct rather than coincidental: a method found in image `I`
 captures `I`'s primitive Block, so the primitive image is the image whose kernel should answer.
@@ -554,7 +567,8 @@ both execution lanes
 primitive boundary
     direct basic-new primitive call validates receiver locality/Behavior/instanceShape
     primitive Blocks from another image cannot allocate this image's class
-    a foreign class-of fails rather than answering the foreign image's Integer/True/Text
+    a foreign class-of fails on a ref input rather than answering the foreign image's class
+    a foreign class-of on an immediate Value answers its own kernel, never the dispatch image's
     both primitives derive their image from activation.block.imageId, not from the sender
     pinned refs remain unsupported
 
@@ -609,7 +623,7 @@ ADR 0045 remains load-bearing: true class == True and false class == False witho
 image-native allocation is not an ADR 0037 capability check; external object creation is a separate future boundary
 ref != authority remains true; lack of an allocation grant is a language-boundary decision, not ref-derived permission
 both primitives are image-local by one rule: the primitive image is activation.block.imageId
-a foreign class-of fails; it never answers another image's Integer, True or Text
+a foreign class-of fails on a ref; on an immediate Value it answers its own kernel, never the sender's
 every required Shape slot is filled because the object model forces it; this ADR only chooses nil
 the allocation primitive mints its own candidate id and writes create-once; putObject never mints it
 known collision -> fresh candidate; unknown outcome of one host op -> same candidate; new send -> fresh candidate

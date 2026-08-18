@@ -26,10 +26,18 @@ artifact's `representation`.
 | `image-projection-binding/v1` | `installImageProjectionBinding()` | `createImageProjectionBindingV1Executor()` |
 | `image-mutation-binding/v1` | `installImageMutationBinding()` | `createImageMutationBindingV1Executor()` |
 | `image-versioned-projection-binding/v1` | `installImageVersionedProjectionBinding()` | `createImageVersionedProjectionBindingV1Executor()` |
+| `smalltalk-kernel-primitive/v1` | `installSmalltalkAllocationProtocol()` | `createSmalltalkKernelPrimitiveV1Executor()`, registered by `createRuntime()` |
 
 The foreign-runtime executors are registered only when `createRuntime()` receives foreign
 runtime definitions, runtimes and definition bindings together. The Component binding
 executor is always registered, but needs a `componentRuntime` to execute anything.
+
+`smalltalk-kernel-primitive/v1` is the one representation *not* registered by
+`createDefaultCodeExecutorRegistry()`. It is language-owned, and `src/language` already imports
+`src/execution`, so registering it there would close a dependency cycle. `createRuntime()` registers
+it instead, the same way it supplies `createSmalltalkTemporaryInitializer()` — language-owned
+execution policy enters through composition, and execution never depends on language (ADR 0046
+decision 2a). "Registered" in the table above therefore means *registered by the assembled runtime*.
 
 ## Interface representations
 
@@ -103,10 +111,15 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `defineClass()` | a class and its metaclass, wired by the ADR 0044 chain rule |
 | `defineMethods()` | methods from semantic `lagrange-code/v0` programs, optionally with captures |
 | `installSmalltalkControlFlow()` | `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:` on True and False (ADR 0045) |
+| `installSmalltalkAllocationProtocol()` | the `class-of`/`basic-new` primitive Blocks, plus `Object >> class`, `Object >> initialize`, `Class >> basicNew` and `Class >> new` (ADR 0046) |
 
 A boolean Value dispatches by bridging to that image's `true`/`false` object, which becomes the
 send's `effectiveReceiver` — the optional second key of a dispatch resolution. Every other immediate
 Value still takes its class from its kind.
+
+A class is instantiable when its `instanceShape` is a Shape ref; `nil` there means not instantiable,
+and an empty Shape is a valid zero-slot layout. `defineClass()` still stores `nil` when no
+`instanceShapeRef` is supplied, so no class written before ADR 0046 changes meaning.
 
 ## ABI and contract identifiers
 

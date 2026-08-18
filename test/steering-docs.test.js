@@ -5,6 +5,7 @@ import {existsSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createDefaultCodeExecutorRegistry} from '../src/execution/executor.js';
+import {createRuntime} from '../src/runtime.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DECISIONS = join(ROOT, 'docs', 'decisions');
@@ -77,13 +78,26 @@ test('docs/seams.md lists exactly the executable representations the registry se
     [...section.matchAll(/^\| `([^`]+)` \|/gm)].map(([, representation]) => representation),
   );
 
-  const registry = createDefaultCodeExecutorRegistry({
+  // The assembled runtime's registry, not the default execution registry. ADR 0046 decision 2a puts
+  // a language-owned executor in at the composition root precisely so `src/execution` never imports
+  // `src/language`, so "registered executable representation" has to mean what the runtime serves —
+  // otherwise documenting one would read as documenting something nothing registers.
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  const registered = new Set(runtime.codeExecutors.executors.keys());
+  await runtime.close();
+  assert.ok(registered.size > 0, 'expected the runtime to register representations');
+
+  // The runtime only ever adds to the default execution registry, never replaces it. Checking that
+  // separately keeps the widening honest: a representation quietly dropped from the default registry
+  // would otherwise still look documented because the composition root happened to add one.
+  const defaults = createDefaultCodeExecutorRegistry({
     foreignRuntimeDefinitions: {start() {}},
     foreignRuntimes: {call() {}},
     foreignRuntimeDefinitionBindings: {resolve() {}},
   });
-  const registered = new Set(registry.executors.keys());
-  assert.ok(registered.size > 0, 'expected the default registry to register representations');
+  for (const representation of defaults.executors.keys()) {
+    assert.ok(registered.has(representation), `the assembled runtime must still serve ${representation}`);
+  }
 
   for (const representation of registered) {
     assert.ok(
