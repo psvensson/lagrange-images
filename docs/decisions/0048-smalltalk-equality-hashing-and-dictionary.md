@@ -124,6 +124,11 @@ IEEE64 already has one representation per numeric value, so no additional numeri
 needed. NaN is deliberately non-reflexive under `=`; its hash is stable but Dictionary does not repair
 a key whose equality relation says it is unequal to itself.
 
+Exact Integer/Float comparison and normalization must be derived from the Float64 value itself, not
+from JavaScript's safe-integer range. A representable integral Float such as `2^60` is equal to the
+Integer `2^60` and must hash identically even though neither is a JavaScript safe integer; Integer
+`2^60 + 1` is not equal to that Float.
+
 This algorithm is a durable Smalltalk contract, not an implementation detail to be replaced for a
 faster host hash. A later built-in hash algorithm requires an explicit compatibility/migration
 decision because existing persistent tables were laid out using this one.
@@ -215,6 +220,12 @@ A mutation never changes the published table object. It:
 An update copies the existing capacity. An insertion grows first when the post-insert load would
 exceed 3/4, doubling capacity and reinserting existing entries by their **stored hashes**. Existing
 keys are not sent `hash` again merely because the table grew.
+
+One exact no-op is recognized before publication: when an equal key already stores the exact same
+canonical Value supplied to `at:put:`, the operation may answer that value without writing another
+table snapshot or bumping the Dictionary version. This is canonical-Value identity of the stored
+value, not a second dynamic `=` send. It makes an exact caller retry after a lost acknowledgement
+idempotent in durable state without inventing value-comparison policy for Dictionary values.
 
 Copy-on-write makes mutation O(capacity) in durable bytes. That is a conscious first tradeoff. The
 current backend stores an object as a whole record anyway, and the alternative — mutating a child
@@ -339,6 +350,7 @@ semantic decision and should land as its own small PR (tracked separately).
 default equality
     two refs compare equal iff imageId/objectId are equal, independent of object version/contents
     integer equality is exact and integer/float equality succeeds only for exactly equal numbers
+    Integer 2^60 equals Float64 2^60 and hashes the same; Integer 2^60+1 does not equal that Float
     +0 = -0; NaN is unequal to itself
     text and bytes compare by contents
     boolean sends survive the true/false effective-receiver bridge
@@ -348,7 +360,7 @@ stable hash
     every built-in equal pair above has equal hash
     hash is identical across two fresh runtimes/restarts for the same built-in value/ref
     object hash ignores backend _version and mutable slots
-    numerically equal Integer/Float pairs have identical hash
+    numerically equal Integer/Float pairs, including representable integral floats beyond JS safe integer, have identical hash
     +0 and -0 have identical hash
     changing the hash implementation would be observable, so the exact SHA-256/63-bit contract is tested
 
@@ -369,6 +381,7 @@ protocol
     size starts at 0 and counts unique keys, not writes
     at:put: inserts and answers the value
     at:put: for an equal key replaces the value without increasing size
+    an exact repeat storing the same canonical Value publishes no new table and does not bump Dictionary version
     includesKey: distinguishes present/absent keys
     at: returns the stored value and missing at: raises SmalltalkDictionaryKeyNotFoundError
     collisions probe correctly even when distinct keys have the same hash
@@ -378,7 +391,7 @@ concurrency/failure
     mutation publishes a fresh table then CAS-swaps exactly one Dictionary slot
     a conflict after user hash/= code is surfaced, never silently retried
     a failed/preempted swap leaves the old Dictionary mapping complete and unchanged
-    a lost acknowledgement after the Dictionary swap is retry-safe: the mapping is found rather than duplicated
+    a lost acknowledgement after the Dictionary swap is retry-safe: exact retry finds the same mapping and performs no second durable publication
     an orphan next-table snapshot is unreachable state, not a half-published Dictionary
 
 boundaries
@@ -464,6 +477,7 @@ Dictionary identity is stable; published table snapshots are immutable by langua
 bucket occupancy is the hash cell, so nil remains a legal key
 v1 uses open addressing, linear probing, minimum capacity 8, max load 3/4, no deletion
 at:put: builds a complete next table and CAS-swaps one Dictionary ref after user hash/= sends finish
+exact at:put: retry of an already-stored same canonical Value is a durable no-op
 conflicts after user code are surfaced and never silently retried
 image-native Dictionary mutation is not an ADR 0037 authority check
 general Dictionary lookup sends hash/=; later MethodDictionary Text lookup may use only the pure built-in fast path
