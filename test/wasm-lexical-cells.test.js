@@ -6,6 +6,7 @@ import {
   createRuntime,
   integerValue,
   objectRef,
+  textValue,
 } from '../src/runtime.js';
 import {compileWasmV1Module} from '../src/wasm/compiler-v1.js';
 
@@ -263,6 +264,88 @@ test('a v0 module artifact is not accepted under the v1 ABI', async () => {
     await assert.rejects(
       run(runtime, objectRef('wasm-cells', block.id)),
       /WASM module ABI does not match lagrange-value-handle\/v1/,
+    );
+  });
+});
+
+// Validation parity with the frozen v0 reader. A new ABI reader must not be laxer than the one it
+// sits beside; each of these was present in v0 and is now required of v1 too.
+test('the v1 module reader keeps the v0 metadata validations', async () => {
+  await withRuntime(async (runtime) => {
+    const compiled = compileWasmV1Module(ASSIGN_THEN_READ);
+    const base = {
+      abi: 'lagrange-value-handle/v1',
+      entry: 'run',
+      parameters: 0,
+      captures: [],
+      cellBindings: compiled.cellBindings,
+      literals: compiled.literals,
+      sendSites: compiled.sendSites,
+      closureSites: compiled.closureSites,
+      functions: compiled.functions,
+      semanticRepresentation: 'lagrange-code/v1',
+    };
+    const attempt = async (id, metadata) => {
+      const moduleArtifact = await runtime.images.putCodeArtifact('wasm-cells', {
+        id: `${id}:module`,
+        representation: WASM_MODULE_V1,
+        content: {kind: 'bytes', base64: Buffer.from(compiled.bytes).toString('base64')},
+        metadata,
+      });
+      const moduleRef = objectRef('wasm-cells', moduleArtifact.id);
+      const functionArtifact = await runtime.images.putCodeArtifact('wasm-cells', {
+        id: `${id}:function`,
+        representation: WASM_FUNCTION_V1,
+        content: moduleRef,
+        derivedFrom: [moduleRef, moduleRef],
+        metadata: {
+          abi: 'lagrange-value-handle/v1',
+          entry: 'run',
+          parameters: 0,
+          captures: [],
+          cellBindings: compiled.cellBindings,
+          closurePrototypes: [],
+        },
+      });
+      const block = await runtime.images.putBlock('wasm-cells', {
+        id,
+        code: objectRef('wasm-cells', functionArtifact.id),
+      });
+      return run(runtime, objectRef('wasm-cells', block.id));
+    };
+
+    await assert.rejects(
+      attempt('empty-functions', {...base, functions: []}),
+      /functions must be a non-empty array/,
+    );
+    await assert.rejects(
+      attempt('duplicate-sites', {
+        ...base,
+        sendSites: [{languageId: 'symmetric-smalltalk', message: textValue('value'), arity: 0}],
+        functions: compiled.functions.map((descriptor) => ({...descriptor, sendSiteIndices: [0, 0]})),
+      }),
+      /contains duplicate index 0/,
+    );
+    // The v1 reader also rejects a ref-valued send message, matching v0. That case is not asserted
+    // here because it is unreachable through the image service: putCodeArtifact refuses object
+    // references in metadata before any ABI reader sees the artifact. The check is retained as
+    // defence in depth, not because a stored artifact can currently reach it.
+  });
+});
+
+test('the v1 executor requires declareTemporaries as part of its contract', async () => {
+  await withRuntime(async (runtime) => {
+    const block = await installV1Block(runtime, 'wasm-cells', {id: 'no-declare', program: ASSIGN_THEN_READ});
+    const activation = await runtime.invocations.invokeBlock(block, []);
+    const code = await runtime.images.getCodeArtifact('wasm-cells', 'no-declare:function');
+    const executor = runtime.executor.executors.get(WASM_FUNCTION_V1);
+    await assert.rejects(
+      executor.execute({activation, code}, {
+        images: runtime.images,
+        readCell() { throw new Error('unused'); },
+        writeCell() { throw new Error('unused'); },
+      }),
+      /requires the declareTemporaries execution operation/,
     );
   });
 });

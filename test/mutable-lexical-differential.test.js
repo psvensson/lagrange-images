@@ -294,3 +294,67 @@ test('pooled WASM instances stay isolated while running v1 trees', async () => {
     assert.equal(stats.created, 1, 'three activations must share one pooled instance');
   });
 });
+
+// ADR 0043 decision 5 is a semantic claim, so the lanes must agree on *which* failure it is. The
+// neutral lane meets the durable {cell: true} record and raises EscapingMutableClosureError. The
+// WASM lane cannot consult that record — its cell operations are synchronous and cell-only, and a
+// durable fallback would reopen the snapshot channel — so it must reach the same conclusion from
+// what it does know: a cell binding with source 'capture' that is absent from this activation
+// belonged to a finished execution.
+//
+// Getting this wrong is quiet: MissingLexicalCellError also stops the program, but it means "this
+// activation has no such cell", which is a different statement about the language.
+test('an escaping mutable closure fails the same way in both lanes', async () => {
+  await withRuntime(async (runtime, helpers) => {
+    const source = `
+      [ :bump |
+        | n increment |
+        n := 0.
+        increment := [ n := bump value: n ].
+        increment value.
+        increment ]
+    `;
+
+    const neutral = await runNeutral(runtime, 'diff', 'escaping', source, [helpers.bump]);
+    // The first execution has ended, so the returned closure now depends on a dead cell.
+    const neutralActivation = await runtime.invocations.invokeBlock(neutral.result, []);
+    await assert.rejects(
+      runtime.executor.execute(neutralActivation),
+      (error) => error.name === 'EscapingMutableClosureError',
+    );
+
+    const tree = await installWasmBlockTree({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      semanticRef: neutral.semanticRef,
+      id: 'escaping:wasm',
+    });
+    const wasmActivation = await runtime.invocations.invokeBlock(objectRef('diff', tree.block.id), [helpers.bump]);
+    const closure = await runtime.executor.execute(wasmActivation);
+    const closureActivation = await runtime.invocations.invokeBlock(closure, []);
+    await assert.rejects(
+      runtime.executor.execute(closureActivation),
+      (error) => error.name === 'EscapingMutableClosureError',
+    );
+  });
+});
+
+// The other half of the translation: an absent *temporary* slot is a malformed artifact, not an
+// escaped closure, and must keep saying so.
+test('a missing temporary slot is not reported as an escaping closure', async () => {
+  await withRuntime(async (runtime) => {
+    const {MissingLexicalCellError} = await import('../src/execution/lexical-cells.js');
+    const {translateMissingCell} = await import('../src/wasm/cell-access.js');
+    const missing = new MissingLexicalCellError('root:temporary:0');
+
+    const asTemporary = translateMissingCell(missing, {id: 'root:temporary:0', name: 'n', source: 'temporary'});
+    assert.equal(asTemporary.name, 'MissingLexicalCellError');
+
+    const asCapture = translateMissingCell(missing, {id: 'root:temporary:0', name: 'n', source: 'capture'});
+    assert.equal(asCapture.name, 'EscapingMutableClosureError');
+
+    // Unrelated failures pass through untouched.
+    const other = new TypeError('something else');
+    assert.equal(translateMissingCell(other, {id: 'x', name: 'x', source: 'capture'}), other);
+  });
+});

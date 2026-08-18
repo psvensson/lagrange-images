@@ -12,6 +12,7 @@ import {
   WASM_INSTANCE_REUSE_STATELESS_V0,
   WasmInstancePool,
 } from './instance-pool.js';
+import {readCellThrough, writeCellThrough} from './cell-access.js';
 import {WasmModuleCache} from './module-cache.js';
 import {WASM_RESUMABLE_VALUE_HANDLE_ABI_V2} from './resumable-abi.js';
 
@@ -305,13 +306,13 @@ function createRebindableHostEnvironment(literals, sendSites, closureSites, effe
     // entry — including each resumption — so a cell read after resumption sees the live cell.
     cell_get(slot) {
       const state = current();
-      return state.arena.put(state.readCell(state.cellBindingId(slot)));
+      return state.arena.put(readCellThrough(state.readCell, state.cellBinding(slot)));
     },
     cell_set(slot, handle) {
       const state = current();
-      const bindingId = state.cellBindingId(slot);
+      const binding = state.cellBinding(slot);
       const value = state.arena.get(handle, `WASM cell_set value handle for slot ${slot}`);
-      return state.arena.put(state.writeCell(bindingId, value));
+      return state.arena.put(writeCellThrough(state.writeCell, binding, value));
     },
   };
 
@@ -398,11 +399,11 @@ function createRebindableHostEnvironment(literals, sendSites, closureSites, effe
         pending,
         readCell,
         writeCell,
-        cellBindingId(slot) {
+        cellBinding(slot) {
           if (!Number.isInteger(slot) || slot < 0 || slot >= cellBindings.length) {
             throw new TypeError(`WASM cell slot out of range for ${descriptor.entry}: ${slot}`);
           }
-          return cellBindings[slot].id;
+          return cellBindings[slot];
         },
         activeSendSites: new Set(descriptor.sendSiteIndices),
         activeClosureSites: new Set(descriptor.closureSiteIndices),

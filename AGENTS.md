@@ -226,6 +226,8 @@ pooled instance != activation state
 - A cell capture occupies no Value-handle position in either WASM ABI. Closure-site arity counts snapshot captures only — that is what makes a cell snapshot structurally unrepresentable rather than merely avoided.
 - Cell slot indices are function-local, resolved through the active function descriptor. A shared module holds several Blocks whose static binding ids all start at `root:`, so a module-global table would confuse unrelated slots.
 - Every WASM metadata normalizer branches on the declared `metadata.abi`. Never teach an old normalizer to accept a new shape; add a sibling that requires the new one.
+- A sibling ABI reader must be no laxer than the one it sits beside. When adding one, port every validation from the frozen reader — duplicate index rejection, non-empty function tables, reference-free metadata — even where another layer happens to catch the case first.
+- The two lanes must agree on *which* failure a program gets, not merely that it fails. An absent cell means `EscapingMutableClosureError` when its binding is a capture and `MissingLexicalCellError` when it is a temporary; the WASM side derives that from `cellBindings.source` rather than consulting the durable record.
 
 ## Authority
 

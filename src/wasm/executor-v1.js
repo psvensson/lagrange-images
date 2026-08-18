@@ -2,8 +2,9 @@ import {
   assertWasmFunctionArtifact,
   assertWasmModuleArtifact,
 } from '../code/wasm-artifacts.js';
-import {canonicalizeValue, isObjectRef} from '../value/index.js';
+import {canonicalizeValue, isObjectRef, isReference} from '../value/index.js';
 import {ValueHandleArena, WASM_IMPORT_MODULE, WASM_VALUE_HANDLE_ABI_V1} from './abi.js';
+import {readCellThrough, writeCellThrough} from './cell-access.js';
 import {WasmModuleCache} from './module-cache.js';
 import {WASM_INSTANCE_REUSE_STATELESS_V0, WasmInstancePool} from './instance-pool.js';
 
@@ -37,11 +38,21 @@ function normalizeLiterals(value) {
 
 function normalizeIndexList(value, limit, label) {
   if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`);
+  const seen = new Set();
   return Object.freeze(value.map((entry, index) => {
     const site = requireNonNegativeInteger(entry, `${label} ${index}`);
     if (site >= limit) throw new TypeError(`${label} ${index} is out of range`);
+    if (seen.has(site)) throw new TypeError(`${label} contains duplicate index ${site}`);
+    seen.add(site);
     return site;
   }));
+}
+
+// Defence in depth: general metadata normalization already rejects object references, but this is
+// an invariant of the ABI reader and the new one should not be laxer than the frozen one.
+function assertNonReferenceMessage(message, index) {
+  if (isReference(message)) throw new TypeError(`WASM send site ${index} message must not hide a graph reference`);
+  return message;
 }
 
 function normalizeSendSites(value) {
@@ -50,7 +61,7 @@ function normalizeSendSites(value) {
     exactKeys(site, ['languageId', 'message', 'arity'], `WASM send site ${index}`);
     return Object.freeze({
       languageId: requiredText(site.languageId, `WASM send site ${index} languageId`),
-      message: canonicalizeValue(site.message),
+      message: assertNonReferenceMessage(canonicalizeValue(site.message), index),
       arity: requireNonNegativeInteger(site.arity, `WASM send site ${index} arity`),
     });
   }));
@@ -114,7 +125,9 @@ function sameCellBindings(left, right) {
 
 function normalizeModuleFunctions(value, sendSites, closureSites) {
   if (value === undefined) return null;
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.functions must be an array');
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError('WASM module metadata.functions must be a non-empty array');
+  }
   const entries = new Set();
   const memberIndices = new Set();
   return Object.freeze(value.map((descriptor, index) => {
@@ -229,14 +242,14 @@ function createRebindableHostEnvironment(literals, sendSites, closureSites) {
     // at `root:`, so a module-global table would confuse unrelated slots that share a name.
     cell_get(slot) {
       const state = current();
-      return state.arena.put(state.readCell(state.cellBindingId(slot)));
+      return state.arena.put(readCellThrough(state.readCell, state.cellBinding(slot)));
     },
     // Assignment is an expression, so this returns the handle of the value written.
     cell_set(slot, handle) {
       const state = current();
-      const bindingId = state.cellBindingId(slot);
+      const binding = state.cellBinding(slot);
       const value = state.arena.get(handle, `WASM cell_set value handle for slot ${slot}`);
-      return state.arena.put(state.writeCell(bindingId, value));
+      return state.arena.put(writeCellThrough(state.writeCell, binding, value));
     },
   };
 
@@ -305,11 +318,11 @@ function createRebindableHostEnvironment(literals, sendSites, closureSites) {
         pending,
         readCell,
         writeCell,
-        cellBindingId(slot) {
+        cellBinding(slot) {
           if (!Number.isInteger(slot) || slot < 0 || slot >= cellBindings.length) {
             throw new TypeError(`WASM cell slot out of range for ${descriptor.entry}: ${slot}`);
           }
-          return cellBindings[slot].id;
+          return cellBindings[slot];
         },
         activeSendSites: new Set(descriptor.sendSiteIndices),
         activeClosureSites: new Set(descriptor.closureSiteIndices),
@@ -356,7 +369,7 @@ async function acquireInstance({moduleArtifact, compiledModule, instancePool, li
 }
 
 function requireCellOperations(context) {
-  for (const operation of ['readCell', 'writeCell']) {
+  for (const operation of ['readCell', 'writeCell', 'declareTemporaries']) {
     if (typeof context[operation] !== 'function') {
       throw new TypeError(`the lagrange-value-handle/v1 ABI requires the ${operation} execution operation`);
     }
