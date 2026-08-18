@@ -229,6 +229,13 @@ pooled instance != activation state
 - A sibling ABI reader must be no laxer than the one it sits beside. When adding one, port every validation from the frozen reader — duplicate index rejection, non-empty function tables, reference-free metadata — even where another layer happens to catch the case first.
 - The two lanes must agree on *which* failure a program gets, not merely that it fails. An absent cell means `EscapingMutableClosureError` when its binding is a capture and `MissingLexicalCellError` when it is a temporary; the WASM side derives that from `cellBindings.source` rather than consulting the durable record.
 
+### Failure conformance
+
+- Two implementations of one abstraction owe conformance on failures as well as values. `success conformance` is `lane A value == lane B value`; `failure conformance` is that equivalent invalid programs or operations fail *for the same semantic reason*, not merely that both threw. `test/failure-conformance.test.js` holds these.
+- Assert the shared reason with one regex applied to both lanes. That permits lane-specific prefixes without inventing an error taxonomy, and still rejects a lane that fails for a different reason.
+- A guest-facing error must explain the program, never the transport. Reporting "invalid handle" where the program read an absent receiver is a conformance defect even though both lanes stop.
+- Constructing an "equivalent operation" takes care when the lanes take different parameters. A malformed version token rejected before an object lookup is a *different* operation, not a different answer to the same one — check before recording a divergence.
+
 ## Authority
 
 - Authority is execution context, never program data (ADR 0037). It is passed as `execute(activation, {authority})` and must never become a Value, a slot, a lexical capture, an `interface-composite/v0` payload, metadata, or part of Block identity or a derivation key.

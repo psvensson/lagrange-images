@@ -18,8 +18,15 @@ function sameValue(left, right) {
 }
 
 class ValueHandleArena {
-  constructor() {
+  #receiverAbsent;
+
+  // Handle 0 is reserved, and in a well-formed module the only way it reaches a value position is
+  // an activation reading a receiver it does not have. Reporting "invalid handle" there would leak
+  // the handle ABI in place of the program's actual error, and would make the WASM lane disagree
+  // with the neutral lane about *why* the program failed — not merely about wording.
+  constructor({receiverAbsent = false} = {}) {
     this.values = [null];
+    this.#receiverAbsent = receiverAbsent;
   }
 
   put(value) {
@@ -28,6 +35,7 @@ class ValueHandleArena {
   }
 
   get(handle, label = 'WASM value handle') {
+    if (handle === 0 && this.#receiverAbsent) throw new TypeError('activation has no receiver');
     if (!Number.isInteger(handle) || handle <= 0 || handle >= this.values.length) {
       throw new TypeError(`${label} is invalid: ${handle}`);
     }
