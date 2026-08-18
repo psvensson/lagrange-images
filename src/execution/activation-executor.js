@@ -129,7 +129,7 @@ class ActivationExecutor {
     return canonicalizeValue(record.value);
   }
 
-  async createClosure({prototype, captures}, cells = null) {
+  async createClosure({prototype, captures}, cells = null, arena = null, frame = null) {
     const prototypeRef = normalizeObjectRef(prototype, 'closure prototype');
     if (!Array.isArray(captures)) throw new TypeError('closure captures must be an array');
     const prototypeBlock = await this.images.getBlock(prototypeRef.imageId, prototypeRef.objectId);
@@ -171,12 +171,27 @@ class ActivationExecutor {
     // Execution-scoped, never durable: this is the only thing that lets a closure created in this
     // execution reach a live cell, and it dies with the arena.
     cells?.associate(blockRef, capturedCells);
+    // Lexical frame state, alongside the lexical cells that already work this way. Execution-scoped
+    // by construction: it dies with the arena, which is what makes an escaped closure fail closed
+    // rather than carry a forgeable claim into a later execution (ADR 0050 decision 10a).
+    if (frame) arena?.associateFrame?.(blockRef, frame);
     return blockRef;
   }
 
   // `authorityContext` is execution context in exactly the way `depth` already is: real,
   // load-bearing, and absent from the durable model. Nothing is added to the activation.
-  async execute(activation, {depth = 0, authority = null, cellArena = null, dispatchImage = null} = {}) {
+  // `invocationFrame` is ADR 0050 decision 5b's transient envelope, and `inheritedFrame` is the
+  // caller's frame offered to a callee the language marked as its own host operation. Both are
+  // execution context in exactly the way `depth` and `authority` are: they reach no activation
+  // record, no Value and no durable state.
+  async execute(activation, {
+    depth = 0,
+    authority = null,
+    cellArena = null,
+    dispatchImage = null,
+    invocationFrame = null,
+    inheritedFrame = null,
+  } = {}) {
     if (!Number.isInteger(depth) || depth < 0) throw new TypeError('activation depth must be a non-negative integer');
     if (depth > MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
     assertActivationRequest(activation);
@@ -199,6 +214,18 @@ class ActivationExecutor {
     // while still expiring when the execution does.
     const arena = cellArena ?? new LexicalCellArena();
     const cells = arena.activationCells(activation.block);
+
+    // ADR 0050 decision 5a, in priority order:
+    //
+    //   a dispatch that supplied a frame        REPLACES  — the callee runs as its own self
+    //   a callee the language marked inheriting INHERITS  — its host operation acts for the caller
+    //   a closure created inside a framed frame  RESTORES  — lexical self, per decision 10
+    //   anything else                            NONE      — and the slot primitives are unusable
+    //
+    // The restore case is also what makes decision 10a fail closed for free: the association lives
+    // in the arena, the arena dies with the execution, so a closure invoked in a *later* execution
+    // finds nothing rather than believing a durable claim.
+    const activeFrame = invocationFrame ?? inheritedFrame ?? arena.frameFor?.(activation.block) ?? null;
 
     // ADR 0044 decision 5a. A root activation dispatches in its own Block's image; a nested one
     // inherits what its sender computed. Context, never a field on the activation.
@@ -282,7 +309,10 @@ class ActivationExecutor {
           if (record) throw new TypeError(`lexical binding ${bindingId} is not an assignable cell`);
           throw new TypeError(`lexical binding not found: ${bindingId}`);
         }),
-        createClosure: whileActive('createClosure', async (request) => await this.createClosure(request, cells)),
+        // Read-only, and only meaningful to a language-owned executor: it is the identity of the
+        // method activation this operation is acting for, never a capability.
+        invocationFrame: activeFrame,
+        createClosure: whileActive('createClosure', async (request) => await this.createClosure(request, cells, arena, activeFrame)),
         // A nested send inherits the current authority. An executor may ask for a narrower
         // child, but never receives one: the attenuation happens here, so no executor ever
         // holds a context. Since attenuation only narrows, a nested send can lose rights and
@@ -301,12 +331,17 @@ class ActivationExecutor {
           const nextDispatchImage = isObjectRef(request.receiver)
             ? request.receiver.imageId
             : activeDispatchImage;
-          const nested = await this.invocations.sendMessage(request, {dispatchImage: nextDispatchImage});
-          return await this.execute(nested, {
+          const dispatched = await this.invocations.prepareDispatch(request, {dispatchImage: nextDispatchImage});
+          return await this.execute(dispatched.activation, {
             depth: depth + 1,
             authority: nestedAuthority,
             cellArena: arena,
             dispatchImage: nextDispatchImage,
+            invocationFrame: dispatched.frame,
+            // Offered only where the language said this callee is its own host operation. An
+            // ordinary Block send inherits nothing, so a method cannot lend its identity to a Block
+            // it merely invoked.
+            inheritedFrame: dispatched.inheritsFrame ? activeFrame : null,
           });
         }),
       },

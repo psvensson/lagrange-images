@@ -12,6 +12,12 @@ import {
   isWasmTailEffectRestrictionError,
 } from '../wasm/resumable-compiler.js';
 import {lowerLagrangeCodeV0, normalizeLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
+import {
+  LAGRANGE_CODE_V1,
+  lowerLagrangeCodeV1,
+  normalizeLagrangeCodeV1Program,
+} from '../code/lagrange-code-v1.js';
+import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {TupleSet} from '../support/tuple-map.js';
 import {sameRef} from './smalltalk-lookup.js';
@@ -40,6 +46,7 @@ import {
   readBehavior,
 } from './smalltalk-kernel.js';
 import {WASM_FUNCTION_V1, WASM_MODULE_V1} from '../code/wasm-artifacts.js';
+import {assembleWasmV1FunctionArtifact} from '../wasm/tree-installer-v1.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 // Installing methods onto a class, and defining new classes with their metaclasses.
@@ -55,6 +62,13 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be non-empty text`);
   return value;
+}
+
+// A method's semantic representation follows from what the program actually is, exactly as
+// `selectSemanticRepresentation` decides it for a Block. ADR 0043's v1 adds temporaries, statement
+// sequences and assignment; a method that needs none still lands on the v0 artifact it always did.
+function methodRepresentation(program) {
+  return Object.hasOwn(program ?? {}, 'temporaries') ? LAGRANGE_CODE_V1 : LAGRANGE_CODE_V0;
 }
 
 const methodsId = (ownerId) => `${ownerId}/methods`;
@@ -89,6 +103,29 @@ async function requireLocalBehavior(images, imageId, ref, label) {
 // honest; real replacement needs versioned method identity and gets it deliberately later.
 // A visible, retryable stall rather than a silent loss: the caller retries once migration has
 // swapped the Behavior's methods edge, and lands in the hashed dictionary.
+// ADR 0050 decision 10 permits staging and demands that staging fail closed. `defineMethods` has
+// never installed nested Block prototypes — every kernel method reaches a Block through a *capture*
+// rather than a literal — so a method containing one cannot be published at all. Refusing at
+// definition time is stronger than failing at execution: the method never exists, so there is no
+// path on which a Block could be read as the target or the self check skipped.
+class SmalltalkMethodBlockLiteralError extends TypeError {
+  constructor(selector) {
+    super(
+      `method ${selector} contains a Block literal, which method installation does not yet support; `
+      + 'instance-variable access inside a nested Block is deferred rather than partly implemented',
+    );
+    this.name = 'SmalltalkMethodBlockLiteralError';
+    this.selector = selector;
+  }
+}
+
+function containsBlockLiteral(expression) {
+  if (!expression || typeof expression !== 'object') return false;
+  if (Array.isArray(expression)) return expression.some(containsBlockLiteral);
+  if (expression.op === 'block') return true;
+  return Object.values(expression).some(containsBlockLiteral);
+}
+
 class SmalltalkSealedMethodDictionaryError extends TypeError {
   constructor(dictionaryRef) {
     super(
@@ -243,17 +280,17 @@ async function ensureBlock(images, imageId, desired) {
 //
 // Reuse compares the *whole* artifact against a freshly derived one rather than trusting
 // representation plus a provenance edge, which would let stale content through.
-async function ensureNeutralCode({images, compilation, imageId, id, semanticRef}) {
+async function ensureNeutralCode({images, compilation, imageId, id, semanticRef, target = NEUTRAL_EXPRESSION_V0}) {
   const codeId = `${id}:code`;
   const existing = await images.getCodeArtifact(imageId, codeId);
   if (!existing) {
-    const code = await compilation.compileArtifact(semanticRef, {id: codeId, targetRepresentation: NEUTRAL_EXPRESSION_V0});
+    const code = await compilation.compileArtifact(semanticRef, {id: codeId, targetRepresentation: target});
     return objectRef(imageId, code.id);
   }
   // Derive under a scratch id so the comparison is against what a fresh compile actually produces.
   const probeId = `${codeId}:probe`;
   const fresh = await images.getCodeArtifact(imageId, probeId)
-    ?? await compilation.compileArtifact(semanticRef, {id: probeId, targetRepresentation: NEUTRAL_EXPRESSION_V0});
+    ?? await compilation.compileArtifact(semanticRef, {id: probeId, targetRepresentation: target});
   const rebase = (record) => ({...record, derivedFrom: record.derivedFrom ?? []});
   if (codeArtifactProjection(rebase(fresh)) !== codeArtifactProjection(rebase(existing))) {
     throw new SmalltalkKernelConflictError('code artifact', imageId, codeId);
@@ -269,8 +306,35 @@ async function ensureNeutralCode({images, compilation, imageId, id, semanticRef}
 // compile would select is resolved first, and an existing function must point at that module and
 // carry the same entry, not merely mention the semantic artifact in its provenance. Provenance
 // alone would let a function with stale compiled output be reused rather than rebuilt.
-async function ensureWasmFunction({images, compilation, imageId, id, semanticRef}) {
+async function ensureWasmFunction({images, compilation, imageId, id, semanticRef, representation}) {
   const functionId = `${id}:wasm:function`;
+  // ADR 0043's v1 semantics reach the WASM lane through their own assembler. There is no `describe`
+  // helper for it, so reuse compares against a freshly assembled probe — the same trick
+  // `ensureNeutralCode` uses, and for the same reason: matching provenance is not matching output.
+  if (representation === LAGRANGE_CODE_V1) {
+    const moduleArtifact = await compilation.compileArtifact(semanticRef, {
+      targetRepresentation: WASM_MODULE_V1,
+      id: `${id}:wasm:module`,
+    });
+    const moduleRef = objectRef(moduleArtifact.imageId ?? imageId, moduleArtifact.id);
+    const assemble = async (target) => (await assembleWasmV1FunctionArtifact({
+      images,
+      semanticRef,
+      moduleRef,
+      functionId: target,
+      entry: moduleArtifact.metadata.entry,
+    })).functionArtifact;
+
+    const existing = await images.getCodeArtifact(imageId, functionId);
+    if (!existing) return objectRef(imageId, (await assemble(functionId)).id);
+    const probeId = `${functionId}:probe`;
+    const fresh = await images.getCodeArtifact(imageId, probeId) ?? await assemble(probeId);
+    const rebase = (record) => ({...record, derivedFrom: record.derivedFrom ?? []});
+    if (codeArtifactProjection(rebase(fresh)) !== codeArtifactProjection(rebase(existing))) {
+      throw new SmalltalkKernelConflictError('wasm function artifact', imageId, functionId);
+    }
+    return objectRef(imageId, existing.id);
+  }
   const moduleArtifact = await compilation.compileArtifact(semanticRef, {
     targetRepresentation: WASM_MODULE_V1,
     id: `${id}:wasm:module`,
@@ -316,7 +380,7 @@ async function isSameInstalledMethod({images, imageId, classRef, selector, progr
   const block = await images.getBlock(imageId, id);
   if (!block || block.metadata?.lane !== lane) return false;
   const semantic = await images.getCodeArtifact(imageId, `${id}:semantic`);
-  if (!semantic || semantic.representation !== LAGRANGE_CODE_V0) return false;
+  if (!semantic || semantic.representation !== methodRepresentation(program)) return false;
   if (semantic.content?.value !== JSON.stringify(program)) return false;
   // The semantic program names its captures but does not contain their values, so two definitions
   // differing only in what `nil` they capture would otherwise look identical here and the second
@@ -406,13 +470,19 @@ async function defineMethods({
       }
       throw new SmalltalkMethodRedefinitionError(classRef, selector);
     }
-    normalizeLagrangeCodeProgram(program);
-    // Walks the body, so an unknown op is rejected here rather than during compilation — after the
-    // create-once `:semantic` artifact has already claimed the selector's deterministic id.
-    lowerLagrangeCodeV0(program, {});
+    if (containsBlockLiteral(program?.body)) throw new SmalltalkMethodBlockLiteralError(selector);
+    if (methodRepresentation(program) === LAGRANGE_CODE_V1) {
+      normalizeLagrangeCodeV1Program(program);
+      lowerLagrangeCodeV1(program, {});
+    } else {
+      normalizeLagrangeCodeProgram(program);
+      // Walks the body, so an unknown op is rejected here rather than during compilation — after the
+      // create-once `:semantic` artifact has already claimed the selector's deterministic id.
+      lowerLagrangeCodeV0(program, {});
+    }
     // Lane restrictions are part of validity too, and the backends decide them from the program
     // alone — so a program the WASM lane cannot compile is rejected before anything is written.
-    if (lane === 'wasm') {
+    if (lane === 'wasm' && methodRepresentation(program) === LAGRANGE_CODE_V0) {
       try {
         compileWasmModule(program);
       } catch (error) {
@@ -430,15 +500,26 @@ async function defineMethods({
     const semantic = await ensureCodeArtifact(images, imageId, {
       id: `${id}:semantic`,
       languageId: SYMMETRIC_SMALLTALK_ID,
-      representation: LAGRANGE_CODE_V0,
+      representation: methodRepresentation(program),
       content: textValue(JSON.stringify(program)),
       metadata: {smalltalk: 'method', selector},
     });
     // ADR 0044 decision 6: one semantic method, an executable Block derived per lane. The WASM
     // lane's Block points at a wasm-function/v1, not at the module it references.
     const codeRef = lane === 'wasm'
-      ? await ensureWasmFunction({images, compilation, imageId, id, semanticRef: objectRef(imageId, semantic.id)})
-      : await ensureNeutralCode({images, compilation, imageId, id, semanticRef: objectRef(imageId, semantic.id)});
+      ? await ensureWasmFunction({
+        images, compilation, imageId, id,
+        semanticRef: objectRef(imageId, semantic.id),
+        representation: methodRepresentation(program),
+      })
+      : await ensureNeutralCode({
+        images,
+        compilation,
+        imageId,
+        id,
+        semanticRef: objectRef(imageId, semantic.id),
+        target: methodRepresentation(program) === LAGRANGE_CODE_V1 ? NEUTRAL_EXPRESSION_V1 : NEUTRAL_EXPRESSION_V0,
+      });
     // Written before the Block, because `putBlock` requires the environment it points at to resolve.
     const captures = capturesBySelector.get(selector);
     const desiredEnvironment = describeMethodEnvironment({methodObjectId: id, selector, captures});
@@ -519,7 +600,17 @@ async function methodBlockRef({images, imageId, classRef, selector} = {}) {
   if (!shape) throw new TypeError(`method dictionary shape not found: ${record.shape.objectId}`);
   assertUniqueSelectorShape(shape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
   const slot = shape.slots.find(({name}) => name === selector);
-  return slot ? record.slots[slot.id] ?? null : null;
+  if (!slot) return null;
+  const method = record.slots[slot.id];
+  // Dispatch treats a slot holding something other than an unpinned Block ref as a malformed
+  // dictionary rather than a miss, and this reader owes the same semantics.
+  if (!isObjectRef(method)) {
+    throw new TypeError(
+      `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId} slot for ${selector} `
+      + 'must contain an unpinned Block ref',
+    );
+  }
+  return method;
 }
 
 // A new class and its metaclass, wired by decision 4's chain rule. The installer applies the same
@@ -690,6 +781,7 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
 }
 
 export {
+  SmalltalkMethodBlockLiteralError,
   SmalltalkMethodRedefinitionError,
   SmalltalkSealedMethodDictionaryError,
   defineClass,

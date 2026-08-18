@@ -29,6 +29,7 @@ import {
   objectRef,
   textValue,
 } from '../value/index.js';
+import {TupleSet} from '../support/tuple-map.js';
 import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 import {
@@ -58,6 +59,8 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   DICTIONARY_INCLUDES_KEY: 'dictionary-includes-key',
   DICTIONARY_AT: 'dictionary-at',
   DICTIONARY_AT_PUT: 'dictionary-at-put',
+  INSTANCE_SLOT_READ: 'instance-slot-read',
+  INSTANCE_SLOT_WRITE: 'instance-slot-write',
 });
 
 const SMALLTALK_PRIMITIVE_NAMES = Object.freeze(Object.values(SMALLTALK_PRIMITIVE));
@@ -75,6 +78,8 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.DICTIONARY_INCLUDES_KEY]: 2,
   [SMALLTALK_PRIMITIVE.DICTIONARY_AT]: 2,
   [SMALLTALK_PRIMITIVE.DICTIONARY_AT_PUT]: 3,
+  [SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ]: 2,
+  [SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE]: 3,
 });
 
 // One locality rule for every primitive. A foreign primitive Block must fail rather than answer a
@@ -653,6 +658,126 @@ async function dictionaryAtPut({
   return stored;
 }
 
+// ADR 0050 decisions 5, 5a and 6. Two checks that answer different questions, kept apart because
+// collapsing them is exactly how the Parent/Child hole opens:
+//
+//   may this method name this slot?   the slot is declared by the defining Behavior's visible layout
+//   does this object have it?         the slot is in the target's *current* Shape
+//
+// Plus the one that makes both meaningful: the target must be this activation's `self`, proved from
+// the transient frame rather than trusted from the argument.
+class SmalltalkSlotAccessError extends TypeError {
+  constructor(primitive, reason) {
+    super(`Symmetric Smalltalk ${primitive} refused: ${reason}`);
+    this.name = 'SmalltalkSlotAccessError';
+    this.primitive = primitive;
+  }
+}
+
+class SmalltalkSlotFrameMissingError extends TypeError {
+  constructor(primitive) {
+    super(
+      `Symmetric Smalltalk ${primitive} has no method frame; instance state is reachable only from a `
+      + 'method of the declaring class, and a closure that outlived its execution no longer has one',
+    );
+    this.name = 'SmalltalkSlotFrameMissingError';
+    this.primitive = primitive;
+  }
+}
+
+function sameValueRef(left, right) {
+  if (isObjectRef(left) && isObjectRef(right)) {
+    return left.imageId === right.imageId && left.objectId === right.objectId;
+  }
+  return JSON.stringify(canonicalizeValue(left)) === JSON.stringify(canonicalizeValue(right));
+}
+
+// The defining Behavior's *visible* layout: its own instance Shape, or the nearest ancestor that
+// declares one. An abstract intermediate class with a nil layout declares nothing of its own and
+// cancels nothing above it, so its methods may still name ancestor-declared slots (ADR 0050
+// decision 5, corrected).
+async function visibleLayoutSlots({images, behaviorRef, nilRef}) {
+  const visited = new TupleSet(2);
+  let currentRef = behaviorRef;
+  while (isObjectRef(currentRef) && !sameRef(currentRef, nilRef)) {
+    const key = [currentRef.imageId, currentRef.objectId];
+    if (visited.has(key)) return new Set();
+    visited.add(key);
+    const behavior = await readBehavior(images, currentRef);
+    if (!sameRef(behavior.instanceShape, nilRef)) {
+      const shape = await images.getShape(behavior.instanceShape.imageId, behavior.instanceShape.objectId);
+      if (!shape) return new Set();
+      return new Set(shape.slots.map(({id}) => id));
+    }
+    currentRef = behavior.superclass;
+  }
+  return new Set();
+}
+
+async function resolveSlotAccess({images, primitiveImage, primitive, target, slotIdValue, context}) {
+  const frame = context?.invocationFrame ?? null;
+  if (!frame) throw new SmalltalkSlotFrameMissingError(primitive);
+  if (slotIdValue?.kind !== VALUE_KIND.TEXT || slotIdValue.value.length === 0) {
+    throw new SmalltalkSlotAccessError(primitive, 'a slot id must be non-empty text');
+  }
+  // Proved, not arranged by the compiler: a method is ordinary durable data, so a forged artifact
+  // could otherwise pass any object at all.
+  if (!sameValueRef(target, frame.self)) {
+    throw new SmalltalkSlotAccessError(primitive, 'instance state is reachable only on the method own self');
+  }
+  assertLocalRef(target, primitiveImage, primitive, 'an instance');
+
+  const kernel = await findSmalltalkKernel({images, imageId: primitiveImage});
+  if (!kernel) throw new TypeError(`image ${primitiveImage} has no Smalltalk kernel`);
+
+  const visible = await visibleLayoutSlots({images, behaviorRef: frame.definingBehavior, nilRef: kernel.nil});
+  if (!visible.has(slotIdValue.value)) {
+    throw new SmalltalkSlotAccessError(
+      primitive,
+      `${slotIdValue.value} is not declared by ${frame.definingBehavior.imageId}/${frame.definingBehavior.objectId}`,
+    );
+  }
+
+  const record = await images.getObject(target.imageId, target.objectId);
+  if (!record) throw new SmalltalkDanglingEdgeError('instance', target, target);
+  const shape = await images.getShape(record.shape.imageId, record.shape.objectId);
+  if (!shape) throw new SmalltalkDanglingEdgeError('instance shape', record, record.shape);
+  // A separate structural question from permission: stale or migrated layout is corruption, never
+  // nil and never an opportunity to add a slot.
+  if (!shape.slots.some(({id}) => id === slotIdValue.value)) {
+    throw new SmalltalkSlotAccessError(
+      primitive,
+      `${slotIdValue.value} is absent from the current shape of ${target.imageId}/${target.objectId}`,
+    );
+  }
+  return {record, slotId: slotIdValue.value};
+}
+
+async function instanceSlotRead({images, primitiveImage, target, slotIdValue, context}) {
+  const {record, slotId} = await resolveSlotAccess({
+    images, primitiveImage, primitive: SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ, target, slotIdValue, context,
+  });
+  return record.slots[slotId];
+}
+
+async function instanceSlotWrite({images, primitiveImage, target, slotIdValue, newValue, context}) {
+  const {record, slotId} = await resolveSlotAccess({
+    images, primitiveImage, primitive: SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE, target, slotIdValue, context,
+  });
+  const stored = canonicalizeValue(newValue);
+  await images.putObject(primitiveImage, {
+    id: record.id,
+    shape: record.shape,
+    behavior: record.behavior,
+    slots: {...record.slots, [slotId]: stored},
+    // Everything else survives. ADR 0047's review found the mutation binding erasing an indexed part
+    // it did not carry forward; a named-slot write rebuilds a whole record for the same reason.
+    ...(Object.hasOwn(record, 'indexed') ? {indexed: record.indexed} : {}),
+    metadata: record.metadata,
+  }, {expectedVersion: record._version});
+  return stored;
+}
+
 // `newObjectId` is runtime machinery, not durable class semantics, so it is injectable.
 function createSmalltalkKernelPrimitiveV1Executor({
   newObjectId = randomUUID,
@@ -706,6 +831,14 @@ function createSmalltalkKernelPrimitiveV1Executor({
           return await builtInEqualsPrimitive({images, primitiveImage, left: value, right: second});
         case SMALLTALK_PRIMITIVE.BUILT_IN_HASH:
           return await builtInHashPrimitive({images, primitiveImage, value});
+        case SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ:
+          return await instanceSlotRead({
+            images, primitiveImage, target: value, slotIdValue: second, context,
+          });
+        case SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE:
+          return await instanceSlotWrite({
+            images, primitiveImage, target: value, slotIdValue: second, newValue: third, context,
+          });
         case SMALLTALK_PRIMITIVE.DICTIONARY_INITIALIZE:
           return await dictionaryInitialize({
             images, primitiveImage, value, newObjectId, maxIdentityAttempts,
@@ -750,6 +883,8 @@ export {
   SmalltalkNotInstantiableError,
   SmalltalkPrimitiveLocalityError,
   SmalltalkPrimitiveReceiverError,
+  SmalltalkSlotAccessError,
+  SmalltalkSlotFrameMissingError,
   createSmalltalkKernelPrimitiveV1Executor,
   parsePrimitiveCode,
   primitiveCodeContent,

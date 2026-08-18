@@ -195,7 +195,11 @@ async function lookupSelector({images, behaviorRef, selector, nilRef, receiverDe
 
     const behavior = await loadBehavior(images, currentRef, {edge, from});
     const method = await methodAt(images, behavior, selector, nilRef, validationCache);
-    if (method) return method;
+    // ADR 0050 decision 5: *which* Behavior's dictionary supplied the method is a permission fact,
+    // and this walk is the only place it is known. Reconstructing it later by asking which
+    // dictionary holds a Block would be neither unique — a Block may legitimately sit in two — nor
+    // trustworthy, since that answer comes from graph data a forged artifact can arrange.
+    if (method) return {method, definingBehavior: currentRef};
 
     from = behavior.record;
     edge = 'superclass';

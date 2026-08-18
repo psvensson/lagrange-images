@@ -1,6 +1,7 @@
 # ADR 0050: Class-scoped instance-variable binding and self-only slot access
 
-Status: accepted — an instance-variable name is resolved to a stable Shape slot id by a class-scoped compilation entry point beside the class-independent one, the durable method carries that id rather than the name, and a language-owned primitive reads or writes it only on the method activation's effective Smalltalk `self` and only for a slot its defining Behavior's visible layout declares, with both facts carried from dispatch to execution by a transient runtime-built envelope.
+Status: implemented — an instance-variable name is resolved to a stable Shape slot id by a class-scoped compilation entry point beside the class-independent one, the durable method carries that id rather than the name, and a language-owned primitive reads or writes it only on the method activation's effective Smalltalk `self` and only for a slot its defining Behavior's visible layout declares, with both facts carried from dispatch to execution by a transient runtime-built envelope.
+Proven by: test/instance-variables.test.js
 
 ## Problem
 

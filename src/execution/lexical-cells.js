@@ -1,3 +1,4 @@
+import {TupleMap} from '../support/tuple-map.js';
 import {canonicalizeValue} from '../value/index.js';
 
 // The lane-neutral lexical frame and cell substrate, per ADR 0043.
@@ -156,6 +157,19 @@ class LexicalCellArena {
   // captured when some earlier activation in this same execution created it.
   activationCells(blockRef) {
     return new ActivationCells(this, this.allocateFrame(), this.capturedCells(blockRef));
+  }
+
+  // ADR 0050 decision 10a. The frame in force where a closure was created, so activating it later in
+  // the *same* execution restores lexical `self`. Deliberately here rather than in a durable record:
+  // a persisted defining Behavior would be forgeable data, which is the vector self-only exists to
+  // close. Dying with the arena is the feature.
+  associateFrame(blockRef, frame) {
+    this.frames ??= new TupleMap(2);
+    this.frames.set([blockRef.imageId, blockRef.objectId], frame);
+  }
+
+  frameFor(blockRef) {
+    return this.frames?.get([blockRef.imageId, blockRef.objectId]) ?? null;
   }
 }
 

@@ -139,6 +139,7 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `installSmalltalkAllocationProtocol()` | the `class-of`/`basic-new` primitive Blocks, plus `Object >> class`, `Object >> initialize`, `Class >> basicNew` and `Class >> new` (ADR 0046) |
 | `installSmalltalkEqualityProtocol()` | the `built-in-equals`/`built-in-hash` primitive Blocks, plus `Object >> =` and `Object >> hash` (ADR 0048) |
 | `installSmalltalkDictionaryProtocol()` | the Dictionary/DictionaryTable Shapes, the five Dictionary primitive Blocks, the `Dictionary` class, and `initialize`, `size`, `includesKey:`, `at:`, `at:put:` (ADR 0048) |
+| `installSmalltalkInstanceVariableProtocol()` | the `instance-slot-read`/`instance-slot-write` primitive Blocks (ADR 0050) |
 | `migrateMethodDictionary()` | rewrites one Behavior's shape-backed method dictionary into the ADR 0049 hashed form |
 | `installSmalltalkIndexedProtocol()` | `Array`, `Class >> basicNew:`, `Array class >> new:`, and `Array >> size`/`at:`/`at:put:` over four more `smalltalk-kernel-primitive/v1` Blocks (ADR 0047) |
 
@@ -149,6 +150,15 @@ Value still takes its class from its kind.
 A class is instantiable when its `instanceShape` is a Shape ref; `nil` there means not instantiable,
 and an empty Shape is a valid zero-slot layout. `defineClass()` still stores `nil` when no
 `instanceShapeRef` is supplied, so no class written before ADR 0046 changes meaning.
+
+ADR 0050 adds no executable representation either. `compileSymmetricSmalltalkMethod()` and
+`defineMethodsFromSource()` are a class-scoped compilation entry point *beside*
+`installSymmetricSmalltalkBlock()`, not above it: a Block still compiles with no class in sight, while
+a method resolves its free names against the defining class's visible instance layout and carries the
+stable slot **id** rather than the source name. Slot access rides two further
+`smalltalk-kernel-primitive/v1` operations, and the primitive proves at execution that the target is
+the activation's own `self` *and* that the slot is declared by the method's defining Behavior — the
+two facts travelling from dispatch in a transient invocation envelope that reaches no record.
 
 ADR 0048 adds no executable representation: the equality, hash and Dictionary operations are further
 `smalltalk-kernel-primitive/v1` primitives reached the same way. A `Dictionary` keeps stable identity

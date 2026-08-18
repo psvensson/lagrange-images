@@ -52,9 +52,17 @@ function selectSemanticRepresentation(syntax) {
   return needsMutableLexicalState(syntax) ? LAGRANGE_CODE_V1 : LAGRANGE_CODE_V0;
 }
 
+// ADR 0050. An instance variable is not a new kind of expression: it lowers to an ordinary send of a
+// language-owned primitive, reached through ordinary captures, so nothing downstream of the compiler
+// learns a new concept. These names are internal to the binder and cannot collide with source names,
+// which the tokenizer restricts to identifier characters.
+const INSTANCE_SLOT_READ_CAPTURE = '$instanceSlotRead';
+const INSTANCE_SLOT_WRITE_CAPTURE = '$instanceSlotWrite';
+
 class SemanticScope {
-  constructor({parent = null, path, parameters = [], rootCaptures = new Map()} = {}) {
+  constructor({parent = null, path, parameters = [], rootCaptures = new Map(), instanceVariables = new Map()} = {}) {
     this.parent = parent;
+    this.instanceVariables = parent ? parent.instanceVariables : instanceVariables;
     this.path = path;
     this.parameters = new Map();
     parameters.forEach((name, index) => {
@@ -98,6 +106,40 @@ class SemanticScope {
     return this.captures.get(key);
   }
 
+  // ADR 0050 decision 3: lexical bindings first, and the instance variable only where resolution
+  // would otherwise raise `unbound Symmetric Smalltalk name` — never earlier. A parameter named `x`
+  // therefore shadows an instance variable named `x`.
+  instanceSlot(name) {
+    return this.instanceVariables.get(name) ?? null;
+  }
+
+  // Built in the *originating* scope, so `self` and the primitive capture resolve through this
+  // scope's own chain. That is what makes an instance variable inside a nested Block mean the
+  // defining method's receiver (ADR 0050 decision 10).
+  instanceSlotRead(slotId) {
+    return Object.freeze({
+      op: 'send',
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: this.resolveName(INSTANCE_SLOT_READ_CAPTURE),
+      message: textValue('value:value:'),
+      arguments: Object.freeze([this.resolveSelf(), Object.freeze({op: 'literal', value: textValue(slotId)})]),
+    });
+  }
+
+  instanceSlotWrite(slotId, valueExpression) {
+    return Object.freeze({
+      op: 'send',
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: this.resolveName(INSTANCE_SLOT_WRITE_CAPTURE),
+      message: textValue('value:value:value:'),
+      arguments: Object.freeze([
+        this.resolveSelf(),
+        Object.freeze({op: 'literal', value: textValue(slotId)}),
+        valueExpression,
+      ]),
+    });
+  }
+
   resolveName(name) {
     const parameter = this.parameters.get(name);
     if (parameter) return Object.freeze({op: 'argument', index: parameter.index});
@@ -105,30 +147,36 @@ class SemanticScope {
     if (temporary) return Object.freeze({op: 'binding', id: temporary.id});
     const capture = this.captures.get(name);
     if (capture) return Object.freeze({op: 'binding', id: capture.id});
-    if (!this.parent) throw new TypeError(`unbound Symmetric Smalltalk name: ${name}`);
-    const provided = this.parent.provideName(name);
-    if (!provided) throw new TypeError(`unbound Symmetric Smalltalk name: ${name}`);
-    const added = this.addCapture(name, provided);
-    return Object.freeze({op: 'binding', id: added.id});
+    const provided = this.parent ? this.parent.provideName(name) : null;
+    if (provided) return Object.freeze({op: 'binding', id: this.addCapture(name, provided).id});
+    const slotId = this.instanceSlot(name);
+    if (slotId) return this.instanceSlotRead(slotId);
+    throw new TypeError(`unbound Symmetric Smalltalk name: ${name}`);
   }
 
   // Assignment needs a cell, so only a temporary — or a capture that resolves to one — qualifies.
   // Parameters and the receiver are not assignable, and a root capture names a durable environment
   // binding rather than a cell, which ADR 0043 decision 2 keeps out of assignment's reach.
+  // Resolution finds the binding *first* and checks write legality *second*; it never keeps
+  // searching for something assignable. So a parameter named `x` shadows an instance variable named
+  // `x` for writes too, and `x := 5` stays illegal rather than becoming a slot write.
   resolveWrite(name) {
     if (this.parameters.has(name)) throw new TypeError(`cannot assign to parameter ${name}`);
     const temporary = this.temporaries.get(name);
-    if (temporary) return temporary.id;
+    if (temporary) return {kind: 'binding', id: temporary.id};
     const existing = this.captures.get(name);
     if (existing) {
       if (!existing.mutable) throw new TypeError(`cannot assign to captured binding ${name}`);
-      return existing.id;
+      return {kind: 'binding', id: existing.id};
     }
-    if (!this.parent) throw new TypeError(`unbound Symmetric Smalltalk name: ${name}`);
-    const provided = this.parent.provideName(name);
-    if (!provided) throw new TypeError(`unbound Symmetric Smalltalk name: ${name}`);
-    if (provided.mutable !== true) throw new TypeError(`cannot assign to captured binding ${name}`);
-    return this.addCapture(name, provided).id;
+    const provided = this.parent ? this.parent.provideName(name) : null;
+    if (provided) {
+      if (provided.mutable !== true) throw new TypeError(`cannot assign to captured binding ${name}`);
+      return {kind: 'binding', id: this.addCapture(name, provided).id};
+    }
+    const slotId = this.instanceSlot(name);
+    if (slotId) return {kind: 'instance', slotId};
+    throw new TypeError(`unbound Symmetric Smalltalk name: ${name}`);
   }
 
   resolveSelf() {
@@ -237,12 +285,13 @@ function compileExpression(syntax, scope, state) {
       return scope.resolveSelf();
     case 'name':
       return scope.resolveName(syntax.name);
-    case 'assign':
-      return Object.freeze({
-        op: 'binding-write',
-        id: scope.resolveWrite(syntax.name),
-        value: compileExpression(syntax.value, scope, state),
-      });
+    case 'assign': {
+      const target = scope.resolveWrite(syntax.name);
+      const value = compileExpression(syntax.value, scope, state);
+      return target.kind === 'instance'
+        ? scope.instanceSlotWrite(target.slotId, value)
+        : Object.freeze({op: 'binding-write', id: target.id, value});
+    }
     case 'send':
       return Object.freeze({
         op: 'send',
@@ -286,9 +335,10 @@ function compileBlockSyntax(syntax, {
   parent = null,
   path = 'root',
   rootCaptures = new Map(),
+  instanceVariables = new Map(),
   representation = LAGRANGE_CODE_V0,
 } = {}) {
-  const scope = new SemanticScope({parent, path, parameters: syntax.parameters, rootCaptures});
+  const scope = new SemanticScope({parent, path, parameters: syntax.parameters, rootCaptures, instanceVariables});
   const state = {path, nextBlock: 0, representation};
   const body = compileBody(syntax.body, scope, state);
   const program = representation === LAGRANGE_CODE_V1
@@ -309,18 +359,21 @@ function compileBlockSyntax(syntax, {
   });
 }
 
-function compileSymmetricSmalltalkSemanticBlock(source, {captures = {}} = {}) {
+function compileSymmetricSmalltalkSemanticBlock(source, {captures = {}, instanceVariables = {}} = {}) {
   const syntax = parseSymmetricSmalltalkBlock(source);
   const representation = selectSemanticRepresentation(syntax);
   const compiled = compileBlockSyntax(syntax, {
     path: 'root',
     rootCaptures: normalizeRootCaptures(captures),
+    instanceVariables: new Map(Object.entries(instanceVariables)),
     representation,
   });
   return Object.freeze({syntax, program: compiled.program, representation});
 }
 
 export {
+  INSTANCE_SLOT_READ_CAPTURE,
+  INSTANCE_SLOT_WRITE_CAPTURE,
   compileSymmetricSmalltalkSemanticBlock,
   needsMutableLexicalState,
   selectSemanticRepresentation,

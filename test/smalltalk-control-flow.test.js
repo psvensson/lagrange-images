@@ -350,7 +350,11 @@ test('an ordinary send resolves without an effectiveReceiver key', async () => {
       message: textValue('+'),
       arguments: [integerValue(4)],
     }, {images: runtime.images, dispatchImage: 'app'});
-    assert.deepEqual(Object.keys(resolved), ['block']);
+    // ADR 0050 adds a frame to a *method* resolution; what must stay absent for an ordinary send is
+    // the effectiveReceiver key, which is what this test is about.
+    assert.equal(Object.hasOwn(resolved, 'effectiveReceiver'), false);
+    assert.deepEqual(resolved.frame.definingBehavior, kernel.integerClass, 'the defining Behavior travels with the resolution');
+    assert.deepEqual(resolved.frame.self, integerValue(3));
 
     const bridged = await dispatcher.resolveMessage({
       kind: 'message-send',
