@@ -1,6 +1,13 @@
 import {randomUUID} from 'node:crypto';
 import {assertBlockApplicationReceiver} from '../execution/block-application.js';
-import {VALUE_KIND, isObjectRef, objectRef} from '../value/index.js';
+import {SHAPE_INDEXED, shapeIndexedKind} from '../object/model.js';
+import {
+  VALUE_KIND,
+  canonicalizeValue,
+  integerValue,
+  isObjectRef,
+  objectRef,
+} from '../value/index.js';
 import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
 import {
   SmalltalkDanglingEdgeError,
@@ -9,31 +16,33 @@ import {
   sameRef,
 } from './smalltalk-lookup.js';
 
-// ADR 0046 decision 2: the two Smalltalk primitives that need image semantics the shared IR cannot
-// express. They are ordinary Blocks for invocation — a method reaches one through an explicit
-// captured ref and sends it `value:` — but their code carries this representation, and a
-// Symmetric-Smalltalk-owned executor runs it.
-//
-// That keeps the common `lagrange-code` grammar free of Smalltalk's Behavior layout, and it keeps
-// both lanes on the existing send/resumption machinery: neither lane learns a new ABI, because from
-// their side this is just a send.
-//
-// Decision 2a: this executor is registered by the composition root, never by
-// `createDefaultCodeExecutorRegistry`. `src/language` already imports `src/execution`, so registering
-// it there would close a dependency cycle that the `export *` barrel turns into an import-time
-// failure naming neither file.
+// ADR 0046 introduced the representation for the image operations the shared IR cannot express;
+// ADR 0047 extends the *same* language-owned primitive family rather than inventing a second ABI.
+// They are ordinary Blocks for invocation, and both execution lanes reach them through ordinary
+// sends, so neither lagrange-code nor the dispatcher learns collection semantics.
 const SMALLTALK_KERNEL_PRIMITIVE_V1 = 'smalltalk-kernel-primitive/v1';
 
 const SMALLTALK_PRIMITIVE = Object.freeze({
   CLASS_OF: 'class-of',
   BASIC_NEW: 'basic-new',
+  BASIC_NEW_SIZED: 'basic-new-sized',
+  INDEXED_SIZE: 'indexed-size',
+  INDEXED_AT: 'indexed-at',
+  INDEXED_AT_PUT: 'indexed-at-put',
 });
 
 const SMALLTALK_PRIMITIVE_NAMES = Object.freeze(Object.values(SMALLTALK_PRIMITIVE));
+const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
+  [SMALLTALK_PRIMITIVE.CLASS_OF]: 1,
+  [SMALLTALK_PRIMITIVE.BASIC_NEW]: 1,
+  [SMALLTALK_PRIMITIVE.BASIC_NEW_SIZED]: 2,
+  [SMALLTALK_PRIMITIVE.INDEXED_SIZE]: 1,
+  [SMALLTALK_PRIMITIVE.INDEXED_AT]: 2,
+  [SMALLTALK_PRIMITIVE.INDEXED_AT_PUT]: 3,
+});
 
-// Decision 11: one locality rule for both primitives, and one definition of the image it is measured
-// against. A foreign primitive Block must fail rather than answer a foreign kernel's `Integer` or
-// allocate into somebody else's image.
+// One locality rule for every primitive. A foreign primitive Block must fail rather than answer a
+// foreign kernel's class, allocate into somebody else's image, or mutate a foreign indexed object.
 class SmalltalkPrimitiveLocalityError extends TypeError {
   constructor(primitive, primitiveImage, ref) {
     super(
@@ -46,9 +55,8 @@ class SmalltalkPrimitiveLocalityError extends TypeError {
   }
 }
 
-// Decision 3: `instanceShape == nil` means "not instantiable", never "empty instance". Kept distinct
-// from a malformed Behavior and from a dangling Shape edge, because the three mean different things
-// to whoever has to fix them.
+// ADR 0046: `instanceShape == nil` means "not instantiable", never "empty instance". Kept distinct
+// from a malformed Behavior and from a dangling Shape edge.
 class SmalltalkNotInstantiableError extends TypeError {
   constructor(classRef) {
     super(
@@ -57,6 +65,31 @@ class SmalltalkNotInstantiableError extends TypeError {
     );
     this.name = 'SmalltalkNotInstantiableError';
     this.classRef = classRef;
+  }
+}
+
+class SmalltalkNotIndexedError extends TypeError {
+  constructor(primitive, ref) {
+    super(
+      `Symmetric Smalltalk ${primitive} requires an indexed object layout; `
+      + `${ref.imageId}/${ref.objectId} does not declare indexed values`,
+    );
+    this.name = 'SmalltalkNotIndexedError';
+    this.primitive = primitive;
+    this.ref = ref;
+  }
+}
+
+class SmalltalkIndexedBoundsError extends RangeError {
+  constructor(primitive, zeroBasedIndex, size) {
+    super(
+      `Symmetric Smalltalk ${primitive} index ${zeroBasedIndex.toString()} is outside `
+      + `the 0-based indexed part of size ${size}`,
+    );
+    this.name = 'SmalltalkIndexedBoundsError';
+    this.primitive = primitive;
+    this.index = zeroBasedIndex.toString();
+    this.size = size;
   }
 }
 
@@ -95,10 +128,21 @@ function primitiveCodeContent(primitive) {
   return JSON.stringify({primitive});
 }
 
-// Decision 9. Deliberately routed through the same `behaviorRefFor` the dispatcher uses, so `class`
-// cannot drift from what a send would actually dispatch through: an object answers its `behavior`
-// edge, an immediate Value answers its kind's kernel class, and a boolean answers True or False
-// under ADR 0045 rather than resurrecting the superseded boolean -> Boolean rule.
+function assertLocalRef(value, primitiveImage, primitive, description) {
+  if (!isObjectRef(value)) {
+    throw new SmalltalkPrimitiveReceiverError(
+      primitive,
+      value?.kind ? `a ${value.kind} Value; ${description}` : `a non-ref; ${description}`,
+    );
+  }
+  if (value.imageId !== primitiveImage) {
+    throw new SmalltalkPrimitiveLocalityError(primitive, primitiveImage, value);
+  }
+  return value;
+}
+
+// ADR 0046 decision 9. Deliberately routed through the same `behaviorRefFor` the dispatcher uses, so
+// `class` cannot drift from what a send would actually dispatch through.
 async function classOf({images, primitiveImage, value}) {
   if (isObjectRef(value) && value.imageId !== primitiveImage) {
     throw new SmalltalkPrimitiveLocalityError(SMALLTALK_PRIMITIVE.CLASS_OF, primitiveImage, value);
@@ -115,28 +159,12 @@ async function classOf({images, primitiveImage, value}) {
   return behavior;
 }
 
-// Decision 5, and decision 6's identity rule.
-//
-// Every slot of the instance Shape is filled, which is not this primitive's choice to make:
-// `assertObjectMatchesShape` rejects an object whose slot set differs from its Shape in either
-// direction, so a partially populated instance is not a representable record. What this ADR decides
-// is only which Value fills them, and that is the image's `nil`.
-async function basicNew({images, primitiveImage, classValue, newObjectId, maxIdentityAttempts}) {
-  if (!isObjectRef(classValue)) {
-    throw new SmalltalkPrimitiveReceiverError(
-      SMALLTALK_PRIMITIVE.BASIC_NEW,
-      classValue?.kind ? `a ${classValue.kind} Value; only an unpinned class ref allocates` : 'a non-ref',
-    );
-  }
-  if (classValue.imageId !== primitiveImage) {
-    throw new SmalltalkPrimitiveLocalityError(SMALLTALK_PRIMITIVE.BASIC_NEW, primitiveImage, classValue);
-  }
+async function loadAllocationClass({images, primitiveImage, classValue, primitive}) {
+  assertLocalRef(classValue, primitiveImage, primitive, 'only an unpinned class ref allocates');
 
   const kernel = await findSmalltalkKernel({images, imageId: primitiveImage});
   if (!kernel) throw new TypeError(`image ${primitiveImage} has no Smalltalk kernel to allocate against`);
 
-  // The three graph failures stay apart, so an absent record is not reported as a structural defect
-  // in a record that is not there. This mirrors how `loadBehavior` separates them during lookup.
   const record = await images.getObject(classValue.imageId, classValue.objectId);
   if (!record) throw new SmalltalkDanglingEdgeError('class', classValue, classValue);
   let behavior;
@@ -146,23 +174,56 @@ async function basicNew({images, primitiveImage, classValue, newObjectId, maxIde
     throw new SmalltalkMalformedBehaviorError(classValue, error);
   }
 
-  // Decision 3. `nil` is compared as a full ref against this image's kernel `nil`, never by object
-  // id, for the same reason superclass lookup terminates that way.
   if (sameRef(behavior.instanceShape, kernel.nil)) throw new SmalltalkNotInstantiableError(classValue);
 
   const shapeRef = behavior.instanceShape;
   const shape = await images.getShape(shapeRef.imageId, shapeRef.objectId);
   if (!shape) throw new SmalltalkDanglingEdgeError('instanceShape', behavior.record, shapeRef);
+  return {kernel, behavior, shapeRef, shape};
+}
+
+function nonNegativeSize(value, primitive) {
+  const normalized = canonicalizeValue(value);
+  if (normalized.kind !== VALUE_KIND.INTEGER) {
+    throw new SmalltalkPrimitiveReceiverError(primitive, `a ${normalized.kind} size; size must be an Integer Value`);
+  }
+  const size = BigInt(normalized.value);
+  if (size < 0n) throw new RangeError(`Symmetric Smalltalk ${primitive} size must be non-negative`);
+  // Durable indices are unbounded integer Values, but this JavaScript representation is an Array.
+  // Fail explicitly rather than letting an implementation RangeError or allocation overflow define
+  // language behavior by accident.
+  if (size > 0xffff_ffffn) {
+    throw new RangeError(`Symmetric Smalltalk ${primitive} size exceeds the current indexed-object implementation limit`);
+  }
+  return Number(size);
+}
+
+async function allocate({
+  images,
+  primitiveImage,
+  classValue,
+  primitive,
+  indexedSize = null,
+  newObjectId,
+  maxIdentityAttempts,
+}) {
+  const {kernel, shapeRef, shape} = await loadAllocationClass({
+    images, primitiveImage, classValue, primitive,
+  });
+  const indexedKind = shapeIndexedKind(shape);
+  if (indexedSize !== null && indexedKind !== SHAPE_INDEXED.VALUES) {
+    throw new SmalltalkNotIndexedError(primitive, classValue);
+  }
 
   const slots = Object.fromEntries(shape.slots.map(({id}) => [id, kernel.nil]));
+  // `basicNew` on an indexed class means its zero-length form. `basicNew:` supplies the fixed size.
+  // A non-indexed shape omits the property entirely, preserving the old record form.
+  const indexed = indexedKind === SHAPE_INDEXED.VALUES
+    ? Array.from({length: indexedSize ?? 0}, () => kernel.nil)
+    : null;
 
-  // Decision 6. The primitive owns the candidate id: it mints one and writes create-once with it.
-  // Letting `putObject` generate an id internally would make decision 7's "retry the same candidate"
-  // unimplementable, because the caller would never have seen the id it should reuse.
-  //
-  //   known collision before creation succeeded  -> choose a fresh candidate  (the loop below)
-  //   unknown outcome, retry of the same host op -> reuse the same candidate  (never re-mints here)
-  //   a new Smalltalk basicNew send              -> always a fresh candidate  (a new invocation)
+  // ADR 0046 identity rule: a known collision chooses another candidate; every other failure
+  // surfaces, and a new Smalltalk send always begins with a fresh candidate.
   for (let attempt = 0; attempt < maxIdentityAttempts; attempt += 1) {
     const candidate = newObjectId();
     if (typeof candidate !== 'string' || candidate.length === 0) {
@@ -174,28 +235,101 @@ async function basicNew({images, primitiveImage, classValue, newObjectId, maxIde
         shape: shapeRef,
         behavior: classValue,
         slots,
+        ...(indexed === null ? {} : {indexed}),
         metadata: {},
       }, {expectedVersion: 0});
       return objectRef(primitiveImage, stored.id);
     } catch (error) {
-      // A collision is the one failure that justifies another candidate. Anything else — a malformed
-      // record, a backend fault — must surface, not be retried behind a fresh identity.
-      //
-      // Matched by name rather than by class, as the image-mutation binding already does: an
-      // embedder may supply its own backend through `lagrangeFactory`, and a conflict raised by a
-      // different module's error class would otherwise escape this loop and fail the whole send.
       if (error?.name !== 'VersionConflictError') throw error;
     }
   }
   throw new TypeError(
-    `Symmetric Smalltalk basicNew could not find a free object identity in ${primitiveImage} `
+    `Symmetric Smalltalk ${primitive} could not find a free object identity in ${primitiveImage} `
     + `after ${maxIdentityAttempts} attempts`,
   );
 }
 
-// `newObjectId` is runtime machinery, not durable class semantics, so it is injectable: the identity
-// of an ordinary instance must not be derived from its class, call site or slot values, and a test
-// still needs to be able to force a collision.
+async function basicNew({images, primitiveImage, classValue, newObjectId, maxIdentityAttempts}) {
+  return await allocate({
+    images,
+    primitiveImage,
+    classValue,
+    primitive: SMALLTALK_PRIMITIVE.BASIC_NEW,
+    newObjectId,
+    maxIdentityAttempts,
+  });
+}
+
+async function basicNewSized({images, primitiveImage, classValue, sizeValue, newObjectId, maxIdentityAttempts}) {
+  const size = nonNegativeSize(sizeValue, SMALLTALK_PRIMITIVE.BASIC_NEW_SIZED);
+  return await allocate({
+    images,
+    primitiveImage,
+    classValue,
+    primitive: SMALLTALK_PRIMITIVE.BASIC_NEW_SIZED,
+    indexedSize: size,
+    newObjectId,
+    maxIdentityAttempts,
+  });
+}
+
+async function loadIndexedObject({images, primitiveImage, value, primitive}) {
+  const ref = assertLocalRef(value, primitiveImage, primitive, 'only an unpinned object ref has indexed state');
+  const record = await images.getObject(ref.imageId, ref.objectId);
+  if (!record) throw new SmalltalkDanglingEdgeError('indexed receiver', ref, ref);
+  const shape = await images.getShape(record.shape.imageId, record.shape.objectId);
+  if (!shape) throw new SmalltalkDanglingEdgeError('shape', record, record.shape);
+  if (shapeIndexedKind(shape) !== SHAPE_INDEXED.VALUES || !Object.hasOwn(record, 'indexed')) {
+    throw new SmalltalkNotIndexedError(primitive, ref);
+  }
+  return record;
+}
+
+function zeroBasedIndex(value, length, primitive) {
+  const normalized = canonicalizeValue(value);
+  if (normalized.kind !== VALUE_KIND.INTEGER) {
+    throw new SmalltalkPrimitiveReceiverError(primitive, `a ${normalized.kind} index; index must be an Integer Value`);
+  }
+  const index = BigInt(normalized.value);
+  if (index < 0n || index >= BigInt(length)) throw new SmalltalkIndexedBoundsError(primitive, index, length);
+  return Number(index);
+}
+
+async function indexedSize({images, primitiveImage, value}) {
+  const record = await loadIndexedObject({
+    images, primitiveImage, value, primitive: SMALLTALK_PRIMITIVE.INDEXED_SIZE,
+  });
+  return integerValue(record.indexed.length);
+}
+
+async function indexedAt({images, primitiveImage, value, indexValue}) {
+  const record = await loadIndexedObject({
+    images, primitiveImage, value, primitive: SMALLTALK_PRIMITIVE.INDEXED_AT,
+  });
+  const index = zeroBasedIndex(indexValue, record.indexed.length, SMALLTALK_PRIMITIVE.INDEXED_AT);
+  return record.indexed[index];
+}
+
+async function indexedAtPut({images, primitiveImage, value, indexValue, newValue}) {
+  const record = await loadIndexedObject({
+    images, primitiveImage, value, primitive: SMALLTALK_PRIMITIVE.INDEXED_AT_PUT,
+  });
+  const index = zeroBasedIndex(indexValue, record.indexed.length, SMALLTALK_PRIMITIVE.INDEXED_AT_PUT);
+  const storedValue = canonicalizeValue(newValue);
+  const indexed = [...record.indexed];
+  indexed[index] = storedValue;
+  await images.putObject(primitiveImage, {
+    id: record.id,
+    shape: record.shape,
+    behavior: record.behavior,
+    slots: record.slots,
+    indexed,
+    metadata: record.metadata,
+  }, {expectedVersion: record._version});
+  return storedValue;
+}
+
+// `newObjectId` is runtime machinery, not durable class semantics, so it is injectable.
 function createSmalltalkKernelPrimitiveV1Executor({
   newObjectId = randomUUID,
   maxIdentityAttempts = 8,
@@ -207,38 +341,46 @@ function createSmalltalkKernelPrimitiveV1Executor({
   return Object.freeze({
     async execute({activation, code}, context) {
       const primitive = parsePrimitiveCode(code);
-      // Every other callable-Block executor demands direct invocation, and this one has a sharper
-      // reason to: a primitive Block ref written into a method-dictionary slot by a raw graph write
-      // would otherwise run as a method, allocating from its first *argument* while `self` is
-      // silently discarded. ADR 0046 decision 3 puts that validation on the primitive itself.
+      // Primitive Blocks may only be called directly; making one a method must not smuggle `self`
+      // past the primitive's own argument contract.
       assertBlockApplicationReceiver(activation, `${SMALLTALK_KERNEL_PRIMITIVE_V1} ${primitive}`);
-      if (activation.arguments.length !== 1) {
+      const expectedArity = SMALLTALK_PRIMITIVE_ARITY[primitive];
+      if (activation.arguments.length !== expectedArity) {
         throw new TypeError(
-          `Symmetric Smalltalk ${primitive} primitive expects exactly one argument, `
+          `Symmetric Smalltalk ${primitive} primitive expects exactly ${expectedArity} arguments, `
           + `received ${activation.arguments.length}`,
         );
       }
-      // Decision 11: the primitive's image is its own Block's image. It is also the only image
-      // identity an executor has — the dispatch image is deliberately not in the executor context —
-      // and using it is what makes a foreign primitive Block fail instead of quietly answering some
-      // other image's kernel.
       const primitiveImage = activation.block.imageId;
       const images = context?.images;
       if (!images || typeof images.getObject !== 'function') {
         throw new TypeError('Symmetric Smalltalk primitives require an images service');
       }
-      const [value] = activation.arguments;
+      const [value, second, third] = activation.arguments;
 
-      if (primitive === SMALLTALK_PRIMITIVE.CLASS_OF) {
-        return await classOf({images, primitiveImage, value});
+      switch (primitive) {
+        case SMALLTALK_PRIMITIVE.CLASS_OF:
+          return await classOf({images, primitiveImage, value});
+        case SMALLTALK_PRIMITIVE.BASIC_NEW:
+          return await basicNew({images, primitiveImage, classValue: value, newObjectId, maxIdentityAttempts});
+        case SMALLTALK_PRIMITIVE.BASIC_NEW_SIZED:
+          return await basicNewSized({
+            images,
+            primitiveImage,
+            classValue: value,
+            sizeValue: second,
+            newObjectId,
+            maxIdentityAttempts,
+          });
+        case SMALLTALK_PRIMITIVE.INDEXED_SIZE:
+          return await indexedSize({images, primitiveImage, value});
+        case SMALLTALK_PRIMITIVE.INDEXED_AT:
+          return await indexedAt({images, primitiveImage, value, indexValue: second});
+        case SMALLTALK_PRIMITIVE.INDEXED_AT_PUT:
+          return await indexedAtPut({images, primitiveImage, value, indexValue: second, newValue: third});
+        default:
+          throw new TypeError(`unknown ${SMALLTALK_KERNEL_PRIMITIVE_V1} primitive: ${primitive}`);
       }
-      return await basicNew({
-        images,
-        primitiveImage,
-        classValue: value,
-        newObjectId,
-        maxIdentityAttempts,
-      });
     },
   });
 }
@@ -247,6 +389,8 @@ export {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
   SMALLTALK_PRIMITIVE,
   SMALLTALK_PRIMITIVE_NAMES,
+  SmalltalkIndexedBoundsError,
+  SmalltalkNotIndexedError,
   SmalltalkNotInstantiableError,
   SmalltalkPrimitiveLocalityError,
   SmalltalkPrimitiveReceiverError,
