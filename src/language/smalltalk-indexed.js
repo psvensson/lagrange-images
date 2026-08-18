@@ -10,17 +10,21 @@ import {
   SmalltalkKernelConflictError,
   canonicalJson,
   findSmalltalkKernel,
+  readBehavior,
 } from './smalltalk-kernel.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
   SMALLTALK_PRIMITIVE,
   primitiveCodeContent,
 } from './smalltalk-primitives.js';
+import {sameRef} from './smalltalk-lookup.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 // ADR 0047 is intentionally post-bootstrap, like allocation and control flow. The kernel remains
 // identity-only; Array is the first ordinary class whose instance Shape has an indexed part.
 const ARRAY_INSTANCE_SHAPE_ID = 'smalltalk/array-instance-shape/v1';
+const ARRAY_CLASS_ID = 'smalltalk/class/Array';
+const ARRAY_METACLASS_ID = 'smalltalk/metaclass/Array';
 
 const INDEXED_PRIMITIVE_BLOCK_ID = Object.freeze({
   [SMALLTALK_PRIMITIVE.BASIC_NEW_SIZED]: 'smalltalk/primitive/basic-new-sized',
@@ -101,6 +105,50 @@ async function ensureArrayShape(images, imageId) {
     throw new SmalltalkKernelConflictError('shape', imageId, desired.id);
   }
   return existing;
+}
+
+function requireSameRef(actual, expected, imageId) {
+  if (!sameRef(actual, expected)) throw new SmalltalkKernelConflictError('class', imageId, ARRAY_CLASS_ID);
+}
+
+async function ensureArrayClass({images, imageId, kernel, shapeRef}) {
+  const classRef = objectRef(imageId, ARRAY_CLASS_ID);
+  const metaclassRef = objectRef(imageId, ARRAY_METACLASS_ID);
+  const existing = await images.getObject(imageId, ARRAY_CLASS_ID);
+  if (!existing) {
+    return await defineClass({
+      images,
+      imageId,
+      name: 'Array',
+      superclassRef: kernel.objectClass,
+      instanceShapeRef: shapeRef,
+    });
+  }
+
+  // Once the class record exists, defineClass completed all four class-graph writes. Calling it
+  // again after methods have begun to publish would wrongly demand that the method dictionaries be
+  // empty again. Rediscovery therefore validates only the immutable class definition and leaves
+  // method dictionaries to defineMethods, which has its own retry-safe exactness contract.
+  let behavior;
+  let metaclass;
+  try {
+    behavior = await readBehavior(images, classRef);
+    metaclass = await readBehavior(images, metaclassRef);
+  } catch (error) {
+    throw new SmalltalkKernelConflictError('class', imageId, ARRAY_CLASS_ID, {cause: error});
+  }
+  if (behavior.name.value !== 'Array' || metaclass.name.value !== 'Array class') {
+    throw new SmalltalkKernelConflictError('class', imageId, ARRAY_CLASS_ID);
+  }
+  requireSameRef(behavior.record.behavior, metaclassRef, imageId);
+  requireSameRef(behavior.superclass, kernel.objectClass, imageId);
+  requireSameRef(behavior.instanceShape, shapeRef, imageId);
+
+  const objectBehavior = await readBehavior(images, kernel.objectClass);
+  requireSameRef(metaclass.record.behavior, kernel.metaclassClass, imageId);
+  requireSameRef(metaclass.superclass, objectBehavior.record.behavior, imageId);
+  requireSameRef(metaclass.instanceShape, kernel.nil, imageId);
+  return Object.freeze({classRef, metaclassRef});
 }
 
 async function installPrimitiveBlock({images, imageId, primitive}) {
@@ -191,12 +239,11 @@ async function installSmalltalkIndexedProtocol({images, compilation, imageId, la
   // Deterministic publication order makes a partial run recoverable by replaying the installer:
   // layout -> class graph -> primitive Blocks -> ordinary methods.
   const shape = await ensureArrayShape(images, imageId);
-  const arrayClass = await defineClass({
+  const arrayClass = await ensureArrayClass({
     images,
     imageId,
-    name: 'Array',
-    superclassRef: kernel.objectClass,
-    instanceShapeRef: objectRef(imageId, shape.id),
+    kernel,
+    shapeRef: objectRef(imageId, shape.id),
   });
 
   const primitives = {};
