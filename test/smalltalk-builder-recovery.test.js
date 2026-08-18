@@ -1,0 +1,240 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  CompilationService,
+  createDefaultCodeCompilerRegistry,
+  createRuntime,
+  defineMethods,
+  findSmalltalkKernel,
+  installSmalltalkKernel,
+  installSymmetricSmalltalkBlock,
+  integerValue,
+  objectRef,
+} from '../src/runtime.js';
+import {SmalltalkMethodRedefinitionError} from '../src/language/smalltalk-class-builder.js';
+
+// Three retry defects in this one publication sequence were each found only because some unrelated
+// test happened to cross a different boundary. Targeted probes cannot settle the question, so this
+// enumerates it: interrupt at *every* write, retry the identical operation, and require the method
+// to become callable.
+//
+// The faulting service also backs the CompilationService, or writes made inside compileArtifact
+// escape the injector entirely — which is exactly how one of the three defects survived.
+
+const PLUS = {
+  selector: '+',
+  program: {
+    parameters: [{id: 'plus:arg', name: 'aNumber'}],
+    captures: [],
+    body: {op: 'integer-add', left: {op: 'receiver'}, right: {op: 'argument', index: 0}},
+  },
+};
+
+const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject'];
+
+// Wraps an ImageService so the Nth write throws, and records what each write was.
+function faultingImages(images, {failAt = null, commitThenThrow = false, log = []} = {}) {
+  let writes = 0;
+  const wrapped = Object.create(Object.getPrototypeOf(images));
+  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
+    if (typeof images[key] !== 'function' || key === 'constructor') continue;
+    wrapped[key] = (...args) => images[key](...args);
+  }
+  for (const [key, value] of Object.entries(images)) {
+    if (typeof value === 'function') wrapped[key] = (...args) => images[key](...args);
+    else wrapped[key] = value;
+  }
+  for (const method of WRITE_METHODS) {
+    wrapped[method] = async (imageId, input, options) => {
+      writes += 1;
+      const index = writes;
+      log.push(`${method}:${input?.id ?? '?'}`);
+      if (index === failAt && !commitThenThrow) {
+        throw new Error(`injected failure at write ${index} (${method} ${input?.id})`);
+      }
+      const result = await images[method](imageId, input, options);
+      // Models a lost acknowledgement: the write committed, the caller never learned it did.
+      if (index === failAt && commitThenThrow) {
+        throw new Error(`injected post-commit failure at write ${index} (${method} ${input?.id})`);
+      }
+      return result;
+    };
+  }
+  return {images: wrapped, writeCount: () => writes};
+}
+
+function servicesFor(images) {
+  return new CompilationService({images, compilers: createDefaultCodeCompilerRegistry()});
+}
+
+async function freshImage(runtime, imageId) {
+  await runtime.images.createImage({id: imageId});
+  await installSmalltalkKernel({images: runtime.images, imageId});
+  return await findSmalltalkKernel({images: runtime.images, imageId});
+}
+
+async function callPlus(runtime, imageId, id) {
+  const installed = await installSymmetricSmalltalkBlock({
+    images: runtime.images, imageId, id, source: '[ :a :b | a + b ]',
+  });
+  const activation = await runtime.invocations.invokeBlock(
+    objectRef(imageId, installed.block.id), [integerValue(3), integerValue(4)],
+  );
+  return await runtime.executor.execute(activation);
+}
+
+// How many writes one clean `defineMethods` performs, so the sweep knows where to stop.
+async function writeCountFor(lane) {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    const kernel = await freshImage(runtime, 'count');
+    const {images, writeCount} = faultingImages(runtime.images);
+    await defineMethods({
+      images, compilation: servicesFor(images), imageId: 'count',
+      classRef: kernel.integerClass, methods: [PLUS], lane,
+    });
+    return writeCount();
+  } finally {
+    await runtime.close();
+  }
+}
+
+for (const lane of ['neutral', 'wasm']) {
+  test(`every write in a ${lane} defineMethods is recoverable by an identical retry`, async () => {
+    const total = await writeCountFor(lane);
+    assert.ok(total > 3, `expected several writes in the ${lane} lane, saw ${total}`);
+
+    for (let failAt = 1; failAt <= total; failAt += 1) {
+      for (const commitThenThrow of [false, true]) {
+        const runtime = await createRuntime({backend: {mode: 'mock'}});
+        try {
+          const kernel = await freshImage(runtime, 'app');
+          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+
+          await assert.rejects(
+            defineMethods({
+              images, compilation: servicesFor(images), imageId: 'app',
+              classRef: kernel.integerClass, methods: [PLUS], lane,
+            }),
+            /injected/,
+            `${lane} lane: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
+          );
+
+          // The identical operation, retried against a clean service, must complete.
+          await defineMethods({
+            images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+            classRef: kernel.integerClass, methods: [PLUS], lane,
+          });
+          assert.deepEqual(
+            await callPlus(runtime, 'app', `retry-${lane}-${failAt}-${commitThenThrow}`),
+            integerValue(7),
+            `${lane} lane: not callable after retrying past write ${failAt} (commitThenThrow=${commitThenThrow})`,
+          );
+        } finally {
+          await runtime.close();
+        }
+      }
+    }
+  });
+}
+
+// A lost acknowledgement on the final dictionary swap is the case where the caller believes it
+// failed but the image already has the method. An identical definition must then be an idempotent
+// success rather than a redefinition error.
+test('an identical definition after a committed dictionary swap is idempotent', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    const kernel = await freshImage(runtime, 'app');
+    const total = await writeCountFor('neutral');
+    const {images} = faultingImages(runtime.images, {failAt: total, commitThenThrow: true});
+
+    await assert.rejects(
+      defineMethods({
+        images, compilation: servicesFor(images), imageId: 'app',
+        classRef: kernel.integerClass, methods: [PLUS], lane: 'neutral',
+      }),
+      /injected post-commit/,
+    );
+    // The swap did land, so the method is already callable.
+    assert.deepEqual(await callPlus(runtime, 'app', 'after-lost-ack'), integerValue(7));
+
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+      classRef: kernel.integerClass, methods: [PLUS], lane: 'neutral',
+    });
+    assert.deepEqual(await callPlus(runtime, 'app', 'after-idempotent-retry'), integerValue(7));
+  } finally {
+    await runtime.close();
+  }
+});
+
+// Only a *different* program or lane for an existing selector is replacement, which stays refused.
+test('a different program for an existing selector is refused as replacement', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    const kernel = await freshImage(runtime, 'app');
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+      classRef: kernel.integerClass, methods: [PLUS], lane: 'neutral',
+    });
+
+    const different = {
+      selector: '+',
+      program: {
+        parameters: [{id: 'plus:arg', name: 'aNumber'}],
+        captures: [],
+        body: {op: 'integer-add', left: {op: 'receiver'}, right: {op: 'receiver'}},
+      },
+    };
+    await assert.rejects(
+      defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass, methods: [different], lane: 'neutral',
+      }),
+      (error) => error instanceof SmalltalkMethodRedefinitionError,
+    );
+    await assert.rejects(
+      defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass, methods: [PLUS], lane: 'wasm',
+      }),
+      (error) => error instanceof SmalltalkMethodRedefinitionError,
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
+// Plan before publish: a bad program must not occupy its selector's deterministic semantic id, or
+// correcting it and retrying becomes a permanent conflict.
+test('a rejected method body leaves no artifact behind', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    const kernel = await freshImage(runtime, 'app');
+    const bad = {
+      selector: '+',
+      program: {parameters: [{id: 'plus:arg', name: 'aNumber'}], captures: [], body: {op: 'not-an-op'}},
+    };
+    await assert.rejects(
+      defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass, methods: [bad], lane: 'neutral',
+      }),
+      /not-an-op|unknown/,
+    );
+    assert.equal(
+      await runtime.images.getCodeArtifact('app', `${kernel.integerClass.objectId}/method/Kw:semantic`),
+      null,
+      'a rejected body must not occupy the selector semantic id',
+    );
+
+    // Corrected, the same selector installs cleanly.
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+      classRef: kernel.integerClass, methods: [PLUS], lane: 'neutral',
+    });
+    assert.deepEqual(await callPlus(runtime, 'app', 'after-correction'), integerValue(7));
+  } finally {
+    await runtime.close();
+  }
+});

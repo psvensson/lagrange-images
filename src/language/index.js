@@ -16,3 +16,5 @@ export * from './symmetric-smalltalk-semantic.js';
 export * from './symmetric-smalltalk-tokenizer.js';
 export {createDefaultLanguagePlatform};
 export * from './smalltalk-kernel.js';
+export * from './smalltalk-class-builder.js';
+export * from './smalltalk-lookup.js';
