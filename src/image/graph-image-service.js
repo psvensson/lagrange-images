@@ -74,7 +74,14 @@ class ImageService {
     await this.getImage(imageId);
     const id = input.id ?? randomUUID();
     const at = this.now();
-    const shape = createShapeRecord({id, imageId, slots: input.slots ?? [], metadata: input.metadata ?? {}, updatedAt: at});
+    const shape = createShapeRecord({
+      id,
+      imageId,
+      slots: input.slots ?? [],
+      metadata: input.metadata ?? {},
+      updatedAt: at,
+      ...(Object.hasOwn(input, 'indexed') ? {indexed: input.indexed} : {}),
+    });
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
       key: id,
@@ -115,12 +122,18 @@ class ImageService {
 
   async putObject(imageId, input, {expectedVersion} = {}) {
     await this.getImage(imageId);
-    assertAllowedFields(input, new Set(['id', 'shape', 'behavior', 'slots', 'metadata']), 'generic object');
+    assertAllowedFields(input, new Set(['id', 'shape', 'behavior', 'slots', 'indexed', 'metadata']), 'generic object');
     const id = input.id ?? randomUUID();
     const at = this.now();
     const object = createObjectRecord({
-      id, imageId, shape: input.shape, behavior: input.behavior ?? null,
-      slots: input.slots ?? {}, metadata: input.metadata ?? {}, updatedAt: at,
+      id,
+      imageId,
+      shape: input.shape,
+      behavior: input.behavior ?? null,
+      slots: input.slots ?? {},
+      metadata: input.metadata ?? {},
+      updatedAt: at,
+      ...(Object.hasOwn(input, 'indexed') ? {indexed: input.indexed} : {}),
     });
     const shape = await this.getShape(object.shape.imageId, object.shape.objectId);
     if (!shape) throw new TypeError(`shape not found: ${object.shape.imageId}/${object.shape.objectId}`);
