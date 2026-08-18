@@ -697,3 +697,90 @@ test('a code artifact differing only in provenance is not treated as exact', asy
     );
   });
 });
+
+// Reuse must be exact to the same standard as ensureCodeArtifact. Correct provenance with the wrong
+// compiled output is stale, not reusable.
+test('a wasm function with right provenance but the wrong module is a conflict', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const methodObjectId = `${kernel.integerClass.objectId}/method/Kw`;
+    const program = plusMethod().program;
+
+    const semantic = await runtime.images.putCodeArtifact('app', {
+      id: `${methodObjectId}:semantic`,
+      languageId: 'symmetric-smalltalk',
+      representation: 'lagrange-code/v0',
+      content: textValue(JSON.stringify(program)),
+      metadata: {smalltalk: 'method', selector: '+'},
+    });
+    // A decoy module, so the planted function's content points somewhere a fresh compile would not.
+    const decoyModule = await runtime.images.putCodeArtifact('app', {
+      id: 'decoy-module',
+      representation: 'wasm-module/v1',
+      content: {kind: 'bytes', base64: ''},
+      metadata: {abi: 'lagrange-value-handle/v0', entry: 'run', parameters: 1, captures: []},
+    });
+    await runtime.images.putCodeArtifact('app', {
+      id: `${methodObjectId}:wasm:function`,
+      representation: 'wasm-function/v1',
+      content: objectRef('app', decoyModule.id),
+      derivedFrom: [objectRef('app', semantic.id), objectRef('app', decoyModule.id)],
+      metadata: {abi: 'lagrange-value-handle/v0', entry: 'run', parameters: 1, captures: [], closurePrototypes: []},
+    });
+
+    await assert.rejects(
+      defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass, methods: [plusMethod()], lane: 'wasm',
+      }),
+      (error) => error.name === 'SmalltalkKernelConflictError' && /wasm function artifact/.test(error.message),
+    );
+  });
+});
+
+// The shape id names a canonical selector *set*, so two orderings of that set must describe the
+// same persisted shape — including its slot array — or recovery conflicts with itself.
+test('a partial install recovers when the same selectors arrive in a different order', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const literal = (text) => ({parameters: [], captures: [], body: {op: 'literal', value: textValue(text)}});
+    const foo = {selector: 'foo', program: literal('foo')};
+    const bar = {selector: 'bar', program: literal('bar')};
+
+    const failing = {
+      ...runtime.images,
+      getCodeArtifact: (...a) => runtime.images.getCodeArtifact(...a),
+      getObject: (...a) => runtime.images.getObject(...a),
+      getShape: (...a) => runtime.images.getShape(...a),
+      getBlock: (...a) => runtime.images.getBlock(...a),
+      putCodeArtifact: (...a) => runtime.images.putCodeArtifact(...a),
+      putBlock: (...a) => runtime.images.putBlock(...a),
+      putShape: (...a) => runtime.images.putShape(...a),
+      putObject: async (imageId, input, options) => {
+        if (input.id.endsWith('/methods')) throw new Error('interrupted after the shape');
+        return await runtime.images.putObject(imageId, input, options);
+      },
+    };
+    await assert.rejects(
+      defineMethods({
+        images: failing, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass, methods: [foo, bar],
+      }),
+      /interrupted after the shape/,
+    );
+
+    // Same set, opposite order. It must reuse the shape the failed attempt left behind.
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+      classRef: kernel.integerClass, methods: [bar, foo],
+    });
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'foo-after', '[ :x | x foo ]', [integerValue(1)]),
+      textValue('foo'),
+    );
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'bar-after', '[ :x | x bar ]', [integerValue(1)]),
+      textValue('bar'),
+    );
+  });
+});

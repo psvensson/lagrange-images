@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
-import {compileWasmFunctionArtifact} from '../wasm/compiler.js';
+import {assembleWasmFunctionArtifact} from '../wasm/compiler.js';
 import {isObjectRef, objectRef, textValue} from '../value/index.js';
 import {
   BEHAVIOR_SHAPE_ID,
@@ -15,7 +15,7 @@ import {
   methodDictionarySlots,
   readBehavior,
 } from './smalltalk-kernel.js';
-import {WASM_FUNCTION_V1} from '../code/wasm-artifacts.js';
+import {WASM_FUNCTION_V1, WASM_MODULE_V1} from '../code/wasm-artifacts.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 // Installing methods onto a class, and defining new classes with their metaclasses.
@@ -109,27 +109,64 @@ async function ensureBlock(images, imageId, desired) {
   return existing;
 }
 
-// compileWasmFunctionArtifact writes its deterministic wasm-function/v1 with an unconditional
-// putCodeArtifact, so a failure after that write but before the dictionary swap would make an exact
-// retry collide with its own output. Reuse an existing function only when its provenance matches
-// this semantic artifact; anything else is a conflict rather than something to overwrite.
+// The neutral lane has the same shape of problem as the WASM one: compileArtifact writes its
+// deterministic output unconditionally, so a failure after it but before the dictionary swap makes
+// an exact retry of the same selector collide with its own output. Reuse is exact on the same terms
+// — right representation, and provenance naming this semantic artifact.
+async function ensureNeutralCode({images, compilation, imageId, id, semanticRef}) {
+  const codeId = `${id}:code`;
+  const existing = await images.getCodeArtifact(imageId, codeId);
+  if (existing) {
+    const derivedFromSemantic = (existing.derivedFrom ?? [])
+      .some((edge) => edge.imageId === semanticRef.imageId && edge.objectId === semanticRef.objectId);
+    if (existing.representation !== NEUTRAL_EXPRESSION_V0 || !derivedFromSemantic) {
+      throw new SmalltalkKernelConflictError('code artifact', imageId, codeId);
+    }
+    return objectRef(imageId, existing.id);
+  }
+  const code = await compilation.compileArtifact(semanticRef, {
+    id: codeId,
+    targetRepresentation: NEUTRAL_EXPRESSION_V0,
+  });
+  return objectRef(imageId, code.id);
+}
+
+// The WASM function artifact is deterministic and written unconditionally by the assembler, so a
+// failure between that write and the dictionary swap would make an exact retry collide with its own
+// output.
+//
+// Reuse therefore has to be *exact*, to the same standard as ensureCodeArtifact: the module a fresh
+// compile would select is resolved first, and an existing function must point at that module and
+// carry the same entry, not merely mention the semantic artifact in its provenance. Provenance
+// alone would let a function with stale compiled output be reused rather than rebuilt.
 async function ensureWasmFunction({images, compilation, imageId, id, semanticRef}) {
   const functionId = `${id}:wasm:function`;
+  const moduleArtifact = await compilation.compileArtifact(semanticRef, {
+    targetRepresentation: WASM_MODULE_V1,
+    id: `${id}:wasm:module`,
+  });
+  const moduleRef = objectRef(moduleArtifact.imageId ?? imageId, moduleArtifact.id);
+
   const existing = await images.getCodeArtifact(imageId, functionId);
   if (existing) {
     const derivedFromSemantic = (existing.derivedFrom ?? [])
       .some((edge) => edge.imageId === semanticRef.imageId && edge.objectId === semanticRef.objectId);
-    if (existing.representation !== WASM_FUNCTION_V1 || !derivedFromSemantic) {
+    const pointsAtModule = isObjectRef(existing.content)
+      && existing.content.imageId === moduleRef.imageId
+      && existing.content.objectId === moduleRef.objectId;
+    const sameEntry = existing.metadata?.entry === moduleArtifact.metadata?.entry;
+    if (existing.representation !== WASM_FUNCTION_V1 || !derivedFromSemantic || !pointsAtModule || !sameEntry) {
       throw new SmalltalkKernelConflictError('wasm function artifact', imageId, functionId);
     }
     return objectRef(imageId, existing.id);
   }
-  const {functionArtifact} = await compileWasmFunctionArtifact({
+
+  const {functionArtifact} = await assembleWasmFunctionArtifact({
     images,
-    compilation,
     semanticRef,
-    moduleId: `${id}:wasm:module`,
+    moduleRef,
     functionId,
+    entry: moduleArtifact.metadata.entry,
   });
   return objectRef(imageId, functionArtifact.id);
 }
@@ -186,10 +223,7 @@ async function defineMethods({
     // lane's Block points at a wasm-function/v1, not at the module it references.
     const codeRef = lane === 'wasm'
       ? await ensureWasmFunction({images, compilation, imageId, id, semanticRef: objectRef(imageId, semantic.id)})
-      : objectRef(imageId, (await compilation.compileArtifact(objectRef(imageId, semantic.id), {
-        id: `${id}:code`,
-        targetRepresentation: NEUTRAL_EXPRESSION_V0,
-      })).id);
+      : await ensureNeutralCode({images, compilation, imageId, id, semanticRef: objectRef(imageId, semantic.id)});
     const block = await ensureBlock(images, imageId, {
       id,
       code: codeRef,
@@ -201,10 +235,14 @@ async function defineMethods({
   // The shape id encodes the canonical selector *set*, not its cardinality. Keying on the count
   // would make two unrelated one-selector dictionaries — say a failed `foo` and a later `bar` —
   // want the same durable id and conflict.
-  const selectors = [...merged.keys()];
+  // Sorted once, and used for BOTH the identity and the persisted slot array. Fingerprinting a
+  // sorted list while building slots in insertion order would give [foo, bar] and [bar, foo] the
+  // same shape id but different slot arrays, so ensureShape would reject the second description of
+  // what is meant to be the same canonical selector set.
+  const selectors = [...merged.keys()].sort();
   const slots = methodDictionarySlots(selectors);
   const fingerprint = createHash('sha256')
-    .update(JSON.stringify([...selectors].sort()))
+    .update(JSON.stringify(selectors))
     .digest('base64url')
     .slice(0, 16);
   const shape = await ensureShape(images, imageId, {
