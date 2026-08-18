@@ -1,6 +1,7 @@
 # ADR 0048: Smalltalk equality, hashing and durable Dictionary
 
-Status: accepted — Symmetric Smalltalk gains a stable default `=`/`hash` contract and a hashed `Dictionary` whose durable identity points at immutable table snapshots; general lookup uses ordinary `hash`/`=` message sends, while the table representation is deliberately readable by a later Text-only MethodDictionary fast path without executing arbitrary Smalltalk during dispatch.
+Status: implemented — Symmetric Smalltalk gains a stable default `=`/`hash` contract and a hashed `Dictionary` whose durable identity points at immutable table snapshots; general lookup uses ordinary `hash`/`=` message sends, while the table representation is deliberately readable by a later Text-only MethodDictionary fast path without executing arbitrary Smalltalk during dispatch.
+Proven by: test/smalltalk-equality-hash.test.js, test/smalltalk-dictionary.test.js
 
 ## Problem
 

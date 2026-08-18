@@ -129,6 +129,8 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `defineMethods()` | methods from semantic `lagrange-code/v0` programs, optionally with captures |
 | `installSmalltalkControlFlow()` | `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:` on True and False (ADR 0045) |
 | `installSmalltalkAllocationProtocol()` | the `class-of`/`basic-new` primitive Blocks, plus `Object >> class`, `Object >> initialize`, `Class >> basicNew` and `Class >> new` (ADR 0046) |
+| `installSmalltalkEqualityProtocol()` | the `built-in-equals`/`built-in-hash` primitive Blocks, plus `Object >> =` and `Object >> hash` (ADR 0048) |
+| `installSmalltalkDictionaryProtocol()` | the Dictionary/DictionaryTable Shapes, the five Dictionary primitive Blocks, the `Dictionary` class, and `initialize`, `size`, `includesKey:`, `at:`, `at:put:` (ADR 0048) |
 | `installSmalltalkIndexedProtocol()` | `Array`, `Class >> basicNew:`, `Array class >> new:`, and `Array >> size`/`at:`/`at:put:` over four more `smalltalk-kernel-primitive/v1` Blocks (ADR 0047) |
 
 A boolean Value dispatches by bridging to that image's `true`/`false` object, which becomes the
@@ -137,7 +139,16 @@ Value still takes its class from its kind.
 
 A class is instantiable when its `instanceShape` is a Shape ref; `nil` there means not instantiable,
 and an empty Shape is a valid zero-slot layout. `defineClass()` still stores `nil` when no
-`instanceShapeRef` is supplied, so no class written before ADR 0046 changes meaning. Instance Shapes
+`instanceShapeRef` is supplied, so no class written before ADR 0046 changes meaning.
+
+ADR 0048 adds no executable representation: the equality, hash and Dictionary operations are further
+`smalltalk-kernel-primitive/v1` primitives reached the same way. A `Dictionary` keeps stable identity
+and one `table` ref; a `DictionaryTable` is an internal graph object (no `behavior`) whose indexed
+part holds `capacity * 3` bucket Values as `hash, key, value` triples. Published tables are immutable
+by language contract — a mutation writes a whole new snapshot and compare-and-sets the single
+`table` ref, so a reader sees one complete mapping or the other. General lookup really sends `hash`
+and `=`, so user overrides work; the pure helpers in `smalltalk-equality.js` are what a later
+Text-only MethodDictionary fast path would use instead. Instance Shapes
 are complete inherited layouts: a subclass may add indexed storage, but once an ancestor declares
 `indexed: values`, a concrete descendant may not drop it. `Array` is fixed-size: `basicNew` gives its
 zero-length form, `basicNew:` establishes the length and fills every element with that image's `nil`.
