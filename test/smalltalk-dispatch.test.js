@@ -12,6 +12,7 @@ import {
   textValue,
 } from '../src/runtime.js';
 import {BEHAVIOR_SHAPE_ID} from '../src/language/smalltalk-kernel.js';
+import {SmalltalkMethodRedefinitionError} from '../src/language/smalltalk-class-builder.js';
 
 // ADR 0044 dispatch: fixed-Behavior lookup with inheritance, immediate Values taking their class
 // from their kind under a dispatch image, and `+` as an ordinary method.
@@ -311,6 +312,208 @@ test('Blocks still answer value and value: without a class', async () => {
           images: runtime.images, imageId: 'app', id: 'identity', source: '[ :v | v ]',
         })).block].map((block) => objectRef('app', block.id))),
       integerValue(5),
+    );
+  });
+});
+
+// ADR 0044 decision 6 in full: ONE semantic method, derived independently into a neutral Block and
+// a WASM Block, with both executed. A single Block reached from two callers would not show this.
+test('the same semantic + method runs through both execution lanes', async () => {
+  for (const lane of ['neutral', 'wasm']) {
+    await withRuntime(async (runtime) => {
+      const kernel = await seed(runtime, 'app');
+      await defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass, methods: [plusMethod()], lane,
+      });
+
+      const dictionary = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
+      const shape = await runtime.images.getShape(dictionary.shape.imageId, dictionary.shape.objectId);
+      const slot = shape.slots.find(({name}) => name === '+');
+      const methodBlock = await runtime.images.getBlock('app', dictionary.slots[slot.id].objectId);
+      const code = await runtime.images.getCodeArtifact(methodBlock.code.imageId, methodBlock.code.objectId);
+      assert.equal(
+        code.representation,
+        lane === 'wasm' ? 'wasm-function/v1' : 'neutral-expression/v0',
+        `the ${lane} lane must derive its own executable representation`,
+      );
+      // The semantic artifact is lagrange-code/v0 in both cases — the method itself is lane-neutral.
+      const semantic = await runtime.images.getCodeArtifact(
+        'app', `${kernel.integerClass.objectId}/method/Kw:semantic`,
+      );
+      assert.equal(semantic.representation, 'lagrange-code/v0');
+
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `adder-${lane}`, '[ :a :b | a + b ]',
+          [integerValue(3), integerValue(4)]),
+        integerValue(7),
+        `3 + 4 must be 7 through the ${lane} lane`,
+      );
+    });
+  }
+});
+
+// Deterministic ids plus a plain putObject would let defineClass silently replace an existing class
+// — the same defect the kernel installer had before review.
+test('defineClass refuses to overwrite an existing class', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    await defineClass({images: runtime.images, imageId: 'app', name: 'Point'});
+    const before = await runtime.images.getObject('app', 'smalltalk/class/Point');
+
+    // An identical definition is a no-op, so a retry after a partial failure works.
+    await defineClass({images: runtime.images, imageId: 'app', name: 'Point'});
+    const after = await runtime.images.getObject('app', 'smalltalk/class/Point');
+    assert.equal(after._version, before._version);
+
+    // A different definition at the same id is refused rather than applied.
+    const other = await defineClass({images: runtime.images, imageId: 'app', name: 'Other'});
+    await assert.rejects(
+      defineClass({images: runtime.images, imageId: 'app', name: 'Point', superclassRef: other.classRef}),
+      (error) => error.name === 'SmalltalkKernelConflictError',
+    );
+  });
+});
+
+test('defineClass validates its superclass before writing anything', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    await seed(runtime, 'other');
+    const foreign = await findSmalltalkKernel({images: runtime.images, imageId: 'other'});
+
+    await assert.rejects(
+      defineClass({images: runtime.images, imageId: 'app', name: 'Foreign', superclassRef: foreign.objectClass}),
+      /superclass must be an unpinned ref in app/,
+    );
+    // Nothing was written, so a class dispatch would later reject does not exist.
+    assert.equal(await runtime.images.getObject('app', 'smalltalk/class/Foreign'), null);
+
+    const legacyShape = await runtime.images.putShape('app', {id: 'not-a-behavior', slots: []});
+    await runtime.images.putObject('app', {id: 'NotABehavior', shape: objectRef('app', legacyShape.id), slots: {}});
+    await assert.rejects(
+      defineClass({
+        images: runtime.images, imageId: 'app', name: 'Bad',
+        superclassRef: objectRef('app', 'NotABehavior'),
+      }),
+      /is not a smalltalk\/behavior-shape\/v1 Behavior/,
+    );
+    assert.equal(await runtime.images.getObject('app', 'smalltalk/class/Bad'), null);
+  });
+});
+
+// Add-only for this landing: the method artifacts are create-once with ids derived from class and
+// selector, so a redefinition would fail partway through and leave the class inconsistent.
+test('redefining a selector is refused up front rather than failing partway', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const define = () => defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+      classRef: kernel.integerClass, methods: [plusMethod()],
+    });
+    await define();
+    const dictionary = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
+    await assert.rejects(define(), (error) => error instanceof SmalltalkMethodRedefinitionError);
+    const after = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
+    assert.equal(after._version, dictionary._version, 'a refused redefinition must not touch the dictionary');
+  });
+});
+
+test('defineMethods requires a local fixed-shape Behavior', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    await seed(runtime, 'other');
+    const foreign = await findSmalltalkKernel({images: runtime.images, imageId: 'other'});
+    await assert.rejects(
+      defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+        classRef: foreign.integerClass, methods: [plusMethod()],
+      }),
+      /class must be an unpinned ref in app/,
+    );
+  });
+});
+
+// The builder enforces selector uniqueness, but generic graph writes can produce a dictionary shape
+// with duplicate names. A find over that would resurrect first-wins lookup.
+test('a duplicate selector in stored data is rejected rather than resolved by position', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+      classRef: kernel.integerClass,
+      methods: [{selector: 'label', program: {parameters: [], captures: [], body: {op: 'literal', value: textValue('first')}}}],
+    });
+    const dictionary = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
+    const original = await runtime.images.getShape(dictionary.shape.imageId, dictionary.shape.objectId);
+    const method = dictionary.slots[original.slots[0].id];
+
+    const corrupt = await runtime.images.putShape('app', {
+      id: 'corrupt-dictionary-shape',
+      slots: [{id: 'a', name: 'label'}, {id: 'b', name: 'label'}],
+    });
+    await runtime.images.putObject('app', {
+      id: dictionary.id,
+      shape: objectRef('app', corrupt.id),
+      slots: {a: method, b: method},
+      metadata: dictionary.metadata,
+    }, {expectedVersion: dictionary._version});
+
+    await assert.rejects(
+      evaluate(runtime, 'app', 'dup-selector', '[ :x | x label ]', [integerValue(1)]),
+      (error) => error.name === 'SmalltalkMalformedBehaviorError' && /2 slots named label/.test(error.message),
+    );
+  });
+});
+
+test('a method Block that does not load is a dangling edge', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+      classRef: kernel.integerClass,
+      methods: [{selector: 'label', program: {parameters: [], captures: [], body: {op: 'literal', value: textValue('x')}}}],
+    });
+    const dictionary = await runtime.images.getObject('app', `${kernel.integerClass.objectId}/methods`);
+    const shape = await runtime.images.getShape(dictionary.shape.imageId, dictionary.shape.objectId);
+    await runtime.images.putObject('app', {
+      id: dictionary.id,
+      shape: dictionary.shape,
+      slots: {[shape.slots[0].id]: objectRef('app', 'no-such-block')},
+      metadata: dictionary.metadata,
+    }, {expectedVersion: dictionary._version});
+
+    await assert.rejects(
+      evaluate(runtime, 'app', 'dangling-method', '[ :x | x label ]', [integerValue(1)]),
+      (error) => error.name === 'SmalltalkDanglingEdgeError'
+        && error.edge === 'method'
+        // The formatter must render refs, not `app/undefined`.
+        && !/undefined/.test(error.message),
+    );
+  });
+});
+
+// Decision 10 preserves what a stored object *means*, and a failure is part of that meaning.
+test('a legacy selector miss keeps its pre-0044 failure identity', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    const legacyShape = await runtime.images.putShape('app', {
+      id: 'legacy-miss-shape', slots: [{id: 'method-other', name: 'other'}],
+    });
+    await runtime.images.putObject('app', {
+      id: 'LegacyMissBehavior', shape: objectRef('app', legacyShape.id),
+      slots: {'method-other': objectRef('app', 'anything')},
+    });
+    const receiverShape = await runtime.images.putShape('app', {id: 'legacy-miss-receiver', slots: []});
+    await runtime.images.putObject('app', {
+      id: 'legacy-miss-receiver-object', shape: objectRef('app', receiverShape.id),
+      behavior: objectRef('app', 'LegacyMissBehavior'), slots: {},
+    });
+
+    await assert.rejects(
+      evaluate(runtime, 'app', 'legacy-miss', '[ :t | t nope ]',
+        [objectRef('app', 'legacy-miss-receiver-object')]),
+      (error) => error.name === 'TypeError'
+        && error.message === 'Symmetric Smalltalk message not understood: nope',
     );
   });
 });

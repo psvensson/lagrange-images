@@ -336,6 +336,10 @@ async function readBehavior(images, ref) {
 export {
   BEHAVIOR_SHAPE_ID,
   SmalltalkKernelConflictError,
+  canonicalJson,
+  ensureObject,
+  ensureShape,
+  isLocalRef,
   BEHAVIOR_SLOTS,
   EMPTY_SHAPE_ID,
   KERNEL_SHAPE_ID,

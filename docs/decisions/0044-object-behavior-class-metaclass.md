@@ -385,6 +385,15 @@ Also required:
 - `class` as a message, which needs an operation exposing a receiver's behavior
 - dispatch against a `pinned-ref` receiver, which needs a decision about which historical version of
   a class applies
+- **cross-image inheritance.** A Behavior's superclass must be a ref in its own image, so a class
+  cannot inherit across an image boundary. That is a deliberate v1 restriction, not an accident of
+  validation: a chain crossing images raises which kernel's `nil` terminates lookup and how the
+  parallel metaclass chain crosses with it, and neither has an obvious answer yet. Lookup still
+  compares the terminator as a full ref, so relaxing the restriction later cannot silently turn every
+  image's `smalltalk/nil` into a chain terminator
+- method *replacement*. Method artifacts are create-once with ids derived from class and selector, so
+  redefining a selector is refused rather than half-applied. Real replacement needs versioned method
+  identity
 - Blocks as ordinary `BlockClosure` instances, per decision 10
 - class variables, class instance variables and traits
 - becoming/migration when a shape changes under existing instances
@@ -415,6 +424,8 @@ the bootstrap is an installer; the dispatcher knows rules, not class names
 bootstrap writes are ensure-exact-or-create; never blind upserts over an image
 a shape or slot ref is identity only with its imageId; object id alone is not
 installing the kernel reinterprets no existing behavior record
-a legacy behavior keeps legacy lookup; migration rewrites records, never meanings
+a legacy behavior keeps legacy lookup, including how it fails; migration rewrites records, never meanings
+a superclass is local to its image; cross-image inheritance is deferred, not accidental
+selector uniqueness is checked when a dictionary is read, not only when it is built
 both lanes agree on results and on failure reasons
 ```

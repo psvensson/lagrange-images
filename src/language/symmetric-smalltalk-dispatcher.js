@@ -1,7 +1,7 @@
 import {VALUE_KIND, isObjectRef} from '../value/index.js';
 import {findSmalltalkKernel, isBehaviorObject} from './smalltalk-kernel.js';
 import {
-  SmalltalkMessageNotUnderstoodError,
+  SmalltalkDanglingEdgeError,
   behaviorRefFor,
   lookupSelector,
 } from './smalltalk-lookup.js';
@@ -28,8 +28,11 @@ async function legacyLookup(images, behavior, selector) {
   if (!shape) {
     throw new TypeError(`Symmetric Smalltalk behavior shape not found: ${behavior.shape.imageId}/${behavior.shape.objectId}`);
   }
+  // Deliberately the pre-0044 TypeError and wording. Decision 10 preserves what an already-stored
+  // object *means*, and a failure is part of that meaning: a legacy receiver that did not
+  // understand a selector must still fail exactly as it did before any kernel existed.
   const methodSlot = shape.slots.find(({name}) => name === selector);
-  if (!methodSlot) throw new SmalltalkMessageNotUnderstoodError(selector, `${behavior.imageId}/${behavior.id}`);
+  if (!methodSlot) throw new TypeError(`Symmetric Smalltalk message not understood: ${selector}`);
   const blockRef = behavior.slots[methodSlot.id];
   if (!isObjectRef(blockRef)) {
     throw new TypeError(`Symmetric Smalltalk method slot ${methodSlot.id} must contain a Block ref`);
@@ -116,10 +119,10 @@ function createSymmetricSmalltalkDispatcher() {
           ? `${request.receiver.imageId}/${request.receiver.objectId}`
           : `a ${request.receiver.kind} Value`,
       });
+      // A selector that resolved to a Block ref which does not load is incomplete graph state, not
+      // a message the receiver failed to understand.
       const method = await images.getBlock(blockRef.imageId, blockRef.objectId);
-      if (!method) {
-        throw new TypeError(`Symmetric Smalltalk method Block not found: ${blockRef.imageId}/${blockRef.objectId}`);
-      }
+      if (!method) throw new SmalltalkDanglingEdgeError('method', behavior, blockRef);
       return Object.freeze({block: blockRef});
     },
   });

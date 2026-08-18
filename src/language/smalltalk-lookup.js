@@ -24,8 +24,17 @@ class SmalltalkMalformedBehaviorError extends TypeError {
   }
 }
 
+// Callers hold records in some places and refs in others; a record has `id` where a ref has
+// `objectId`, so normalize before formatting or the message reads `app/undefined`.
+function asRef(value) {
+  if (!value) return {imageId: 'unknown', objectId: 'unknown'};
+  return {imageId: value.imageId, objectId: value.objectId ?? value.id};
+}
+
 class SmalltalkDanglingEdgeError extends TypeError {
-  constructor(edge, from, ref) {
+  constructor(edge, fromValue, refValue) {
+    const from = asRef(fromValue);
+    const ref = asRef(refValue);
     super(
       `Behavior ${from.imageId}/${from.objectId} has a dangling ${edge} edge to `
       + `${ref.imageId}/${ref.objectId}; the object graph is incomplete`,
@@ -97,11 +106,19 @@ async function methodAt(images, behavior, selector) {
   if (!shape) {
     throw new SmalltalkDanglingEdgeError('method dictionary shape', dictionary, dictionary.shape);
   }
-  // Selector names are unique in a MethodDictionary by construction, so this cannot resolve by
-  // position — see ADR 0044 decision 2.
-  const slot = shape.slots.find(({name}) => name === selector);
-  if (!slot) return null;
-  const method = dictionary.slots[slot.id];
+  // Uniqueness is enforced when a dictionary is built, but generic graph writes can produce a
+  // shape with duplicate slot names, and a `find` over that would resurrect first-wins lookup —
+  // the exact defect ADR 0044 decision 2 exists to remove. So it is checked here too, on the data
+  // as it actually is rather than as the builder intended.
+  const matches = shape.slots.filter(({name}) => name === selector);
+  if (matches.length > 1) {
+    throw new SmalltalkMalformedBehaviorError(
+      dictionaryRef,
+      new TypeError(`method dictionary declares ${matches.length} slots named ${selector}`),
+    );
+  }
+  if (matches.length === 0) return null;
+  const method = dictionary.slots[matches[0].id];
   if (!isObjectRef(method)) {
     throw new SmalltalkMalformedBehaviorError(
       dictionaryRef,
