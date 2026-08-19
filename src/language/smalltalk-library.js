@@ -1,3 +1,4 @@
+import {findSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {ensureNamedClass, ensureSmalltalkShape} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
@@ -12,8 +13,11 @@ import {objectRef} from '../value/index.js';
 //
 //   no ordering comparison   loops count *up* and stop on `=`, never `<=`
 //   no false literal         `1 = 2` is how a Boolean false is spelled
-//   no `whileTrue:`          iteration is ordinary recursion through a helper selector
 //   no conditions            operations that would raise a range error are omitted, not faked
+//
+// One of those gaps is now closed. ADR 0051 gave Blocks `whileTrue:`/`whileFalse:`, so iteration is
+// a loop rather than recursion through a helper selector — which is what makes this library usable
+// at all, since recursion put every traversal under the 256-activation limit.
 //
 // Each of those is a general language gap rather than a collection concern, and each is recorded in
 // `docs/roadmap.md` rather than papered over here.
@@ -65,43 +69,49 @@ const ORDERED_COLLECTION_METHODS = [
     selector: 'grow',
     source: `[ | bigger |
       bigger := ArrayClass new: (contents size + contents size).
-      self copyInto: bigger index: 1.
+      self copyInto: bigger.
       contents := bigger.
       self ]`,
   },
 
-  // Iteration is recursion because there is no loop construct: a Block cannot answer `whileTrue:`,
-  // since ADR 0044 decision 11 gives Blocks only `value`. Counting *up* and stopping on `=` avoids
-  // the ordering comparison Integer does not have.
+  // Iteration is a loop (ADR 0051), not recursion through a helper selector. That is the whole
+  // point of the ADR: these four methods were correct before it and unusable past a few dozen
+  // elements, because each element cost an activation. Counting *up* and stopping on `=` still
+  // avoids the ordering comparison Integer does not have, which is ADR 0052.
   {
-    selector: 'copyInto:index:',
-    source: `[ :target :index |
-      (index = (tally + 1))
-        ifFalse: [ target at: index put: (contents at: index). self copyInto: target index: (index + 1) ] ]`,
+    selector: 'copyInto:',
+    source: `[ :target | | index |
+      index := 1.
+      [ index = (tally + 1) ] whileFalse: [
+        target at: index put: (contents at: index).
+        index := index + 1 ] ]`,
   },
-  {selector: 'do:', source: '[ :aBlock | self do: aBlock index: 1 ]'},
   {
-    selector: 'do:index:',
-    source: `[ :aBlock :index |
-      (index = (tally + 1))
-        ifFalse: [ aBlock value: (contents at: index). self do: aBlock index: (index + 1) ] ]`,
+    selector: 'do:',
+    source: `[ :aBlock | | index |
+      index := 1.
+      [ index = (tally + 1) ] whileFalse: [
+        aBlock value: (contents at: index).
+        index := index + 1 ] ]`,
   },
-  {selector: 'includes:', source: '[ :item | self includes: item index: 1 ]'},
+  // `found` carries the answer out of the loop, because a Block has no non-local return yet — the
+  // next gap this style of code runs into, and one ADR 0051 deliberately left open.
   {
-    selector: 'includes:index:',
-    source: `[ :item :index |
-      (index = (tally + 1))
-        ifTrue: [ 1 = 2 ]
-        ifFalse: [ (item = (contents at: index))
-          ifTrue: [ 1 = 1 ]
-          ifFalse: [ self includes: item index: (index + 1) ] ] ]`,
+    selector: 'includes:',
+    source: `[ :item | | index found |
+      index := 1. found := 1 = 2.
+      [ (index = (tally + 1)) ifTrue: [ 1 = 2 ] ifFalse: [ found ifTrue: [ 1 = 2 ] ifFalse: [ 1 = 1 ] ] ]
+        whileTrue: [
+          (item = (contents at: index)) ifTrue: [ found := 1 = 1 ] ifFalse: [ 1 = 2 ].
+          index := index + 1 ].
+      found ]`,
   },
   {
     captures: [ARRAY_CLASS_CAPTURE],
     selector: 'asArray',
     source: `[ | result |
       result := ArrayClass new: tally.
-      self copyInto: result index: 1.
+      self copyInto: result.
       result ]`,
   },
 ];
@@ -152,6 +162,12 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
   const arrayClassRef = objectRef(imageId, 'smalltalk/class/Array');
   if (!await images.getObject(imageId, arrayClassRef.objectId)) {
     throw new TypeError(`image ${imageId} has no Array class; install the indexed protocol first`);
+  }
+  // Every traversal below loops, so an image without ADR 0051's Block protocol would install
+  // methods that compile cleanly and then fail with "Block does not understand: whileFalse:" on
+  // first use. Refused here instead, where the cause is still visible.
+  if (!await findSmalltalkBlockProtocol({images, imageId})) {
+    throw new TypeError(`image ${imageId} has no Smalltalk Block protocol; install it first`);
   }
   await defineMethodsFromSource({
     images,

@@ -62,6 +62,17 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   DICTIONARY_AT_PUT: 'dictionary-at-put',
   INSTANCE_SLOT_READ: 'instance-slot-read',
   INSTANCE_SLOT_WRITE: 'instance-slot-write',
+  // ADR 0051. These two are unlike every primitive above: they are not applied as
+  // `aPrimitive value: x`, but dispatched with the condition Block as the receiver.
+  BLOCK_WHILE_TRUE: 'block-while-true',
+  BLOCK_WHILE_FALSE: 'block-while-false',
+});
+
+// The loop primitives, kept as a set because their invocation shape and therefore their guard
+// differ from every other primitive's.
+const LOOP_PRIMITIVES = Object.freeze({
+  [SMALLTALK_PRIMITIVE.BLOCK_WHILE_TRUE]: true,
+  [SMALLTALK_PRIMITIVE.BLOCK_WHILE_FALSE]: false,
 });
 
 const SMALLTALK_PRIMITIVE_NAMES = Object.freeze(Object.values(SMALLTALK_PRIMITIVE));
@@ -81,6 +92,9 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.DICTIONARY_AT_PUT]: 3,
   [SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ]: 2,
   [SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE]: 3,
+  // One argument, the body Block; the condition Block arrives as the receiver.
+  [SMALLTALK_PRIMITIVE.BLOCK_WHILE_TRUE]: 1,
+  [SMALLTALK_PRIMITIVE.BLOCK_WHILE_FALSE]: 1,
 });
 
 // One locality rule for every primitive. A foreign primitive Block must fail rather than answer a
@@ -759,6 +773,93 @@ async function instanceSlotWrite({images, primitiveImage, target, slotIdValue, n
   return stored;
 }
 
+// ADR 0051 decision 4. Every other primitive is applied as `aPrimitive value: x`, so
+// `assertBlockApplicationReceiver` can demand that the activation's receiver *is* the Block. A loop
+// primitive is dispatched instead, with the condition Block as receiver, so that guard cannot apply
+// and something must replace it — otherwise `aLoopPrimitive value: aBlock` would arrive with the
+// primitive itself as the condition, which is precisely the bypass the structural rule below closes.
+//
+// "Kernel-primitive Block" is the existing structural test and nothing else: the Block's CodeArtifact
+// has representation `smalltalk-kernel-primitive/v1`. That is already how the dispatcher decides
+// frame inheritance for a Block send, so this reuses a definition the system depends on rather than
+// adding a second, weaker notion of "is a primitive" that the two could drift apart on.
+async function assertLoopBlock({images, value, primitive, role}) {
+  // A direct `invokeBlock` leaves the receiver null, which `assertBlockApplicationReceiver` treats as
+  // the legitimate direct-application case. For a loop primitive it is not legitimate at all: there
+  // is no condition Block, so say that rather than failing later on an untagged value.
+  if (value === null || value === undefined) {
+    throw new SmalltalkPrimitiveReceiverError(
+      primitive,
+      `no ${role}; a loop primitive is reachable only by dispatching whileTrue: or whileFalse:`,
+    );
+  }
+  const ref = canonicalizeValue(value);
+  if (!isObjectRef(ref)) {
+    throw new SmalltalkPrimitiveReceiverError(primitive, `a ${ref.kind} Value as the ${role}`);
+  }
+  const block = await images.getBlock(ref.imageId, ref.objectId);
+  if (!block) {
+    throw new SmalltalkPrimitiveReceiverError(primitive, `${ref.imageId}/${ref.objectId} as the ${role}, which is not a Block`);
+  }
+  const code = block.code && await images.getCodeArtifact(block.code.imageId, block.code.objectId);
+  if (code?.representation === SMALLTALK_KERNEL_PRIMITIVE_V1) {
+    throw new SmalltalkPrimitiveReceiverError(primitive, `a kernel-primitive Block as the ${role}`);
+  }
+  return ref;
+}
+
+// The loop itself. Every evaluation is an ordinary nested `value` send through the execution
+// context, never a direct execution of the Block's code, so lexical frame restoration, authority
+// attenuation, the dispatch image and cell arenas are inherited rather than reimplemented here.
+//
+// Constant activation depth falls out of the shape rather than from any bookkeeping: each `await`
+// returns before the next send begins, so the sends are siblings from this one activation rather
+// than a nesting chain, and depth does not grow with iteration count.
+async function blockWhile({images, activation, context, primitive, wanted}) {
+  const condition = await assertLoopBlock({
+    images, value: activation.receiver, primitive, role: 'condition',
+  });
+  const body = await assertLoopBlock({
+    images, value: activation.arguments[0], primitive, role: 'body',
+  });
+  const sendMessage = requireSendMessage(context, primitive);
+
+  // ADR 0051 decision 12: the loop answers the condition image's nil, rediscovered from that image's
+  // current kernel rather than captured at install time — a captured nil would keep answering after
+  // the image's kernel changed underneath it. Resolved before the first iteration so a broken kernel
+  // fails as a kernel failure rather than after the body has already had effects.
+  const conditionImage = condition.imageId;
+  const kernel = await findSmalltalkKernel({images, imageId: conditionImage});
+  if (!kernel) {
+    throw new TypeError(
+      `Symmetric Smalltalk ${primitive} primitive requires a Smalltalk kernel in ${conditionImage} to answer nil`,
+    );
+  }
+
+  for (;;) {
+    const verdict = canonicalizeValue(await sendMessage({
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: condition,
+      message: textValue('value'),
+      arguments: [],
+    }));
+    // ADR 0051 decision 7: a canonical boolean, and nothing else. Accepting more would introduce a
+    // second, looser notion of truth beside the polymorphism ADR 0045 established.
+    if (verdict.kind !== VALUE_KIND.BOOLEAN) {
+      throw new TypeError(
+        `Symmetric Smalltalk ${primitive} condition answered a ${verdict.kind} Value; a Boolean is required`,
+      );
+    }
+    if (verdict.value !== wanted) return kernel.nil;
+    await sendMessage({
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: body,
+      message: textValue('value'),
+      arguments: [],
+    });
+  }
+}
+
 // `newObjectId` is runtime machinery, not durable class semantics, so it is injectable.
 function createSmalltalkKernelPrimitiveV1Executor({
   newObjectId = randomUUID,
@@ -772,8 +873,13 @@ function createSmalltalkKernelPrimitiveV1Executor({
     async execute({activation, code}, context) {
       const primitive = parsePrimitiveCode(code);
       // Primitive Blocks may only be called directly; making one a method must not smuggle `self`
-      // past the primitive's own argument contract.
-      assertBlockApplicationReceiver(activation, `${SMALLTALK_KERNEL_PRIMITIVE_V1} ${primitive}`);
+      // past the primitive's own argument contract. The loop primitives are the one exception, and
+      // not a weakening: they are dispatched rather than applied, so they carry their own stricter
+      // structural guard on both the receiver and the argument (see `assertLoopBlock`).
+      const isLoop = Object.hasOwn(LOOP_PRIMITIVES, primitive);
+      if (!isLoop) {
+        assertBlockApplicationReceiver(activation, `${SMALLTALK_KERNEL_PRIMITIVE_V1} ${primitive}`);
+      }
       const expectedArity = SMALLTALK_PRIMITIVE_ARITY[primitive];
       if (activation.arguments.length !== expectedArity) {
         throw new TypeError(
@@ -787,6 +893,11 @@ function createSmalltalkKernelPrimitiveV1Executor({
         throw new TypeError('Symmetric Smalltalk primitives require an images service');
       }
       const [value, second, third] = activation.arguments;
+      if (isLoop) {
+        return await blockWhile({
+          images, activation, context, primitive, wanted: LOOP_PRIMITIVES[primitive],
+        });
+      }
 
       switch (primitive) {
         case SMALLTALK_PRIMITIVE.CLASS_OF:

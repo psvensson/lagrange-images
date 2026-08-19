@@ -2,6 +2,8 @@
 
 Status: accepted — `whileTrue:` and `whileFalse:` are two more operations on the existing classless Block personality, dispatched to language-owned loop primitives that drive the condition and body through ordinary `value` sends, so iteration costs no activation depth.
 
+Proven by: `test/block-loop.test.js`, plus the large-collection traversal in `test/smalltalk-library.test.js`.
+
 ## Problem
 
 ADR 0047 promised `OrderedCollection` as "an ordinary object holding an `Array` plus a size and a

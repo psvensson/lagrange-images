@@ -220,10 +220,9 @@ no ordering comparison    Integer has =, and nothing else. Loops must count *up*
                           and an indexed read cannot bounds-check, so `at:`, `first`, `last` and
                           `removeLast` are omitted rather than written incorrectly
 no general subtraction    `integer-add` is the only arithmetic op, and `lagrange-code/v0` is frozen
-no loop construct         a Block answers only `value` (ADR 0044 decision 11), so `whileTrue:` is
-                          not expressible. Iteration is recursion, which caps a collection at a few
-                          dozen elements: `do:` succeeds over 50 and exceeds the activation depth
-                          limit by 100
+no loop construct         CLOSED by ADR 0051. A Block now answers `whileTrue:`/`whileFalse:`, so
+                          iteration costs no activation depth. Before it, `do:` succeeded over 50
+                          elements and exceeded the depth limit by 100
 no true/false/nil literal a Boolean false is spelled `1 = 2`
 no and:/or:/not           deferred with the rest of the Boolean protocol; nested `ifTrue:ifFalse:`
                           stands in
@@ -237,8 +236,9 @@ no ^ return, no cascades  surface syntax, already known
 The two with the most leverage are **ordering comparison** and a **loop construct**: between them they
 are the difference between a collection that is correct-but-crippled and one that is ordinary. Both
 are language decisions rather than library ones — ordering because `lagrange-code/v0` is a frozen
-grammar with no comparison op, and looping because Blocks are not yet objects that can answer
-`whileTrue:`.
+grammar with no comparison op, and looping because Blocks were not yet objects that could answer
+`whileTrue:`. Looping is now closed by ADR 0051, which in turn exposed the closure-identity cost
+listed below: removing the depth ceiling made a pre-existing per-evaluation allocation observable.
 
 Next, ordered by architectural pressure rather than convenience:
 
@@ -253,9 +253,16 @@ Next, ordered by architectural pressure rather than convenience:
       `lagrange-code/v0` is frozen, so this is either a new semantic representation or language-owned
       primitives — a real decision, and the one blocking correct indexed collection access. It is
       also what lets `OrderedCollection` drop counting up and comparing with `=`
-- [ ] implement ADR 0051's constant-stack `whileTrue:`/`whileFalse:`, which is the fix for the
-      iteration defect the library seed exposed: `do:` and `includes:` are correct today and unusable
-      past a few dozen elements
+- [x] ADR 0051's constant-stack `whileTrue:`/`whileFalse:`. `OrderedCollection`'s traversals are
+      loops rather than recursion, so `do:` and `includes:` work past the old ~100-element ceiling
+- [ ] closure identity, which ADR 0051 exposed and did not fix. Evaluating a Block that creates a
+      closure publishes a *new durable Block record every time*, so a loop grows the image without
+      bound: a body creating one closure allocates ~2 records per iteration, and `OrderedCollection`
+      `add:` costs ~3. Recursion hid this — the 256-activation limit stopped any program before the
+      growth mattered. The traversal itself is linear, but building a collection is superlinear
+      (50/100/150 elements cost 1.6s/7.0s/29.5s), because every read pays for the records the
+      previous iterations left behind. Fixing it is a real decision — deterministic per-creation-site
+      closure ids, transient closures, or collection — and is the natural ADR 0053
 - [ ] `true`, `false` and `nil` as source literals, plus `and:`/`or:`/`not` — the rest of ADR 0045's
       deferred Boolean protocol
 - [ ] a way to name a class from source; today a method captures one explicitly
