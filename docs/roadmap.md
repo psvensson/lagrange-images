@@ -196,6 +196,8 @@ Implemented:
   object as the effective receiver of one send, and `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:` and
   `ifFalse:ifTrue:` are methods on True and False, proven in both execution lanes including a
   non-tail block invocation (ADR 0045)
+- a first image-resident library: `Association` and a minimal `OrderedCollection`, written in
+  Smalltalk over the kernel facilities with no collection-specific primitive
 - allocation and class introspection as ordinary message sends: `basicNew`, `new`, `initialize` and
   `class` are methods over two language-owned primitive Blocks, instance layout is explicit durable
   class data, and instances get fresh opaque identities with every slot starting at that image's
@@ -206,6 +208,38 @@ themselves supply control flow, and 0046 let a program make objects of its own. 
 which "symmetric Smalltalk" stops being architectural scaffolding and starts being visible in
 ordinary programs.
 
+### What writing the first library exposed
+
+`Association` and a minimal `OrderedCollection` are now ordinary Smalltalk classes, written over
+allocation, instance variables, `Array`, equality, conditionals and Blocks, with no collection
+primitive added. Writing them was a substrate test, and it found the following. None of these is a
+collection concern; each is a general language capability that is missing.
+
+```text
+no ordering comparison    Integer has =, and nothing else. Loops must count *up* and stop on `=`,
+                          and an indexed read cannot bounds-check, so `at:`, `first`, `last` and
+                          `removeLast` are omitted rather than written incorrectly
+no general subtraction    `integer-add` is the only arithmetic op, and `lagrange-code/v0` is frozen
+no loop construct         a Block answers only `value` (ADR 0044 decision 11), so `whileTrue:` is
+                          not expressible. Iteration is recursion, which caps a collection at a few
+                          dozen elements: `do:` succeeds over 50 and exceeds the activation depth
+                          limit by 100
+no true/false/nil literal a Boolean false is spelled `1 = 2`
+no and:/or:/not           deferred with the rest of the Boolean protocol; nested `ifTrue:ifFalse:`
+                          stands in
+no global namespace       a class cannot be named in source. `Array` is an explicitly captured ref,
+                          which this work plumbed through the class-scoped compiler
+no conditions             a collection cannot report a range error, which is why the operations that
+                          would need one are absent rather than faked
+no ^ return, no cascades  surface syntax, already known
+```
+
+The two with the most leverage are **ordering comparison** and a **loop construct**: between them they
+are the difference between a collection that is correct-but-crippled and one that is ordinary. Both
+are language decisions rather than library ones — ordering because `lagrange-code/v0` is a frozen
+grammar with no comparison op, and looping because Blocks are not yet objects that can answer
+`whileTrue:`.
+
 Next, ordered by architectural pressure rather than convenience:
 
 - [ ] basic collections, at which point a MethodDictionary can stop being represented by a Shape
@@ -215,8 +249,14 @@ Next, ordered by architectural pressure rather than convenience:
       or the singleton
 - [ ] primitive-backed methods beyond `+`. ADR 0044 decides how immediate Values dispatch and how
       a primitive-backed method is written; the remaining work is which primitives the kernel needs
-- [ ] instance-variable read/write and source-level class definition, which is what makes allocated
-      objects useful from source rather than only from a host-side inspection
+- [ ] Integer ordering comparison, and general arithmetic beyond `integer-add`. `lagrange-code/v0`
+      is frozen, so this is either a new semantic representation or language-owned primitives — a
+      real decision, and the one blocking correct indexed collection access
+- [ ] a loop construct. `whileTrue:` needs Blocks to answer messages, which ADR 0044 decision 11
+      deliberately deferred; without it every iteration is recursion under the activation depth limit
+- [ ] `true`, `false` and `nil` as source literals, plus `and:`/`or:`/`not` — the rest of ADR 0045's
+      deferred Boolean protocol
+- [ ] a way to name a class from source; today a method captures one explicitly
 - [ ] cascades, and `true`/`false`/`nil` as source literals — both surface syntax rather than
       semantic decisions, and both cheap once the decisions above are made
 - [ ] REPL/workspace, once conditionals, allocation and a few collections make interactive

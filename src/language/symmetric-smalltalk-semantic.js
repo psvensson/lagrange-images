@@ -216,8 +216,14 @@ class SemanticScope {
       });
     }
     if (!this.parent) return null;
-    this.resolveName(name);
-    const inherited = this.captures.get(name);
+    // Ask upward directly rather than going through `resolveName`. Since ADR 0050 `resolveName` may
+    // answer an *instance variable* — an expression, not a capture — and then there is nothing here
+    // for a descendant to capture. Answering null in that case is right: the originating scope
+    // resolves the instance variable itself, which is what makes the read reach the defining
+    // method's receiver from any depth.
+    const provided = this.parent.provideName(name);
+    if (!provided) return null;
+    const inherited = this.addCapture(name, provided);
     return Object.freeze({
       id: inherited.id,
       name: inherited.name,

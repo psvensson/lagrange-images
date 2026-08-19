@@ -29,6 +29,10 @@ const PRIMITIVE_BLOCK_ID = Object.freeze({
   [SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE]: 'smalltalk/primitive/instance-slot-write',
 });
 
+// Owned by the class-scoped binder, which injects them for instance-variable access.
+const RESERVED_CAPTURE_NAMES = new Set([INSTANCE_SLOT_READ_CAPTURE, INSTANCE_SLOT_WRITE_CAPTURE]);
+const RESERVED_CAPTURE_IDS = new Set(Object.values(PRIMITIVE_BLOCK_ID));
+
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be non-empty text`);
   return value;
@@ -87,6 +91,53 @@ async function instanceVariableBindings({images, imageId, classRef} = {}) {
   return Object.freeze(bindings);
 }
 
+// A method may capture named values, exactly as a Block may. This is how a method names anything
+// that is not a parameter, temporary or instance variable — a class, for instance, since source has
+// no global namespace: `Array` is a captured ref, not a resolvable global.
+//
+// Compilation and installation are kept apart. What the *compiler* needs is a declaration — a name
+// bound to a stable capture id — and it answers the program's capture list. Every declaration is in
+// that list, referenced or not. Binding values is installation's job, because a value is per image
+// while a declaration is not.
+//
+// Two forms are accepted and both mean the same thing to the compiler:
+//
+//   {name: captureId}                  a declaration map
+//   [{name, id, value?}]               declarations, optionally carrying installation values
+//
+// Duplicates are refused in either form rather than resolved by position. A repeated name would make
+// the meaning of that name in source depend on declaration order, and a repeated id would collapse
+// two declarations into one binding — the same first-wins defect this substrate rejects everywhere.
+function normalizeCaptureDeclarations(captures) {
+  const entries = Array.isArray(captures)
+    ? captures.map((entry) => {
+      if (!entry || typeof entry !== 'object') throw new TypeError('a capture declaration must be an object');
+      return {name: entry.name, id: entry.id, value: entry.value};
+    })
+    : Object.entries(captures ?? {}).map(([name, id]) => ({name, id, value: undefined}));
+
+  const names = new Set();
+  const ids = new Set();
+  for (const entry of entries) {
+    requiredText(entry.name, 'capture name');
+    requiredText(entry.id, 'capture id');
+    // The binder adds its own captures for the slot primitives, and they are spread *after* the
+    // caller's — so a colliding declaration would be silently replaced, value and all, which is
+    // exactly what the uniform capture contract is supposed to prevent. Refuse instead.
+    if (RESERVED_CAPTURE_NAMES.has(entry.name)) {
+      throw new TypeError(`capture name ${entry.name} is reserved for instance-variable access`);
+    }
+    if (RESERVED_CAPTURE_IDS.has(entry.id)) {
+      throw new TypeError(`capture id ${entry.id} is reserved for instance-variable access`);
+    }
+    if (names.has(entry.name)) throw new TypeError(`method declares capture name ${entry.name} twice`);
+    if (ids.has(entry.id)) throw new TypeError(`method declares capture id ${entry.id} twice`);
+    names.add(entry.name);
+    ids.add(entry.id);
+  }
+  return entries;
+}
+
 // The class-scoped entry point: parse -> compile *with the defining class* -> semantic program.
 async function compileSymmetricSmalltalkMethod({
   images,
@@ -97,35 +148,56 @@ async function compileSymmetricSmalltalkMethod({
   captures = {},
 } = {}) {
   requiredText(selector, 'selector');
+  const declared = normalizeCaptureDeclarations(captures);
   const instanceVariables = await instanceVariableBindings({images, imageId, classRef});
   // The primitives arrive as ordinary root captures, so an instance-variable reference lowers to an
   // ordinary send and nothing downstream of the compiler learns a new concept. They are added only
   // when the source actually names an instance variable, so a method that uses none carries none.
   const compiled = compileSymmetricSmalltalkSemanticBlock(source, {
     captures: {
-      ...captures,
+      ...Object.fromEntries(declared.map(({name, id}) => [name, id])),
       [INSTANCE_SLOT_READ_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ],
       [INSTANCE_SLOT_WRITE_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE],
     },
     instanceVariables,
   });
-  const used = compiled.program.captures.filter(({id}) => Object.values(PRIMITIVE_BLOCK_ID).includes(id));
+
+  // Every declaration becomes a program capture, referenced or not — that is the block compiler's
+  // existing behaviour for root captures and this path does not change it. What is returned is the
+  // program's own capture list, in its own order, with no values: this is compilation, and a value
+  // is an installation concern.
   return Object.freeze({
     selector,
     program: compiled.program,
     representation: compiled.representation,
     instanceVariables,
-    captures: used.map(({id, name}) => ({id, name, value: objectRef(imageId, id)})),
+    captures: compiled.program.captures.map(({id, name}) => Object.freeze({id, name})),
   });
 }
 
-// Compile a method from source against its defining class and install it.
+// Compile methods from source against their defining class and install them. This is where a
+// capture declaration acquires its value: the slot primitives resolve to their well-known Blocks in
+// this image, and anything else must have been supplied by the caller.
 async function defineMethodsFromSource({images, compilation, imageId, classRef, methods, lane = 'neutral'} = {}) {
   if (!Array.isArray(methods) || methods.length === 0) throw new TypeError('methods must be a non-empty array');
+  const primitiveIds = new Set(Object.values(PRIMITIVE_BLOCK_ID));
   const compiled = [];
   for (const {selector, source, captures} of methods) {
+    const declared = normalizeCaptureDeclarations(captures ?? {});
+    const supplied = new Map(declared.map(({id, value}) => [id, value]));
     const method = await compileSymmetricSmalltalkMethod({images, imageId, classRef, selector, source, captures});
-    compiled.push({selector: method.selector, program: method.program, captures: method.captures});
+    const bound = method.captures.map(({id, name}) => {
+      if (primitiveIds.has(id)) return {id, name, value: objectRef(imageId, id)};
+      const value = supplied.get(id);
+      if (value === undefined) {
+        throw new TypeError(
+          `method ${selector} declares capture ${name} without a value; every declared capture `
+          + 'becomes a binding in the installed method, so installation needs a value for each',
+        );
+      }
+      return {id, name, value};
+    });
+    compiled.push({selector: method.selector, program: method.program, captures: bound});
   }
   return await defineMethods({images, compilation, imageId, classRef, lane, methods: compiled});
 }

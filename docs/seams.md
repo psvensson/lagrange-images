@@ -140,6 +140,7 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `installSmalltalkEqualityProtocol()` | the `built-in-equals`/`built-in-hash` primitive Blocks, plus `Object >> =` and `Object >> hash` (ADR 0048) |
 | `installSmalltalkDictionaryProtocol()` | the Dictionary/DictionaryTable Shapes, the five Dictionary primitive Blocks, the `Dictionary` class, and `initialize`, `size`, `includesKey:`, `at:`, `at:put:` (ADR 0048) |
 | `installSmalltalkInstanceVariableProtocol()` | the `instance-slot-read`/`instance-slot-write` primitive Blocks (ADR 0050) |
+| `installSmalltalkLibrary()` | `Association` and a minimal `OrderedCollection`, written in Smalltalk over the kernel protocols; adds no primitive |
 | `migrateMethodDictionary()` | rewrites one Behavior's shape-backed method dictionary into the ADR 0049 hashed form |
 | `installSmalltalkIndexedProtocol()` | `Array`, `Class >> basicNew:`, `Array class >> new:`, and `Array >> size`/`at:`/`at:put:` over four more `smalltalk-kernel-primitive/v1` Blocks (ADR 0047) |
 

@@ -23,6 +23,7 @@ export * from './smalltalk-dictionary.js';
 export * from './smalltalk-dictionary-table.js';
 export * from './smalltalk-equality.js';
 export * from './smalltalk-instance-variables.js';
+export * from './smalltalk-library.js';
 export * from './smalltalk-method-dictionary.js';
 export * from './smalltalk-method-dictionary-migration.js';
 export * from './smalltalk-indexed.js';
