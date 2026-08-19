@@ -1,3 +1,4 @@
+import {ensureCodeArtifact} from '../graph/ensure-records.js';
 import {
   I32,
   functionExport,
@@ -477,7 +478,12 @@ async function assembleWasmFunctionArtifact({
     closurePrototypes,
     prototypeRefs,
   });
-  const functionArtifact = await images.putCodeArtifact(semanticRef.imageId, input);
+  // Ensure-exact-or-create, like every other deterministic-id write in this substrate. The function
+  // id is derived, so a commit whose acknowledgement was lost would otherwise make an identical
+  // retry collide with the artifact it had just written. `ensureWasmFunction` performs a stricter
+  // describe-based check before calling here; the nested-tree path calls this directly and has no
+  // such caller-side guard.
+  const functionArtifact = await ensureCodeArtifact(images, semanticRef.imageId, input);
   return Object.freeze({moduleArtifact, functionArtifact});
 }
 

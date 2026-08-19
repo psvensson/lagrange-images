@@ -1,3 +1,4 @@
+import {ensureBlock, ensureCodeArtifact} from '../graph/ensure-records.js';
 import {randomUUID} from 'node:crypto';
 import {
   LAGRANGE_CODE_V0,
@@ -159,7 +160,7 @@ async function persistSemanticTree({images, rootRef, rootArtifact, rootPlan, roo
 
   const persistChildren = async (parentPlan) => {
     for (const child of parentPlan.children) {
-      const childArtifact = await images.putCodeArtifact(parentPlan.semanticRef.imageId, {
+      const childArtifact = await ensureCodeArtifact(images, parentPlan.semanticRef.imageId, {
         id: child.ids.semanticId,
         languageId: parentPlan.semanticArtifact.languageId,
         representation: LAGRANGE_CODE_V0,
@@ -217,7 +218,7 @@ async function installExecutableTree({
       blockPrototypes,
     });
     const isRoot = plan === rootPlan;
-    const block = await images.putBlock(plan.semanticRef.imageId, {
+    const block = await ensureBlock(images, plan.semanticRef.imageId, {
       id: plan.ids.blockId,
       code: objectRef(functionArtifact.imageId, functionArtifact.id),
       environment: isRoot ? rootEnvironment : null,

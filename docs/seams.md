@@ -151,6 +151,14 @@ A class is instantiable when its `instanceShape` is a Shape ref; `nil` there mea
 and an empty Shape is a valid zero-slot layout. `defineClass()` still stores `nil` when no
 `instanceShapeRef` is supplied, so no class written before ADR 0046 changes meaning.
 
+Nested Block publication is one implementation, in `smalltalk-nested-blocks.js`, shared by
+`installSymmetricSmalltalkBlock()` and by `defineMethods()`. A method's nested identities derive from
+its own deterministic method id plus the semantic block id, and every write is ensure-exact-or-create
+— as are the WASM tree installers and `CompilationService` outputs, so a partial install converges on
+an identical retry rather than colliding with its own earlier output. In the WASM lane a method with
+nested Blocks is published by `installWasmBlockTree()`, which already plans a shared module and
+already dispatches on v0 versus v1.
+
 ADR 0050 adds no executable representation either. `compileSymmetricSmalltalkMethod()` and
 `defineMethodsFromSource()` are a class-scoped compilation entry point *beside*
 `installSymmetricSmalltalkBlock()`, not above it: a Block still compiles with no class in sight, while

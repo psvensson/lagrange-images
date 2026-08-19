@@ -19,9 +19,16 @@ import {
 } from '../code/lagrange-code-v1.js';
 import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
+import {
+  codeArtifactProjection,
+  ensureBlock as ensureBlockRecord,
+  ensureCodeArtifact as ensureCodeArtifactRecord,
+} from '../graph/ensure-records.js';
 import {TupleSet} from '../support/tuple-map.js';
 import {sameRef} from './smalltalk-lookup.js';
 import {ensureMethodDictionaryShape} from './smalltalk-method-dictionary-migration.js';
+import {directNestedBlocks, installNestedPrototypes} from './smalltalk-nested-blocks.js';
+import {installWasmBlockTree} from '../wasm/tree-installer.js';
 import {
   METHOD_DICTIONARY_SHAPE_ID,
   buildMethodBuckets,
@@ -103,29 +110,6 @@ async function requireLocalBehavior(images, imageId, ref, label) {
 // honest; real replacement needs versioned method identity and gets it deliberately later.
 // A visible, retryable stall rather than a silent loss: the caller retries once migration has
 // swapped the Behavior's methods edge, and lands in the hashed dictionary.
-// ADR 0050 decision 10 permits staging and demands that staging fail closed. `defineMethods` has
-// never installed nested Block prototypes — every kernel method reaches a Block through a *capture*
-// rather than a literal — so a method containing one cannot be published at all. Refusing at
-// definition time is stronger than failing at execution: the method never exists, so there is no
-// path on which a Block could be read as the target or the self check skipped.
-class SmalltalkMethodBlockLiteralError extends TypeError {
-  constructor(selector) {
-    super(
-      `method ${selector} contains a Block literal, which method installation does not yet support; `
-      + 'instance-variable access inside a nested Block is deferred rather than partly implemented',
-    );
-    this.name = 'SmalltalkMethodBlockLiteralError';
-    this.selector = selector;
-  }
-}
-
-function containsBlockLiteral(expression) {
-  if (!expression || typeof expression !== 'object') return false;
-  if (Array.isArray(expression)) return expression.some(containsBlockLiteral);
-  if (expression.op === 'block') return true;
-  return Object.values(expression).some(containsBlockLiteral);
-}
-
 class SmalltalkSealedMethodDictionaryError extends TypeError {
   constructor(dictionaryRef) {
     super(
@@ -147,30 +131,13 @@ class SmalltalkMethodRedefinitionError extends TypeError {
   }
 }
 
-// One definition of "exact" for a code artifact, used by every reuse decision here. Representation,
-// content, provenance and metadata all participate: matching provenance is not matching output, so
-// an artifact with the right `derivedFrom` but stale content is stale, not reusable.
-function codeArtifactProjection(record) {
-  return canonicalJson({
-    representation: record.representation ?? null,
-    languageId: record.languageId ?? null,
-    content: record.content ?? null,
-    dependencies: record.dependencies ?? [],
-    derivedFrom: record.derivedFrom ?? [],
-    metadata: record.metadata ?? {},
-  });
-}
+// The generic ensure-exact-or-create helpers, with this layer's conflict error so callers and tests
+// keep the wording they depend on. The definition of "exact" now lives in one neutral place, because
+// the WASM tree installers owe the same convergence guarantee for the same reason.
+const smalltalkConflict = (kind, imageId, id) => new SmalltalkKernelConflictError(kind, imageId, id);
 
-// Create-once artifacts, made retry-safe: an identical artifact left by a partial run is reused
-// rather than rewritten, and a differing one is refused rather than clobbered.
-async function ensureCodeArtifact(images, imageId, desired) {
-  const existing = await images.getCodeArtifact(imageId, desired.id);
-  if (!existing) return await images.putCodeArtifact(imageId, desired);
-  if (codeArtifactProjection(desired) !== codeArtifactProjection(existing)) {
-    throw new SmalltalkKernelConflictError('code artifact', imageId, desired.id);
-  }
-  return existing;
-}
+const ensureCodeArtifact = (images, imageId, desired) =>
+  ensureCodeArtifactRecord(images, imageId, desired, {conflict: smalltalkConflict});
 
 // ADR 0045 decision 6. A method may carry captures, which is how a kernel method names an object —
 // `nil`, for the untaken arm of a one-arm conditional — without the common IR learning what that
@@ -260,19 +227,8 @@ async function ensureLexicalEnvironment(images, imageId, desired) {
   return existing;
 }
 
-async function ensureBlock(images, imageId, desired) {
-  const existing = await images.getBlock(imageId, desired.id);
-  if (!existing) return await images.putBlock(imageId, desired);
-  const projection = (record) => canonicalJson({
-    code: record.code ?? null,
-    environment: record.environment ?? null,
-    metadata: record.metadata ?? {},
-  });
-  if (projection(desired) !== projection(existing)) {
-    throw new SmalltalkKernelConflictError('block', imageId, desired.id);
-  }
-  return existing;
-}
+const ensureBlock = (images, imageId, desired) =>
+  ensureBlockRecord(images, imageId, desired, {conflict: smalltalkConflict});
 
 // The neutral lane has the same shape of problem as the WASM one: compileArtifact writes its
 // deterministic output unconditionally, so a failure after it but before the dictionary swap makes
@@ -280,17 +236,20 @@ async function ensureBlock(images, imageId, desired) {
 //
 // Reuse compares the *whole* artifact against a freshly derived one rather than trusting
 // representation plus a provenance edge, which would let stale content through.
-async function ensureNeutralCode({images, compilation, imageId, id, semanticRef, target = NEUTRAL_EXPRESSION_V0}) {
+async function ensureNeutralCode({
+  images, compilation, imageId, id, semanticRef, target = NEUTRAL_EXPRESSION_V0, blockPrototypes = {},
+}) {
   const codeId = `${id}:code`;
+  const options = {blockPrototypes};
   const existing = await images.getCodeArtifact(imageId, codeId);
   if (!existing) {
-    const code = await compilation.compileArtifact(semanticRef, {id: codeId, targetRepresentation: target});
+    const code = await compilation.compileArtifact(semanticRef, {id: codeId, targetRepresentation: target, options});
     return objectRef(imageId, code.id);
   }
   // Derive under a scratch id so the comparison is against what a fresh compile actually produces.
   const probeId = `${codeId}:probe`;
   const fresh = await images.getCodeArtifact(imageId, probeId)
-    ?? await compilation.compileArtifact(semanticRef, {id: probeId, targetRepresentation: target});
+    ?? await compilation.compileArtifact(semanticRef, {id: probeId, targetRepresentation: target, options});
   const rebase = (record) => ({...record, derivedFrom: record.derivedFrom ?? []});
   if (codeArtifactProjection(rebase(fresh)) !== codeArtifactProjection(rebase(existing))) {
     throw new SmalltalkKernelConflictError('code artifact', imageId, codeId);
@@ -398,6 +357,22 @@ async function isSameInstalledMethod({images, imageId, classRef, selector, progr
   return lexicalEnvironmentProjection(environment) === lexicalEnvironmentProjection(expected);
 }
 
+// Validate a program and every nested Block program it contains, publishing nothing. Lowering
+// resolves a `block` op through a prototype map, so preflight supplies placeholders — the point is
+// to reject an unknown op or a malformed nested program before any create-once artifact claims a
+// deterministic id, not to produce executable output.
+function validateProgramTree(program, imageId) {
+  const v1 = methodRepresentation(program) === LAGRANGE_CODE_V1;
+  if (v1) normalizeLagrangeCodeV1Program(program); else normalizeLagrangeCodeProgram(program);
+  const nested = directNestedBlocks(program.body);
+  const blockPrototypes = Object.fromEntries(
+    nested.map(({blockId}) => [blockId, objectRef(imageId, 'preflight-placeholder')]),
+  );
+  if (v1) lowerLagrangeCodeV1(program, {blockPrototypes});
+  else lowerLagrangeCodeV0(program, {blockPrototypes});
+  for (const child of nested) validateProgramTree(child.program, imageId);
+}
+
 // Adding a method rewrites the dictionary and its shape, per ADR 0044 decision 2 — visible,
 // confined to one object kind, and gone when collections arrive. The Behavior itself is untouched,
 // which is the point of giving it a fixed shape.
@@ -470,19 +445,17 @@ async function defineMethods({
       }
       throw new SmalltalkMethodRedefinitionError(classRef, selector);
     }
-    if (containsBlockLiteral(program?.body)) throw new SmalltalkMethodBlockLiteralError(selector);
-    if (methodRepresentation(program) === LAGRANGE_CODE_V1) {
-      normalizeLagrangeCodeV1Program(program);
-      lowerLagrangeCodeV1(program, {});
-    } else {
-      normalizeLagrangeCodeProgram(program);
-      // Walks the body, so an unknown op is rejected here rather than during compilation — after the
-      // create-once `:semantic` artifact has already claimed the selector's deterministic id.
-      lowerLagrangeCodeV0(program, {});
-    }
+    // Walks the body, so an unknown op is rejected here rather than during compilation — after the
+    // create-once `:semantic` artifact has already claimed the selector's deterministic id.
+    //
+    // Nested Block literals are validated the same way, level by level, against placeholder
+    // prototypes: lowering needs *a* prototype per nested block id to check the surrounding body,
+    // and nothing may be published before the whole tree is known to be valid.
+    validateProgramTree(program, imageId);
     // Lane restrictions are part of validity too, and the backends decide them from the program
     // alone — so a program the WASM lane cannot compile is rejected before anything is written.
-    if (lane === 'wasm' && methodRepresentation(program) === LAGRANGE_CODE_V0) {
+    if (lane === 'wasm' && methodRepresentation(program) === LAGRANGE_CODE_V0
+      && directNestedBlocks(program.body).length === 0) {
       try {
         compileWasmModule(program);
       } catch (error) {
@@ -506,30 +479,60 @@ async function defineMethods({
     });
     // ADR 0044 decision 6: one semantic method, an executable Block derived per lane. The WASM
     // lane's Block points at a wasm-function/v1, not at the module it references.
-    const codeRef = lane === 'wasm'
-      ? await ensureWasmFunction({
-        images, compilation, imageId, id,
-        semanticRef: objectRef(imageId, semantic.id),
-        representation: methodRepresentation(program),
-      })
-      : await ensureNeutralCode({
-        images,
-        compilation,
-        imageId,
-        id,
-        semanticRef: objectRef(imageId, semantic.id),
-        target: methodRepresentation(program) === LAGRANGE_CODE_V1 ? NEUTRAL_EXPRESSION_V1 : NEUTRAL_EXPRESSION_V0,
-      });
-    // Written before the Block, because `putBlock` requires the environment it points at to resolve.
+    // Written before the code, because the WASM tree installer publishes the method's Block itself
+    // and therefore needs the environment its captures resolve through.
     const captures = capturesBySelector.get(selector);
     const desiredEnvironment = describeMethodEnvironment({methodObjectId: id, selector, captures});
     const environment = desiredEnvironment === null
       ? null
       : await ensureLexicalEnvironment(images, imageId, desiredEnvironment);
-    const block = await ensureBlock(images, imageId, {
+    const environmentRef = environment ? objectRef(imageId, environment.id) : null;
+
+    const representation = methodRepresentation(program);
+    const semanticRef = objectRef(imageId, semantic.id);
+    const nested = directNestedBlocks(program.body).length > 0;
+
+    // A method with nested Block literals goes through the same publication the standalone Block
+    // installer uses: one recursive implementation, deterministic ids derived from this method's own
+    // id, and every write ensure-exact-or-create so a partial install converges on retry.
+    //
+    // The WASM lane hands the whole tree to `installWasmBlockTree`, which already plans a shared
+    // module for a nested tree and already dispatches on v0 vs v1. Publishing the method's own Block
+    // through it keeps one tree planner rather than a second one that only methods use.
+    let codeRef = null;
+    let treeBlock = null;
+    if (lane === 'wasm' && nested) {
+      treeBlock = (await installWasmBlockTree({
+        images,
+        compilation,
+        semanticRef,
+        id,
+        environment: environmentRef,
+        metadata: {smalltalk: 'method', selector, lane},
+      })).block;
+    } else {
+      const blockPrototypes = nested
+        ? await installNestedPrototypes({
+          images, compilation, imageId, rootId: id, parentSemanticRef: semanticRef, program, representation,
+        })
+        : {};
+      codeRef = lane === 'wasm'
+        ? await ensureWasmFunction({images, compilation, imageId, id, semanticRef, representation})
+        : await ensureNeutralCode({
+          images,
+          compilation,
+          imageId,
+          id,
+          semanticRef,
+          target: representation === LAGRANGE_CODE_V1 ? NEUTRAL_EXPRESSION_V1 : NEUTRAL_EXPRESSION_V0,
+          blockPrototypes,
+        });
+    }
+    // The tree installer already published the method's Block; otherwise publish it here.
+    const block = treeBlock ?? await ensureBlock(images, imageId, {
       id,
       code: codeRef,
-      environment: environment ? objectRef(imageId, environment.id) : null,
+      environment: environmentRef,
       metadata: {smalltalk: 'method', selector, lane},
     });
     merged.set(selector, objectRef(imageId, block.id));
@@ -781,7 +784,6 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
 }
 
 export {
-  SmalltalkMethodBlockLiteralError,
   SmalltalkMethodRedefinitionError,
   SmalltalkSealedMethodDictionaryError,
   defineClass,

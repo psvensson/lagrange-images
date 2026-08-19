@@ -417,6 +417,14 @@ not implemented in the first landing, it must raise explicitly. It must never fa
 Block as the target, and it must never skip decision 5's check because the enclosing self was
 inconvenient to obtain. Staging is permitted; a hole is not.
 
+> **Implementation note:** the first landing staged this, refusing any method containing a Block
+> literal at definition time. That staging is now removed and the rule above is implemented: a method
+> may contain nested Blocks in both semantic representations and both execution lanes, and a closure
+> created inside a method restores that method's frame when activated within the same execution.
+> Method installation and standalone Block installation share one recursive publication
+> implementation, with nested identities derived from the method's own deterministic id.
+> Decision 10a below is unchanged.
+
 ### 10a. An ivar-using closure does not survive its execution
 
 Decision 10's frame restore works because the frame is still there. A closure can outlive it.
@@ -500,8 +508,10 @@ frame lifetime
     an activation with no frame cannot use the slot primitives at all
 
 blocks
-    the semantic rule holds, or a staged implementation fails explicitly rather than reading
-        the Block or skipping the self check
+    a closure created in a method restores that method's frame and mutates the defining receiver
+    a closure invoked from a *different* method does not inherit that method's frame
+    a closure created inside a forged method gets that method's defining Behavior, not a chosen one
+    a published prototype Block is not a runnable closure on its own
     an ivar-using closure invoked in a *later* execution fails closed with a named error
     no defining Behavior is ever written into a durable environment or artifact to make that work
 
