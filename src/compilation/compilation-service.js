@@ -1,3 +1,4 @@
+import {ensureCodeArtifact} from '../graph/ensure-records.js';
 import {randomUUID} from 'node:crypto';
 import {normalizeArtifactDependencies} from '../execution/model.js';
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
@@ -97,7 +98,7 @@ class CompilationService {
       ? {compilerIdentity: descriptor.compilerIdentity, derivationKey: descriptor.derivationKey}
       : {};
 
-    return await this.images.putCodeArtifact(ref.imageId, {
+    return await ensureCodeArtifact(this.images, ref.imageId, {
       id,
       languageId: result.languageId,
       representation: target,
@@ -156,7 +157,7 @@ class CompilationService {
       ? {compilerIdentity: descriptor.compilerIdentity, derivationKey: descriptor.derivationKey}
       : {};
 
-    return await this.images.putCodeArtifact(imageId, {
+    return await ensureCodeArtifact(this.images, imageId, {
       id,
       languageId: result.languageId,
       representation: target,

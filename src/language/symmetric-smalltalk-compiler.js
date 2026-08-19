@@ -5,65 +5,19 @@ import {CompilationService, createDefaultCodeCompilerRegistry} from '../compilat
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
 import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
 import {objectRef, textValue} from '../value/index.js';
+import {
+  executableTargetFor,
+  installNestedPrototypes,
+} from './smalltalk-nested-blocks.js';
 import {compileSymmetricSmalltalkSemanticBlock} from './symmetric-smalltalk-semantic.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 const SYMMETRIC_SMALLTALK_SOURCE_V0 = 'symmetric-smalltalk/source-v0';
 const SYMMETRIC_SMALLTALK_SYNTAX_V0 = 'symmetric-smalltalk/syntax-v0';
 
-// The semantic representation is chosen once for the whole tree, so the executable target follows
-// from it rather than being decided independently per node.
-const EXECUTABLE_TARGET = Object.freeze({
-  [LAGRANGE_CODE_V0]: NEUTRAL_EXPRESSION_V0,
-  [LAGRANGE_CODE_V1]: NEUTRAL_EXPRESSION_V1,
-});
-
-function executableTargetFor(representation) {
-  const target = EXECUTABLE_TARGET[representation];
-  if (!target) throw new TypeError(`no executable target for semantic representation ${representation}`);
-  return target;
-}
-
 function compileSymmetricSmalltalkBlock(source, options = {}) {
   const {syntax, program, representation} = compileSymmetricSmalltalkSemanticBlock(source, options);
   return Object.freeze({syntax, semanticProgram: program, program, representation});
-}
-
-function directNestedBlocks(expression, result = []) {
-  if (!expression || typeof expression !== 'object' || Array.isArray(expression)) return result;
-  switch (expression.op) {
-    case 'block':
-      result.push(expression);
-      return result;
-    case 'send':
-      directNestedBlocks(expression.receiver, result);
-      for (const argument of expression.arguments) directNestedBlocks(argument, result);
-      return result;
-    // A Block is very often the right-hand side of an assignment or a statement of a sequence, so
-    // omitting these would silently install no prototype for it.
-    case 'binding-write':
-      directNestedBlocks(expression.value, result);
-      return result;
-    case 'sequence':
-      for (const statement of expression.statements) directNestedBlocks(statement, result);
-      return result;
-    case 'integer-add':
-    case 'equals':
-      directNestedBlocks(expression.left, result);
-      directNestedBlocks(expression.right, result);
-      return result;
-    case 'if':
-      directNestedBlocks(expression.condition, result);
-      directNestedBlocks(expression.then, result);
-      directNestedBlocks(expression.else, result);
-      return result;
-    default:
-      return result;
-  }
-}
-
-function blockSuffix(blockId) {
-  return blockId.replace(/[^A-Za-z0-9_-]+/g, '_');
 }
 
 function resolveCompilation(images, compilation) {
@@ -72,54 +26,6 @@ function resolveCompilation(images, compilation) {
     return compilation;
   }
   return new CompilationService({images, compilers: createDefaultCodeCompilerRegistry()});
-}
-
-async function installNestedPrototypes({
-  images,
-  compilation,
-  imageId,
-  rootId,
-  parentSemanticRef,
-  program,
-  representation,
-}) {
-  const prototypes = {};
-  for (const nested of directNestedBlocks(program.body)) {
-    const suffix = blockSuffix(nested.blockId);
-    const semanticArtifact = await images.putCodeArtifact(imageId, {
-      id: `${rootId}:semantic:${suffix}`,
-      languageId: SYMMETRIC_SMALLTALK_ID,
-      representation,
-      content: textValue(JSON.stringify(nested.program)),
-      derivedFrom: [parentSemanticRef],
-      metadata: {semanticBlockId: nested.blockId},
-    });
-    const childPrototypes = await installNestedPrototypes({
-      images,
-      compilation,
-      imageId,
-      rootId,
-      parentSemanticRef: objectRef(imageId, semanticArtifact.id),
-      program: nested.program,
-      representation,
-    });
-    const codeArtifact = await compilation.compileArtifact(
-      objectRef(imageId, semanticArtifact.id),
-      {
-        id: `${rootId}:code:${suffix}`,
-        targetRepresentation: executableTargetFor(representation),
-        options: {blockPrototypes: childPrototypes},
-        metadata: {semanticBlockId: nested.blockId},
-      },
-    );
-    const prototype = await images.putBlock(imageId, {
-      id: `${rootId}:prototype:${suffix}`,
-      code: objectRef(imageId, codeArtifact.id),
-      metadata: {prototype: true, semanticBlockId: nested.blockId},
-    });
-    prototypes[nested.blockId] = objectRef(imageId, prototype.id);
-  }
-  return Object.freeze(prototypes);
 }
 
 async function installSymmetricSmalltalkBlock({

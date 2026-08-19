@@ -616,19 +616,20 @@ test('an ordinary Block invoked by a method does not borrow the method self', as
   });
 });
 
-// ADR 0050 decision 10, staged: refused at definition time, which is stronger than failing at
-// execution — the method never exists, so no path can read the Block as the target.
-test('a method containing a Block literal is refused rather than partly supported', async () => {
+// ADR 0050 decision 10, now implemented rather than staged: a Block inside a method is ordinary, and
+// its `self` is the defining method's receiver.
+test('a nested Block reaches the defining method receiver instance state', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');
     const point = await pointClass(runtime, 'app');
-    await assert.rejects(
-      defineMethodsFromSource({
-        images: runtime.images, compilation: runtime.compilation, imageId: 'app', classRef: point.classRef,
-        methods: [{selector: 'inBlock', source: '[ [ x := 1 ] value ]'}],
-      }),
-      (error) => error.name === 'SmalltalkMethodBlockLiteralError',
-    );
+    await defineMethodsFromSource({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', classRef: point.classRef,
+      methods: [{selector: 'bumpInBlock', source: '[ [ x := x + 1 ] value ]'}],
+    });
+    const instance = await newInstance(runtime, 'app', 'nested', point.classRef);
+    await evaluate(runtime, 'app', 'seed-x', '[ :o | o setX: 1 ]', [instance]);
+    await evaluate(runtime, 'app', 'bump-in-block', '[ :o | o bumpInBlock ]', [instance]);
+    assert.deepEqual(await evaluate(runtime, 'app', 'read-x', '[ :o | o x ]', [instance]), integerValue(2));
   });
 });
 
