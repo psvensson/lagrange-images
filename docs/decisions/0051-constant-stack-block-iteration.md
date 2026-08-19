@@ -110,6 +110,32 @@ same position an image without the allocation protocol is in. Degrading a *corru
 state would turn a damaged image into a quietly less capable one, which is the failure mode worth
 refusing here.
 
+**Validating the object is not validating what it points at.** A structurally perfect protocol object
+whose slots have been repointed is the interesting attack, and it passes every check above: the slots
+are still local, still unpinned, still refs. Discovery must therefore follow each ref and prove the
+*target* is the primitive that slot claims, not merely that something is there:
+
+```text
+load the referenced Block                      must exist
+load that Block's CodeArtifact                 must exist
+representation                                 must be smalltalk-kernel-primitive/v1
+parse the primitive declaration                the existing parser, same JSON contract
+identity                                       while-true  slot -> the while-true primitive
+                                               while-false slot -> the while-false primitive
+```
+
+Two new primitive names join the existing enumeration for that last step, so the check is an equality
+against a known name rather than a heuristic. Both slots are validated, and a mismatch is a corrupt
+protocol by decision 3's taxonomy — an explicit failure, never "absent".
+
+The reason to pay for the extra reads is that this object is a **routing authority**: the dispatcher
+hands it control of what a `whileTrue:` send runs. Accepting a local ref as sufficient would let any
+object in the image be nominated as the loop implementation, and it would be invoked with the
+caller's frame inherited (decision 9) — so the weaker check would not merely run the wrong code, it
+would run attacker-chosen code with borrowed identity. Slot-repointing is exactly the shape ADR 0049
+guarded against with its structural discriminator, and the answer is the same one: verify the target,
+not the pointer.
+
 **The protocol is discovered in the condition Block's image, and the loop answers that image's nil.**
 This is not a new rule; it is the existing one applied. A nested send sets the dispatch image from an
 object receiver's own image (`activation-executor.js`: `isObjectRef(receiver) ? receiver.imageId :
@@ -275,6 +301,37 @@ When `BlockClosure` eventually arrives, `whileTrue:` becomes an ordinary method 
 dispatcher's special case shrinks. Nothing here makes that harder — which is the test a temporary
 mechanism should pass.
 
+### 12. The answered nil comes from the kernel, and the two failure modes stay distinct
+
+Decision 8 says the loop answers the condition image's nil. That is a **dependency**, not a
+convenience: the loop cannot complete without one, so it must be obtained the ordinary way and the
+absence of one must be reported as itself.
+
+```text
+installation   requires a valid kernel in the target image, and refuses to install without one
+execution      obtains nil through normal kernel discovery in the dispatch image —
+               the kernel's `nil` slot, already validated as an unpinned local ref
+```
+
+There is no host `null`, no synthesized nil, and no nil captured at install time and frozen into the
+primitive — a captured nil would keep answering after the image's kernel changed underneath it, which
+is precisely the class of stale-binding bug the dispatch-image rule exists to prevent.
+
+The failure taxonomy is stated explicitly because the two cases are easy to collapse and mean
+opposite things about the image:
+
+```text
+valid kernel, no Block protocol        ordinary "Block does not understand: whileTrue:"
+                                       — a coherent image whose Blocks simply do not loop
+
+Block protocol present, kernel         a kernel failure, named as one
+missing or corrupt                     — NOT a does-not-understand, and NOT a host null
+```
+
+Reporting the second as a does-not-understand would describe a broken image as a limited one and send
+whoever is debugging it after the wrong protocol entirely. Answering a host `null` would be worse: it
+would let a broken image's loop appear to succeed and hand a non-Value into Smalltalk code.
+
 ## Proof required for implementation
 
 ```text
@@ -306,7 +363,18 @@ refusals
         "does not understand" rather than a crash
     a corrupt protocol object fails explicitly and is never degraded to "absent":
         wrong shape, wrong metadata, missing slot, non-ref slot, pinned slot, foreign-image slot
+    a structurally perfect protocol whose slots are repointed is refused, for each of:
+        a slot pointing at a non-Block object; at a Block with an ordinary (non-primitive)
+        CodeArtifact; at a Block whose CodeArtifact is missing; at a different kernel
+        primitive; and at the *other* loop primitive, so while-true/while-false cannot be swapped
     re-installation is exact-or-create: identical reuses and writes nothing, different refuses
+
+kernel dependency
+    installation into an image with no valid kernel is refused
+    a valid kernel with no Block protocol gives an ordinary Block does-not-understand
+    a present Block protocol with a missing or corrupt kernel gives a kernel failure —
+        proven to be neither a does-not-understand nor a host null
+    the answered nil is the dispatch image's current kernel nil, not one captured at install time
 
 both lanes
     the protocol is discovered in the condition Block's image, and the loop answers that
@@ -350,6 +418,10 @@ the dispatcher discovers the loop primitives through a protocol object; it never
 no new durable record *kind*, Value, activation field or representation; the protocol object
     and the two primitive Blocks are themselves ordinary durable records
 the protocol object has a fixed Shape, is installed exact-or-create, and absent never means corrupt
+discovery validates what the slots point at — each target must be the primitive that slot claims —
+    because the protocol object is a routing authority, not merely a record
+the answered nil comes from kernel discovery in the dispatch image, never a host null or a
+    nil captured at install time; a missing kernel is a kernel failure, not a does-not-understand
 the condition Block's image owns the send: it supplies the protocol and the answered nil
 a kernel-primitive Block is one whose CodeArtifact representation is smalltalk-kernel-primitive/v1
 BlockClosure stays deferred, and nothing here makes it harder to arrive
