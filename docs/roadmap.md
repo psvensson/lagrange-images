@@ -249,11 +249,13 @@ Next, ordered by architectural pressure rather than convenience:
       or the singleton
 - [ ] primitive-backed methods beyond `+`. ADR 0044 decides how immediate Values dispatch and how
       a primitive-backed method is written; the remaining work is which primitives the kernel needs
-- [ ] Integer ordering comparison, and general arithmetic beyond `integer-add`. `lagrange-code/v0`
-      is frozen, so this is either a new semantic representation or language-owned primitives — a
-      real decision, and the one blocking correct indexed collection access
-- [ ] a loop construct. `whileTrue:` needs Blocks to answer messages, which ADR 0044 decision 11
-      deliberately deferred; without it every iteration is recursion under the activation depth limit
+- [ ] Integer ordering comparison, and general arithmetic beyond `integer-add` (ADR 0052).
+      `lagrange-code/v0` is frozen, so this is either a new semantic representation or language-owned
+      primitives — a real decision, and the one blocking correct indexed collection access. It is
+      also what lets `OrderedCollection` drop counting up and comparing with `=`
+- [ ] implement ADR 0051's constant-stack `whileTrue:`/`whileFalse:`, which is the fix for the
+      iteration defect the library seed exposed: `do:` and `includes:` are correct today and unusable
+      past a few dozen elements
 - [ ] `true`, `false` and `nil` as source literals, plus `and:`/`or:`/`not` — the rest of ADR 0045's
       deferred Boolean protocol
 - [ ] a way to name a class from source; today a method captures one explicitly

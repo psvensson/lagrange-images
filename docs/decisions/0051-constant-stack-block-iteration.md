@@ -1,0 +1,287 @@
+# ADR 0051: Constant-stack Block iteration
+
+Status: accepted — `whileTrue:` and `whileFalse:` are two more operations on the existing classless Block personality, dispatched to language-owned loop primitives that drive the condition and body through ordinary `value` sends, so iteration costs no activation depth.
+
+## Problem
+
+ADR 0047 promised `OrderedCollection` as "an ordinary object holding an `Array` plus a size and a
+growth policy, written in Smalltalk". ADR 0050 made that possible and it now exists. Writing it
+exposed the thing that makes it a toy:
+
+```smalltalk
+OrderedCollection >> do: aBlock          [ self do: aBlock index: 1 ]
+OrderedCollection >> do:index:           [ :aBlock :index |
+    (index = (tally + 1))
+      ifFalse: [ aBlock value: (contents at: index). self do: aBlock index: (index + 1) ] ]
+```
+
+That is not a stylistic choice. A Block answers `value` and nothing else (ADR 0044 decision 11), so
+`whileTrue:` is not expressible, and every iteration in the image is therefore recursion. Recursion
+consumes activation depth, and `MAX_ACTIVATION_DEPTH` is 256:
+
+```text
+do: over 50 elements     works
+do: over 100 elements    activation depth limit exceeded
+```
+
+So this is not a missing convenience. It is a correctness and scalability defect in protocol that
+already ships: `do:`, `includes:`, growth and copying are all written, all correct, and all unusable
+at ordinary collection sizes. That is what makes iteration more urgent than the other gaps the
+library exposed — Integer ordering is protocol that is simply absent, and absent protocol misleads
+nobody.
+
+## Decision
+
+### 1. This is not a loop instruction
+
+The framing matters more than the mechanism, because the mechanism follows from it.
+
+`whileTrue:` and `whileFalse:` are **two more operations on the temporary classless Block
+personality** ADR 0044 decision 11 created, implemented by repeated ordinary sends. They are not a
+control-flow construct the compiler knows, not an operation in the semantic IR, and not a new
+execution primitive in the loop sense.
+
+That keeps the direction ADR 0045 set. Conditionals became message sends rather than compiler magic;
+iteration does the same. A language whose `ifTrue:` is a message and whose `whileTrue:` is a keyword
+would be inconsistent in a way that shows up the first time somebody wants to write their own control
+structure.
+
+```text
+the compiler                learns no selector
+lagrange-code/v0 and /v1    unchanged; both remain frozen
+executable representations  unchanged; no new one
+Block                       still classless, still not a BlockClosure
+```
+
+### 2. Ordinary source sends, resolved by the existing Block rule
+
+```smalltalk
+[ index <= limit ] whileTrue: [ ... ]
+[ done ] whileFalse: [ ... ]
+```
+
+parse as keyword sends like any other, and reach the dispatcher's existing Block special case — the
+one that answers `value`/`value:` today. That case gains exactly two selectors and no third
+mechanism.
+
+The receiver is the **condition** Block and the single argument is the **body** Block, which is
+Smalltalk's own arrangement.
+
+### 3. Dispatch resolves them to language-owned loop primitives, discovered rather than named
+
+This is the first Block send that resolves to a Block *other than the receiver*: `value` answers the
+receiver itself, while `whileTrue:` must reach a loop primitive with the condition Block as its
+receiver.
+
+The dispatcher must therefore obtain that primitive without knowing its object id, because ADR 0044
+decision 9 is explicit that the dispatcher learns *rules*, never specific object ids. So the loop
+primitives are reachable through a small discoverable protocol object, exactly as the kernel is:
+
+```text
+SmalltalkBlockProtocol        one per image, at a known protocol location
+    whileTrue   whileFalse    refs to the two loop primitive Blocks
+```
+
+The dispatcher knows that a Block protocol object may exist and what its slots mean. It never knows
+a primitive's id, and it holds no bootstrap state. An image without the protocol object answers
+neither selector, and says so as an ordinary "Block does not understand" — the same coherent state
+an image without the allocation protocol is in.
+
+### 4. The invocation shape is dispatched, not `value:`-applied — and is guarded accordingly
+
+Every kernel primitive so far is reached as `aPrimitive value: x`, so its activation receiver *is* the
+primitive Block, which `assertBlockApplicationReceiver` checks. A loop primitive is different by
+construction: its activation receiver is the condition Block.
+
+```text
+activation.block       the loop primitive
+activation.receiver    the condition Block
+activation.arguments   [ the body Block ]
+```
+
+That guard therefore cannot apply, and something must replace it or the primitive becomes reachable
+by an unintended route — `aLoopPrimitive value: aBlock` would otherwise arrive with the primitive
+itself as the condition.
+
+The replacement rule is structural and cheap:
+
+```text
+the receiver must be a Block, and must not be a kernel-primitive Block
+the argument must be a Block, and must not be a kernel-primitive Block
+```
+
+which refuses the self-application above, refuses a primitive smuggled in as a body, and leaves
+ordinary Blocks working. A loop primitive is not otherwise callable.
+
+### 5. The loop drives both Blocks through ordinary `value` sends
+
+The implementation never executes a Block's CodeArtifact directly. It sends `value` — through the
+execution context's ordinary nested-send path — once per condition evaluation and once per body
+evaluation.
+
+That is the whole reason the semantics stay right rather than needing to be re-established:
+
+```text
+lexical frame restoration   ADR 0050 decision 5a: a closure restores the frame it was created in
+authority                   flows through the nested send, attenuated exactly as it already is
+dispatch image              carries through unchanged
+lexical cells               resolved through the arena the sends already share
+cross-execution behaviour   an escaped ivar-dependent closure still finds no frame, and fails closed
+```
+
+Executing the code directly would bypass every one of those and would require re-implementing them
+inside a loop, which is how this kind of primitive usually acquires subtly different semantics from
+the rest of the language.
+
+### 6. Constant activation depth with respect to iteration count
+
+Each condition and body activation **returns before the next begins**. The loop is a sequence of
+sibling sends from one activation, not a chain of nested ones, so depth is constant no matter how
+many iterations run:
+
+```text
+recursive do: over n elements    depth grows with n; fails at ~100
+whileTrue: over n iterations     depth is that of the loop primitive plus one, for every n
+```
+
+Implementing `whileTrue:` recursively would satisfy the surface protocol and preserve the exact
+defect this ADR exists to remove, so it is ruled out explicitly rather than left to taste.
+
+**Scope, stated so it is not overclaimed:** only *iterations* are constant-stack. A loop nested inside
+another loop consumes nesting depth normally, a loop body that recurses still recurses, and this ADR
+makes no arbitrary recursive program constant-stack. It removes iteration as a consumer of depth,
+nothing more.
+
+### 7. The condition answers a canonical boolean, and nothing else
+
+```text
+canonical boolean Value    continue or stop
+anything else              an explicit failure
+```
+
+No truthiness, no coercion, no "nil is false", no object with a `isTrue`-ish protocol. ADR 0045
+established that Symmetric Smalltalk's conditionals are polymorphism over `True` and `False` rather
+than a test on an arbitrary value, and a loop that accepted more would quietly introduce a second,
+looser notion of truth into the same language.
+
+Note that the condition Block answers the canonical boolean, not the `true`/`false` singleton: ADR
+0045's bridge nominates a singleton as the *receiver of a send*, and nothing here sends to the
+condition's result.
+
+### 8. Semantics
+
+```text
+whileTrue:    evaluate the condition; while it answers true, evaluate the body, then the condition again
+whileFalse:   the same, while the condition answers false
+body result   ignored
+answer        that image's nil
+zero iterations  a condition that stops immediately runs the body zero times, and answers nil
+```
+
+`whileFalse:` is included rather than deferred for the reason ADR 0045 included `ifFalse:ifTrue:`:
+it is the mirror of an operation being added, and omitting it would be an arbitrary hole rather than
+a decision.
+
+### 9. Frames follow ADR 0050 exactly, with one deliberate difference
+
+```text
+the loop primitive     INHERITS the caller's frame, as a language-owned host operation
+the condition Block    inherits nothing; its own creation frame is restored, or it has none
+the body Block         the same
+```
+
+The primitive inherits for the same reason the slot primitives do — it is the language's own
+operation, invoked on the language's behalf. The condition and body are *arbitrary* Blocks and must
+never borrow it, which is ADR 0050 decision 5a rule 4 and needs no new machinery: they are reached by
+ordinary `value` sends, which inherit nothing.
+
+The consequences are therefore inherited rather than restated:
+
+```text
+an ivar-using closure created in this execution   works inside a loop
+an escaped ivar-dependent closure from earlier    still fails closed
+```
+
+### 10. Nothing durable or activation-shaped is added
+
+No new field on the activation request, no new durable record kind, no new Value, no metadata. The
+loop primitives are ordinary Blocks carrying the existing `smalltalk-kernel-primitive/v1`
+representation, installed by an explicit installer like every protocol since ADR 0045, and the
+protocol object is an ordinary graph object.
+
+### 11. `BlockClosure` stays deferred
+
+ADR 0044 decision 11 deliberately left Blocks with a special classless protocol and deferred making
+them ordinary instances with a method dictionary. That is still deferred, and this ADR is careful not
+to force it: two selectors are added to the existing personality, not a class.
+
+When `BlockClosure` eventually arrives, `whileTrue:` becomes an ordinary method on it and the
+dispatcher's special case shrinks. Nothing here makes that harder — which is the test a temporary
+mechanism should pass.
+
+## Proof required for implementation
+
+```text
+constant stack
+    10,000+ iterations complete, and activation depth does not grow with iteration count
+    a recursive equivalent at the same count still fails, so the difference is demonstrated
+    nested loops consume nesting depth normally
+
+semantics
+    whileTrue: and whileFalse: both run, with the expected sense
+    a condition that is false at once runs the body zero times
+    the loop answers that image's nil, and the body result is ignored
+    the condition and the body each evaluate exactly once per iteration, proven by counting effects
+
+state
+    a mutable temporary written by the body is visible to the next condition evaluation
+    a snapshot capture behaves as ADR 0043 says
+    a condition or body created inside a method reaches that method's instance variables
+    such a closure invoked from another method still uses its creator's self
+    an escaped ivar-dependent closure fails closed in a later execution
+
+refusals
+    a non-boolean condition result is refused explicitly, and names the problem
+    a loop primitive applied to itself with `value:` is refused
+    a kernel-primitive Block passed as the condition or the body is refused
+    an image without the Block protocol object answers neither selector
+
+both lanes
+    neutral and WASM callers both loop
+    a non-tail WASM case: the loop's result feeds a further send after it returns
+
+what must not have changed
+    no compiler selector recognition; the semantic artifact contains ordinary sends
+    no lagrange-code op and no new executable representation
+    no BlockClosure class, and Blocks still answer value without one
+    installation is idempotent and the publication sequence is swept pre/post-commit
+```
+
+## What is deferred
+
+- `BlockClosure` as an ordinary class with a method dictionary, per decision 11
+- `to:do:`, `timesRepeat:`, `detect:`, `inject:into:` and the rest of the iteration protocol, which
+  become ordinary Smalltalk once `whileTrue:` and Integer ordering both exist
+- non-local return from inside a Block, which is a separate control-flow decision
+- Integer ordering comparison, which is ADR 0052 and is what lets `OrderedCollection` drop its
+  count-up-and-compare-with-`=` idiom and regain `at:`, `first`, `last` and `removeLast`
+- making recursion constant-stack, which this ADR explicitly does not do
+- any loop that is not driven by ordinary sends
+
+## Guardrails
+
+```text
+whileTrue:/whileFalse: are sends; the compiler recognizes no loop selector
+this is two operations on the classless Block personality, not a loop instruction
+lagrange-code stays frozen; no new op and no new executable representation
+the loop drives condition and body through ordinary `value` sends, never their CodeArtifact directly
+each iteration returns before the next begins; depth is constant in iteration count
+looping is never implemented recursively
+only iterations are constant-stack; nesting and recursion still consume depth
+the condition answers a canonical boolean; there is no truthiness
+the loop primitive inherits the caller frame; an arbitrary condition or body never does
+a loop primitive is reachable only by dispatching these selectors, and refuses self-application
+the dispatcher discovers the loop primitives through a protocol object; it never knows their ids
+nothing durable, no activation field, no Value, no metadata is added
+BlockClosure stays deferred, and nothing here makes it harder to arrive
+```
