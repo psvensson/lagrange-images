@@ -195,7 +195,11 @@ async function lookupSelector({images, behaviorRef, selector, nilRef, receiverDe
 
     const behavior = await loadBehavior(images, currentRef, {edge, from});
     const method = await methodAt(images, behavior, selector, nilRef, validationCache);
-    if (method) return method;
+    // ADR 0050 decision 5: *which* Behavior's dictionary supplied the method is a permission fact,
+    // and this walk is the only place it is known. Reconstructing it later by asking which
+    // dictionary holds a Block would be neither unique — a Block may legitimately sit in two — nor
+    // trustworthy, since that answer comes from graph data a forged artifact can arrange.
+    if (method) return {method, definingBehavior: currentRef};
 
     from = behavior.record;
     edge = 'superclass';
@@ -203,6 +207,47 @@ async function lookupSelector({images, behaviorRef, selector, nilRef, receiverDe
   }
 
   throw new SmalltalkMessageNotUnderstoodError(selector, receiverDescription);
+}
+
+// ADR 0050 decision 5, as corrected: the layout a method of this Behavior may name. One
+// implementation, shared by the binder and by the runtime permission check, because two would be two
+// chances to disagree about what is visible and two different answers for corrupt graph state.
+//
+// Strict on purpose. Returning "no layout" for a cycle or a dangling Shape would convert corruption
+// into an ordinary denial at runtime and into `unbound Symmetric Smalltalk name` at compile time —
+// the same laundering of structural failure into a language-level outcome that ADR 0044's three-way
+// split exists to prevent.
+//
+// `null` means exactly one thing: the walk reached the kernel `nil` terminator having found no
+// declared layout.
+async function visibleInstanceShape({images, behaviorRef, nilRef}) {
+  const visited = new TupleSet(2);
+  let currentRef = behaviorRef;
+
+  while (!sameRef(currentRef, nilRef)) {
+    if (!isObjectRef(currentRef)) {
+      throw new TypeError('instance layout walk reached a non-ref superclass edge');
+    }
+    // Tuple-keyed, never a joined string: object ids are arbitrary non-empty text, so no separator
+    // can make `imageId/objectId` injective.
+    const key = [currentRef.imageId, currentRef.objectId];
+    if (visited.has(key)) {
+      throw new TypeError(
+        `instance layout walk hit a superclass cycle at ${currentRef.imageId}/${currentRef.objectId}; `
+        + 'the visible layout cannot be determined',
+      );
+    }
+    visited.add(key);
+
+    const behavior = await loadBehavior(images, currentRef, {edge: 'superclass', from: currentRef});
+    if (!sameRef(behavior.instanceShape, nilRef)) {
+      const shape = await images.getShape(behavior.instanceShape.imageId, behavior.instanceShape.objectId);
+      if (!shape) throw new SmalltalkDanglingEdgeError('instanceShape', behavior.record, behavior.instanceShape);
+      return shape;
+    }
+    currentRef = behavior.superclass;
+  }
+  return null;
 }
 
 // The class a receiver dispatches through, and the image that answers "which Integer?".
@@ -251,6 +296,7 @@ export {
   SmalltalkMessageNotUnderstoodError,
   behaviorRefFor,
   isBehaviorObject,
+  visibleInstanceShape,
   lookupSelector,
   sameRef,
 };

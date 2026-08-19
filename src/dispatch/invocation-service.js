@@ -41,11 +41,18 @@ function normalizeDispatchResolution(resolution) {
   if (!resolution || typeof resolution !== 'object' || Array.isArray(resolution)) {
     throw new TypeError('message dispatcher must return a resolution object');
   }
-  if (!sameKeys(resolution, ['block']) && !sameKeys(resolution, ['block', 'effectiveReceiver'])) {
-    throw new TypeError('message dispatcher resolution must contain block, and may contain effectiveReceiver');
+  const optional = ['effectiveReceiver', 'frame', 'inheritsFrame'];
+  const extra = Object.keys(resolution).filter((key) => key !== 'block' && !optional.includes(key));
+  if (!Object.hasOwn(resolution, 'block') || extra.length > 0) {
+    throw new TypeError(
+      `message dispatcher resolution must contain block, and may contain ${optional.join(', ')}`,
+    );
   }
   const block = normalizeObjectRef(resolution.block, 'message dispatcher block');
-  if (!Object.hasOwn(resolution, 'effectiveReceiver')) return Object.freeze({block, effectiveReceiver: null});
+  const frame = normalizeInvocationFrame(resolution);
+  if (!Object.hasOwn(resolution, 'effectiveReceiver')) {
+    return Object.freeze({block, effectiveReceiver: null, ...frame});
+  }
   // Present but empty is a caller mistake, not a second way to spell the default: absence is the
   // only way to say "the original receiver".
   if (resolution.effectiveReceiver === null || resolution.effectiveReceiver === undefined) {
@@ -57,7 +64,31 @@ function normalizeDispatchResolution(resolution) {
   return Object.freeze({
     block,
     effectiveReceiver: normalizeObjectRef(resolution.effectiveReceiver, 'message dispatcher effectiveReceiver'),
+    ...frame,
   });
+}
+
+// ADR 0050 decision 5b. The trusted facts of one dispatch, kept out of the activation record on
+// purpose: a permission fact does not belong in the closed model ADR 0005 defined and every executor
+// consumes. `inheritsFrame` is the language saying "this callee is my own host operation", which is
+// the only case that may borrow the invoker's frame.
+function normalizeInvocationFrame(resolution) {
+  if (Object.hasOwn(resolution, 'inheritsFrame')) {
+    if (resolution.inheritsFrame !== true) throw new TypeError('message dispatcher inheritsFrame must be true when present');
+    if (Object.hasOwn(resolution, 'frame')) throw new TypeError('a resolution may inherit a frame or supply one, not both');
+    return {inheritsFrame: true};
+  }
+  if (!Object.hasOwn(resolution, 'frame')) return {};
+  const {frame} = resolution;
+  if (!frame || typeof frame !== 'object' || Array.isArray(frame) || !sameKeys(frame, ['self', 'definingBehavior'])) {
+    throw new TypeError('message dispatcher frame must contain exactly self and definingBehavior');
+  }
+  return {
+    frame: Object.freeze({
+      self: canonicalizeValue(frame.self),
+      definingBehavior: normalizeObjectRef(frame.definingBehavior, 'message dispatcher frame definingBehavior'),
+    }),
+  };
 }
 
 function normalizeDispatchInfo(dispatch) {
@@ -87,6 +118,16 @@ function assertImageService(images) {
 class InvocationService {
   constructor({images, dispatchers = new DispatchRegistry()} = {}) {
     this.images = assertImageService(images);
+    // ADR 0050 decision 5b's envelope, keyed on the activation this dispatch produced. Keeping it
+    // beside the activation rather than *in* it is the point; keeping it here rather than in a
+    // return value is what lets the ordinary `sendMessage` -> `execute` path carry a frame too,
+    // without every caller learning that frames exist.
+    //
+    // This is not the "ask which dictionary holds this Block" shortcut ADR 0050 rules out: the key
+    // is the object identity of one dispatch's activation, which is process memory rather than graph
+    // data, so durable reuse and forged records cannot steer it. It is weakly held and dies with the
+    // activation.
+    this.invocationFrames = new WeakMap();
     if (!dispatchers || typeof dispatchers.get !== 'function') {
       throw new TypeError('dispatchers must be a DispatchRegistry-compatible object');
     }
@@ -105,14 +146,30 @@ class InvocationService {
   // `dispatchImage` is execution context, exactly as depth and authority are: it never appears on
   // the request, on a Value, or in the durable graph. An immediate receiver carries no image, so
   // this is what says which kernel's Integer applies (ADR 0044 decision 5a).
-  async sendMessage(input, {dispatchImage = null} = {}) {
+  // The activation alone, for every caller that does not need the envelope. The frame is still
+  // recorded, so a root `sendMessage` -> `execute` reaches a method with its frame intact.
+  async sendMessage(input, options = {}) {
+    return (await this.prepareDispatch(input, options)).activation;
+  }
+
+  // The envelope for an activation this service dispatched, or null. `invokeBlock` records none, so
+  // a directly invoked Block has no frame — which is what makes the slot primitives unusable there.
+  frameFor(activation) {
+    return this.invocationFrames.get(activation) ?? null;
+  }
+
+  // ADR 0050 decision 5b: the activation request *and* the transient envelope beside it. Built here,
+  // from the normalized resolution, so nothing a guest supplied can reach it — a message-send request
+  // validates exact keys and the envelope is not one of them. `invokeBlock` produces none, so a
+  // directly invoked Block has no frame at all.
+  async prepareDispatch(input, {dispatchImage = null} = {}) {
     const request = createMessageSendRequest(input);
     const dispatcher = this.dispatchers.get(request.languageId);
     const resolution = normalizeDispatchResolution(
       await dispatcher.resolveMessage(request, {images: this.images, dispatchImage}),
     );
 
-    return await this.prepareActivation({
+    const activation = await this.prepareActivation({
       block: resolution.block,
       arguments: request.arguments,
       // The effective receiver is what the method's `self` is. It is transient in exactly the way
@@ -123,6 +180,12 @@ class InvocationService {
         languageId: request.languageId,
         message: request.message,
       },
+    });
+    if (resolution.frame) this.invocationFrames.set(activation, resolution.frame);
+    return Object.freeze({
+      activation,
+      frame: resolution.frame ?? null,
+      inheritsFrame: resolution.inheritsFrame === true,
     });
   }
 

@@ -6,11 +6,12 @@ import {
   behaviorRefFor,
   lookupSelector,
 } from './smalltalk-lookup.js';
+import {SMALLTALK_KERNEL_PRIMITIVE_V1} from './smalltalk-primitives.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 function assertImages(images) {
   if (!images || typeof images !== 'object') throw new TypeError('images service is required');
-  for (const method of ['getObject', 'getShape', 'getBlock']) {
+  for (const method of ['getObject', 'getShape', 'getBlock', 'getCodeArtifact']) {
     if (typeof images[method] !== 'function') throw new TypeError(`images service must implement ${method}`);
   }
   return images;
@@ -47,10 +48,12 @@ async function legacyLookup(images, behavior, selector) {
 
 // ADR 0045 decision 7: the key is present only when the language actually nominates a different
 // receiver, so an ordinary send produces exactly the `{block}` resolution it always has.
-function resolution(block, effectiveReceiver) {
-  return effectiveReceiver
-    ? Object.freeze({block, effectiveReceiver})
-    : Object.freeze({block});
+function resolution(block, effectiveReceiver, frame = null) {
+  return Object.freeze({
+    ...(effectiveReceiver ? {effectiveReceiver} : {}),
+    ...(frame ? {frame} : {}),
+    block,
+  });
 }
 
 function createSymmetricSmalltalkDispatcher() {
@@ -78,7 +81,14 @@ function createSymmetricSmalltalkDispatcher() {
         if (blockReceiver) {
           const expected = blockValueSelector(request.arguments.length);
           if (selector !== expected) throw new TypeError(`Symmetric Smalltalk Block does not understand: ${selector}`);
-          return Object.freeze({block: request.receiver});
+          // ADR 0050 decision 5a. A kernel-primitive Block is how a method reaches a host operation,
+          // so it inherits the invoking method's frame — that is the only way the slot primitives
+          // can see whose `self` they are acting on. Every *other* Block send inherits nothing: a
+          // method must not lend its identity to a Block it merely happens to invoke.
+          const code = await images.getCodeArtifact(blockReceiver.code.imageId, blockReceiver.code.objectId);
+          return code?.representation === SMALLTALK_KERNEL_PRIMITIVE_V1
+            ? Object.freeze({block: request.receiver, inheritsFrame: true})
+            : Object.freeze({block: request.receiver});
         }
       }
 
@@ -132,7 +142,7 @@ function createSymmetricSmalltalkDispatcher() {
           `image ${behavior.imageId} holds a fixed-shape Behavior but no Smalltalk kernel to terminate lookup`,
         );
       }
-      const blockRef = await lookupSelector({
+      const {method: blockRef, definingBehavior} = await lookupSelector({
         images,
         behaviorRef: behavior,
         selector,
@@ -144,7 +154,9 @@ function createSymmetricSmalltalkDispatcher() {
       // a message the receiver failed to understand.
       const method = await images.getBlock(blockRef.imageId, blockRef.objectId);
       if (!method) throw new SmalltalkDanglingEdgeError('method', behavior, blockRef);
-      return resolution(blockRef, effectiveReceiver);
+      // ADR 0050 decision 5b: the trusted facts of this dispatch travel in the resolution, and the
+      // invocation layer turns them into a transient envelope. They never reach the activation.
+      return resolution(blockRef, effectiveReceiver, {definingBehavior, self: activeReceiver});
     },
   });
 }
