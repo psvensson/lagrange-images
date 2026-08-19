@@ -75,17 +75,53 @@ receiver.
 
 The dispatcher must therefore obtain that primitive without knowing its object id, because ADR 0044
 decision 9 is explicit that the dispatcher learns *rules*, never specific object ids. So the loop
-primitives are reachable through a small discoverable protocol object, exactly as the kernel is:
+primitives are reachable through a small discoverable protocol object, discovered exactly as
+`findSmalltalkKernel` discovers the kernel — same convention, same failure taxonomy, no second style
+of bootstrap lookup:
 
 ```text
-SmalltalkBlockProtocol        one per image, at a known protocol location
-    whileTrue   whileFalse    refs to the two loop primitive Blocks
+object id     smalltalk-block-protocol/v1        one per image, at a fixed known id
+shape         smalltalk/block-protocol-shape/v1  fixed, local, exactly these two slots
+metadata      protocol: smalltalk-block-protocol/v1
+slots
+    while-true    unpinned local ref to the whileTrue: loop primitive Block
+    while-false   unpinned local ref to the whileFalse: loop primitive Block
 ```
 
-The dispatcher knows that a Block protocol object may exist and what its slots mean. It never knows
-a primitive's id, and it holds no bootstrap state. An image without the protocol object answers
-neither selector, and says so as an ordinary "Block does not understand" — the same coherent state
-an image without the allocation protocol is in.
+The shape is pinned rather than left to the installer because an under-specified protocol object is
+how a partially-written or deliberately-shaped impostor gets handed to the dispatcher. Installation
+is ensure-exact-or-create at those deterministic ids, like every derived id in this repository:
+absent creates, identical reuses and writes nothing, different fails and overwrites nothing.
+
+**Absent and corrupt are different answers**, which is the distinction `findSmalltalkKernel` already
+draws and this must not blur:
+
+```text
+no object at the id                       absent  -> the image has no loop protocol, so a
+                                                     whileTrue: send is an ordinary
+                                                     "Block does not understand"
+present, wrong shape, wrong metadata,     corrupt -> an explicit failure naming the problem;
+non-local slot, pinned slot, missing                 never silently treated as absent, and
+slot, or a slot that is not a ref                    never handed to the dispatcher
+```
+
+An image without the protocol is coherent — merely an image whose Blocks do not loop — which is the
+same position an image without the allocation protocol is in. Degrading a *corrupt* one into that
+state would turn a damaged image into a quietly less capable one, which is the failure mode worth
+refusing here.
+
+**The protocol is discovered in the condition Block's image, and the loop answers that image's nil.**
+This is not a new rule; it is the existing one applied. A nested send sets the dispatch image from an
+object receiver's own image (`activation-executor.js`: `isObjectRef(receiver) ? receiver.imageId :
+activeDispatchImage`), and a Block is an object ref, so `conditionBlock whileTrue: body` already
+dispatches in the condition Block's image. The protocol lookup follows the dispatch image, so the
+image that owns the send owns the loop.
+
+The consequence for a cross-image body is likewise inherited rather than special-cased: when the
+primitive sends `value` to a body Block living elsewhere, that ordinary send sets the dispatch image
+to the *body's* image by the same line, so the body executes against its own image's protocol. Two
+images that disagree about their kernels therefore each behave as themselves, and neither is
+silently evaluated against the other's.
 
 ### 4. The invocation shape is dispatched, not `value:`-applied — and is guarded accordingly
 
@@ -109,6 +145,12 @@ The replacement rule is structural and cheap:
 the receiver must be a Block, and must not be a kernel-primitive Block
 the argument must be a Block, and must not be a kernel-primitive Block
 ```
+
+"Kernel-primitive Block" means the existing **structural** test and nothing else: the Block's
+CodeArtifact has representation `smalltalk-kernel-primitive/v1`. Not metadata, not a list of known
+ids, not a naming convention. That is already exactly how the dispatcher decides frame inheritance
+for a Block send today, so this guard reuses a definition the system depends on rather than adding a
+second, weaker notion of "is a primitive" that the two could drift apart on.
 
 which refuses the self-application above, refuses a primitive smuggled in as a body, and leaves
 ordinary Blocks working. A loop primitive is not otherwise callable.
@@ -202,12 +244,26 @@ an ivar-using closure created in this execution   works inside a loop
 an escaped ivar-dependent closure from earlier    still fails closed
 ```
 
-### 10. Nothing durable or activation-shaped is added
+### 10. No new durable record *kind*, Value, activation field or representation
 
-No new field on the activation request, no new durable record kind, no new Value, no metadata. The
-loop primitives are ordinary Blocks carrying the existing `smalltalk-kernel-primitive/v1`
+Stated precisely, because the loose version of this claim is false: the protocol object and the two
+primitive Blocks **are** durable, newly written records. What must not grow is the set of *kinds* of
+thing the substrate has:
+
+```text
+added            three ordinary durable records — one object, two Blocks — plus their
+                 CodeArtifacts and one Shape, all of existing kinds
+not added        no new durable record kind
+                 no new Value kind
+                 no new field on the activation request or the activation itself
+                 no new executable representation
+                 no new metadata key outside the protocol object's own `protocol` tag
+```
+
+The loop primitives are ordinary Blocks carrying the existing `smalltalk-kernel-primitive/v1`
 representation, installed by an explicit installer like every protocol since ADR 0045, and the
-protocol object is an ordinary graph object.
+protocol object is an ordinary graph object with a fixed Shape. An image that has never installed the
+protocol contains none of these records and is, as decision 3 says, coherent without them.
 
 ### 11. `BlockClosure` stays deferred
 
@@ -231,7 +287,9 @@ semantics
     whileTrue: and whileFalse: both run, with the expected sense
     a condition that is false at once runs the body zero times
     the loop answers that image's nil, and the body result is ignored
-    the condition and the body each evaluate exactly once per iteration, proven by counting effects
+    for N body executions the condition runs N+1 times, counting the final stopping test;
+        the property being proven is that no condition test and no body effect is duplicated,
+        not that the two counts are equal
 
 state
     a mutable temporary written by the body is visible to the next condition evaluation
@@ -244,9 +302,16 @@ refusals
     a non-boolean condition result is refused explicitly, and names the problem
     a loop primitive applied to itself with `value:` is refused
     a kernel-primitive Block passed as the condition or the body is refused
-    an image without the Block protocol object answers neither selector
+    an image without the Block protocol object answers neither selector, as a
+        "does not understand" rather than a crash
+    a corrupt protocol object fails explicitly and is never degraded to "absent":
+        wrong shape, wrong metadata, missing slot, non-ref slot, pinned slot, foreign-image slot
+    re-installation is exact-or-create: identical reuses and writes nothing, different refuses
 
 both lanes
+    the protocol is discovered in the condition Block's image, and the loop answers that
+        image's nil
+    a body Block from another image executes against its own image, by the ordinary send rule
     neutral and WASM callers both loop
     a non-tail WASM case: the loop's result feeds a further send after it returns
 
@@ -282,6 +347,10 @@ the condition answers a canonical boolean; there is no truthiness
 the loop primitive inherits the caller frame; an arbitrary condition or body never does
 a loop primitive is reachable only by dispatching these selectors, and refuses self-application
 the dispatcher discovers the loop primitives through a protocol object; it never knows their ids
-nothing durable, no activation field, no Value, no metadata is added
+no new durable record *kind*, Value, activation field or representation; the protocol object
+    and the two primitive Blocks are themselves ordinary durable records
+the protocol object has a fixed Shape, is installed exact-or-create, and absent never means corrupt
+the condition Block's image owns the send: it supplies the protocol and the answered nil
+a kernel-primitive Block is one whose CodeArtifact representation is smalltalk-kernel-primitive/v1
 BlockClosure stays deferred, and nothing here makes it harder to arrive
 ```
