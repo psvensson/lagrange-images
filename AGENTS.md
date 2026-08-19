@@ -313,6 +313,15 @@ pooled instance != activation state
 - A durable algorithm is pinned by **fixed vectors**, never by a self-comparison. `builtInHash(x) === builtInHash(x)` stays green if the digest, domain string, byte order or truncation changes — each of which relocates every key in every stored table.
 - Rediscovering a record at a deterministic id validates the whole immutable definition, not one field. Carrying the right Shape is not the same as being that class; adopting a differently-defined Behavior then publishes methods onto it. Mutable parts — method dictionaries — are excluded, because their own installer owns their exactness.
 
+### Image-resident library
+
+- A library installer uses `ensureNamedClass`/`ensureSmalltalkShape` rather than rolling its own rediscovery. Accepting *any* record at a deterministic id adopts an unrelated object as that class or layout; `defineClass` alone is not enough for rediscovery, because it also ensures an empty method dictionary and conflicts once methods exist.
+- Library classes are written in Smalltalk over the kernel protocols. When an idiom turns out to be inexpressible, the answer is to record the missing *general* language capability, not to add a collection-shaped primitive — a primitive added for one class hides the gap from every other.
+- Source has no global namespace: a class a method needs is an explicit captured ref, supplied at install time. Compilation takes capture *declarations* (name -> stable id) and installation binds *values*, because a declaration is image-independent and a value is not. Every declaration becomes a binding whether or not the source mentions it, so every declaration needs a value — uniform, rather than a special case depending on whether the compiler kept the reference.
+- Duplicate capture names or ids are refused, never resolved by position: a repeated name would make a source name mean whichever declaration came last. The binder's own capture names and ids are reserved for the same reason — they are spread after the caller's, so a collision would silently replace a caller declaration and its value.
+- "Whole immutable definition" includes deterministically written `metadata`. Exclude a field from rediscovery only when it has a lifecycle of its own, as a method dictionary does; metadata has none. `compileSymmetricSmalltalkMethod` takes capture values for exactly this.
+- The awkward spellings in library source are deliberate signals, not style: counting *up* and stopping on `=` marks the missing ordering comparison, `1 = 2` marks the missing false literal, and a recursive helper selector marks the missing loop construct. Do not tidy them away without removing the underlying gap.
+
 ### Mutable lexical state
 
 - Assignment mutates an activation-visible cell (ADR 0043). Never a canonical Value, never a Block, and never the durable lexical-environment graph. If an assignment causes a `putLexicalEnvironment` call or a history event, it is wrong.

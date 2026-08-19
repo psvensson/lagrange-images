@@ -616,6 +616,70 @@ async function methodBlockRef({images, imageId, classRef, selector} = {}) {
   return method;
 }
 
+// Ensure-exact-or-create for a Smalltalk instance Shape. One implementation, because "the same
+// layout" has to mean one thing: a Shape carrying the right slots but a different indexed
+// declaration is a different layout, and adopting it would silently change what its instances are.
+async function ensureSmalltalkShape(images, imageId, desired) {
+  const existing = await images.getShape(imageId, desired.id);
+  if (!existing) return objectRef(imageId, (await images.putShape(imageId, desired)).id);
+  const layout = (shape) => canonicalJson({
+    slots: shape.slots,
+    indexed: Object.hasOwn(shape, 'indexed') ? shape.indexed : SHAPE_INDEXED.NONE,
+  });
+  if (layout(existing) !== layout(desired)) throw new SmalltalkKernelConflictError('shape', imageId, desired.id);
+  return objectRef(imageId, existing.id);
+}
+
+// Define a class, or rediscover one and validate its whole immutable definition.
+//
+// `defineClass` alone is not usable for rediscovery: it also ensures an *empty* method dictionary,
+// which conflicts once methods have been published. So rediscovery checks everything that cannot
+// change — names, the class/metaclass behavior edges, superclass, both instance Shapes — and
+// deliberately excludes the method dictionary, which is the mutable part with its own retry-safe
+// installer. Carrying the right instance Shape is not the same as being this class.
+async function ensureNamedClass({images, imageId, name, superclassRef = null, instanceShapeRef = null} = {}) {
+  requiredText(name, 'class name');
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  const classRef = objectRef(imageId, `smalltalk/class/${name}`);
+  const metaclassRef = objectRef(imageId, `smalltalk/metaclass/${name}`);
+  const superclass = superclassRef ?? kernel.objectClass;
+  const instanceShape = instanceShapeRef ?? kernel.nil;
+
+  const existing = await images.getObject(imageId, classRef.objectId);
+  if (!existing) {
+    const defined = await defineClass({images, imageId, name, superclassRef: superclass, instanceShapeRef});
+    return Object.freeze({classRef: defined.classRef, metaclassRef: defined.metaclassRef});
+  }
+
+  const conflict = () => new SmalltalkKernelConflictError('class', imageId, classRef.objectId);
+  let behavior;
+  let metaclass;
+  try {
+    behavior = await readBehavior(images, classRef);
+    metaclass = await readBehavior(images, metaclassRef);
+  } catch (error) {
+    throw new SmalltalkKernelConflictError('class', imageId, classRef.objectId, {cause: error});
+  }
+  if (behavior.name.value !== name || metaclass.name.value !== `${name} class`) throw conflict();
+  // `defineClass` writes this deterministically, so it is part of what "the same class" means. The
+  // method dictionary is excluded above because it has a legitimate lifecycle of its own; metadata
+  // has none.
+  if (canonicalJson(behavior.record.metadata) !== canonicalJson({smalltalk: 'behavior', name})) throw conflict();
+  if (canonicalJson(metaclass.record.metadata) !== canonicalJson({smalltalk: 'behavior', name: `${name} class`})) {
+    throw conflict();
+  }
+  if (!sameRef(behavior.record.behavior, metaclassRef)) throw conflict();
+  if (!sameRef(behavior.superclass, superclass)) throw conflict();
+  if (!sameRef(behavior.instanceShape, instanceShape)) throw conflict();
+
+  const superBehavior = await readBehavior(images, superclass);
+  if (!sameRef(metaclass.record.behavior, kernel.metaclassClass)) throw conflict();
+  if (!sameRef(metaclass.superclass, superBehavior.record.behavior)) throw conflict();
+  if (!sameRef(metaclass.instanceShape, kernel.nil)) throw conflict();
+  return Object.freeze({classRef, metaclassRef});
+}
+
 // A new class and its metaclass, wired by decision 4's chain rule. The installer applies the same
 // rule with forward references, because its objects do not resolve until the whole graph exists;
 // here the superclass already resolves, so its metaclass is read from it. Two encodings of one
@@ -789,6 +853,8 @@ export {
   defineClass,
   defineMethods,
   ensureBlock,
+  ensureNamedClass,
+  ensureSmalltalkShape,
   methodBlockRef,
   ensureCodeArtifact,
 };

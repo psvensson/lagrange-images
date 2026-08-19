@@ -1,10 +1,11 @@
 import {SHAPE_INDEXED} from '../object/model.js';
 import {objectRef, textValue} from '../value/index.js';
 import {
-  defineClass,
   defineMethods,
   ensureBlock,
   ensureCodeArtifact,
+  ensureNamedClass,
+  ensureSmalltalkShape,
 } from './smalltalk-class-builder.js';
 import {
   DICTIONARY_SHAPE_ID,
@@ -108,19 +109,6 @@ async function installPrimitiveBlock({images, imageId, primitive}) {
   return objectRef(imageId, block.id);
 }
 
-const shapeLayout = (shape) => canonicalJson({
-  slots: shape.slots,
-  indexed: Object.hasOwn(shape, 'indexed') ? shape.indexed : SHAPE_INDEXED.NONE,
-});
-
-async function ensureShapeExactly(images, imageId, desired) {
-  const existing = await images.getShape(imageId, desired.id);
-  if (!existing) return await images.putShape(imageId, desired);
-  if (shapeLayout(existing) !== shapeLayout(desired)) {
-    throw new SmalltalkKernelConflictError('shape', imageId, desired.id);
-  }
-  return existing;
-}
 
 // `Object >> =` and `Object >> hash`. Every receiver in the image inherits them, which is what makes
 // the default relation of decision 2 the language's default rather than a Dictionary-private helper.
@@ -159,56 +147,6 @@ async function installSmalltalkEqualityProtocol({images, compilation, imageId, l
   return Object.freeze({objectClass: kernel.objectClass});
 }
 
-function requireSameRef(actual, expected, imageId) {
-  if (!sameRef(actual, expected)) throw new SmalltalkKernelConflictError('class', imageId, DICTIONARY_CLASS_ID);
-}
-
-// The Dictionary class is created directly rather than through `defineClass`, because its class and
-// metaclass records must be rediscovered on a retry: once method publication has begun, a replayed
-// `defineClass` would wrongly demand that the method dictionaries be empty again.
-//
-// Rediscovery validates the whole *immutable* class definition, not just the instance Shape. A
-// record carrying the right Shape but the wrong name, superclass or metaclass edge is a different
-// class that happens to occupy this deterministic id, and adopting it would then publish Dictionary
-// methods onto it. Method dictionaries are deliberately excluded: they are the mutable part, and
-// `defineMethods` has its own retry-safe exactness contract. Same pattern as ADR 0047's Array
-// installer, for the same reason.
-async function ensureDictionaryClass({images, imageId, kernel, instanceShapeRef}) {
-  const classRef = objectRef(imageId, DICTIONARY_CLASS_ID);
-  const metaclassRef = objectRef(imageId, DICTIONARY_METACLASS_ID);
-  const existing = await images.getObject(imageId, DICTIONARY_CLASS_ID);
-  if (!existing) {
-    const defined = await defineClass({
-      images,
-      imageId,
-      name: 'Dictionary',
-      superclassRef: kernel.objectClass,
-      instanceShapeRef,
-    });
-    return Object.freeze({classRef: defined.classRef, metaclassRef: defined.metaclassRef});
-  }
-
-  let behavior;
-  let metaclass;
-  try {
-    behavior = await readBehavior(images, classRef);
-    metaclass = await readBehavior(images, metaclassRef);
-  } catch (error) {
-    throw new SmalltalkKernelConflictError('class', imageId, DICTIONARY_CLASS_ID, {cause: error});
-  }
-  if (behavior.name.value !== 'Dictionary' || metaclass.name.value !== 'Dictionary class') {
-    throw new SmalltalkKernelConflictError('class', imageId, DICTIONARY_CLASS_ID);
-  }
-  requireSameRef(behavior.record.behavior, metaclassRef, imageId);
-  requireSameRef(behavior.superclass, kernel.objectClass, imageId);
-  requireSameRef(behavior.instanceShape, instanceShapeRef, imageId);
-
-  const objectBehavior = await readBehavior(images, kernel.objectClass);
-  requireSameRef(metaclass.record.behavior, kernel.metaclassClass, imageId);
-  requireSameRef(metaclass.superclass, objectBehavior.record.behavior, imageId);
-  requireSameRef(metaclass.instanceShape, kernel.nil, imageId);
-  return Object.freeze({classRef, metaclassRef});
-}
 
 async function installSmalltalkDictionaryProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
@@ -218,11 +156,8 @@ async function installSmalltalkDictionaryProtocol({images, compilation, imageId,
 
   // The table Shape carries the indexed declaration ADR 0047 introduced; the Dictionary Shape is an
   // ordinary one-slot layout, so a Dictionary's own identity never moves when its contents change.
-  await ensureShapeExactly(images, imageId, {
-    id: DICTIONARY_SHAPE_ID,
-    slots: [...DICTIONARY_SHAPE_SLOTS],
-  });
-  await ensureShapeExactly(images, imageId, {
+  await ensureSmalltalkShape(images, imageId, {id: DICTIONARY_SHAPE_ID, slots: [...DICTIONARY_SHAPE_SLOTS]});
+  await ensureSmalltalkShape(images, imageId, {
     id: DICTIONARY_TABLE_SHAPE_ID,
     slots: [...DICTIONARY_TABLE_SHAPE_SLOTS],
     indexed: SHAPE_INDEXED.VALUES,
@@ -238,10 +173,11 @@ async function installSmalltalkDictionaryProtocol({images, compilation, imageId,
     await installPrimitiveBlock({images, imageId, primitive});
   }
 
-  const {classRef} = await ensureDictionaryClass({
+  const {classRef} = await ensureNamedClass({
     images,
     imageId,
-    kernel,
+    name: 'Dictionary',
+    superclassRef: kernel.objectClass,
     instanceShapeRef: objectRef(imageId, DICTIONARY_SHAPE_ID),
   });
 
