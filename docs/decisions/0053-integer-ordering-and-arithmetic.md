@@ -1,6 +1,7 @@
 # ADR 0053: Integer ordering and arithmetic
 
-Status: accepted — ordering and the remaining arithmetic are ordinary Smalltalk methods backed by language-owned Integer primitives, so `lagrange-code/v0` stays frozen and the neutral IR never learns Smalltalk's numeric protocol.
+Status: implemented — ordering and the remaining arithmetic are ordinary Smalltalk methods backed by language-owned Integer primitives, so `lagrange-code/v0` stays frozen and the neutral IR never learns Smalltalk's numeric protocol.
+Proven by: test/integer-protocol.test.js, test/smalltalk-library.test.js
 
 ## Problem
 

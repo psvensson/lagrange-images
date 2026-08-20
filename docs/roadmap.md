@@ -253,16 +253,24 @@ Next, ordered by architectural pressure rather than convenience:
       the 0052 slot ahead of Integer ordering: unbounded durable image growth was a substrate and
       operational problem, where a missing `<` is missing functionality. The rejected alternatives
       were per-creation-site ids and durable collection; ADR 0052 records why
-- [ ] implement ADR 0053's Integer ordering and arithmetic. The decision is language-owned
-      primitives with ordinary `<`/`<=`/`>`/`>=` and `-`/`*`/`//`/`\\` methods, keeping
-      `lagrange-code/v0` frozen. It unblocks `OrderedCollection`'s `at:`, `first`, `last` and
-      `removeLast` — each of which is a bounds check, and a bounds check is an ordering question —
-      and retires the count-up-and-compare-with-`=` idiom
+- [x] Integer ordering and arithmetic (**ADR 0053**). `<`/`<=`/`>`/`>=` and `-`/`*`/`//`/`\\` are
+      ordinary methods over language-owned primitives, `lagrange-code/v0` is unchanged, and
+      `OrderedCollection` gained `at:`, `first`, `last` and `removeLast` with real bounds checks.
+      The count-up-and-compare-with-`=` idiom is retired
+- [ ] non-local return from a Block, which is why `includes:` still carries its answer out in a
+      `found` temporary rather than answering from inside the loop
 - [ ] basic collections, at which point a MethodDictionary can stop being represented by a Shape
-- [ ] exception/condition substrate, including how unwinding crosses resumable WASM suspension
+- [ ] exception/condition substrate, including how unwinding crosses resumable WASM suspension.
+      ADR 0053 made this concrete: with no way to *signal* a refusal, `OrderedCollection >> at:`
+      reports an out-of-range index by sending `errorIndexOutOfBounds:`, which nothing implements, so
+      the failure arrives as a message-not-understood. It at least names the collection's own concept
+      rather than surfacing an Array error about a different object, but it is a gap signal and not a
+      design — and writing the first bounds-checked accessors is what exposed it
 - [ ] the rest of the boolean protocol — `not`, `and:`, `or:` — which runs ADR 0045's bridge
       backwards: a boolean-*answering* method has to decide whether it answers the canonical Value
-      or the singleton
+      or the singleton. ADR 0053 needed negation for `<=`/`>=` and used the neutral `if` inside two
+      kernel-authored programs rather than pull this decision forward, so the library still spells a
+      two-part bounds test as nested `ifTrue:ifFalse:` and `false` as `1 = 2`
 - [ ] primitive-backed methods beyond `+`. ADR 0044 decides how immediate Values dispatch and how
       a primitive-backed method is written; the remaining work is which primitives the kernel needs
 - [x] ADR 0051's constant-stack `whileTrue:`/`whileFalse:`. `OrderedCollection`'s traversals are

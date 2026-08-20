@@ -66,6 +66,14 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   // `aPrimitive value: x`, but dispatched with the condition Block as the receiver.
   BLOCK_WHILE_TRUE: 'block-while-true',
   BLOCK_WHILE_FALSE: 'block-while-false',
+  // ADR 0053. One comparison, because four would be four chances for the set to disagree.
+  INTEGER_LESS_THAN: 'integer-less-than',
+  INTEGER_SUBTRACT: 'integer-subtract',
+  INTEGER_MULTIPLY: 'integer-multiply',
+  // Named for what it does, not for the operator it backs: the name becomes durable CodeArtifact
+  // content, and `integer-divide` would imply the host truncation ADR 0053 decision 4 rejects.
+  INTEGER_FLOOR_DIVIDE: 'integer-floor-divide',
+  INTEGER_MODULO: 'integer-modulo',
 });
 
 // The loop primitives, kept as a set because their invocation shape and therefore their guard
@@ -95,6 +103,11 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   // One argument, the body Block; the condition Block arrives as the receiver.
   [SMALLTALK_PRIMITIVE.BLOCK_WHILE_TRUE]: 1,
   [SMALLTALK_PRIMITIVE.BLOCK_WHILE_FALSE]: 1,
+  [SMALLTALK_PRIMITIVE.INTEGER_LESS_THAN]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_SUBTRACT]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_MULTIPLY]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_FLOOR_DIVIDE]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_MODULO]: 2,
 });
 
 // One locality rule for every primitive. A foreign primitive Block must fail rather than answer a
@@ -788,6 +801,71 @@ async function instanceSlotWrite({images, primitiveImage, target, slotIdValue, n
   return stored;
 }
 
+// ADR 0053. Two Integers, and nothing else: mixed Integer/Float *ordering and arithmetic* need
+// coercion rules this ADR deliberately defers. Mixed *equality* is untouched — ADR 0048 already
+// decided that an Integer equals a finite integral Float of the same mathematical value.
+class SmalltalkIntegerOperandError extends TypeError {
+  constructor(primitive, kind, position) {
+    super(`Symmetric Smalltalk ${primitive} primitive requires two Integers; the ${position} is a ${kind} Value`);
+    this.name = 'SmalltalkIntegerOperandError';
+    this.primitive = primitive;
+  }
+}
+
+class SmalltalkDivideByZeroError extends TypeError {
+  constructor(primitive) {
+    super(`Symmetric Smalltalk ${primitive} primitive cannot divide by zero`);
+    this.name = 'SmalltalkDivideByZeroError';
+    this.primitive = primitive;
+  }
+}
+
+const SMALLTALK_INTEGER_ARITY = Object.freeze({
+  [SMALLTALK_PRIMITIVE.INTEGER_LESS_THAN]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_SUBTRACT]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_MULTIPLY]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_FLOOR_DIVIDE]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_MODULO]: 2,
+});
+
+function integerOperands(primitive, left, right) {
+  const a = canonicalizeValue(left);
+  const b = canonicalizeValue(right);
+  if (a.kind !== VALUE_KIND.INTEGER) throw new SmalltalkIntegerOperandError(primitive, a.kind, 'receiver');
+  if (b.kind !== VALUE_KIND.INTEGER) throw new SmalltalkIntegerOperandError(primitive, b.kind, 'argument');
+  // BigInt throughout: an Integer Value is arbitrary precision, and a host number round-trip would
+  // silently round anything past 2^53.
+  return [BigInt(a.value), BigInt(b.value)];
+}
+
+// q = floor(a / b). Host BigInt division truncates toward zero, so the correction below is the whole
+// point of this primitive existing rather than the operator being wired straight through.
+function floorDivide(a, b) {
+  const quotient = a / b;
+  return (a % b !== 0n) && ((a < 0n) !== (b < 0n)) ? quotient - 1n : quotient;
+}
+
+function integerOperation(primitive, left, right) {
+  const [a, b] = integerOperands(primitive, left, right);
+  switch (primitive) {
+    case SMALLTALK_PRIMITIVE.INTEGER_LESS_THAN:
+      return booleanValue(a < b);
+    case SMALLTALK_PRIMITIVE.INTEGER_SUBTRACT:
+      return integerValue(a - b);
+    case SMALLTALK_PRIMITIVE.INTEGER_MULTIPLY:
+      return integerValue(a * b);
+    case SMALLTALK_PRIMITIVE.INTEGER_FLOOR_DIVIDE:
+      if (b === 0n) throw new SmalltalkDivideByZeroError(primitive);
+      return integerValue(floorDivide(a, b));
+    default:
+      // r = a - q*b, so the remainder takes the divisor's sign: 0 <= r < b for b > 0, and
+      // b < r <= 0 for b < 0. That range — not the reconstruction identity, which a truncating
+      // implementation also satisfies — is what makes `\\` usable for hashing and indexing.
+      if (b === 0n) throw new SmalltalkDivideByZeroError(primitive);
+      return integerValue(a - floorDivide(a, b) * b);
+  }
+}
+
 // ADR 0051 decision 4. Every other primitive is applied as `aPrimitive value: x`, so
 // `assertBlockApplicationReceiver` can demand that the activation's receiver *is* the Block. A loop
 // primitive is dispatched instead, with the condition Block as receiver, so that guard cannot apply
@@ -908,6 +986,9 @@ function createSmalltalkKernelPrimitiveV1Executor({
         throw new TypeError('Symmetric Smalltalk primitives require an images service');
       }
       const [value, second, third] = activation.arguments;
+      if (Object.hasOwn(SMALLTALK_INTEGER_ARITY, primitive)) {
+        return integerOperation(primitive, value, second);
+      }
       if (isLoop) {
         return await blockWhile({
           images, activation, context, primitive, wanted: LOOP_PRIMITIVES[primitive],
@@ -986,6 +1067,8 @@ export {
   SmalltalkDictionaryConflictError,
   SmalltalkDictionaryKeyNotFoundError,
   SmalltalkDictionaryProtocolError,
+  SmalltalkDivideByZeroError,
+  SmalltalkIntegerOperandError,
   SmalltalkIndexedBoundsError,
   SmalltalkNotIndexedError,
   SmalltalkNotInstantiableError,

@@ -1,6 +1,6 @@
 import {findSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
-import {ensureNamedClass, ensureSmalltalkShape} from './smalltalk-class-builder.js';
+import {ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {objectRef} from '../value/index.js';
 
@@ -11,13 +11,18 @@ import {objectRef} from '../value/index.js';
 // It is a substrate exercise as much as a library. Where an idiom is unavailable the code uses what
 // exists rather than reaching for a host operation, and the awkwardness is left visible on purpose:
 //
-//   no ordering comparison   loops count *up* and stop on `=`, never `<=`
 //   no false literal         `1 = 2` is how a Boolean false is spelled
-//   no conditions            operations that would raise a range error are omitted, not faked
+//   no `or:` / `not`         a two-part bounds test is written as nested `ifTrue:ifFalse:`
+//   no non-local return      a search carries its answer out in a `found` temporary
+//   no conditions            a refusal is signalled by sending a selector nothing implements, so
+//                            an out-of-range access fails as a message-not-understood naming the
+//                            collection's own concept rather than raising anything
 //
-// One of those gaps is now closed. ADR 0051 gave Blocks `whileTrue:`/`whileFalse:`, so iteration is
-// a loop rather than recursion through a helper selector — which is what makes this library usable
-// at all, since recursion put every traversal under the 256-activation limit.
+// Two of those gaps are now closed, and the awkwardness went with them. ADR 0051 gave Blocks
+// `whileTrue:`/`whileFalse:`, so iteration is a loop rather than recursion under the 256-activation
+// limit. ADR 0053 gave Integer `<=`, so a traversal states its bound instead of counting up to
+// `tally + 1` and comparing with `=` — and `at:`, `first`, `last` and `removeLast` become possible,
+// because each is a bounds check and a bounds check is an ordering question.
 //
 // Each of those is a general language gap rather than a collection concern, and each is recorded in
 // `docs/roadmap.md` rather than papered over here.
@@ -51,6 +56,11 @@ const ASSOCIATION_METHODS = [
 // so only the methods that need the class declare it.
 const ARRAY_CLASS_CAPTURE = Object.freeze({name: 'ArrayClass', id: 'smalltalk/library/array-class'});
 
+// Removing an element must *clear* the slot it vacated, and clearing needs a nil to write. There is
+// no nil literal in source, so it arrives the same way `Array` does: an explicit captured ref bound
+// at install time.
+const NIL_CAPTURE = Object.freeze({name: 'NilObject', id: 'smalltalk/library/nil'});
+
 const ORDERED_COLLECTION_METHODS = [
   {
     selector: 'initialize',
@@ -74,15 +84,13 @@ const ORDERED_COLLECTION_METHODS = [
       self ]`,
   },
 
-  // Iteration is a loop (ADR 0051), not recursion through a helper selector. That is the whole
-  // point of the ADR: these four methods were correct before it and unusable past a few dozen
-  // elements, because each element cost an activation. Counting *up* and stopping on `=` still
-  // avoids the ordering comparison Integer does not have, which is ADR 0053.
+  // Iteration is a loop (ADR 0051) that states its bound with `<=` (ADR 0053), rather than
+  // recursion counting up to `tally + 1` to avoid an ordering comparison that did not exist.
   {
     selector: 'copyInto:',
     source: `[ :target | | index |
       index := 1.
-      [ index = (tally + 1) ] whileFalse: [
+      [ index <= tally ] whileTrue: [
         target at: index put: (contents at: index).
         index := index + 1 ] ]`,
   },
@@ -90,21 +98,59 @@ const ORDERED_COLLECTION_METHODS = [
     selector: 'do:',
     source: `[ :aBlock | | index |
       index := 1.
-      [ index = (tally + 1) ] whileFalse: [
+      [ index <= tally ] whileTrue: [
         aBlock value: (contents at: index).
         index := index + 1 ] ]`,
   },
-  // `found` carries the answer out of the loop, because a Block has no non-local return yet — the
-  // next gap this style of code runs into, and one ADR 0051 deliberately left open.
+  // `found` still carries the answer out of the loop, because a Block has no non-local return. That
+  // gap is unchanged by ADR 0053 and remains the next one this style of code runs into.
   {
     selector: 'includes:',
     source: `[ :item | | index found |
       index := 1. found := 1 = 2.
-      [ (index = (tally + 1)) ifTrue: [ 1 = 2 ] ifFalse: [ found ifTrue: [ 1 = 2 ] ifFalse: [ 1 = 1 ] ] ]
+      [ found ifTrue: [ 1 = 2 ] ifFalse: [ index <= tally ] ]
         whileTrue: [
           (item = (contents at: index)) ifTrue: [ found := 1 = 1 ] ifFalse: [ 1 = 2 ].
           index := index + 1 ].
       found ]`,
+  },
+  // ADR 0053's point. Each of these is a bounds check, which is why none existed before an ordering
+  // comparison did.
+  //
+  // The bound is the collection's own `tally`, never the backing Array's capacity: `contents at:`
+  // succeeds for any index up to capacity, so a collection that deferred to it would cheerfully
+  // answer whatever slack the growth policy left behind.
+  //
+  // Refusal is where the language is still missing something. There is no way to raise a condition,
+  // so an out-of-range access sends a selector nothing implements: the failure is a
+  // message-not-understood naming `errorIndexOutOfBounds:`, which at least names the collection's
+  // own concept rather than surfacing an Array error about a different object. Recorded in
+  // `docs/roadmap.md` rather than papered over with a collection-shaped primitive.
+  {
+    selector: 'at:',
+    source: `[ :index |
+      (index < 1)
+        ifTrue: [ self errorIndexOutOfBounds: index ]
+        ifFalse: [ (index <= tally)
+          ifTrue: [ contents at: index ]
+          ifFalse: [ self errorIndexOutOfBounds: index ] ] ]`,
+  },
+  {selector: 'first', source: '[ self at: 1 ]'},
+  {selector: 'last', source: '[ self at: tally ]'},
+  // The vacated slot is cleared, not merely hidden. `at:` would refuse to answer it either way, but
+  // the backing Array is a durable object: leaving the ref there keeps the removed element
+  // graph-reachable, so a large collection drained to empty would retain every element it ever held.
+  {
+    captures: [NIL_CAPTURE],
+    selector: 'removeLast',
+    source: `[ | item |
+      (tally < 1)
+        ifTrue: [ self errorEmptyCollection ]
+        ifFalse: [
+          item := contents at: tally.
+          contents at: tally put: NilObject.
+          tally := tally - 1.
+          item ] ]`,
   },
   {
     captures: [ARRAY_CLASS_CAPTURE],
@@ -169,6 +215,17 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
   if (!await findSmalltalkBlockProtocol({images, imageId})) {
     throw new TypeError(`image ${imageId} has no Smalltalk Block protocol; install it first`);
   }
+  // Every traversal states its bound with `<=` and every bounds check uses `<`, so an image without
+  // ADR 0053's Integer protocol would install methods that compile cleanly and fail on first use.
+  // Checked as an installed *method*, not as the presence of the primitive Block. The Integer
+  // installer publishes its primitives before its methods, so a partial install would satisfy a
+  // Block-existence check with `<`, `<=` and `-` still absent — and this library would then compile
+  // cleanly and fail on first use, which is exactly what the check exists to prevent.
+  for (const selector of ['<', '<=', '-']) {
+    if (!await methodBlockRef({images, imageId, classRef: kernel.integerClass, selector})) {
+      throw new TypeError(`image ${imageId} has no Integer ${selector} method; install the Integer protocol first`);
+    }
+  }
   await defineMethodsFromSource({
     images,
     compilation,
@@ -176,7 +233,13 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
     lane,
     classRef: orderedCollectionRef,
     methods: ORDERED_COLLECTION_METHODS.map((method) => (method.captures
-      ? {...method, captures: method.captures.map((capture) => ({...capture, value: arrayClassRef}))}
+      ? {
+        ...method,
+        captures: method.captures.map((capture) => ({
+          ...capture,
+          value: capture.id === NIL_CAPTURE.id ? kernel.nil : arrayClassRef,
+        })),
+      }
       : method)),
   });
 
