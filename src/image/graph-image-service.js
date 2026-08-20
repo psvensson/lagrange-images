@@ -7,6 +7,7 @@ import {
   createCodeArtifactRecord,
   createLexicalEnvironmentRecord,
 } from '../execution/model.js';
+import {findTransientRefs, isTransientObjectId} from '../value/transient-ref.js';
 
 const IMAGE_COLLECTION = 'images';
 const records = (id) => `image:${id}:objects`;
@@ -18,6 +19,33 @@ function assertAllowedFields(input, allowed, label) {
   if (extra.length) throw new TypeError(`unknown ${label} fields: ${extra.join(', ')}`);
 }
 
+// ADR 0052 decision 5b. Every durable write in this service funnels through here, which is why the
+// guard lives here rather than in each `put*`: one seam, so a record kind added later is covered
+// without anyone remembering to cover it.
+//
+// Two refusals, and they are different failures. A reserved *id* would create a durable record that
+// arena-first resolution could later shadow, which decision 5c forbids outright. A reserved *ref*
+// would persist a pointer to something that dies with the arena — a dangling reference the moment
+// the execution ends.
+//
+// Neither should ever fire in correct operation: the central promotion operation runs first and
+// rewrites transient refs. This is the proof that it did, not the mechanism that does it.
+function assertNoTransientIdentity(collection, key, value) {
+  if (isTransientObjectId(key)) {
+    throw new TypeError(
+      `cannot write a durable record at the runtime-reserved transient id ${key} in ${collection}`,
+    );
+  }
+  const embedded = findTransientRefs(value);
+  if (embedded.length > 0) {
+    const {imageId, objectId} = embedded[0];
+    throw new TypeError(
+      `cannot write a durable record embedding the unpromoted transient reference `
+      + `${imageId}/${objectId}; it must be promoted first`,
+    );
+  }
+}
+
 async function putWithHistory(backend, {
   collection,
   key,
@@ -26,6 +54,7 @@ async function putWithHistory(backend, {
   stream,
   event,
 }) {
+  assertNoTransientIdentity(collection, key, value);
   return await backend.transaction(async (candidate) => {
     const transaction = assertBackendTransaction(candidate);
     const stored = await transaction.put(collection, key, value, {expectedVersion});

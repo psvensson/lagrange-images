@@ -162,14 +162,19 @@ class InvocationService {
   // from the normalized resolution, so nothing a guest supplied can reach it — a message-send request
   // validates exact keys and the envelope is not one of them. `invokeBlock` produces none, so a
   // directly invoked Block has no frame at all.
-  async prepareDispatch(input, {dispatchImage = null} = {}) {
+  // ADR 0052 decision 5a. `images` here is an arena-first *view*, supplied per execution exactly as
+  // `dispatchImage` is: it lets this service and the language dispatcher see a closure instance that
+  // has not escaped, without either learning what an arena is. Absent, resolution is durable-only,
+  // which is what a root dispatch outside any execution should do.
+  async prepareDispatch(input, {dispatchImage = null, images = null} = {}) {
     const request = createMessageSendRequest(input);
     const dispatcher = this.dispatchers.get(request.languageId);
     const resolution = normalizeDispatchResolution(
-      await dispatcher.resolveMessage(request, {images: this.images, dispatchImage}),
+      await dispatcher.resolveMessage(request, {images: images ?? this.images, dispatchImage}),
     );
 
     const activation = await this.prepareActivation({
+      images,
       block: resolution.block,
       arguments: request.arguments,
       // The effective receiver is what the method's `self` is. It is transient in exactly the way
@@ -189,24 +194,25 @@ class InvocationService {
     });
   }
 
-  async prepareActivation({block, arguments: args = [], receiver = null, dispatch = null}) {
+  async prepareActivation({block, arguments: args = [], receiver = null, dispatch = null, images = null}) {
+    const resolver = images ?? this.images;
     const blockRef = normalizeObjectRef(block, 'activation block');
     const normalizedArguments = normalizeArguments(args);
     const normalizedReceiver = receiver === null ? null : canonicalizeValue(receiver);
     const normalizedDispatch = normalizeDispatchInfo(dispatch);
 
-    const blockRecord = await this.images.getBlock(blockRef.imageId, blockRef.objectId);
+    const blockRecord = await resolver.getBlock(blockRef.imageId, blockRef.objectId);
     if (!blockRecord) {
       throw new TypeError(`activation block not found: ${blockRef.imageId}/${blockRef.objectId}`);
     }
 
-    const code = await this.images.getCodeArtifact(blockRecord.code.imageId, blockRecord.code.objectId);
+    const code = await resolver.getCodeArtifact(blockRecord.code.imageId, blockRecord.code.objectId);
     if (!code) {
       throw new TypeError(`activation code artifact not found: ${blockRecord.code.imageId}/${blockRecord.code.objectId}`);
     }
 
     if (blockRecord.environment) {
-      const environment = await this.images.getLexicalEnvironment(
+      const environment = await resolver.getLexicalEnvironment(
         blockRecord.environment.imageId,
         blockRecord.environment.objectId,
       );
