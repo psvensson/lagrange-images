@@ -7,6 +7,7 @@ import {
   findSmalltalkKernel,
   installSmalltalkAllocationProtocol,
   installSmalltalkBlockProtocol,
+  installSmalltalkIntegerProtocol,
   installSmalltalkControlFlow,
   installSmalltalkEqualityProtocol,
   installSmalltalkIndexedProtocol,
@@ -54,6 +55,7 @@ async function seed(runtime, imageId, {lane = 'neutral'} = {}) {
   await installSmalltalkIndexedProtocol(options);
   await installSmalltalkInstanceVariableProtocol({images: runtime.images, imageId});
   await installSmalltalkBlockProtocol({images: runtime.images, imageId});
+  await installSmalltalkIntegerProtocol(options);
   const kernel = await findSmalltalkKernel({images: runtime.images, imageId});
   await defineMethods({...options, classRef: kernel.integerClass, methods: [PLUS]});
   const library = await installSmalltalkLibrary(options);
@@ -274,9 +276,9 @@ test('every library method is an ordinary Smalltalk method with a semantic artif
 
 // No collection-specific host operation was added. The primitive family is exactly what ADRs
 // 0046-0051 installed, and the library reaches storage only through Array's ordinary protocol.
-// ADR 0051's two loop primitives are language operations on the Block personality, not collection
-// operations: no method in this library names them, and they are reached only by dispatching
-// `whileTrue:`/`whileFalse:`.
+// ADR 0051's loop primitives and ADR 0053's Integer primitives are language operations, not
+// collection operations: no method in this library names any of them. They are reached by
+// dispatching `whileTrue:`/`whileFalse:` and `<`/`<=`/`-` like any other message.
 test('the library adds no new kernel primitive', async () => {
   const {SMALLTALK_PRIMITIVE_NAMES} = await import('../src/language/smalltalk-primitives.js');
   assert.deepEqual([...SMALLTALK_PRIMITIVE_NAMES].sort(), [
@@ -297,6 +299,11 @@ test('the library adds no new kernel primitive', async () => {
     'indexed-size',
     'instance-slot-read',
     'instance-slot-write',
+    'integer-floor-divide',
+    'integer-less-than',
+    'integer-modulo',
+    'integer-multiply',
+    'integer-subtract',
   ]);
 });
 
@@ -507,4 +514,121 @@ test('a large OrderedCollection traverses, where recursion used to exceed the de
       booleanValue(true),
     );
   });
+});
+
+// --- ADR 0053: bounds-checked access --------------------------------------------------------------
+
+// `at:` is the first integration test for ordering, and the interesting edge is not the arithmetic —
+// it is that the collection's logical size must bound the access, never the backing Array's
+// capacity. `contents at:` succeeds for any index up to capacity, so a collection that deferred to
+// it would answer whatever slack the growth policy left behind.
+test('at: bounds by tally, not by the backing Array capacity', async () => {
+  await withRuntime(async (runtime) => {
+    const {library} = await seed(runtime, 'app');
+    // One element in a collection whose backing Array holds four: indices 2..4 are readable from the
+    // Array and must still be refused by the collection.
+    const collection = await evaluate(runtime, 'app', 'one',
+      '[ :c | | oc | oc := c new. oc add: 11. oc ]', [library.orderedCollection]);
+
+    assert.deepEqual(await evaluate(runtime, 'app', 'size-one', '[ :oc | oc size ]', [collection]), integerValue(1));
+    assert.deepEqual(await evaluate(runtime, 'app', 'at-one', '[ :oc | oc at: 1 ]', [collection]), integerValue(11));
+
+    // The capacity leak, if the bound were wrong: index 2 is inside the Array and outside the
+    // collection. It must be refused rather than answering the Array's unused slot.
+    for (const index of [2, 3, 4]) {
+      await assert.rejects(
+        evaluate(runtime, 'app', `at-slack-${index}`, `[ :oc | oc at: ${index} ]`, [collection]),
+        /errorIndexOutOfBounds:/,
+        `index ${index} is within the backing Array but outside the collection`,
+      );
+    }
+    // And the backing Array really does hold that slack, so the test above is not vacuous.
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'capacity', '[ :oc | (oc asArray) size ]', [collection]),
+      integerValue(1),
+      'asArray is tally-sized, so the slack lives only in contents',
+    );
+  });
+});
+
+test('at: refuses an index below one and past the end', async () => {
+  await withRuntime(async (runtime) => {
+    const {library} = await seed(runtime, 'app');
+    const collection = await evaluate(runtime, 'app', 'three', `[ :c | | oc |
+      oc := c new. oc add: 1. oc add: 2. oc add: 3. oc ]`, [library.orderedCollection]);
+
+    assert.deepEqual(await evaluate(runtime, 'app', 'at-1', '[ :oc | oc at: 1 ]', [collection]), integerValue(1));
+    assert.deepEqual(await evaluate(runtime, 'app', 'at-3', '[ :oc | oc at: 3 ]', [collection]), integerValue(3));
+    for (const index of ['0', '(0 - 1)', '4']) {
+      await assert.rejects(
+        evaluate(runtime, 'app', `at-bad-${index}`, `[ :oc | oc at: ${index} ]`, [collection]),
+        /errorIndexOutOfBounds:/,
+        `index ${index}`,
+      );
+    }
+  });
+});
+
+test('first, last and removeLast work, and refuse on an empty collection', async () => {
+  await withRuntime(async (runtime) => {
+    const {library} = await seed(runtime, 'app');
+    const collection = await evaluate(runtime, 'app', 'flr', `[ :c | | oc |
+      oc := c new. oc add: 7. oc add: 8. oc add: 9. oc ]`, [library.orderedCollection]);
+
+    assert.deepEqual(await evaluate(runtime, 'app', 'first', '[ :oc | oc first ]', [collection]), integerValue(7));
+    assert.deepEqual(await evaluate(runtime, 'app', 'last', '[ :oc | oc last ]', [collection]), integerValue(9));
+    assert.deepEqual(await evaluate(runtime, 'app', 'rm', '[ :oc | oc removeLast ]', [collection]), integerValue(9));
+    assert.deepEqual(await evaluate(runtime, 'app', 'after-rm', '[ :oc | oc size ]', [collection]), integerValue(2));
+    assert.deepEqual(await evaluate(runtime, 'app', 'last-2', '[ :oc | oc last ]', [collection]), integerValue(8));
+    // Removing does not make the removed element reachable again through at:.
+    await assert.rejects(
+      evaluate(runtime, 'app', 'at-removed', '[ :oc | oc at: 3 ]', [collection]),
+      /errorIndexOutOfBounds:/,
+    );
+
+    // Empty: every accessor refuses rather than answering the backing Array's nil.
+    const empty = await evaluate(runtime, 'app', 'empty', '[ :c | c new ]', [library.orderedCollection]);
+    await assert.rejects(evaluate(runtime, 'app', 'e-first', '[ :oc | oc first ]', [empty]), /errorIndexOutOfBounds:/);
+    await assert.rejects(evaluate(runtime, 'app', 'e-last', '[ :oc | oc last ]', [empty]), /errorIndexOutOfBounds:/);
+    await assert.rejects(
+      evaluate(runtime, 'app', 'e-rm', '[ :oc | oc removeLast ]', [empty]),
+      /errorEmptyCollection/,
+    );
+  });
+});
+
+test('removeLast down to empty, then refuses', async () => {
+  await withRuntime(async (runtime) => {
+    const {library} = await seed(runtime, 'app');
+    const collection = await evaluate(runtime, 'app', 'drain', `[ :c | | oc |
+      oc := c new. oc add: 1. oc add: 2. oc ]`, [library.orderedCollection]);
+    assert.deepEqual(await evaluate(runtime, 'app', 'd1', '[ :oc | oc removeLast ]', [collection]), integerValue(2));
+    assert.deepEqual(await evaluate(runtime, 'app', 'd2', '[ :oc | oc removeLast ]', [collection]), integerValue(1));
+    assert.deepEqual(await evaluate(runtime, 'app', 'd-size', '[ :oc | oc size ]', [collection]), integerValue(0));
+    assert.deepEqual(await evaluate(runtime, 'app', 'd-empty', '[ :oc | oc isEmpty ]', [collection]), booleanValue(true));
+    await assert.rejects(
+      evaluate(runtime, 'app', 'd3', '[ :oc | oc removeLast ]', [collection]),
+      /errorEmptyCollection/,
+    );
+  });
+});
+
+// The gap signal ADR 0047 recorded is retired with the gap: no library method counts up to
+// `tally + 1` and compares with `=` any more.
+test('the count-up-and-compare-with-= idiom is gone from the library', async () => {
+  const {ORDERED_COLLECTION_METHODS} = await import('../src/language/smalltalk-library.js');
+  for (const {selector, source} of ORDERED_COLLECTION_METHODS) {
+    // The idiom is *comparing* against `tally + 1`, not the increment in `add:`, which is ordinary
+    // arithmetic and stays.
+    assert.ok(
+      !/=\s*\(tally \+ 1\)/.test(source),
+      `${selector} still counts up to tally + 1 instead of bounding with <=`,
+    );
+  }
+  // And the traversals do state their bound.
+  const traversals = ORDERED_COLLECTION_METHODS.filter(({selector}) => ['do:', 'copyInto:'].includes(selector));
+  assert.equal(traversals.length, 2);
+  for (const {selector, source} of traversals) {
+    assert.match(source, /index <= tally/, `${selector} must bound with <=`);
+  }
 });

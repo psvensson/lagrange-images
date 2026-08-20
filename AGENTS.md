@@ -320,7 +320,8 @@ pooled instance != activation state
 - Source has no global namespace: a class a method needs is an explicit captured ref, supplied at install time. Compilation takes capture *declarations* (name -> stable id) and installation binds *values*, because a declaration is image-independent and a value is not. Every declaration becomes a binding whether or not the source mentions it, so every declaration needs a value — uniform, rather than a special case depending on whether the compiler kept the reference.
 - Duplicate capture names or ids are refused, never resolved by position: a repeated name would make a source name mean whichever declaration came last. The binder's own capture names and ids are reserved for the same reason — they are spread after the caller's, so a collision would silently replace a caller declaration and its value.
 - "Whole immutable definition" includes deterministically written `metadata`. Exclude a field from rediscovery only when it has a lifecycle of its own, as a method dictionary does; metadata has none. `compileSymmetricSmalltalkMethod` takes capture values for exactly this.
-- The awkward spellings in library source are deliberate signals, not style: counting *up* and stopping on `=` marks the missing ordering comparison and `1 = 2` marks the missing false literal. Do not tidy them away without removing the underlying gap. The recursive-helper spelling marked the missing loop construct and is gone, because ADR 0051 removed the gap rather than the signal.
+- The awkward spellings in library source are deliberate signals, not style: `1 = 2` marks the missing false literal, nested `ifTrue:ifFalse:` marks the missing `or:`, a `found` temporary marks the missing non-local return, and sending an unimplemented `errorIndexOutOfBounds:` marks the missing condition system. Do not tidy them away without removing the underlying gap. Two signals are already gone because their gaps were closed rather than hidden: the recursive-helper spelling (ADR 0051) and counting up to `tally + 1` to compare with `=` (ADR 0053).
+- A collection's bound is its own logical size, never its backing store's capacity. `contents at:` succeeds for any index up to capacity, so an accessor that delegates its bounds check to the Array will happily answer whatever slack the growth policy left behind.
 - Traversals loop; they do not recurse. A recursive traversal is correct and unusable — every element costs an activation, and the limit is 256. `installSmalltalkLibrary` therefore requires the Block protocol, so an image missing it is refused at install rather than failing on first use.
 
 ### Block iteration
@@ -332,6 +333,16 @@ pooled instance != activation state
 - The loop primitives are reached only by dispatching those two selectors. They are guarded structurally — receiver and argument must both be Blocks and neither a kernel-primitive Block — because `assertBlockApplicationReceiver` cannot apply when the activation receiver is the condition rather than the primitive.
 - The dispatcher finds them through a discoverable Block protocol object and never knows an object id. Discovery validates what the slots *point at* — Block, CodeArtifact, `smalltalk-kernel-primitive/v1`, and the primitive name that slot claims — because the object is a routing authority whose target inherits the caller's frame. Absent is not corrupt: a missing protocol is an ordinary does-not-understand, and a damaged one is an explicit failure.
 - The answered nil comes from kernel discovery in the condition Block's image at call time, never a host `null` and never a nil captured at install. A missing kernel is a kernel failure, not a does-not-understand.
+
+### Integer ordering and arithmetic
+
+- Ordering is protocol, not an instruction (ADR 0053). `lagrange-code` gains no comparison op; `<` is found by the same Behavior walk as `+`. If a change here touches the IR, it is the wrong change.
+- One comparison primitive, three derived methods. Four primitives would be four chances for the set to disagree, and a `>=` that parts company with `<` at exactly one boundary is the classic form of that bug.
+- A method never *is* a primitive: it captures the primitive Block and sends it `value:value:`.
+- `//` floors and `\\` takes the divisor's sign. The distinguishing invariant is the remainder's *range* — `0 <= r < b` for `b > 0`, `b < r <= 0` for `b < 0` — because `(a // b) * b + (a \\ b) = a` holds for truncating division too and specifies nothing on its own. Host `BigInt` truncates toward zero, so the floor correction is the reason the primitive exists; test all four sign quadrants.
+- The durable primitive is `integer-floor-divide`. A primitive name becomes durable CodeArtifact content, so it must not imply host semantics.
+- Two Integers only, refused by name otherwise. Mixed *ordering* and *arithmetic* stay deferred; mixed *equality* is already decided by ADR 0048 and must keep working.
+- Arbitrary precision throughout: never round-trip an Integer through a host number.
 
 ### Mutable lexical state
 
