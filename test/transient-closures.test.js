@@ -80,6 +80,34 @@ test('no durable record may be written at a reserved transient id', async () => 
   });
 });
 
+// ADR 0052 reserves the namespace for REF object ids, not for every storage key. An image id is not
+// an object id and never appears as one in a REF, so an image may be named anything — including
+// something that looks like a reserved object id. Scoping the check wrongly would make a legal image
+// name unusable for a rule that was never about image names.
+test('a reserved-looking image name stays legal, while a record inside it does not', async () => {
+  await withRuntime(async (runtime) => {
+    const imageId = `${TRANSIENT_ID_PREFIX}perfectly-valid-image`;
+    await runtime.images.createImage({id: imageId});
+    assert.equal((await runtime.images.getImage(imageId)).id, imageId);
+
+    // Ordinary records inside that image are unaffected.
+    const shape = await runtime.images.putShape(imageId, {id: 'ordinary-shape', slots: []});
+    assert.equal(shape.id, 'ordinary-shape');
+    // Setting a root still works, so the second image-collection writer is unaffected too.
+    await runtime.images.putObject(imageId, {
+      id: 'root', shape: objectRef(imageId, 'ordinary-shape'), slots: {}, metadata: {},
+    }, {expectedVersion: 0});
+    await runtime.images.setRoot(imageId, 'root');
+    assert.equal((await runtime.images.getImage(imageId)).rootObjectId, 'root');
+
+    // But a *record* at a reserved object id is refused, in this image like any other.
+    await assert.rejects(
+      runtime.images.putShape(imageId, {id: transientObjectId('inside'), slots: []}),
+      /runtime-reserved transient id/,
+    );
+  });
+});
+
 test('no durable record may embed an unpromoted transient reference', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');
@@ -129,6 +157,19 @@ test('no durable record may embed an unpromoted transient reference', async () =
         metadata: {nested: {deep: transient}},
       }),
       /must not contain object references/,
+    );
+  });
+});
+
+// The embedded-ref half of the guard is not scoped: a transient ref dangles wherever it is stored,
+// image records included.
+test('an image record may not embed an unpromoted transient reference either', async () => {
+  await withRuntime(async (runtime) => {
+    await assert.rejects(
+      runtime.images.createImage({
+        id: 'holder-image', metadata: {held: objectRef('holder-image', transientObjectId('x'))},
+      }),
+      /unpromoted transient reference|must not contain object references/,
     );
   });
 });

@@ -23,15 +23,22 @@ function assertAllowedFields(input, allowed, label) {
 // guard lives here rather than in each `put*`: one seam, so a record kind added later is covered
 // without anyone remembering to cover it.
 //
-// Two refusals, and they are different failures. A reserved *id* would create a durable record that
-// arena-first resolution could later shadow, which decision 5c forbids outright. A reserved *ref*
-// would persist a pointer to something that dies with the arena — a dangling reference the moment
-// the execution ends.
+// Two refusals, and they are different failures with different scopes.
+//
+// A reserved *id* would create a durable record that arena-first resolution could later shadow,
+// which decision 5c forbids outright. That check applies only where the key *is* an object id — the
+// per-image record collection. ADR 0052 reserves the namespace for REF `objectId` specifically, not
+// for every storage key, so an image may legitimately be named anything at all; an image id is not
+// an object id and never appears as one in a REF.
+//
+// A reserved *ref* would persist a pointer to something that dies with the arena — a dangling
+// reference the moment the execution ends. That applies to every durable value, image records
+// included, because a transient ref is just as dangling wherever it is stored.
 //
 // Neither should ever fire in correct operation: the central promotion operation runs first and
 // rewrites transient refs. This is the proof that it did, not the mechanism that does it.
-function assertNoTransientIdentity(collection, key, value) {
-  if (isTransientObjectId(key)) {
+function assertNoTransientIdentity(collection, key, value, {keyIsObjectId}) {
+  if (keyIsObjectId && isTransientObjectId(key)) {
     throw new TypeError(
       `cannot write a durable record at the runtime-reserved transient id ${key} in ${collection}`,
     );
@@ -53,8 +60,12 @@ async function putWithHistory(backend, {
   expectedVersion,
   stream,
   event,
+  // True where `key` is a graph object id, which is the only place ADR 0052's reserved namespace
+  // applies. Default false so a new caller has to say so deliberately rather than inherit a
+  // restriction on whatever its keys happen to mean.
+  keyIsObjectId = false,
 }) {
-  assertNoTransientIdentity(collection, key, value);
+  assertNoTransientIdentity(collection, key, value, {keyIsObjectId});
   return await backend.transaction(async (candidate) => {
     const transaction = assertBackendTransaction(candidate);
     const stored = await transaction.put(collection, key, value, {expectedVersion});
@@ -118,6 +129,7 @@ class ImageService {
     });
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
+      keyIsObjectId: true,
       key: id,
       value: shape,
       expectedVersion: 0,
@@ -174,6 +186,7 @@ class ImageService {
     assertObjectMatchesShape(object, shape);
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
+      keyIsObjectId: true,
       key: id,
       value: object,
       expectedVersion,
@@ -213,6 +226,7 @@ class ImageService {
     }
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
+      keyIsObjectId: true,
       key: id,
       value: artifact,
       expectedVersion: 0,
@@ -252,6 +266,7 @@ class ImageService {
     }
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
+      keyIsObjectId: true,
       key: id,
       value: environment,
       expectedVersion: expectedVersion ?? current?._version ?? 0,
@@ -287,6 +302,7 @@ class ImageService {
     if (block.environment) await this.requireRecordKind(block.environment, 'lexical-environment', 'block environment');
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
+      keyIsObjectId: true,
       key: id,
       value: block,
       expectedVersion: 0,
