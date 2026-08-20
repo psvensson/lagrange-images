@@ -17,6 +17,7 @@ import {
   installSymmetricSmalltalkBlock,
   integerValue,
   objectRef,
+  pinnedRef,
   textValue,
 } from '../src/runtime.js';
 import {defineMethodsFromSource} from '../src/language/smalltalk-instance-variables.js';
@@ -101,6 +102,57 @@ test('whileTrue: and whileFalse: loop with the expected sense', async () => {
   });
 });
 
+// Proven on its own terms rather than as an inversion of the whileTrue: fixture: its own counting,
+// its own zero-iteration case, and its own answer.
+test('whileFalse: is a loop in its own right', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel} = await seed(runtime, 'app');
+    // Runs while the condition is false, and stops on the first true.
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'wf-sense', `[ | i seen |
+        i := 0. seen := 0.
+        [ i = 3 ] whileFalse: [ i := i + 1. seen := seen + i ].
+        seen ]`),
+      integerValue(6),
+    );
+    // N bodies, N+1 conditions, counted independently of the whileTrue: case.
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'wf-count', `[ | i conditions bodies |
+        i := 0. conditions := 0. bodies := 0.
+        [ conditions := conditions + 1. i = 5 ] whileFalse: [ bodies := bodies + 1. i := i + 1 ].
+        (conditions + (bodies + 100)) ]`),
+      integerValue(111),
+    );
+    // A condition already true runs the body zero times and still answers nil.
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'wf-zero', `[ | runs |
+        runs := 0.
+        [ 1 = 1 ] whileFalse: [ runs := runs + 1 ] ]`),
+      kernel.nil,
+    );
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'wf-zero-count', `[ | runs |
+        runs := 0.
+        [ 1 = 1 ] whileFalse: [ runs := runs + 1 ].
+        runs ]`),
+      integerValue(0),
+    );
+  });
+});
+
+test('whileTrue: runs the body zero times when its condition is false at once', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'wt-zero', `[ | runs |
+        runs := 0.
+        [ 1 = 2 ] whileTrue: [ runs := runs + 1 ].
+        runs ]`),
+      integerValue(0),
+    );
+  });
+});
+
 test('a condition that stops at once runs the body zero times', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');
@@ -157,10 +209,13 @@ test('a mutable temporary written by the body is visible to the next condition',
 test('ten thousand iterations complete, where recursion fails far sooner', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');
-    assert.deepEqual(
-      await evaluate(runtime, 'app', 'many', '[ | i | i := 0. [ i = 10000 ] whileFalse: [ i := i + 1 ]. i ]'),
-      integerValue(10000),
-    );
+    // Completion alone would be satisfied by a loop that silently skipped work, so the same run
+    // counts both evaluations: 10,000 bodies and the 10,001 conditions that bracket them.
+    const counted = await evaluate(runtime, 'app', 'many', `[ | i conditions bodies |
+      i := 0. conditions := 0. bodies := 0.
+      [ conditions := conditions + 1. i = 10000 ] whileFalse: [ bodies := bodies + 1. i := i + 1 ].
+      (conditions + bodies) ]`);
+    assert.deepEqual(counted, integerValue(20001), '10001 conditions + 10000 bodies');
 
     // The recursive equivalent of the same count, so the difference is demonstrated rather than
     // asserted. `countTo:` is exactly the idiom the library was forced into before this ADR.
@@ -277,6 +332,22 @@ test('a loop primitive refuses self-application and primitive operands', async (
     );
     // A non-Block argument.
     await assert.rejects(send(ordinaryRef, 'whileTrue:', [integerValue(3)]), /as the body/);
+    // The third distinct shape: a primitive Block as the *dispatched* condition. This reaches the
+    // guard by the intended route rather than by `value:`, so it is not the same case as the
+    // self-application above.
+    await assert.rejects(
+      send(protocol.whileFalse, 'whileTrue:', [ordinaryRef]),
+      /kernel-primitive Block as the condition/,
+    );
+    // Including a non-loop primitive, so the rule is "no kernel primitive", not "no loop primitive".
+    await assert.rejects(
+      send(objectRef('app', 'smalltalk/primitive/basic-new'), 'whileTrue:', [ordinaryRef]),
+      /kernel-primitive Block as the condition/,
+    );
+    await assert.rejects(
+      send(ordinaryRef, 'whileTrue:', [objectRef('app', 'smalltalk/primitive/basic-new')]),
+      /kernel-primitive Block as the body/,
+    );
   });
 });
 
@@ -384,6 +455,30 @@ test('a repointed protocol slot is refused rather than routed', async () => {
   }
 });
 
+// The corruption a "both slots hold loop primitives" check would wave through, and the one that
+// would silently turn every whileTrue: in the image into a whileFalse:.
+test('swapping the two loop primitives is refused', async () => {
+  await withRuntime(async (runtime) => {
+    const {protocol} = await seed(runtime, 'app');
+    await rewriteObject(runtime, 'app', 'smalltalk-block-protocol/v1', (record) => ({
+      ...record,
+      slots: {
+        'block-protocol-while-true': protocol.whileFalse,
+        'block-protocol-while-false': protocol.whileTrue,
+      },
+    }));
+    await assert.rejects(
+      findSmalltalkBlockProtocol({images: runtime.images, imageId: 'app'}),
+      /slot whileTrue references the block-while-false primitive, not block-while-true/,
+    );
+    // The send fails rather than quietly looping with the opposite sense.
+    await assert.rejects(
+      evaluate(runtime, 'app', 'swapped', '[ | i | i := 0. [ i = 2 ] whileFalse: [ i := i + 1 ]. i ]'),
+      /is corrupt/,
+    );
+  });
+});
+
 test('a structurally damaged protocol object is corrupt, never absent', async () => {
   const damage = [
     {label: 'missing protocol tag', mutate: (record) => ({...record, metadata: {}}), match: /does not declare/},
@@ -413,6 +508,19 @@ test('a structurally damaged protocol object is corrupt, never absent', async ()
       }),
       match: /slot whileFalse must be an unpinned local ref/,
     },
+    {
+      // A pinned ref is a different Value kind, not a ref with a flag: accepting one would let a
+      // pinned handle stand in for the local Block the dispatcher is about to run.
+      label: 'pinned slot',
+      mutate: (record) => ({
+        ...record,
+        slots: {
+          ...record.slots,
+          'block-protocol-while-false': pinnedRef('app', 'smalltalk/primitive/block-while-false', 1),
+        },
+      }),
+      match: /slot whileFalse must be an unpinned local ref/,
+    },
   ];
 
   for (const {label, mutate, match, setUp} of damage) {
@@ -433,6 +541,30 @@ test('a structurally damaged protocol object is corrupt, never absent', async ()
 // cannot coexist with the correct shape id and is unreachable through `putObject`. The check still
 // exists because discovery must not depend on that guarantee holding for records it did not write,
 // so it is exercised against a stub that can produce the record the store will not.
+// Two states the store's own invariants make unreachable — it refuses a dangling `code` ref on
+// `putBlock`, and refuses slots that disagree with the declared shape. Discovery still checks both,
+// because it must not assume those invariants held for records it did not write, so they are
+// exercised against a stub that can produce what the store will not.
+test('a protocol slot pointing at a Block with no code artifact is refused', async () => {
+  const stub = {
+    getObject: async () => ({
+      id: 'smalltalk-block-protocol/v1',
+      shape: objectRef('app', 'smalltalk/block-protocol-shape/v1'),
+      slots: {
+        'block-protocol-while-true': objectRef('app', 'smalltalk/primitive/block-while-true'),
+        'block-protocol-while-false': objectRef('app', 'smalltalk/primitive/block-while-false'),
+      },
+      metadata: {protocol: 'smalltalk-block-protocol/v1'},
+    }),
+    getBlock: async (imageId, objectId) => ({id: objectId, code: objectRef('app', `${objectId}:code`)}),
+    getCodeArtifact: async () => null,
+  };
+  await assert.rejects(
+    findSmalltalkBlockProtocol({images: stub, imageId: 'app'}),
+    /slot whileTrue references a Block with no code artifact/,
+  );
+});
+
 test('a protocol object with a missing slot is refused', async () => {
   const stub = {
     getObject: async () => ({
@@ -453,6 +585,75 @@ test('a protocol object with a missing slot is refused', async () => {
     findSmalltalkBlockProtocol({images: stub, imageId: 'app'}),
     /slot whileFalse must be an unpinned local ref/,
   );
+});
+
+// Every deterministic identity the installer claims, squatted by a differing record. Each must be
+// refused rather than overwritten: silently replacing a squatter is how a routing authority gets
+// re-pointed by whoever wrote first.
+test('a differing record at any installed identity is refused, never overwritten', async () => {
+  const squatters = [
+    {
+      label: 'the protocol shape',
+      plant: async (runtime) => {
+        await runtime.images.putShape('app', {id: 'smalltalk/block-protocol-shape/v1', slots: [{id: 'x', name: 'x'}]});
+      },
+      survives: async (runtime) => {
+        const shape = await runtime.images.getShape('app', 'smalltalk/block-protocol-shape/v1');
+        assert.deepEqual(shape.slots, [{id: 'x', name: 'x'}], 'the squatting shape is untouched');
+      },
+    },
+    {
+      label: 'a primitive code artifact',
+      plant: async (runtime) => {
+        await runtime.images.putCodeArtifact('app', {
+          id: 'smalltalk/primitive/block-while-true:code',
+          languageId: SYMMETRIC_SMALLTALK_ID,
+          representation: 'smalltalk-kernel-primitive/v1',
+          content: textValue(JSON.stringify({primitive: 'basic-new'})),
+          metadata: {},
+        });
+      },
+      survives: async (runtime) => {
+        const code = await runtime.images.getCodeArtifact('app', 'smalltalk/primitive/block-while-true:code');
+        assert.equal(JSON.parse(code.content.value).primitive, 'basic-new', 'the squatting artifact is untouched');
+      },
+    },
+    {
+      label: 'a primitive Block',
+      plant: async (runtime) => {
+        const code = await runtime.images.putCodeArtifact('app', {
+          id: 'squatter:code',
+          languageId: SYMMETRIC_SMALLTALK_ID,
+          representation: 'smalltalk-kernel-primitive/v1',
+          content: textValue(JSON.stringify({primitive: 'class-of'})),
+          metadata: {},
+        });
+        await runtime.images.putBlock('app', {
+          id: 'smalltalk/primitive/block-while-false',
+          code: objectRef('app', code.id),
+          environment: null,
+          metadata: {},
+        });
+      },
+      survives: async (runtime) => {
+        const block = await runtime.images.getBlock('app', 'smalltalk/primitive/block-while-false');
+        assert.equal(block.code.objectId, 'squatter:code', 'the squatting Block is untouched');
+      },
+    },
+  ];
+
+  for (const {label, plant, survives} of squatters) {
+    await withRuntime(async (runtime) => {
+      await seed(runtime, 'app', {blockProtocol: false});
+      await plant(runtime);
+      await assert.rejects(
+        installSmalltalkBlockProtocol({images: runtime.images, imageId: 'app'}),
+        /already exists and differs/,
+        `expected a differing record at ${label} to be refused`,
+      );
+      await survives(runtime);
+    });
+  }
 });
 
 test('a conflicting protocol object is refused rather than overwritten', async () => {
@@ -497,6 +698,37 @@ test('the loop captures no nil at install time and answers the kernel nil it loo
 
     assert.deepEqual(await evaluate(runtime, 'app', 'nil-now', '[ [ 1 = 2 ] whileTrue: [ 1 ] ]'), kernel.nil);
     assert.deepEqual(protocol.whileTrue.imageId, 'app');
+  });
+});
+
+// The execution-time proof, not just the no-capture one: repoint `kernel-nil` *after* the protocol
+// is installed and the loop must answer the new object.
+//
+// The fixture has to avoid every message send, because nil is also the method dictionary's
+// empty-bucket marker — a loop whose condition sends `=` would fail on a corrupt dictionary before
+// reaching the answer. A condition that is simply a captured argument sends nothing at all.
+test('the answered nil is fetched from the kernel at execution time', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel} = await seed(runtime, 'app');
+    const loop = (id) => evaluate(runtime, 'app', id, '[ :keepGoing | [ keepGoing ] whileTrue: [ 1 ] ]', [
+      booleanValue(false),
+    ]);
+    assert.deepEqual(await loop('nil-before'), kernel.nil);
+
+    const replacement = objectRef('app', (await runtime.images.putObject('app', {
+      id: 'smalltalk/other-nil',
+      shape: objectRef('app', 'smalltalk/empty-shape/v1'),
+      behavior: null,
+      slots: {},
+      metadata: {},
+    }, {expectedVersion: 0})).id);
+    await rewriteObject(runtime, 'app', 'smalltalk-kernel/v1', (record) => ({
+      ...record, slots: {...record.slots, 'kernel-nil': replacement},
+    }));
+
+    // Same primitive, same installed records, different answer: the nil is looked up per execution.
+    assert.deepEqual(await loop('nil-after'), replacement);
+    assert.notDeepEqual(replacement, kernel.nil);
   });
 });
 
@@ -582,45 +814,145 @@ test('an escaped ivar-dependent closure still fails closed inside a loop', async
   });
 });
 
+// ADR 0050 decision 5a rule 4, and the case the loop makes newly reachable: the loop primitive
+// inherits the caller's frame, so if that frame leaked to the body an arbitrary Block would act on
+// the calling method's `self`. The adversarial shape is a closure belonging to one instance driven
+// by a loop inside a *different* instance's method: it must bump its creator, never its driver.
+test('a body driven by a loop acts on its creator self, never the loop callers', async () => {
+  await withRuntime(async (runtime) => {
+    const {options} = await seed(runtime, 'app');
+    const counter = await counterClass(runtime, 'app', options);
+    await defineMethodsFromSource({
+      ...options,
+      classRef: counter.classRef,
+      // A method whose own `self` is the driver, looping over someone else's Block.
+      methods: [{
+        selector: 'driveTwice:',
+        source: '[ :body | | i | i := 0. [ i = 2 ] whileFalse: [ body value. i := i + 1 ]. n ]',
+      }],
+    });
+
+    const result = await evaluate(runtime, 'app', 'cross-self', `[ :c | | owner driver drivenN |
+      owner := c new. owner init.
+      driver := c new. driver init.
+      drivenN := driver driveTwice: (owner bumper).
+      (owner n) + (drivenN + 100) ]`, [counter.classRef]);
+
+    // owner n = 2 (bumped twice), driver n = 0 (never touched): 2 + 0 + 100.
+    assert.deepEqual(result, integerValue(102),
+      'the body bumped its creator, and the loop callers own n stayed untouched');
+  });
+});
+
 // --- images --------------------------------------------------------------------------------------
 
-// The protocol is found in the condition Block's image, and the body still executes in its own — both
-// by the existing nested-send rule rather than by anything the loop does.
-test('the condition image owns the loop, and a foreign body runs in its own image', async () => {
+// The protocol is found in the condition Block's image, and the body still executes in its own —
+// both by the existing nested-send rule rather than by anything the loop does. Proven semantically:
+// each image answers the same selector differently, so the outcome names which image ran the code.
+
+const literalMethod = (selector, value) => ({
+  selector,
+  program: {parameters: [], captures: [], body: {op: 'literal', value}},
+});
+
+test('the condition Block image owns the loop, semantically', async () => {
   await withRuntime(async (runtime) => {
     const {kernel: homeKernel} = await seed(runtime, 'home');
-    await seed(runtime, 'away');
-    // `tag` exists only in the away image. A body that runs under home's dispatch image could not
-    // find it, so completing proves the body dispatched in its own image.
-    const awayKernel = await findSmalltalkKernel({images: runtime.images, imageId: 'away'});
-    await defineMethods({
-      images: runtime.images,
-      compilation: runtime.compilation,
-      imageId: 'away',
-      lane: 'neutral',
-      classRef: awayKernel.integerClass,
-      methods: [{selector: 'tag', program: {parameters: [], captures: [], body: {op: 'literal', value: integerValue(7)}}}],
-    });
-    const body = await installSymmetricSmalltalkBlock({
-      images: runtime.images, imageId: 'away', id: 'foreign-body', source: '[ 0 tag ]',
-    });
+    const {kernel: awayKernel} = await seed(runtime, 'away');
 
-    // Home has no `tag`, which is what makes the previous assertion meaningful.
-    await assert.rejects(evaluate(runtime, 'home', 'no-tag', '[ 0 tag ]'), /message not understood: tag/);
+    // The same selector, opposite answers. A condition evaluated in the wrong image would not merely
+    // give a different result — answering true in `home` would never terminate.
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'away', lane: 'neutral',
+      classRef: awayKernel.integerClass, methods: [literalMethod('keepGoing', booleanValue(false))],
+    });
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'home', lane: 'neutral',
+      classRef: homeKernel.integerClass, methods: [literalMethod('keepGoing', booleanValue(true))],
+    });
 
     const condition = await installSymmetricSmalltalkBlock({
-      images: runtime.images, imageId: 'home', id: 'home-condition', source: '[ :c | 1 = 2 ]',
+      images: runtime.images, imageId: 'away', id: 'away-condition', source: '[ 0 keepGoing ]',
     });
-    void condition;
+    const body = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'home', id: 'home-body', source: '[ 1 ]',
+    });
 
-    // Driven from home: condition in home, body in away.
-    const answer = await evaluate(
-      runtime, 'home', 'cross',
-      '[ :b | | i | i := 0. [ i = 3 ] whileFalse: [ b value. i := i + 1 ] ]',
-      [objectRef('away', body.block.id)],
+    // Dispatched with `home` as the ambient dispatch image, so only the receiver's own image can be
+    // what selects the protocol and the condition's meaning.
+    const dispatched = await runtime.invocations.prepareDispatch({
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: objectRef('away', condition.block.id),
+      message: textValue('whileTrue:'),
+      arguments: [objectRef('home', body.block.id)],
+    }, {dispatchImage: 'home'});
+    const answer = await runtime.executor.execute(dispatched.activation, {
+      dispatchImage: 'home', invocationFrame: dispatched.frame,
+    });
+
+    // Terminating at all proves the condition answered away's `false`; the answer proves the loop
+    // took its nil from the condition image rather than the ambient one.
+    assert.deepEqual(answer, awayKernel.nil);
+    assert.notDeepEqual(awayKernel.nil, homeKernel.nil);
+  });
+});
+
+test('a body in another image runs against that image own methods', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel: homeKernel, options: homeOptions} = await seed(runtime, 'home');
+    const {kernel: awayKernel} = await seed(runtime, 'away');
+
+    // `tag` exists in both images and answers differently, so the recorded value names the image the
+    // body actually dispatched in.
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'away', lane: 'neutral',
+      classRef: awayKernel.integerClass, methods: [literalMethod('tag', integerValue(7))],
+    });
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'home', lane: 'neutral',
+      classRef: homeKernel.integerClass, methods: [literalMethod('tag', integerValue(1))],
+    });
+
+    const shape = objectRef('home', (await runtime.images.putShape('home', {
+      id: 'recorder-shape', slots: [{id: 'seen-slot', name: 'seen'}],
+    })).id);
+    const recorder = await defineClass({images: runtime.images, imageId: 'home', name: 'Recorder', instanceShapeRef: shape});
+    await defineMethodsFromSource({
+      ...homeOptions,
+      classRef: recorder.classRef,
+      methods: [
+        {selector: 'record:', source: '[ :v | seen := v. self ]'},
+        {selector: 'seen', source: '[ seen ]'},
+      ],
+    });
+    const instance = await evaluate(runtime, 'home', 'rec', '[ :c | c new ]', [recorder.classRef]);
+
+    // The body lives in `away` and captures the `home` recorder: the object send goes home, the
+    // immediate send stays away, which is exactly the rule under test.
+    // `captures` declares name -> stable binding id; the *value* is bound by the block's lexical
+    // environment, which is what makes a capture image-independent until it is installed.
+    await runtime.images.putLexicalEnvironment('away', {
+      id: 'away-body-env',
+      bindings: {'away:recorder': {name: 'recorder', value: instance}},
+    });
+    const body = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'away',
+      id: 'away-body',
+      source: '[ recorder record: 0 tag ]',
+      captures: {recorder: 'away:recorder'},
+      environment: objectRef('away', 'away-body-env'),
+    });
+
+    await evaluate(runtime, 'home', 'drive-foreign',
+      '[ :b | | i | i := 0. [ i = 1 ] whileFalse: [ b value. i := i + 1 ] ]',
+      [objectRef('away', body.block.id)]);
+
+    assert.deepEqual(
+      await evaluate(runtime, 'home', 'read-rec', '[ :r | r seen ]', [instance]),
+      integerValue(7),
+      'the body used away tag, not home tag',
     );
-    // And the answer is the *condition* image's nil, not the body image's.
-    assert.deepEqual(answer, homeKernel.nil);
   });
 });
 
@@ -775,24 +1107,17 @@ test('a loop runs the same in the WASM lane', async () => {
 });
 
 // The loop's own result feeding a further send cannot be compiled as a tail call, so this is the
-// case the resumable ABI has to carry across suspension and resumption.
+// case the resumable ABI has to carry across suspension and resumption: the loop must fully return
+// before `class` can be dispatched on its answer.
 test('a loop result feeding another send resumes correctly in WASM', async () => {
   await withRuntime(async (runtime) => {
-    const {kernel, options} = await seed(runtime, 'app', {lane: 'wasm'});
-    // `answer` is defined on UndefinedObject, so sending it to the loop's nil result is a genuine
-    // non-tail continuation: the loop must return before the send can be dispatched.
-    await defineMethods({
-      ...options,
-      classRef: (await runtime.images.getObject('app', 'smalltalk/class/UndefinedObject'))
-        ? objectRef('app', 'smalltalk/class/UndefinedObject')
-        : kernel.objectClass,
-      methods: [{
-        selector: 'loopAnswer',
-        program: {parameters: [], captures: [], body: {op: 'literal', value: integerValue(42)}},
-      }],
-    });
+    await seed(runtime, 'app', {lane: 'wasm'});
+    const source = '[ | i | i := 0. ([ i = 3 ] whileFalse: [ i := i + 1 ]) class ]';
 
-    const source = '[ | i | i := 0. ([ i = 3 ] whileFalse: [ i := i + 1 ]) loopAnswer ]';
+    const neutral = await evaluate(runtime, 'app', 'nontail-neutral', source);
+    assert.deepEqual(neutral, objectRef('app', 'smalltalk/class/UndefinedObject'),
+      'the loop answers nil, whose class is UndefinedObject');
+
     const installed = await installSymmetricSmalltalkBlock({
       images: runtime.images, imageId: 'app', id: 'wasm-nontail', source,
     });
@@ -803,7 +1128,8 @@ test('a loop result feeding another send resumes correctly in WASM', async () =>
       id: 'wasm-nontail-tree',
     });
     const activation = await runtime.invocations.invokeBlock(objectRef('app', tree.block.id), []);
-    assert.deepEqual(await runtime.executor.execute(activation), integerValue(42));
+    assert.deepEqual(await runtime.executor.execute(activation), neutral,
+      'both lanes agree, and the WASM lane resumed after the loop returned');
   });
 });
 
@@ -886,6 +1212,10 @@ test('every write publishing the Block protocol is recoverable', async () => {
 // fixing it is a real design decision (deterministic per-creation-site ids? transient closures?
 // collection?) rather than something to slip into this change. It is pinned here so the cost is
 // measured and cannot regress unnoticed, and recorded in `docs/roadmap.md`.
+//
+// The assertions below count *records*, deliberately, and not elapsed time. Wall-clock in this
+// suite is dominated by the mock backend cloning the whole database per transaction, which
+// multiplies this growth into a quadratic curve that says more about the harness than the system.
 test('closure-creating iterations still allocate a durable Block each time', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');

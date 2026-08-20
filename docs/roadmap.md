@@ -257,12 +257,14 @@ Next, ordered by architectural pressure rather than convenience:
       loops rather than recursion, so `do:` and `includes:` work past the old ~100-element ceiling
 - [ ] closure identity, which ADR 0051 exposed and did not fix. Evaluating a Block that creates a
       closure publishes a *new durable Block record every time*, so a loop grows the image without
-      bound: a body creating one closure allocates ~2 records per iteration, and `OrderedCollection`
-      `add:` costs ~3. Recursion hid this — the 256-activation limit stopped any program before the
-      growth mattered. The traversal itself is linear, but building a collection is superlinear
-      (50/100/150 elements cost 1.6s/7.0s/29.5s), because every read pays for the records the
-      previous iterations left behind. Fixing it is a real decision — deterministic per-creation-site
-      closure ids, transient closures, or collection — and is the natural ADR 0053
+      bound: measured at ~2.1 records per closure-creating iteration, strictly linear and never
+      converging, against ~0 for a closure-free body. Recursion hid this — the 256-activation limit
+      stopped any program before the growth mattered. Fixing it is a real decision — deterministic
+      per-creation-site closure ids, transient closures, or collection — and is the natural ADR 0053.
+      Note the growth is the finding; the *timing* curve seen in tests (50/100/200 elements taking
+      1.5s/4.7s/22.6s to build) is that growth amplified by the mock backend, which clones the whole
+      database per transaction. Read-only traversal is linear. Do not cite the timings as evidence of
+      a production performance problem, and do not size a test as though they were inherent
 - [ ] `true`, `false` and `nil` as source literals, plus `and:`/`or:`/`not` — the rest of ADR 0045's
       deferred Boolean protocol
 - [ ] a way to name a class from source; today a method captures one explicitly
