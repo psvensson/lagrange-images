@@ -21,6 +21,7 @@ export * from './smalltalk-control-flow.js';
 export * from './smalltalk-allocation.js';
 export * from './smalltalk-block-protocol.js';
 export * from './smalltalk-integer.js';
+export * from './smalltalk-conditions.js';
 export * from './smalltalk-dictionary.js';
 export * from './smalltalk-dictionary-table.js';
 export * from './smalltalk-equality.js';

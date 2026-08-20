@@ -1,6 +1,7 @@
 # ADR 0054: Conditions and handlers
 
-Status: accepted — a condition is an ordinary Smalltalk object, signalling is an ordinary send, and a handler runs *at the signal point before any unwinding*, so it may either resume the signalling computation with a value or unwind to its `on:do:` — which is what makes resumption expressible across WASM suspension at all.
+Status: implemented — a condition is an ordinary Smalltalk object, signalling is an ordinary send, and a handler runs *at the signal point before any unwinding*, so it may either resume the signalling computation with a value or unwind to its `on:do:` — which is what makes resumption expressible across WASM suspension at all.
+Proven by: test/conditions.test.js, test/smalltalk-library.test.js
 
 ## Problem
 

@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {TupleMap} from '../support/tuple-map.js';
 import {canonicalizeValue, objectRef} from '../value/index.js';
 import {isTransientObjectId, transientObjectId} from '../value/transient-ref.js';
+import {ConditionRuntime} from './conditions.js';
 
 // A closure instance whose arena is gone. Distinct from "block not found" on purpose: ADR 0052
 // decision 5c makes this rigorous, because a reserved id can never name a durable record, so its
@@ -236,6 +237,15 @@ class LexicalCellArena {
 
   promotionMemo() {
     return this.#promotionMemo;
+  }
+
+  // ADR 0054. Kept on the arena because its lifetime is the arena's: a handler established in this
+  // execution must not be findable from a later one, for the same reason a defining frame is not.
+  #conditions = null;
+
+  conditionRuntime() {
+    this.#conditions ??= new ConditionRuntime();
+    return this.#conditions;
   }
 }
 

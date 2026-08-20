@@ -320,7 +320,7 @@ pooled instance != activation state
 - Source has no global namespace: a class a method needs is an explicit captured ref, supplied at install time. Compilation takes capture *declarations* (name -> stable id) and installation binds *values*, because a declaration is image-independent and a value is not. Every declaration becomes a binding whether or not the source mentions it, so every declaration needs a value — uniform, rather than a special case depending on whether the compiler kept the reference.
 - Duplicate capture names or ids are refused, never resolved by position: a repeated name would make a source name mean whichever declaration came last. The binder's own capture names and ids are reserved for the same reason — they are spread after the caller's, so a collision would silently replace a caller declaration and its value.
 - "Whole immutable definition" includes deterministically written `metadata`. Exclude a field from rediscovery only when it has a lifecycle of its own, as a method dictionary does; metadata has none. `compileSymmetricSmalltalkMethod` takes capture values for exactly this.
-- The awkward spellings in library source are deliberate signals, not style: `1 = 2` marks the missing false literal, nested `ifTrue:ifFalse:` marks the missing `or:`, a `found` temporary marks the missing non-local return, and sending an unimplemented `errorIndexOutOfBounds:` marks the missing condition system. Do not tidy them away without removing the underlying gap. Two signals are already gone because their gaps were closed rather than hidden: the recursive-helper spelling (ADR 0051) and counting up to `tally + 1` to compare with `=` (ADR 0053).
+- The awkward spellings in library source are deliberate signals, not style: `1 = 2` marks the missing false literal, nested `ifTrue:ifFalse:` marks the missing `or:`, and a `found` temporary marks the missing non-local return. Do not tidy them away without removing the underlying gap. Three signals are already gone because their gaps were closed rather than hidden: the recursive-helper spelling (ADR 0051), counting up to `tally + 1` to compare with `=` (ADR 0053), and the unimplemented `errorIndexOutOfBounds:` refusal (ADR 0054).
 - A collection's bound is its own logical size, never its backing store's capacity. `contents at:` succeeds for any index up to capacity, so an accessor that delegates its bounds check to the Array will happily answer whatever slack the growth policy left behind.
 - Traversals loop; they do not recurse. A recursive traversal is correct and unusable — every element costs an activation, and the limit is 256. `installSmalltalkLibrary` therefore requires the Block protocol, so an image missing it is refused at install rather than failing on first use.
 
@@ -343,6 +343,18 @@ pooled instance != activation state
 - The durable primitive is `integer-floor-divide`. A primitive name becomes durable CodeArtifact content, so it must not imply host semantics.
 - Two Integers only, refused by name otherwise. Mixed *ordering* and *arithmetic* stay deferred; mixed *equality* is already decided by ADR 0048 and must keep working.
 - Arbitrary precision throughout: never round-trip an Integer through a host number.
+
+### Conditions and handlers
+
+- A handler runs at the signal point, *before* unwinding (ADR 0054). Unwind-first would make `resume:` impossible: a suspended WASM activation's state lives in the instance, and the executor retires that instance on any escaping throw.
+- One execution-wide condition runtime, owned beside the arena and living exactly as long. The three classless-Block operations only enter and leave scopes on it. There is no separate "WASM exception system" — WASM contributes only the suspend/resume/retire behaviour it already had.
+- Resumption rides the existing resumable ABI: a handled signal answers the host effect and the guest resumes at its effect site. No new export, no ABI change, and no extra resumption is charged — the counter increments before the host effect.
+- A handler's `self` is free (ADR 0050 restores the Block's creation frame); its **authority is not**. Authority propagates dynamically, so it must be captured at `on:do:` time and kept privately on the transient scope — never on the closure, never in a Value (ADR 0037). The same applies to `ensure:`/`ifCurtailed:` blocks.
+- A running handler is disabled while it runs, so a re-signal delegates to an outer handler instead of recursing into itself. Without this it is an immediate infinite regress, not a slow one.
+- `ensure:` answers the protected Block's value and discards the cleanup Block's own. It runs for *every* non-normal exit, including host failures that are not Smalltalk-catchable — protection that only fired for catchable failures would stop working exactly when something unexpected happened.
+- A cleanup failure stays catchable: if it escapes it becomes the outward failure and retains the original as `duringUnwind`, so neither is lost.
+- `resume:`/`return:` act on the receiver's currently *active* occurrence, and fail explicitly when there is none. A condition object carries no handling state — one object signalled twice has two independent occurrences.
+- A condition object is an ordinary durable object. ADR 0054 adds no second category of object; only the signal occurrence is transient.
 
 ### Mutable lexical state
 

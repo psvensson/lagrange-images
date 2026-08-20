@@ -147,6 +147,7 @@ function normalizeBooleanSingleton(value, kernel) {
 }
 
 export {
+  sameRefIdentity,
   SMALLTALK_EQUALITY_DOMAIN,
   SMALLTALK_HASH_BITS,
   SmalltalkUnhashableValueError,

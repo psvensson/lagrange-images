@@ -7,6 +7,7 @@ import {
   lookupSelector,
 } from './smalltalk-lookup.js';
 import {findSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
+import {findSmalltalkBlockUnwindProtocol} from './smalltalk-conditions.js';
 import {SMALLTALK_KERNEL_PRIMITIVE_V1} from './smalltalk-primitives.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
@@ -23,6 +24,14 @@ function assertImages(images) {
 const LOOP_SELECTOR = Object.freeze({
   'whileTrue:': 'whileTrue',
   'whileFalse:': 'whileFalse',
+});
+
+// ADR 0054. A separate protocol object from the loop one, so the dispatcher still knows only slot
+// names and never an object id, and an image with loops but no unwind protocol stays coherent.
+const UNWIND_SELECTOR = Object.freeze({
+  'on:do:': {slot: 'onDo', arity: 2},
+  'ensure:': {slot: 'ensure', arity: 1},
+  'ifCurtailed:': {slot: 'ifCurtailed', arity: 1},
 });
 
 function blockValueSelector(argumentCount) {
@@ -104,6 +113,14 @@ function createSymmetricSmalltalkDispatcher() {
             // the caller's frame. The condition and body do not — they are reached by ordinary
             // `value` sends, which inherit nothing.
             if (protocol) return Object.freeze({block: protocol[loopSlot], inheritsFrame: true});
+          }
+          const unwind = UNWIND_SELECTOR[selector];
+          if (unwind && request.arguments.length === unwind.arity) {
+            const protocol = await findSmalltalkBlockUnwindProtocol({images, imageId: request.receiver.imageId});
+            // Same rule as the loop primitives: the unwind primitive is the language's own host
+            // operation and inherits the caller's frame, while the protected, handler and cleanup
+            // Blocks are invoked in their own right and inherit nothing.
+            if (protocol) return Object.freeze({block: protocol[unwind.slot], inheritsFrame: true});
           }
           const expected = blockValueSelector(request.arguments.length);
           if (selector !== expected) throw new TypeError(`Symmetric Smalltalk Block does not understand: ${selector}`);

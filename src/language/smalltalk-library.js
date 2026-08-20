@@ -1,4 +1,5 @@
 import {findSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
+import {findSmalltalkBlockUnwindProtocol} from './smalltalk-conditions.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
@@ -61,6 +62,11 @@ const ARRAY_CLASS_CAPTURE = Object.freeze({name: 'ArrayClass', id: 'smalltalk/li
 // at install time.
 const NIL_CAPTURE = Object.freeze({name: 'NilObject', id: 'smalltalk/library/nil'});
 
+// ADR 0054. A refusal is a signal now, not a selector nobody implements, so the collection needs the
+// condition classes the same way it needs `Array` — as explicit captured refs.
+const INDEX_ERROR_CAPTURE = Object.freeze({name: 'IndexError', id: 'smalltalk/library/index-error'});
+const EMPTY_ERROR_CAPTURE = Object.freeze({name: 'EmptyError', id: 'smalltalk/library/empty-error'});
+
 const ORDERED_COLLECTION_METHODS = [
   {
     selector: 'initialize',
@@ -121,19 +127,26 @@ const ORDERED_COLLECTION_METHODS = [
   // succeeds for any index up to capacity, so a collection that deferred to it would cheerfully
   // answer whatever slack the growth policy left behind.
   //
-  // Refusal is where the language is still missing something. There is no way to raise a condition,
-  // so an out-of-range access sends a selector nothing implements: the failure is a
-  // message-not-understood naming `errorIndexOutOfBounds:`, which at least names the collection's
-  // own concept rather than surfacing an Array error about a different object. Recorded in
-  // `docs/roadmap.md` rather than papered over with a collection-shaped primitive.
+  // A refusal is an ordinary signal (ADR 0054), so a caller can handle it — which is what makes
+  // `at:ifAbsent:` writable in Smalltalk rather than needing a second primitive. Before that ADR
+  // this sent `errorIndexOutOfBounds:`, which nothing implemented, so the failure arrived as a
+  // message-not-understood that no one could catch.
   {
+    captures: [INDEX_ERROR_CAPTURE],
     selector: 'at:',
     source: `[ :index |
       (index < 1)
-        ifTrue: [ self errorIndexOutOfBounds: index ]
+        ifTrue: [ (IndexError new) signal ]
         ifFalse: [ (index <= tally)
           ifTrue: [ contents at: index ]
-          ifFalse: [ self errorIndexOutOfBounds: index ] ] ]`,
+          ifFalse: [ (IndexError new) signal ] ] ]`,
+  },
+  // Expressible only because the refusal is catchable: the alternative Block is evaluated by
+  // handling the collection's own signal, with no new protocol underneath it.
+  {
+    captures: [INDEX_ERROR_CAPTURE],
+    selector: 'at:ifAbsent:',
+    source: '[ :index :aBlock | [ self at: index ] on: IndexError do: [ :e | aBlock value ] ]',
   },
   {selector: 'first', source: '[ self at: 1 ]'},
   {selector: 'last', source: '[ self at: tally ]'},
@@ -141,11 +154,11 @@ const ORDERED_COLLECTION_METHODS = [
   // the backing Array is a durable object: leaving the ref there keeps the removed element
   // graph-reachable, so a large collection drained to empty would retain every element it ever held.
   {
-    captures: [NIL_CAPTURE],
+    captures: [NIL_CAPTURE, EMPTY_ERROR_CAPTURE],
     selector: 'removeLast',
     source: `[ | item |
       (tally < 1)
-        ifTrue: [ self errorEmptyCollection ]
+        ifTrue: [ (EmptyError new) signal ]
         ifFalse: [
           item := contents at: tally.
           contents at: tally put: NilObject.
@@ -205,6 +218,10 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
       {id: 'ordered-collection-tally', name: 'tally'},
     ],
   });
+  const conditions = await findSmalltalkBlockUnwindProtocol({images, imageId});
+  if (!conditions) {
+    throw new TypeError(`image ${imageId} has no Smalltalk condition protocol; install it first`);
+  }
   const arrayClassRef = objectRef(imageId, 'smalltalk/class/Array');
   if (!await images.getObject(imageId, arrayClassRef.objectId)) {
     throw new TypeError(`image ${imageId} has no Array class; install the indexed protocol first`);
@@ -226,6 +243,12 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
       throw new TypeError(`image ${imageId} has no Integer ${selector} method; install the Integer protocol first`);
     }
   }
+  const captureValues = Object.freeze({
+    [ARRAY_CLASS_CAPTURE.id]: arrayClassRef,
+    [NIL_CAPTURE.id]: kernel.nil,
+    [INDEX_ERROR_CAPTURE.id]: objectRef(imageId, 'smalltalk/class/IndexOutOfRange'),
+    [EMPTY_ERROR_CAPTURE.id]: objectRef(imageId, 'smalltalk/class/EmptyCollection'),
+  });
   await defineMethodsFromSource({
     images,
     compilation,
@@ -235,10 +258,7 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
     methods: ORDERED_COLLECTION_METHODS.map((method) => (method.captures
       ? {
         ...method,
-        captures: method.captures.map((capture) => ({
-          ...capture,
-          value: capture.id === NIL_CAPTURE.id ? kernel.nil : arrayClassRef,
-        })),
+        captures: method.captures.map((capture) => ({...capture, value: captureValues[capture.id]})),
       }
       : method)),
   });
