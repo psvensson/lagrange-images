@@ -301,3 +301,130 @@ test('both lanes agree on ordering and arithmetic', async () => {
     }
   });
 });
+
+// --- publication recovery --------------------------------------------------------------------------
+
+// `defineMethods` recovery is proven elsewhere, but not for *this* composed installer: five
+// primitive CodeArtifact/Block pairs published before eight methods that capture them. The
+// interesting failures are in the composition — a method whose captured Block was never written, or
+// a retry that meets a half-finished protocol.
+const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
+
+function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
+  let writes = 0;
+  const wrapped = Object.create(Object.getPrototypeOf(images));
+  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
+    if (typeof images[key] !== 'function' || key === 'constructor') continue;
+    wrapped[key] = (...args) => images[key](...args);
+  }
+  for (const [key, value] of Object.entries(images)) {
+    wrapped[key] = typeof value === 'function' ? (...args) => images[key](...args) : value;
+  }
+  for (const method of WRITE_METHODS) {
+    wrapped[method] = async (imageId, input, options) => {
+      writes += 1;
+      const hit = writes === failAt;
+      if (hit && !commitThenThrow) throw new Error(`injected failure at write ${writes} (${input?.id})`);
+      const result = await images[method](imageId, input, options);
+      if (hit && commitThenThrow) throw new Error(`injected post-commit failure at write ${writes} (${input?.id})`);
+      return result;
+    };
+  }
+  return {images: wrapped, writeCount: () => writes};
+}
+
+async function baseImage(runtime, imageId) {
+  await runtime.images.createImage({id: imageId});
+  await installSmalltalkKernel({images: runtime.images, imageId});
+  const options = {images: runtime.images, compilation: runtime.compilation, imageId, lane: 'neutral'};
+  await installSmalltalkAllocationProtocol(options);
+  await installSmalltalkEqualityProtocol(options);
+  await installSmalltalkControlFlow(options);
+  await installSmalltalkBlockProtocol({images: runtime.images, imageId});
+  return options;
+}
+
+test('every write publishing the Integer protocol is recoverable', async () => {
+  const total = await withRuntime(async (runtime) => {
+    const options = await baseImage(runtime, 'count');
+    const {images, writeCount} = faultingImages(runtime.images);
+    await installSmalltalkIntegerProtocol({...options, images});
+    return writeCount();
+  });
+  assert.ok(total > 10, `expected many writes across five primitives and eight methods, saw ${total}`);
+
+  for (let failAt = 1; failAt <= total; failAt += 1) {
+    for (const commitThenThrow of [false, true]) {
+      await withRuntime(async (runtime) => {
+        const options = await baseImage(runtime, 'app');
+        const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+
+        await assert.rejects(
+          installSmalltalkIntegerProtocol({...options, images}),
+          /injected/,
+          `write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
+        );
+
+        // The retry converges rather than conflicting, and the protocol works afterwards.
+        await installSmalltalkIntegerProtocol(options);
+        assert.deepEqual(
+          await evaluate(runtime, 'app', `recovered-${failAt}-${commitThenThrow}`, '[ 3 <= 4 ]'),
+          booleanValue(true),
+        );
+        assert.deepEqual(
+          await evaluate(runtime, 'app', `recovered-div-${failAt}-${commitThenThrow}`, '[ (0 - 7) // 2 ]'),
+          integerValue(-4),
+        );
+      });
+    }
+  }
+});
+
+// The partial-install hazard the library's prerequisite check exists for: primitives are published
+// before methods, so a Block-existence check would pass while `<` is still missing.
+test('a half-installed Integer protocol is not mistaken for a complete one', async () => {
+  await withRuntime(async (runtime) => {
+    const options = await baseImage(runtime, 'app');
+    // The library checks for its Array class before it checks Integer, so that prerequisite has to
+    // be satisfied for this test to reach the check it is actually about.
+    const {installSmalltalkIndexedProtocol} = await import('../src/runtime.js');
+    await installSmalltalkIndexedProtocol(options);
+    // Fail at the first *method* write, leaving all five primitive Blocks published.
+    let seenPrimitiveBlocks = 0;
+    const faulting = Object.create(runtime.images);
+    faulting.putBlock = async (imageId, input) => {
+      const stored = await runtime.images.putBlock(imageId, input);
+      if (input.id?.startsWith('smalltalk/primitive/integer-')) seenPrimitiveBlocks += 1;
+      if (seenPrimitiveBlocks === 5 && !input.id?.startsWith('smalltalk/primitive/')) {
+        throw new Error('injected failure before the methods');
+      }
+      return stored;
+    };
+    faulting.putCodeArtifact = async (imageId, input) => {
+      if (seenPrimitiveBlocks === 5 && !input.id?.startsWith('smalltalk/primitive/')) {
+        throw new Error('injected failure before the methods');
+      }
+      return await runtime.images.putCodeArtifact(imageId, input);
+    };
+
+    await assert.rejects(installSmalltalkIntegerProtocol({...options, images: faulting}), /injected/);
+
+    // The primitive Block exists...
+    assert.ok(await runtime.images.getBlock('app', 'smalltalk/primitive/integer-less-than'));
+    // ...but the method does not, which is precisely what the library must not be fooled by.
+    const {methodBlockRef} = await import('../src/language/smalltalk-class-builder.js');
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+    assert.equal(
+      await methodBlockRef({images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: '<'}),
+      null,
+      'the fixture must leave < absent for this test to mean anything',
+    );
+
+    const {installSmalltalkLibrary} = await import('../src/runtime.js');
+    await assert.rejects(
+      installSmalltalkLibrary(options),
+      /has no Integer < method/,
+      'the library must check for the method, not for the primitive Block',
+    );
+  });
+});

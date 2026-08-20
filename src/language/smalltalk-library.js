@@ -1,6 +1,6 @@
 import {findSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
-import {ensureNamedClass, ensureSmalltalkShape} from './smalltalk-class-builder.js';
+import {ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {objectRef} from '../value/index.js';
 
@@ -55,6 +55,11 @@ const ASSOCIATION_METHODS = [
 // name the compiler could resolve. A declaration is a binding whether or not the source mentions it,
 // so only the methods that need the class declare it.
 const ARRAY_CLASS_CAPTURE = Object.freeze({name: 'ArrayClass', id: 'smalltalk/library/array-class'});
+
+// Removing an element must *clear* the slot it vacated, and clearing needs a nil to write. There is
+// no nil literal in source, so it arrives the same way `Array` does: an explicit captured ref bound
+// at install time.
+const NIL_CAPTURE = Object.freeze({name: 'NilObject', id: 'smalltalk/library/nil'});
 
 const ORDERED_COLLECTION_METHODS = [
   {
@@ -132,12 +137,20 @@ const ORDERED_COLLECTION_METHODS = [
   },
   {selector: 'first', source: '[ self at: 1 ]'},
   {selector: 'last', source: '[ self at: tally ]'},
+  // The vacated slot is cleared, not merely hidden. `at:` would refuse to answer it either way, but
+  // the backing Array is a durable object: leaving the ref there keeps the removed element
+  // graph-reachable, so a large collection drained to empty would retain every element it ever held.
   {
+    captures: [NIL_CAPTURE],
     selector: 'removeLast',
     source: `[ | item |
       (tally < 1)
         ifTrue: [ self errorEmptyCollection ]
-        ifFalse: [ item := contents at: tally. tally := tally - 1. item ] ]`,
+        ifFalse: [
+          item := contents at: tally.
+          contents at: tally put: NilObject.
+          tally := tally - 1.
+          item ] ]`,
   },
   {
     captures: [ARRAY_CLASS_CAPTURE],
@@ -204,8 +217,14 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
   }
   // Every traversal states its bound with `<=` and every bounds check uses `<`, so an image without
   // ADR 0053's Integer protocol would install methods that compile cleanly and fail on first use.
-  if (!await images.getBlock(imageId, 'smalltalk/primitive/integer-less-than')) {
-    throw new TypeError(`image ${imageId} has no Integer ordering protocol; install it first`);
+  // Checked as an installed *method*, not as the presence of the primitive Block. The Integer
+  // installer publishes its primitives before its methods, so a partial install would satisfy a
+  // Block-existence check with `<`, `<=` and `-` still absent — and this library would then compile
+  // cleanly and fail on first use, which is exactly what the check exists to prevent.
+  for (const selector of ['<', '<=', '-']) {
+    if (!await methodBlockRef({images, imageId, classRef: kernel.integerClass, selector})) {
+      throw new TypeError(`image ${imageId} has no Integer ${selector} method; install the Integer protocol first`);
+    }
   }
   await defineMethodsFromSource({
     images,
@@ -214,7 +233,13 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
     lane,
     classRef: orderedCollectionRef,
     methods: ORDERED_COLLECTION_METHODS.map((method) => (method.captures
-      ? {...method, captures: method.captures.map((capture) => ({...capture, value: arrayClassRef}))}
+      ? {
+        ...method,
+        captures: method.captures.map((capture) => ({
+          ...capture,
+          value: capture.id === NIL_CAPTURE.id ? kernel.nil : arrayClassRef,
+        })),
+      }
       : method)),
   });
 

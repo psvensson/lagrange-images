@@ -542,12 +542,13 @@ test('at: bounds by tally, not by the backing Array capacity', async () => {
         `index ${index} is within the backing Array but outside the collection`,
       );
     }
-    // And the backing Array really does hold that slack, so the test above is not vacuous.
-    assert.deepEqual(
-      await evaluate(runtime, 'app', 'capacity', '[ :oc | (oc asArray) size ]', [collection]),
-      integerValue(1),
-      'asArray is tally-sized, so the slack lives only in contents',
-    );
+    // The private backing Array really does hold that slack, so the refusals above are not vacuous.
+    // Read from the durable record rather than through `asArray`, which answers a tally-sized copy
+    // and so says nothing about capacity.
+    const record = await runtime.images.getObject('app', collection.objectId);
+    const contents = await runtime.images.getObject('app', record.slots['ordered-collection-contents'].objectId);
+    assert.equal(contents.indexed.length, 4,
+      'the growth policy starts at four, so indices 2..4 exist in the Array and are refused above');
   });
 });
 
@@ -593,6 +594,34 @@ test('first, last and removeLast work, and refuse on an empty collection', async
     await assert.rejects(
       evaluate(runtime, 'app', 'e-rm', '[ :oc | oc removeLast ]', [empty]),
       /errorEmptyCollection/,
+    );
+  });
+});
+
+// `at:` refusing to answer a removed element is not the same as the element being gone. The backing
+// Array is a durable object, so a ref left behind keeps the removed element reachable in the graph —
+// and a large collection drained to empty would retain everything it ever held.
+test('removeLast clears the slot it vacates, so the element is not retained', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel, library} = await seed(runtime, 'app');
+    const held = await evaluate(runtime, 'app', 'held', "[ :c | (c new) key: 'k' value: 1 ]", [library.association]);
+    const collection = await evaluate(runtime, 'app', 'holder',
+      '[ :c :item | | oc | oc := c new. oc add: item. oc ]', [library.orderedCollection, held]);
+
+    const backingArray = async () => {
+      const record = await runtime.images.getObject('app', collection.objectId);
+      return await runtime.images.getObject('app', record.slots['ordered-collection-contents'].objectId);
+    };
+    assert.deepEqual((await backingArray()).indexed[0], held, 'the element is in the Array before removal');
+
+    await evaluate(runtime, 'app', 'drop', '[ :oc | oc removeLast ]', [collection]);
+
+    const after = await backingArray();
+    assert.deepEqual(after.indexed[0], kernel.nil, 'the vacated slot must be cleared, not merely hidden');
+    // Nothing anywhere in the collection still points at the removed element.
+    assert.ok(
+      !JSON.stringify(after.indexed).includes(held.objectId),
+      'the removed element is still reachable through the backing Array',
     );
   });
 });
