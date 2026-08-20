@@ -242,6 +242,22 @@ listed below: removing the depth ceiling made a pre-existing per-evaluation allo
 
 Next, ordered by architectural pressure rather than convenience:
 
+- [ ] closure identity, which ADR 0051 exposed and did not fix. Evaluating a Block that creates a
+      closure publishes a *new durable Block record every time*, so a loop grows the image without
+      bound: measured at ~2.1 records per closure-creating iteration, strictly linear and never
+      converging, against ~0 for a closure-free body. Recursion hid this — the 256-activation limit
+      stopped any program before the growth mattered. Fixing it is a real decision — deterministic
+      per-creation-site closure ids, transient closures, or collection — and is now **ADR 0052**,
+      ahead of Integer ordering: unbounded durable image growth is a substrate and operational
+      problem, where a missing `<` is missing functionality.
+      Note the growth is the finding; the *timing* curve seen in tests (50/100/200 elements taking
+      1.5s/4.7s/22.6s to build) is that growth amplified by the mock backend, which clones the whole
+      database per transaction. Read-only traversal is linear. Do not cite the timings as evidence of
+      a production performance problem, and do not size a test as though they were inherent
+- [ ] Integer ordering comparison, and general arithmetic beyond `integer-add` (ADR 0053).
+      `lagrange-code/v0` is frozen, so this is either a new semantic representation or language-owned
+      primitives — a real decision, and the one blocking correct indexed collection access. It is
+      also what lets `OrderedCollection` drop counting up and comparing with `=`
 - [ ] basic collections, at which point a MethodDictionary can stop being represented by a Shape
 - [ ] exception/condition substrate, including how unwinding crosses resumable WASM suspension
 - [ ] the rest of the boolean protocol — `not`, `and:`, `or:` — which runs ADR 0045's bridge
@@ -249,22 +265,8 @@ Next, ordered by architectural pressure rather than convenience:
       or the singleton
 - [ ] primitive-backed methods beyond `+`. ADR 0044 decides how immediate Values dispatch and how
       a primitive-backed method is written; the remaining work is which primitives the kernel needs
-- [ ] Integer ordering comparison, and general arithmetic beyond `integer-add` (ADR 0052).
-      `lagrange-code/v0` is frozen, so this is either a new semantic representation or language-owned
-      primitives — a real decision, and the one blocking correct indexed collection access. It is
-      also what lets `OrderedCollection` drop counting up and comparing with `=`
 - [x] ADR 0051's constant-stack `whileTrue:`/`whileFalse:`. `OrderedCollection`'s traversals are
       loops rather than recursion, so `do:` and `includes:` work past the old ~100-element ceiling
-- [ ] closure identity, which ADR 0051 exposed and did not fix. Evaluating a Block that creates a
-      closure publishes a *new durable Block record every time*, so a loop grows the image without
-      bound: measured at ~2.1 records per closure-creating iteration, strictly linear and never
-      converging, against ~0 for a closure-free body. Recursion hid this — the 256-activation limit
-      stopped any program before the growth mattered. Fixing it is a real decision — deterministic
-      per-creation-site closure ids, transient closures, or collection — and is the natural ADR 0053.
-      Note the growth is the finding; the *timing* curve seen in tests (50/100/200 elements taking
-      1.5s/4.7s/22.6s to build) is that growth amplified by the mock backend, which clones the whole
-      database per transaction. Read-only traversal is linear. Do not cite the timings as evidence of
-      a production performance problem, and do not size a test as though they were inherent
 - [ ] `true`, `false` and `nil` as source literals, plus `and:`/`or:`/`not` — the rest of ADR 0045's
       deferred Boolean protocol
 - [ ] a way to name a class from source; today a method captures one explicitly

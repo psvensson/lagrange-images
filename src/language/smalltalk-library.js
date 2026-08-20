@@ -77,7 +77,7 @@ const ORDERED_COLLECTION_METHODS = [
   // Iteration is a loop (ADR 0051), not recursion through a helper selector. That is the whole
   // point of the ADR: these four methods were correct before it and unusable past a few dozen
   // elements, because each element cost an activation. Counting *up* and stopping on `=` still
-  // avoids the ordering comparison Integer does not have, which is ADR 0052.
+  // avoids the ordering comparison Integer does not have, which is ADR 0053.
   {
     selector: 'copyInto:',
     source: `[ :target | | index |

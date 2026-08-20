@@ -1,8 +1,7 @@
 # ADR 0051: Constant-stack Block iteration
 
-Status: accepted — `whileTrue:` and `whileFalse:` are two more operations on the existing classless Block personality, dispatched to language-owned loop primitives that drive the condition and body through ordinary `value` sends, so iteration costs no activation depth.
-
-Proven by: `test/block-loop.test.js`, plus the large-collection traversal in `test/smalltalk-library.test.js`.
+Status: implemented — `whileTrue:` and `whileFalse:` are two more operations on the existing classless Block personality, dispatched to language-owned loop primitives that drive the condition and body through ordinary `value` sends, so iteration costs no activation depth.
+Proven by: test/block-loop.test.js, test/smalltalk-library.test.js
 
 ## Problem
 
@@ -398,8 +397,11 @@ what must not have changed
 - `to:do:`, `timesRepeat:`, `detect:`, `inject:into:` and the rest of the iteration protocol, which
   become ordinary Smalltalk once `whileTrue:` and Integer ordering both exist
 - non-local return from inside a Block, which is a separate control-flow decision
-- Integer ordering comparison, which is ADR 0052 and is what lets `OrderedCollection` drop its
-  count-up-and-compare-with-`=` idiom and regain `at:`, `first`, `last` and `removeLast`
+- Integer ordering comparison, which is ADR 0053 and is what lets `OrderedCollection` drop its
+  count-up-and-compare-with-`=` idiom and regain `at:`, `first`, `last` and `removeLast`. It was to
+  have been 0052; implementing this ADR displaced it, because removing the depth ceiling exposed
+  unbounded durable growth from repeated closure creation — a substrate problem, where ordering is
+  missing functionality — so closure lifetime and identity took that number instead
 - making recursion constant-stack, which this ADR explicitly does not do
 - any loop that is not driven by ordinary sends
 
