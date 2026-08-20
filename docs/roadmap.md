@@ -259,6 +259,15 @@ Next, ordered by architectural pressure rather than convenience:
       The count-up-and-compare-with-`=` idiom is retired
 - [ ] non-local return from a Block, which is why `includes:` still carries its answer out in a
       `found` temporary rather than answering from inside the loop
+- [ ] general object residency: should a newly allocated image object begin execution-local and
+      become durable only on crossing a durability boundary, as ADR 0052 made closures? One object
+      kind and one ObjectRef, with residency as a lifetime state. ADR 0054 raised it by declining
+      it — a handled condition allocates a durable object per occurrence, and the tempting fix would
+      generalise ADR 0052 from closures to arbitrary mutable graphs. Closures were tractable because
+      their durable projection is deliberately narrow; a mutable object's is the whole reachable
+      graph, so this must first answer aliasing, cycles, promotion atomicity, identity across
+      promotion, and whether persisting one object persists everything it reaches. Potentially a
+      large simplification of the image model, potentially too expensive
 - [ ] basic collections, at which point a MethodDictionary can stop being represented by a Shape
 - [ ] implement **ADR 0054**'s conditions and handlers. The decision is that a handler runs at the
       signal point *before* unwinding, so it may `resume:` the signalling computation or `return:`

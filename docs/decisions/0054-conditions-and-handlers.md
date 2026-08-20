@@ -39,6 +39,42 @@ No new Value kind, no new executable representation, and no signalling instructi
 argument is ADR 0045's and ADR 0051's, for the third time: a language whose conditionals and loops
 are messages should not acquire a keyword for failure.
 
+### 1a. One object model: a condition is an ordinary object
+
+Stated explicitly, because the ADR is otherwise silent on it and silence here invites exactly the
+wrong optimization:
+
+```text
+condition object     an ordinary image object, with ordinary identity, ordinary allocation
+                     and ordinary persistence rules. Nothing about being a condition changes
+                     how it lives.
+
+signal occurrence    transient execution state: which handler is currently selected, whether
+                     that handler is active, the resume and return targets, and any primary
+                     failure retained during cleanup.
+```
+
+That split is already forced by decision 6a — `resume:` cannot be state on the condition object,
+because one object may be signalled twice at once and each occurrence must act independently. It is
+repeated here as a *lifetime* statement rather than only a protocol one.
+
+**This ADR introduces no second category of object.** The temptation is real: a handled
+`IndexOutOfRange` allocates a durable object per occurrence, and a tight loop over a failing accessor
+therefore creates durable garbage. That is a known allocation cost, not a semantic ambiguity, and the
+fix does not belong here.
+
+Making conditions execution-local would generalise ADR 0052 from closures to arbitrary objects, and
+the two cases are not alike. A closure has a deliberately narrow durable projection — a Block plus an
+immutable snapshot environment, with live cells and the defining frame explicitly not persisting. A
+general mutable object's durable projection is the whole reachable mutable graph, which raises
+questions closures never had to answer: whether an ephemeral object may hold another, what happens to
+mutable slots at promotion, whether identity survives, how cycles and shared mutable subgraphs
+publish, whether `basicNew` now makes transient objects, and whether persisting one object
+recursively persists everything it reaches.
+
+Those belong to a general object residency decision, not to a decision about signalling. Until such a
+decision exists, no invariant of the form "N signals produce zero durable records" is claimed here.
+
 ### 2. Handlers run at the signal point, before unwinding
 
 This is the load-bearing decision, and it is forced by the substrate rather than merely preferred.
@@ -331,11 +367,21 @@ durability and lanes
 - an interactive debugger, or reifying a suspended computation as an object
 - conditions crossing image boundaries as anything other than ordinary objects
 - retrofitting every existing host error; decision 8 lists the ones this ADR covers
+- the allocation cost of automatically generated conditions, which belongs to a general
+  object-residency decision: should a newly allocated image object begin execution-local and become
+  durable only on crossing a durability boundary, as ADR 0052 made closures? That would keep one
+  object kind and one ObjectRef, with residency as a lifetime state — potentially a large
+  simplification of the image model — but it has to answer mutable graphs, aliasing, cycles,
+  promotion atomicity and identity first, and may prove too expensive
 
 ## Guardrails
 
 ```text
 a condition is an object and signalling is a send; the compiler and lagrange-code learn nothing
+a condition object obeys ordinary object lifetime; ONLY the signal occurrence is transient. This
+    ADR adds no second category of object — making conditions execution-local would generalise
+    ADR 0052 from closures to arbitrary mutable graphs, which is a separate decision
+no "N signals, zero durable records" invariant is claimed until that decision exists
 handlers run at the signal point BEFORE unwinding — unwinding first makes `resume:` impossible,
     and in the WASM lane the frames are genuinely gone once retired
 resumption rides the existing resumable ABI: a handled signal answers the host effect, and the
