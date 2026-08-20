@@ -259,13 +259,22 @@ Next, ordered by architectural pressure rather than convenience:
       The count-up-and-compare-with-`=` idiom is retired
 - [ ] non-local return from a Block, which is why `includes:` still carries its answer out in a
       `found` temporary rather than answering from inside the loop
+- [ ] general object residency: should a newly allocated image object begin execution-local and
+      become durable only on crossing a durability boundary, as ADR 0052 made closures? One object
+      kind and one ObjectRef, with residency as a lifetime state. ADR 0054 raised it by declining
+      it — a handled condition allocates a durable object per occurrence, and the tempting fix would
+      generalise ADR 0052 from closures to arbitrary mutable graphs. Closures were tractable because
+      their durable projection is deliberately narrow; a mutable object's is the whole reachable
+      graph, so this must first answer aliasing, cycles, promotion atomicity, identity across
+      promotion, and whether persisting one object persists everything it reaches. Potentially a
+      large simplification of the image model, potentially too expensive
 - [ ] basic collections, at which point a MethodDictionary can stop being represented by a Shape
-- [ ] exception/condition substrate, including how unwinding crosses resumable WASM suspension.
-      ADR 0053 made this concrete: with no way to *signal* a refusal, `OrderedCollection >> at:`
-      reports an out-of-range index by sending `errorIndexOutOfBounds:`, which nothing implements, so
-      the failure arrives as a message-not-understood. It at least names the collection's own concept
-      rather than surfacing an Array error about a different object, but it is a gap signal and not a
-      design — and writing the first bounds-checked accessors is what exposed it
+- [ ] implement **ADR 0054**'s conditions and handlers. The decision is that a handler runs at the
+      signal point *before* unwinding, so it may `resume:` the signalling computation or `return:`
+      through its `on:do:` — which is the only shape under which resumption works in the WASM lane,
+      since a retired instance's frames are gone for good. Resumption rides the existing resumable
+      ABI unchanged. It replaces `OrderedCollection >> at:`'s `errorIndexOutOfBounds:` placeholder,
+      which ADR 0053 could only spell as a deliberate message-not-understood
 - [ ] the rest of the boolean protocol — `not`, `and:`, `or:` — which runs ADR 0045's bridge
       backwards: a boolean-*answering* method has to decide whether it answers the canonical Value
       or the singleton. ADR 0053 needed negation for `<=`/`>=` and used the neutral `if` inside two
