@@ -242,7 +242,7 @@ listed below: removing the depth ceiling made a pre-existing per-evaluation allo
 
 Next, ordered by architectural pressure rather than convenience:
 
-- [ ] closure identity, which ADR 0051 exposed and did not fix. Evaluating a Block that creates a
+- [x] closure identity, which ADR 0051 exposed and ADR 0052 fixed. Evaluating a Block that creates a
       closure publishes a *new durable Block record every time*, so a loop grows the image without
       bound: measured at ~2.1 records per closure-creating iteration, strictly linear and never
       converging, against ~0 for a closure-free body. Recursion hid this — the 256-activation limit
@@ -251,10 +251,9 @@ Next, ordered by architectural pressure rather than convenience:
       0052**, which chose execution-local instances with promotion on escape, ahead of Integer
       ordering: unbounded durable image growth is a substrate and operational problem, where a
       missing `<` is missing functionality.
-      Note the growth is the finding; the *timing* curve seen in tests (50/100/200 elements taking
-      1.5s/4.7s/22.6s to build) is that growth amplified by the mock backend, which clones the whole
-      database per transaction. Read-only traversal is linear. Do not cite the timings as evidence of
-      a production performance problem, and do not size a test as though they were inherent
+      Closed: a closure instance is now execution-local and becomes durable only on escape.
+      100,000 non-escaping closure evaluations produce **zero** durable records, and wall-clock is
+      linear in iteration count (1k/10k/100k at 0.97s/8.8s/87.6s) where the eager form was quadratic
 - [ ] Integer ordering comparison, and general arithmetic beyond `integer-add` (ADR 0053).
       `lagrange-code/v0` is frozen, so this is either a new semantic representation or language-owned
       primitives — a real decision, and the one blocking correct indexed collection access. It is

@@ -22,12 +22,15 @@ test('nested Smalltalk Blocks capture outer parameters and execute through value
   });
   assert.deepEqual(result, integerValue(7));
 
-  const environments = await runtime.images.listLexicalEnvironments('demo');
-  assert.equal(environments.length, 1);
-  assert.deepEqual(environments[0].bindings['root:parameter:0'].value, integerValue(7));
+  // ADR 0052 changed what this test is about. It used to assert that the capture was *materialized*
+  // — a durable LexicalEnvironment and a durable Block per evaluation. A closure that never escapes
+  // is now execution-local, so the observable contract is the answer plus the absence of writes.
+  // The capture itself is proven by the answer: `x` reached the inner Block, which is the thing the
+  // durable environment was only ever evidence of.
+  assert.deepEqual(await runtime.images.listLexicalEnvironments('demo'), []);
   const materialized = (await runtime.images.listBlocks('demo'))
     .find((block) => block.metadata?.prototypeBlockId === 'capture-block:prototype:root_block_0');
-  assert.ok(materialized);
+  assert.equal(materialized, undefined, 'a closure that never escaped must not be published');
   await runtime.close();
 });
 
@@ -44,9 +47,9 @@ test('deep nested Blocks pass the same stable captured binding through intermedi
   });
   assert.deepEqual(result, integerValue(11));
 
-  const environments = await runtime.images.listLexicalEnvironments('demo');
-  assert.equal(environments.length, 2);
-  assert.ok(environments.every((environment) => Object.hasOwn(environment.bindings, 'root:parameter:0')));
+  // Two closures were created and neither escaped, so neither is durable (ADR 0052). That the same
+  // binding threaded through both scopes is what the answer demonstrates.
+  assert.deepEqual(await runtime.images.listLexicalEnvironments('demo'), []);
   await runtime.close();
 });
 

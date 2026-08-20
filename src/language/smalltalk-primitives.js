@@ -366,12 +366,12 @@ async function indexedAt({images, primitiveImage, value, indexValue}) {
   return record.indexed[index];
 }
 
-async function indexedAtPut({images, primitiveImage, value, indexValue, newValue}) {
+async function indexedAtPut({images, primitiveImage, value, indexValue, newValue, context}) {
   const record = await loadIndexedObject({
     images, primitiveImage, value, primitive: SMALLTALK_PRIMITIVE.INDEXED_AT_PUT,
   });
   const index = zeroBasedIndex(indexValue, record.indexed.length, SMALLTALK_PRIMITIVE.INDEXED_AT_PUT);
-  const storedValue = canonicalizeValue(newValue);
+  const storedValue = canonicalizeValue(await promoted(context, newValue));
   const indexed = [...record.indexed];
   indexed[index] = storedValue;
   await images.putObject(primitiveImage, {
@@ -391,6 +391,18 @@ async function indexedAtPut({images, primitiveImage, value, indexValue, newValue
 // General Dictionary lookup is defined to *send* hash and =, so an execution context without a
 // message runtime cannot serve these primitives — failing here is clearer than a lookup that
 // silently used the built-in helper and ignored a user override.
+// ADR 0052 decision 6: writing into a slot, an indexed part or a Dictionary makes a value durably
+// reachable, so it is an escape. Each of these boundaries rewrites the value through the one central
+// promoter and then performs its existing write unchanged — the promotion is the boundary's job, not
+// the graph guard's.
+//
+// A context without `promote` is an execution that predates this seam rather than an error: the
+// value passes through, and the graph guard still refuses a transient ref, so a missed boundary
+// fails loudly instead of silently persisting a dangling reference.
+async function promoted(context, value) {
+  return typeof context?.promote === 'function' ? await context.promote(value) : value;
+}
+
 function requireSendMessage(context, primitive) {
   if (typeof context?.sendMessage !== 'function') {
     throw new TypeError(`Symmetric Smalltalk ${primitive} primitive requires a message runtime to send hash and =`);
@@ -597,9 +609,12 @@ async function dictionaryAt({images, primitiveImage, value, keyValue, sendMessag
 }
 
 async function dictionaryAtPut({
-  images, primitiveImage, value, keyValue, newValue, sendMessage, newObjectId, maxIdentityAttempts,
+  images, primitiveImage, value, keyValue, newValue, sendMessage, newObjectId, maxIdentityAttempts, context,
 }) {
   const primitive = SMALLTALK_PRIMITIVE.DICTIONARY_AT_PUT;
+  // Both, because a Dictionary makes its keys durably reachable exactly as it does its values.
+  keyValue = await promoted(context, keyValue);
+  newValue = await promoted(context, newValue);
   const kernel = await findSmalltalkKernel({images, imageId: primitiveImage});
   if (!kernel) throw new TypeError(`image ${primitiveImage} has no Smalltalk kernel`);
 
@@ -759,7 +774,7 @@ async function instanceSlotWrite({images, primitiveImage, target, slotIdValue, n
   const {record, slotId} = await resolveSlotAccess({
     images, primitiveImage, primitive: SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE, target, slotIdValue, context,
   });
-  const stored = canonicalizeValue(newValue);
+  const stored = canonicalizeValue(await promoted(context, newValue));
   await images.putObject(primitiveImage, {
     id: record.id,
     shape: record.shape,
@@ -918,7 +933,7 @@ function createSmalltalkKernelPrimitiveV1Executor({
         case SMALLTALK_PRIMITIVE.INDEXED_AT:
           return await indexedAt({images, primitiveImage, value, indexValue: second});
         case SMALLTALK_PRIMITIVE.INDEXED_AT_PUT:
-          return await indexedAtPut({images, primitiveImage, value, indexValue: second, newValue: third});
+          return await indexedAtPut({images, primitiveImage, value, indexValue: second, newValue: third, context});
         case SMALLTALK_PRIMITIVE.BUILT_IN_EQUALS:
           return await builtInEqualsPrimitive({images, primitiveImage, left: value, right: second});
         case SMALLTALK_PRIMITIVE.BUILT_IN_HASH:
@@ -955,6 +970,7 @@ function createSmalltalkKernelPrimitiveV1Executor({
             sendMessage: requireSendMessage(context, primitive),
             newObjectId,
             maxIdentityAttempts,
+            context,
           });
         default:
           throw new TypeError(`unknown ${SMALLTALK_KERNEL_PRIMITIVE_V1} primitive: ${primitive}`);

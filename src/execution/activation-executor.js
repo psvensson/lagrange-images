@@ -1,5 +1,6 @@
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
 import {arenaImagesView} from './lexical-cells.js';
+import {promoteClosure} from './closure-promotion.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 import {
   EscapingMutableClosureError,
@@ -159,16 +160,35 @@ class ActivationExecutor {
       bindings[capture.id] = {name: capture.name, value: canonicalizeValue(capture.value)};
     }
 
-    let environment = null;
-    if (Object.keys(bindings).length > 0) {
-      environment = await this.images.putLexicalEnvironment(prototypeRef.imageId, {bindings});
+    // ADR 0052 decision 5: a closure instance is execution-local. No environment record, no Block
+    // record, no history event — the instance lives in the arena and becomes durable only if it
+    // escapes, which is what makes evaluating a Block literal in a loop cost nothing.
+    //
+    // The instance's image is the prototype's, so dispatch-image behaviour is unchanged.
+    const hasBindings = Object.keys(bindings).length > 0;
+    let blockRef;
+    if (arena) {
+      const environment = hasBindings
+        ? arena.mintClosureEnvironment(prototypeRef.imageId, {bindings})
+        : null;
+      blockRef = arena.mintClosureBlock(prototypeRef.imageId, {
+        code: prototypeBlock.code,
+        environment,
+        metadata: {prototypeBlockId: prototypeRef.objectId},
+      });
+    } else {
+      // No arena means no execution to be local to — a closure created outside one has nowhere
+      // transient to live, so it is durable immediately.
+      const environment = hasBindings
+        ? await this.images.putLexicalEnvironment(prototypeRef.imageId, {bindings})
+        : null;
+      const block = await this.images.putBlock(prototypeRef.imageId, {
+        code: prototypeBlock.code,
+        environment: environment ? objectRef(environment.imageId, environment.id) : null,
+        metadata: {prototypeBlockId: prototypeRef.objectId},
+      });
+      blockRef = objectRef(block.imageId, block.id);
     }
-    const block = await this.images.putBlock(prototypeRef.imageId, {
-      code: prototypeBlock.code,
-      environment: environment ? objectRef(environment.imageId, environment.id) : null,
-      metadata: {prototypeBlockId: prototypeRef.objectId},
-    });
-    const blockRef = objectRef(block.imageId, block.id);
     // Execution-scoped, never durable: this is the only thing that lets a closure created in this
     // execution reach a live cell, and it dies with the arena.
     cells?.associate(blockRef, capturedCells);
@@ -205,6 +225,11 @@ class ActivationExecutor {
     // Created here, before the verification reads below, because ADR 0052 lets the activation's
     // Block be a closure instance that lives only in the arena — so the resolver has to exist
     // before anything tries to resolve.
+    // ADR 0052 decision 6: returning from a *root* execution is an escape, because the answer
+    // reaches a caller with no arena. A nested send is not — it hands its answer back inside the
+    // same arena, where a transient closure stays perfectly usable. The existing call structure
+    // already draws that line exactly: the root is the execution that was given no arena.
+    const ownsArena = !cellArena;
     const arena = cellArena ?? new LexicalCellArena();
     // ADR 0052 decision 5a: one resolution rule for this execution, shared by the executors, the
     // dispatcher and this class's own reads. Identical to `this.images` when there is no arena.
@@ -272,6 +297,10 @@ class ActivationExecutor {
       {activation, code},
       {
         images: view,
+        // ADR 0052 decision 7a. The boundary that creates durable reachability calls this before
+        // its write; the graph guard stays a tripwire proving a boundary was not forgotten, rather
+        // than becoming the mechanism. A value with nothing transient in it comes straight back.
+        promote: whileActive('promote', async (value) => await promoteClosure(this.images, arena, value)),
         // Check-only, and the only authority operation that crosses this seam. There is no
         // grant to return, no context to read, and no principal to branch on. Absent
         // authority fails closed rather than permitting.
@@ -361,7 +390,12 @@ class ActivationExecutor {
         }),
       },
       );
-      return canonicalizeValue(result);
+      const answer = canonicalizeValue(result);
+      // Before leaving, while the arena still exists. Deliberately the returned Value only: a
+      // durable object cannot secretly hold a transient closure, because creating that edge would
+      // already have been refused at the graph write seam. Walking a returned object graph would be
+      // I/O spent re-proving what the write boundary guarantees.
+      return ownsArena ? await promoteClosure(this.images, arena, answer) : answer;
     } finally {
       // Also on the exceptional path: a trapping guest must not leave a live context behind.
       lifetime.active = false;
