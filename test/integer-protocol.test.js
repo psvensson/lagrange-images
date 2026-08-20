@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CompilationService,
   booleanValue,
+  createDefaultCodeCompilerRegistry,
+  createDefaultCompilationGroupCompilerRegistry,
   createRuntime,
   defineMethods,
   findSmalltalkKernel,
@@ -333,10 +336,18 @@ function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
   return {images: wrapped, writeCount: () => writes};
 }
 
-async function baseImage(runtime, imageId) {
+// Group compilers included: the WASM lane plans a shared-module compilation group, so a service
+// without them cannot publish one.
+const servicesFor = (images) => new CompilationService({
+  images,
+  compilers: createDefaultCodeCompilerRegistry(),
+  groupCompilers: createDefaultCompilationGroupCompilerRegistry(),
+});
+
+async function baseImage(runtime, imageId, lane) {
   await runtime.images.createImage({id: imageId});
   await installSmalltalkKernel({images: runtime.images, imageId});
-  const options = {images: runtime.images, compilation: runtime.compilation, imageId, lane: 'neutral'};
+  const options = {images: runtime.images, compilation: runtime.compilation, imageId, lane};
   await installSmalltalkAllocationProtocol(options);
   await installSmalltalkEqualityProtocol(options);
   await installSmalltalkControlFlow(options);
@@ -344,47 +355,66 @@ async function baseImage(runtime, imageId) {
   return options;
 }
 
-test('every write publishing the Integer protocol is recoverable', async () => {
-  const total = await withRuntime(async (runtime) => {
-    const options = await baseImage(runtime, 'count');
-    const {images, writeCount} = faultingImages(runtime.images);
-    await installSmalltalkIntegerProtocol({...options, images});
-    return writeCount();
-  });
-  assert.ok(total > 10, `expected many writes across five primitives and eight methods, saw ${total}`);
+// Both `images` and `compilation` are bound to the *same* faulting service. Wrapping only `images`
+// would let the compiler publish its source, syntax and semantic artifacts through the unwrapped
+// service — so those writes would never be injected into, the enumeration would be short, and the
+// sweep would silently skip exactly the artifacts a method depends on.
+const faultingServices = (images, options, fault) => {
+  const wrapped = faultingImages(images, fault);
+  return {
+    services: {...options, images: wrapped.images, compilation: servicesFor(wrapped.images)},
+    writeCount: wrapped.writeCount,
+  };
+};
 
-  for (let failAt = 1; failAt <= total; failAt += 1) {
-    for (const commitThenThrow of [false, true]) {
-      await withRuntime(async (runtime) => {
-        const options = await baseImage(runtime, 'app');
-        const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+for (const lane of ['neutral', 'wasm']) {
+  test(`every write publishing the ${lane} Integer protocol is recoverable`, async () => {
+    // Enumerated after binding both services, so the count covers compiler-internal writes too.
+    const total = await withRuntime(async (runtime) => {
+      const options = await baseImage(runtime, 'count', lane);
+      const {services, writeCount} = faultingServices(runtime.images, options, {});
+      await installSmalltalkIntegerProtocol(services);
+      return writeCount();
+    });
+    // 43 in the neutral lane and 51 in WASM at the time of writing. Binding `compilation` to the
+    // faulting service is worth 8 of those in each lane — the per-method compiler artifacts — which
+    // is precisely how many write points a sweep over `images` alone would never inject into.
+    assert.ok(total > 30, `expected many writes across five primitives and eight methods, saw ${total}`);
 
-        await assert.rejects(
-          installSmalltalkIntegerProtocol({...options, images}),
-          /injected/,
-          `write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
-        );
+    for (let failAt = 1; failAt <= total; failAt += 1) {
+      for (const commitThenThrow of [false, true]) {
+        await withRuntime(async (runtime) => {
+          const options = await baseImage(runtime, 'app', lane);
+          const {services} = faultingServices(runtime.images, options, {failAt, commitThenThrow});
 
-        // The retry converges rather than conflicting, and the protocol works afterwards.
-        await installSmalltalkIntegerProtocol(options);
-        assert.deepEqual(
-          await evaluate(runtime, 'app', `recovered-${failAt}-${commitThenThrow}`, '[ 3 <= 4 ]'),
-          booleanValue(true),
-        );
-        assert.deepEqual(
-          await evaluate(runtime, 'app', `recovered-div-${failAt}-${commitThenThrow}`, '[ (0 - 7) // 2 ]'),
-          integerValue(-4),
-        );
-      });
+          await assert.rejects(
+            installSmalltalkIntegerProtocol(services),
+            /injected/,
+            `${lane} write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
+          );
+
+          // Retried with clean services on the same lane, and then actually exercised: converging on
+          // records is not the claim — the protocol answering afterwards is.
+          await installSmalltalkIntegerProtocol(options);
+          assert.deepEqual(
+            await evaluate(runtime, 'app', `cmp-${lane}-${failAt}-${commitThenThrow}`, '[ 3 <= 4 ]'),
+            booleanValue(true),
+          );
+          assert.deepEqual(
+            await evaluate(runtime, 'app', `div-${lane}-${failAt}-${commitThenThrow}`, '[ (0 - 7) // 2 ]'),
+            integerValue(-4),
+          );
+        });
+      }
     }
-  }
-});
+  });
+}
 
 // The partial-install hazard the library's prerequisite check exists for: primitives are published
 // before methods, so a Block-existence check would pass while `<` is still missing.
 test('a half-installed Integer protocol is not mistaken for a complete one', async () => {
   await withRuntime(async (runtime) => {
-    const options = await baseImage(runtime, 'app');
+    const options = await baseImage(runtime, 'app', 'neutral');
     // The library checks for its Array class before it checks Integer, so that prerequisite has to
     // be satisfied for this test to reach the check it is actually about.
     const {installSmalltalkIndexedProtocol} = await import('../src/runtime.js');
