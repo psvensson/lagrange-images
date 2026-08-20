@@ -1,4 +1,5 @@
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
+import {arenaImagesView} from './lexical-cells.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 import {
   EscapingMutableClosureError,
@@ -91,7 +92,7 @@ class ActivationExecutor {
 
   // The durable record rather than its value, because the three capture dispositions of ADR 0043
   // mean different things and only one of them carries a value at all.
-  async lookupBindingRecord(environmentRef, bindingId) {
+  async lookupBindingRecord(environmentRef, bindingId, images = this.images) {
     if (typeof bindingId !== 'string' || bindingId.length === 0) {
       throw new TypeError('binding id must be a non-empty string');
     }
@@ -111,7 +112,7 @@ class ActivationExecutor {
       if (visitedObjects.has(ref.objectId)) throw new TypeError('lexical environment parent cycle detected');
       visitedObjects.add(ref.objectId);
 
-      const environment = await this.images.getLexicalEnvironment(ref.imageId, ref.objectId);
+      const environment = await images.getLexicalEnvironment(ref.imageId, ref.objectId);
       if (!environment) {
         throw new TypeError(`lexical environment not found: ${ref.imageId}/${ref.objectId}`);
       }
@@ -121,8 +122,8 @@ class ActivationExecutor {
     return null;
   }
 
-  async lookupBinding(environmentRef, bindingId) {
-    const record = await this.lookupBindingRecord(environmentRef, bindingId);
+  async lookupBinding(environmentRef, bindingId, images = this.images) {
+    const record = await this.lookupBindingRecord(environmentRef, bindingId, images);
     if (!record) throw new TypeError(`lexical binding not found: ${bindingId}`);
     if (record.cell === true) throw new EscapingMutableClosureError(bindingId, record.name);
     if (record.unbound === true) throw new UnboundBindingError(record.name, bindingId);
@@ -196,23 +197,31 @@ class ActivationExecutor {
     if (depth > MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
     assertActivationRequest(activation);
 
-    const block = await this.images.getBlock(activation.block.imageId, activation.block.objectId);
+    // The root execution owns the arena; nested sends share it. That is a lifetime relationship and
+    // nothing more: cells are still reached by frame, so sharing an arena never means sharing a
+    // variable. It is what makes a returned closure keep working for the rest of this execution
+    // while still expiring when the execution does.
+    //
+    // Created here, before the verification reads below, because ADR 0052 lets the activation's
+    // Block be a closure instance that lives only in the arena — so the resolver has to exist
+    // before anything tries to resolve.
+    const arena = cellArena ?? new LexicalCellArena();
+    // ADR 0052 decision 5a: one resolution rule for this execution, shared by the executors, the
+    // dispatcher and this class's own reads. Identical to `this.images` when there is no arena.
+    const view = arenaImagesView(this.images, arena);
+
+    const block = await view.getBlock(activation.block.imageId, activation.block.objectId);
     if (!block) throw new TypeError(`activation block not found: ${activation.block.imageId}/${activation.block.objectId}`);
     if (!sameRef(block.code, activation.code)) throw new TypeError('activation code does not match Block code');
     if (!sameRef(block.environment, activation.environment)) {
       throw new TypeError('activation environment does not match Block environment');
     }
 
-    const code = await this.images.getCodeArtifact(activation.code.imageId, activation.code.objectId);
+    const code = await view.getCodeArtifact(activation.code.imageId, activation.code.objectId);
     if (!code) throw new TypeError(`activation code artifact not found: ${activation.code.imageId}/${activation.code.objectId}`);
 
     const executor = this.executors.get(code.representation);
 
-    // The root execution owns the arena; nested sends share it. That is a lifetime relationship
-    // and nothing more: cells are still reached by frame, so sharing an arena never means sharing
-    // a variable. It is what makes a returned closure keep working for the rest of this execution
-    // while still expiring when the execution does.
-    const arena = cellArena ?? new LexicalCellArena();
     const cells = arena.activationCells(activation.block);
 
     // ADR 0050 decision 5a, in priority order:
@@ -242,7 +251,7 @@ class ActivationExecutor {
       // belongs to a language rather than to an image. The execution layer still knows nothing
       // about any particular language — only that an artifact has one.
       const initial = await this.temporaryInitializer({
-        images: this.images,
+        images: view,
         dispatchImage: activeDispatchImage,
         languageId: code.languageId ?? null,
       });
@@ -262,7 +271,7 @@ class ActivationExecutor {
       const result = await executor.execute(
       {activation, code},
       {
-        images: this.images,
+        images: view,
         // Check-only, and the only authority operation that crosses this seam. There is no
         // grant to return, no context to read, and no principal to branch on. Absent
         // authority fails closed rather than permitting.
@@ -273,7 +282,7 @@ class ActivationExecutor {
         }),
         lookupBinding: whileActive('lookupBinding', async (bindingId) => {
           if (!activation.environment) throw new TypeError(`lexical binding not found: ${bindingId}`);
-          return await this.lookupBinding(activation.environment, bindingId);
+          return await this.lookupBinding(activation.environment, bindingId, view);
         }),
         // Declared, not initialized: a temporary has no value until it is assigned, and there is
         // no nil to give it. Reading one before assignment raises rather than defaulting.
@@ -299,7 +308,7 @@ class ActivationExecutor {
           const cell = cells.resolve(bindingId);
           if (cell) return cell.read();
           if (!activation.environment) throw new TypeError(`lexical binding not found: ${bindingId}`);
-          return await this.lookupBinding(activation.environment, bindingId);
+          return await this.lookupBinding(activation.environment, bindingId, view);
         }),
         writeBinding: whileActive('writeBinding', async (bindingId, value) => {
           const cell = cells.resolve(bindingId);
@@ -307,7 +316,7 @@ class ActivationExecutor {
           // Assignment reaches cells only. A durable binding is layout plus a snapshot, and ADR
           // 0043 decision 2 keeps assignment out of the graph entirely.
           const record = activation.environment
-            ? await this.lookupBindingRecord(activation.environment, bindingId)
+            ? await this.lookupBindingRecord(activation.environment, bindingId, view)
             : null;
           if (record?.cell === true) throw new EscapingMutableClosureError(bindingId, record.name);
           if (record) throw new TypeError(`lexical binding ${bindingId} is not an assignable cell`);
@@ -335,7 +344,9 @@ class ActivationExecutor {
           const nextDispatchImage = isObjectRef(request.receiver)
             ? request.receiver.imageId
             : activeDispatchImage;
-          const dispatched = await this.invocations.prepareDispatch(request, {dispatchImage: nextDispatchImage});
+          const dispatched = await this.invocations.prepareDispatch(request, {
+            dispatchImage: nextDispatchImage, images: view,
+          });
           return await this.execute(dispatched.activation, {
             depth: depth + 1,
             authority: nestedAuthority,

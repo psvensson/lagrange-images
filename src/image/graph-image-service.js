@@ -7,6 +7,7 @@ import {
   createCodeArtifactRecord,
   createLexicalEnvironmentRecord,
 } from '../execution/model.js';
+import {findTransientRefs, isTransientObjectId} from '../value/transient-ref.js';
 
 const IMAGE_COLLECTION = 'images';
 const records = (id) => `image:${id}:objects`;
@@ -18,6 +19,40 @@ function assertAllowedFields(input, allowed, label) {
   if (extra.length) throw new TypeError(`unknown ${label} fields: ${extra.join(', ')}`);
 }
 
+// ADR 0052 decision 5b. Every durable write in this service funnels through here, which is why the
+// guard lives here rather than in each `put*`: one seam, so a record kind added later is covered
+// without anyone remembering to cover it.
+//
+// Two refusals, and they are different failures with different scopes.
+//
+// A reserved *id* would create a durable record that arena-first resolution could later shadow,
+// which decision 5c forbids outright. That check applies only where the key *is* an object id — the
+// per-image record collection. ADR 0052 reserves the namespace for REF `objectId` specifically, not
+// for every storage key, so an image may legitimately be named anything at all; an image id is not
+// an object id and never appears as one in a REF.
+//
+// A reserved *ref* would persist a pointer to something that dies with the arena — a dangling
+// reference the moment the execution ends. That applies to every durable value, image records
+// included, because a transient ref is just as dangling wherever it is stored.
+//
+// Neither should ever fire in correct operation: the central promotion operation runs first and
+// rewrites transient refs. This is the proof that it did, not the mechanism that does it.
+function assertNoTransientIdentity(collection, key, value, {keyIsObjectId}) {
+  if (keyIsObjectId && isTransientObjectId(key)) {
+    throw new TypeError(
+      `cannot write a durable record at the runtime-reserved transient id ${key} in ${collection}`,
+    );
+  }
+  const embedded = findTransientRefs(value);
+  if (embedded.length > 0) {
+    const {imageId, objectId} = embedded[0];
+    throw new TypeError(
+      `cannot write a durable record embedding the unpromoted transient reference `
+      + `${imageId}/${objectId}; it must be promoted first`,
+    );
+  }
+}
+
 async function putWithHistory(backend, {
   collection,
   key,
@@ -25,7 +60,12 @@ async function putWithHistory(backend, {
   expectedVersion,
   stream,
   event,
+  // True where `key` is a graph object id, which is the only place ADR 0052's reserved namespace
+  // applies. Default false so a new caller has to say so deliberately rather than inherit a
+  // restriction on whatever its keys happen to mean.
+  keyIsObjectId = false,
 }) {
+  assertNoTransientIdentity(collection, key, value, {keyIsObjectId});
   return await backend.transaction(async (candidate) => {
     const transaction = assertBackendTransaction(candidate);
     const stored = await transaction.put(collection, key, value, {expectedVersion});
@@ -89,6 +129,7 @@ class ImageService {
     });
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
+      keyIsObjectId: true,
       key: id,
       value: shape,
       expectedVersion: 0,
@@ -145,6 +186,7 @@ class ImageService {
     assertObjectMatchesShape(object, shape);
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
+      keyIsObjectId: true,
       key: id,
       value: object,
       expectedVersion,
@@ -184,6 +226,7 @@ class ImageService {
     }
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
+      keyIsObjectId: true,
       key: id,
       value: artifact,
       expectedVersion: 0,
@@ -223,6 +266,7 @@ class ImageService {
     }
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
+      keyIsObjectId: true,
       key: id,
       value: environment,
       expectedVersion: expectedVersion ?? current?._version ?? 0,
@@ -258,6 +302,7 @@ class ImageService {
     if (block.environment) await this.requireRecordKind(block.environment, 'lexical-environment', 'block environment');
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
+      keyIsObjectId: true,
       key: id,
       value: block,
       expectedVersion: 0,

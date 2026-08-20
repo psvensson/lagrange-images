@@ -1,5 +1,19 @@
+import {randomUUID} from 'node:crypto';
 import {TupleMap} from '../support/tuple-map.js';
-import {canonicalizeValue} from '../value/index.js';
+import {canonicalizeValue, objectRef} from '../value/index.js';
+import {isTransientObjectId, transientObjectId} from '../value/transient-ref.js';
+
+// A closure instance whose arena is gone. Distinct from "block not found" on purpose: ADR 0052
+// decision 5c makes this rigorous, because a reserved id can never name a durable record, so its
+// absence from the arena means expiry rather than a missing or corrupt record.
+class ExpiredClosureInstanceError extends TypeError {
+  constructor(imageId, objectId) {
+    super(`closure instance ${imageId}/${objectId} has expired; its execution has ended`);
+    this.name = 'ExpiredClosureInstanceError';
+    this.imageId = imageId;
+    this.objectId = objectId;
+  }
+}
 
 // The lane-neutral lexical frame and cell substrate, per ADR 0043.
 //
@@ -171,6 +185,50 @@ class LexicalCellArena {
   frameFor(blockRef) {
     return this.frames?.get([blockRef.imageId, blockRef.objectId]) ?? null;
   }
+
+  // ADR 0052 decision 5a. Closure instances that have not escaped live here rather than in the
+  // graph, keyed by the same instance ref the cells and frame above are keyed by — one keying
+  // scheme, so an instance's cells, frame and definition are all reached the same way.
+  //
+  // The stored shapes deliberately mirror the durable Block and LexicalEnvironment records field for
+  // field. Promotion is then a copy rather than a translation, which is what keeps a promoted
+  // closure the same representation as one written eagerly.
+  #instances = new TupleMap(2);
+
+  #mint(imageId, kind, record) {
+    const objectId = transientObjectId(`${kind}/${this.#nextInstance += 1}/${this.#nonce}`);
+    this.#instances.set([imageId, objectId], record);
+    return objectRef(imageId, objectId);
+  }
+
+  #nextInstance = 0;
+
+  // Per-arena, so a transient id minted by one execution can never be mistaken for one minted by
+  // another — including after an arena is gone, where the id must read as expired rather than as
+  // some other execution's live instance.
+  #nonce = randomUUID();
+
+  // The instance's image is its prototype's, so dispatch-image behaviour needs no special case for
+  // a transient receiver (ADR 0044 decision 5a, ADR 0051 decision 3).
+  mintClosureBlock(imageId, {code, environment = null, metadata = {}}) {
+    return this.#mint(imageId, 'block', Object.freeze({
+      kind: 'block', code, environment, metadata: Object.freeze({...metadata}),
+    }));
+  }
+
+  mintClosureEnvironment(imageId, {bindings, parent = null}) {
+    return this.#mint(imageId, 'environment', Object.freeze({
+      kind: 'lexical-environment', bindings: Object.freeze({...bindings}), parent,
+    }));
+  }
+
+  transientRecord(imageId, objectId) {
+    return this.#instances.get([imageId, objectId]) ?? null;
+  }
+
+  transientEntries() {
+    return this.#instances.entries();
+  }
 }
 
 // What an executor is given. Deliberately narrow: declare a slot, resolve one, associate a new
@@ -204,13 +262,52 @@ class ActivationCells {
   }
 }
 
+
+
+// ADR 0052 decision 5a: Block resolution is arena-first, then durable.
+//
+// Delivered as a view over the images service rather than as a new parameter on every reader,
+// because the readers that must see a transient instance — `prepareActivation`, the language
+// dispatcher's Block recognition, binding lookup — all already take an images service. A view keeps
+// one resolution rule in one place instead of three call sites remembering to check the arena.
+//
+// The view is execution context in exactly the way `dispatchImage` is: it is built per execution,
+// it reaches no durable record, and it dies with the arena.
+function arenaImagesView(images, arena) {
+  if (!arena) return images;
+  const view = Object.create(images);
+  const transient = (imageId, objectId, kind) => {
+    const record = arena.transientRecord(imageId, objectId);
+    if (!record) return null;
+    return record.kind === kind ? record : null;
+  };
+  // Durable fallback is never reached for a reserved id, because decision 5b forbids a durable
+  // record from taking one. A reserved id absent from this arena is therefore an *expired*
+  // instance, which is a lifetime error rather than a missing record — and saying so is the
+  // difference between "your closure outlived its execution" and "your image is corrupt".
+  const resolve = async (imageId, objectId, kind, durable) => {
+    const found = transient(imageId, objectId, kind);
+    if (found) return found;
+    if (isTransientObjectId(objectId)) {
+      throw new ExpiredClosureInstanceError(imageId, objectId);
+    }
+    return await durable.call(images, imageId, objectId);
+  };
+  view.getBlock = (imageId, objectId) => resolve(imageId, objectId, 'block', images.getBlock);
+  view.getLexicalEnvironment = (imageId, objectId) =>
+    resolve(imageId, objectId, 'lexical-environment', images.getLexicalEnvironment);
+  return view;
+}
+
 export {
   ActivationCells,
   EscapingMutableClosureError,
+  ExpiredClosureInstanceError,
   MissingLexicalCellError,
   LexicalCell,
   LexicalCellArena,
   LexicalFrame,
   UNBOUND,
   UnboundBindingError,
+  arenaImagesView,
 };
