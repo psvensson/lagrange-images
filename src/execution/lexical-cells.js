@@ -229,6 +229,14 @@ class LexicalCellArena {
   transientEntries() {
     return this.#instances.entries();
   }
+
+  // ADR 0052 decision 7a. Lives on the arena so promotion is idempotent for the whole execution
+  // rather than per boundary: a closure written into two slots must be one closure both times.
+  #promotionMemo = new TupleMap(2);
+
+  promotionMemo() {
+    return this.#promotionMemo;
+  }
 }
 
 // What an executor is given. Deliberately narrow: declare a slot, resolve one, associate a new
