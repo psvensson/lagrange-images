@@ -253,10 +253,11 @@ Next, ordered by architectural pressure rather than convenience:
       the 0052 slot ahead of Integer ordering: unbounded durable image growth was a substrate and
       operational problem, where a missing `<` is missing functionality. The rejected alternatives
       were per-creation-site ids and durable collection; ADR 0052 records why
-- [ ] Integer ordering comparison, and general arithmetic beyond `integer-add` (ADR 0053).
-      `lagrange-code/v0` is frozen, so this is either a new semantic representation or language-owned
-      primitives — a real decision, and the one blocking correct indexed collection access. It is
-      also what lets `OrderedCollection` drop counting up and comparing with `=`
+- [ ] implement ADR 0053's Integer ordering and arithmetic. The decision is language-owned
+      primitives with ordinary `<`/`<=`/`>`/`>=` and `-`/`*`/`//`/`\\` methods, keeping
+      `lagrange-code/v0` frozen. It unblocks `OrderedCollection`'s `at:`, `first`, `last` and
+      `removeLast` — each of which is a bounds check, and a bounds check is an ordering question —
+      and retires the count-up-and-compare-with-`=` idiom
 - [ ] basic collections, at which point a MethodDictionary can stop being represented by a Shape
 - [ ] exception/condition substrate, including how unwinding crosses resumable WASM suspension
 - [ ] the rest of the boolean protocol — `not`, `and:`, `or:` — which runs ADR 0045's bridge
