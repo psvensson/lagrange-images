@@ -120,9 +120,15 @@ no extra resumption is charged     the executor increments its counter *before* 
                                    double-charge it against MAX_WASM_RESUMPTIONS and make a
                                    handled loop fail sooner than the same loop unhandled.
 
-the handler does not re-enter      it runs in the *host*, above the guest, and never inside
-the guest                          the suspended WASM frame
+the handler does not re-enter      the search and the transfer are orchestrated by the host,
+the suspended guest                above the guest, and never inside the suspended frame
 ```
+
+"In the host" describes *orchestration*, not what the handler is made of. A handler is an ordinary
+Block: it may itself be a WASM method, in which case it runs in its own nested activation with its own
+lease, exactly like any other Block invoked during a host effect. Reading "the handler runs in the
+host" as "handlers are host code" would be a real misimplementation — it would put a Smalltalk Block
+somewhere it cannot be written.
 
 ### 4. Unwinding is one-way, and retires what it passes
 
@@ -131,13 +137,31 @@ effect unbinds the instance host and releases its lease with `{retire: true}` ra
 to the pool, because a mid-computation instance is not reusable.
 
 ```text
-unwinding past a WASM activation   retires the instance; the activation is gone for good
+unwinding past a SUSPENDED WASM    retires the instance; that activation is gone for good
+activation (a non-tail effect)
+
+unwinding out of a TAIL effect     retires nothing. The guest already returned, the loop broke
+                                   with `effect.resume === null`, and the lease was released
+                                   normally *before* the effect ran — the effect itself runs
+                                   outside the executor's try/catch, so there is no live
+                                   instance to retire and none is wrongly pooled either.
+
 unwinding past a neutral frame     ordinary stack unwinding
+
 resuming after unwinding           impossible, and refused explicitly rather than silently
                                    producing a wrong answer
 ```
 
-An implementation must not "optimize" by pooling a retired instance. That is the one place where a
+The tail case matters in both directions, and an implementation that treats every WASM effect alike
+gets one of them wrong. It must not try to retire an already-released lease, and it must not assume a
+signal during a WASM effect always destroys a continuation — a tail effect has none to destroy.
+
+Resumption still works there, and means something slightly different: the handler's value becomes the
+effect's result, which is the activation's result. It does not re-enter a guest, because the guest has
+already finished. A tail effect also books no resumption at all — the counter is incremented only on
+the non-tail path.
+
+An implementation must not "optimize" by pooling a *retired* instance. That is the one place where a
 correct-looking change would produce a guest resuming into another computation's locals.
 
 ### 4a. Blocks receive the new selectors through a separate protocol object
@@ -213,8 +237,14 @@ anException resume: value   the signalling send answers `value`; computation con
 anException return: value   unwind to this handler's `on:do:`, which answers `value`
 ```
 
-`resume:` and `return:` act on the **current signal occurrence**, which is transient execution state,
-not durable condition-object state. One condition object signalled twice — or signalled from two
+`resume:` and `return:` act on the receiver's **currently active signal occurrence** — the one being
+handled right now — which is transient execution state, not durable condition-object state.
+
+Being precise about *which* occurrence is the point, not pedantry. Sending `resume:` to a condition
+with no active occurrence, or to one whose occurrence has already been transferred out of, is an
+explicit failure rather than a silent no-op: both mean the sender believes it is inside a handler it
+is not inside. And a condition object signalled twice concurrently has two occurrences, so
+"the current one" must be resolved per active handling and never by reading the object. One condition object signalled twice — or signalled from two
 executions — has two occurrences, and neither may see the other's. Storing "am I being handled" on the
 object would make a durable record carry live control-flow state, which is the same mistake ADR 0050
 refused for defining frames.
@@ -237,7 +267,15 @@ the running handler          raised inside it finds only *outer* handlers. Witho
 ```text
 ensure: aBlock        runs on every exit, normal or not
 ifCurtailed: aBlock   runs only on a non-normal exit
+
+both answer           the protected Block's value on a normal exit. The cleanup Block's own
+                      ordinary value is discarded — cleanup runs for its effect, and letting
+                      it replace the answer would make adding a `Transcript` line to an
+                      `ensure:` silently change what the expression evaluates to.
 ```
+
+A cleanup Block that *signals* is a different matter and is decided below; discarding a value is not
+the same as ignoring a failure.
 
 **"Non-normal" means every non-normal exit, not only a Smalltalk condition.** A host trap crossing the
 protected scope — a depth-limit failure, an expired closure instance, a WASM error — must run the
@@ -310,6 +348,9 @@ signalling and handling
     a handler's ordinary returned value acts as `return:`, so `on: Error do: [ :e | 0 ]` answers 0
     two signals of one condition object have independent occurrences, and the object holds
         no handling state
+    `resume:` or `return:` with no active occurrence for that receiver fails explicitly
+    a handler that is itself a WASM method runs in its own activation and lease, and can
+        resume or return from there
     the unwind selectors are reached through their own protocol object, and an image holding
         the loop protocol but not the unwind protocol is coherent
 
@@ -322,8 +363,11 @@ resumption
 
 unwinding
     `return:` unwinds to the establishing `on:do:`, which answers the handler's value
-    unwinding past a WASM activation retires the instance and does not return it to the pool,
-        proven by instance-pool statistics rather than by inspection
+    unwinding past a *suspended* WASM activation retires the instance and does not return it
+        to the pool, proven by instance-pool statistics rather than by inspection
+    unwinding out of a *tail* effect retires nothing, because the lease was already released
+        normally before the effect ran — and no attempt is made to release it twice
+    a signal resumed during a tail effect answers the activation, and books no resumption
     resuming after unwinding is refused explicitly
     a signal crossing several activations unwinds all of them exactly once
 
@@ -337,6 +381,8 @@ context
     the handler stack reaches no durable record, no Value and no activation field
 
 unwind protection
+    `ensure:` answers the protected Block's value, and a cleanup Block that answers something
+        else does not change it
     `ensure:` runs on the normal path and on the unwinding path
     `ifCurtailed:` runs only when unwound through
     both run for a non-catchable host failure crossing their scope, not only for conditions
@@ -386,20 +432,25 @@ handlers run at the signal point BEFORE unwinding — unwinding first makes `res
     and in the WASM lane the frames are genuinely gone once retired
 resumption rides the existing resumable ABI: a handled signal answers the host effect, and the
     guest resumes at its effect site with no new export or ABI change
-unwinding retires WASM instances; never return a mid-computation instance to the pool
+unwinding retires a *suspended* WASM instance and never returns a mid-computation one to the
+    pool — but a tail effect's lease is already released normally before the effect runs, so
+    nothing is retired there and nothing is released twice
+"the handler runs in the host" is about orchestration; a handler is an ordinary Block and may
+    itself be a WASM method with its own activation and lease
 the handler stack is execution context — never durable, never a Value, never an activation field
 a handler runs with its establisher's self (free, via ADR 0050) and its authority (NOT free —
     authority propagates dynamically, so it must be captured at `on:do:` time and retained
     privately on the transient entry, never on the closure and never in a Value: ADR 0037)
 `ensure:` and `ifCurtailed:` capture the establisher's authority the same way
 the unwind selectors get their own protocol object; never widen the exact two-slot loop protocol
-`resume:`/`return:` act on the transient signal occurrence, never on durable condition state;
+`resume:`/`return:` act on the receiver's currently active transient occurrence, never on durable
+    condition state, and fail explicitly when there is no active occurrence;
     a handler's ordinary value means `return:`, and a running handler is disabled for re-signals
 a resumed signal charges no extra WASM resumption — the counter increments before the host effect
 unwind protection runs for every non-normal exit, including host failures that are not catchable
 a cleanup failure stays catchable: if it escapes it becomes the outward failure and retains the
     original as its cause
-`ensure:` runs on both paths while the arena is still alive; a signal during unwinding does not
-    replace the condition already unwinding
+`ensure:` runs on both paths while the arena is still alive and answers the protected Block's
+    value, discarding the cleanup Block's own
 this ADR makes failures catchable, not interceptable: `doesNotUnderstand:` stays deferred
 ```
