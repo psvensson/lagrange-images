@@ -1,6 +1,7 @@
 # ADR 0052: Closure instance lifetime and identity
 
-Status: accepted — a closure *instance* is execution-local by default and acquires a durable Block and LexicalEnvironment only when it crosses a durability boundary, so evaluating a Block literal costs no graph write unless the resulting closure actually escapes.
+Status: implemented — a closure *instance* is execution-local by default and acquires a durable Block and LexicalEnvironment only when it crosses a durability boundary, so evaluating a Block literal costs no graph write unless the resulting closure actually escapes.
+Proven by: test/transient-closures.test.js, test/closure-promotion.test.js
 
 ## Problem
 

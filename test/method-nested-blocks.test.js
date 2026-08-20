@@ -156,7 +156,21 @@ test('a nested-Block result feeding another send resumes correctly in WASM', asy
       id: 'nontail-caller-tree',
     });
     const activation = await runtime.invocations.invokeBlock(objectRef('app', tree.block.id), [instance]);
+    // ADR 0052: the nested closure `o incrementer` answers never escapes — it is invoked and
+    // discarded inside this execution — so it must cost no durable record, and a WASM suspension
+    // across the non-tail send must not itself count as an escape. Measured across the execution
+    // only, since publishing the tree above is compilation rather than execution.
+    // Counted as *every* durable record, not just promoted ones. Filtering on the promotion id
+    // prefix would pass under the old eager scheme too, since that wrote closures under fresh
+    // UUIDs — so the narrow assertion would have proven nothing.
+    const durableRecords = async () => (await runtime.images.listRecords('app')).length;
+    const before = await durableRecords();
     assert.deepEqual(await runtime.executor.execute(activation), integerValue(11));
+    assert.equal(
+      await durableRecords(), before,
+      'a non-escaping nested closure must cost no durable record, and WASM suspension is not an escape',
+    );
+
     assert.deepEqual(
       await evaluate(runtime, 'app', 'nontail-read', '[ :o | o n ]', [instance]),
       integerValue(1),

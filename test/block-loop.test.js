@@ -1200,23 +1200,12 @@ test('every write publishing the Block protocol is recoverable', async () => {
   }
 });
 
-// --- what the loop exposed -----------------------------------------------------------------------
+// --- what the loop exposed, and ADR 0052 closed -------------------------------------------------
 
-// A characterization test, not an endorsement. ADR 0051 delivers constant *stack*, and it does — but
-// removing the depth ceiling revealed that evaluating a Block that creates a closure publishes a new
-// durable Block record every time. Recursion capped that at a couple of hundred before the
-// activation limit stopped the program; a loop does not, so image growth is now unbounded in
-// iteration count.
-//
-// This is pre-existing closure-identity behaviour rather than anything the loop introduced, and
-// fixing it is a real design decision (deterministic per-creation-site ids? transient closures?
-// collection?) rather than something to slip into this change. It is pinned here so the cost is
-// measured and cannot regress unnoticed, and recorded in `docs/roadmap.md`.
-//
-// The assertions below count *records*, deliberately, and not elapsed time. Wall-clock in this
-// suite is dominated by the mock backend cloning the whole database per transaction, which
-// multiplies this growth into a quadratic curve that says more about the harness than the system.
-test('closure-creating iterations still allocate a durable Block each time', async () => {
+// This was a characterization test: it pinned the cost of ADR 0051 removing the depth ceiling, which
+// exposed that every closure evaluation published a durable Block. ADR 0052 made closure instances
+// execution-local, so the same shapes now allocate nothing, and the assertion is inverted.
+test('closure-creating iterations allocate no durable records', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');
     const source = (n) =>
@@ -1227,21 +1216,12 @@ test('closure-creating iterations still allocate a durable Block each time', asy
       return (await runtime.images.listRecords('app')).length - before;
     };
 
+    // The published prototypes for the source are the only writes, so growth does not scale with
+    // iteration count — it is the same for fifty iterations and for a thousand.
     const fifty = await growth('grow-50', 50);
-    const hundred = await growth('grow-100', 100);
-    // Strictly linear in iteration count, and it does not converge on a re-run: these are fresh
-    // records each time, not ensure-exact-or-create hits.
-    assert.ok(fifty > 50, `expected per-iteration allocation, saw ${fifty} records for 50 iterations`);
-    assert.ok(
-      hundred > fifty * 1.8,
-      `expected growth to scale with iterations, saw ${fifty} then ${hundred}`,
-    );
-
-    // The contrast that makes the cause specific: a body creating no closure allocates nothing
-    // per iteration, so this is closure identity rather than looping.
-    const before = (await runtime.images.listRecords('app')).length;
-    await evaluate(runtime, 'app', 'flat-grow', '[ | i | i := 0. [ i = 200 ] whileFalse: [ i := i + 1 ]. i ]');
-    const flat = (await runtime.images.listRecords('app')).length - before;
-    assert.ok(flat < 20, `a closure-free body should allocate nothing per iteration, saw ${flat}`);
+    const thousand = await growth('grow-1000', 1000);
+    assert.equal(fifty, thousand,
+      `iteration count must not affect durable growth: ${fifty} at 50, ${thousand} at 1000`);
+    assert.ok(thousand < 20, `expected O(1) records, saw ${thousand}`);
   });
 });
