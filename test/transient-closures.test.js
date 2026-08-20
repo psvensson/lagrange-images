@@ -585,3 +585,37 @@ test('durable growth does not scale with the number of closure evaluations', asy
     assert.equal(await run('scale-2000', 2000), 0);
   });
 });
+
+// The third durable-write boundary. A Dictionary makes both its keys and its values durably
+// reachable, so both are promoted; this covers the ordinary shape — an already-durable key naming a
+// closure value — through persistence and later use.
+test('storing a closure as a Dictionary value promotes it and it survives', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    const {installSmalltalkDictionaryProtocol} = await import('../src/runtime.js');
+    await installSmalltalkDictionaryProtocol({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+    });
+
+    const dictionary = await rootAnswer(
+      runtime, 'app', 'fill-dictionary',
+      "[ :c | | d | d := c new. d at: 'k' put: [ 12 ]. d ]",
+      [objectRef('app', 'smalltalk/class/Dictionary')],
+    );
+
+    // Nothing transient reached the durable graph — which the write seam would have refused anyway,
+    // so this is really asserting that the boundary promoted rather than failed.
+    for (const record of await runtime.images.listRecords('app')) {
+      assert.deepEqual(findTransientRefs(record), [], `${record.id} holds a transient ref`);
+    }
+
+    // The stored closure is a published Block, and still runs in a later execution.
+    const stored = await rootAnswer(runtime, 'app', 'read-dictionary', "[ :d | d at: 'k' ]", [dictionary]);
+    assert.ok(!isTransientRef(stored));
+    assert.ok(await runtime.images.getBlock('app', stored.objectId), 'the stored closure was not published');
+    assert.deepEqual(
+      await rootAnswer(runtime, 'app', 'use-dictionary', "[ :d | (d at: 'k') value ]", [dictionary]),
+      integerValue(12),
+    );
+  });
+});

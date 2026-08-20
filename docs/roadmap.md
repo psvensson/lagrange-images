@@ -242,18 +242,17 @@ listed below: removing the depth ceiling made a pre-existing per-evaluation allo
 
 Next, ordered by architectural pressure rather than convenience:
 
-- [x] closure identity, which ADR 0051 exposed and ADR 0052 fixed. Evaluating a Block that creates a
-      closure publishes a *new durable Block record every time*, so a loop grows the image without
-      bound: measured at ~2.1 records per closure-creating iteration, strictly linear and never
-      converging, against ~0 for a closure-free body. Recursion hid this — the 256-activation limit
-      stopped any program before the growth mattered. Fixing it is a real decision — deterministic
-      per-creation-site closure ids, transient closures, or collection — and is decided by **ADR
-      0052**, which chose execution-local instances with promotion on escape, ahead of Integer
-      ordering: unbounded durable image growth is a substrate and operational problem, where a
-      missing `<` is missing functionality.
-      Closed: a closure instance is now execution-local and becomes durable only on escape.
-      100,000 non-escaping closure evaluations produce **zero** durable records, and wall-clock is
-      linear in iteration count (1k/10k/100k at 0.97s/8.8s/87.6s) where the eager form was quadratic
+- [x] closure identity (**ADR 0052**). A closure instance is execution-local and becomes durable only
+      when it escapes, so 100,000 non-escaping closure evaluations produce **zero** durable records
+      and wall-clock is linear in iteration count (1k/10k/100k at 0.97s/8.8s/87.6s).
+      What it fixed, in the past tense it now belongs in: every evaluation of a Block that created a
+      closure *used to* publish a new durable Block, so a loop grew the image without bound — about
+      2.1 records per closure-creating iteration, strictly linear and never converging, against ~0
+      for a closure-free body. ADR 0051 is what exposed it; recursion had hidden it, because the
+      256-activation limit stopped any program before the growth mattered. That is also why this took
+      the 0052 slot ahead of Integer ordering: unbounded durable image growth was a substrate and
+      operational problem, where a missing `<` is missing functionality. The rejected alternatives
+      were per-creation-site ids and durable collection; ADR 0052 records why
 - [ ] Integer ordering comparison, and general arithmetic beyond `integer-add` (ADR 0053).
       `lagrange-code/v0` is frozen, so this is either a new semantic representation or language-owned
       primitives — a real decision, and the one blocking correct indexed collection access. It is
