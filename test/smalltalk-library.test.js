@@ -6,6 +6,7 @@ import {
   defineMethods,
   findSmalltalkKernel,
   installSmalltalkAllocationProtocol,
+  installSmalltalkBlockProtocol,
   installSmalltalkControlFlow,
   installSmalltalkEqualityProtocol,
   installSmalltalkIndexedProtocol,
@@ -52,6 +53,7 @@ async function seed(runtime, imageId, {lane = 'neutral'} = {}) {
   await installSmalltalkControlFlow(options);
   await installSmalltalkIndexedProtocol(options);
   await installSmalltalkInstanceVariableProtocol({images: runtime.images, imageId});
+  await installSmalltalkBlockProtocol({images: runtime.images, imageId});
   const kernel = await findSmalltalkKernel({images: runtime.images, imageId});
   await defineMethods({...options, classRef: kernel.integerClass, methods: [PLUS]});
   const library = await installSmalltalkLibrary(options);
@@ -271,12 +273,17 @@ test('every library method is an ordinary Smalltalk method with a semantic artif
 });
 
 // No collection-specific host operation was added. The primitive family is exactly what ADRs
-// 0046-0050 installed, and the library reaches storage only through Array's ordinary protocol.
+// 0046-0051 installed, and the library reaches storage only through Array's ordinary protocol.
+// ADR 0051's two loop primitives are language operations on the Block personality, not collection
+// operations: no method in this library names them, and they are reached only by dispatching
+// `whileTrue:`/`whileFalse:`.
 test('the library adds no new kernel primitive', async () => {
   const {SMALLTALK_PRIMITIVE_NAMES} = await import('../src/language/smalltalk-primitives.js');
   assert.deepEqual([...SMALLTALK_PRIMITIVE_NAMES].sort(), [
     'basic-new',
     'basic-new-sized',
+    'block-while-false',
+    'block-while-true',
     'built-in-equals',
     'built-in-hash',
     'class-of',
@@ -466,6 +473,37 @@ test('an instance variable resolves from a Block nested two levels deep', async 
     // `includes:index:` is exactly that shape, and it reads `contents` from the inner arm.
     assert.deepEqual(
       await evaluate(runtime, 'app', 'deep-has', '[ :x | x includes: 5 ]', [collection]),
+      booleanValue(true),
+    );
+  });
+});
+
+// ADR 0051's reason for existing, discharged. Before it, `do:` recursed once per element and every
+// traversal sat under the 256-activation limit: 50 elements worked and 100 raised "activation depth
+// limit exceeded". The methods were correct the whole time; they were simply unreachable at any
+// useful size.
+test('a large OrderedCollection traverses, where recursion used to exceed the depth limit', async () => {
+  await withRuntime(async (runtime) => {
+    const {library} = await seed(runtime, 'app');
+    const collection = await evaluate(runtime, 'app', 'big', `[ :c | | oc i |
+      oc := c new.
+      i := 0.
+      [ i = 110 ] whileFalse: [ i := i + 1. oc add: i ].
+      oc ]`, [library.orderedCollection]);
+
+    assert.deepEqual(await evaluate(runtime, 'app', 'big-size', '[ :oc | oc size ]', [collection]), integerValue(110));
+    // `do:` over 110 elements. Before ADR 0051 this collection could be built but not traversed:
+    // 50 elements answered 1275 and 100 raised "activation depth limit exceeded".
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'big-sum', `[ :oc | | sum |
+        sum := 0.
+        oc do: [ :each | sum := sum + each ].
+        sum ]`, [collection]),
+      integerValue(6105),
+    );
+    // And `includes:`, which also had to scan by recursion.
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'big-inc', '[ :oc | oc includes: 109 ]', [collection]),
       booleanValue(true),
     );
   });

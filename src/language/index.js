@@ -19,6 +19,7 @@ export * from './smalltalk-kernel.js';
 export * from './smalltalk-class-builder.js';
 export * from './smalltalk-control-flow.js';
 export * from './smalltalk-allocation.js';
+export * from './smalltalk-block-protocol.js';
 export * from './smalltalk-dictionary.js';
 export * from './smalltalk-dictionary-table.js';
 export * from './smalltalk-equality.js';

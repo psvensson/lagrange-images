@@ -6,6 +6,7 @@ import {
   behaviorRefFor,
   lookupSelector,
 } from './smalltalk-lookup.js';
+import {findSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
 import {SMALLTALK_KERNEL_PRIMITIVE_V1} from './smalltalk-primitives.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
@@ -16,6 +17,13 @@ function assertImages(images) {
   }
   return images;
 }
+
+// The only two selectors the dispatcher recognizes for a Block beyond `value`. Mapping selector to
+// protocol slot name keeps the dispatcher's knowledge to "which slot", never "which object".
+const LOOP_SELECTOR = Object.freeze({
+  'whileTrue:': 'whileTrue',
+  'whileFalse:': 'whileFalse',
+});
 
 function blockValueSelector(argumentCount) {
   if (!Number.isInteger(argumentCount) || argumentCount < 0) throw new TypeError('argument count must be a non-negative integer');
@@ -79,6 +87,24 @@ function createSymmetricSmalltalkDispatcher() {
       if (isObjectRef(request.receiver)) {
         const blockReceiver = await images.getBlock(request.receiver.imageId, request.receiver.objectId);
         if (blockReceiver) {
+          // ADR 0051: two more operations on the classless Block personality. The protocol is
+          // looked up in the *condition* Block's image — which is the receiver, and therefore
+          // already the dispatch image a nested send would compute — so the image that owns the
+          // send owns the loop, and the answered nil is that image's.
+          //
+          // The dispatcher learns a protocol tag and two slot meanings, never an object id
+          // (ADR 0044 decision 9). An image with no protocol falls through to the ordinary
+          // does-not-understand below, which is the coherent answer for an image whose Blocks
+          // simply do not loop; a corrupt one throws out of `findSmalltalkBlockProtocol` rather
+          // than being degraded to that.
+          const loopSlot = LOOP_SELECTOR[selector];
+          if (loopSlot && request.arguments.length === 1) {
+            const protocol = await findSmalltalkBlockProtocol({images, imageId: request.receiver.imageId});
+            // Decision 9: the loop primitive is the language's own host operation, so it inherits
+            // the caller's frame. The condition and body do not — they are reached by ordinary
+            // `value` sends, which inherit nothing.
+            if (protocol) return Object.freeze({block: protocol[loopSlot], inheritsFrame: true});
+          }
           const expected = blockValueSelector(request.arguments.length);
           if (selector !== expected) throw new TypeError(`Symmetric Smalltalk Block does not understand: ${selector}`);
           // ADR 0050 decision 5a. A kernel-primitive Block is how a method reaches a host operation,
