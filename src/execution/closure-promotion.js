@@ -23,6 +23,19 @@ import {ExpiredClosureInstanceError} from './lexical-cells.js';
 // preassigned durable ref is what lets another environment name this closure before its Block record
 // exists — which is legal because `putLexicalEnvironment` validates the parent edge only and does
 // not require binding refs to resolve, so no atomic write of a cycle is needed.
+//
+// But "identity reserved" and "records published" are different facts, and conflating them turns the
+// very mechanism that breaks cycles into a way of reporting a failed promotion as a success: a retry
+// would meet the leftover entry and answer a durable ref whose Block was never written. The memo
+// therefore has three effective states:
+//
+//   absent        begin promotion
+//   in-progress   answer the preassigned ref, so recursion and cycles terminate
+//   complete      answer the promoted ref; the records exist
+//
+// A failure clears the in-progress entry, so a later call re-runs publication rather than trusting
+// a reservation nobody honoured. Exact-or-create is what makes that safe after a commit-then-lost-
+// ack: the retry rediscovers its own committed records and converges on them.
 
 // Deterministic, and derived from the transient id — which already carries a per-arena nonce, so two
 // executions cannot collide and a retry within one execution recomputes the same id. That is what
@@ -62,8 +75,11 @@ class ClosurePromoter {
   }
 
   async promote(ref) {
-    const existing = this.#memo.get([ref.imageId, ref.objectId]);
-    if (existing) return existing;
+    const key = [ref.imageId, ref.objectId];
+    // Both `in-progress` and `complete` answer the same ref: the first is what closes a cycle, the
+    // second is what makes promotion idempotent. Only `absent` starts work.
+    const existing = this.#memo.get(key);
+    if (existing) return existing.ref;
 
     const record = this.#arena.transientRecord(ref.imageId, ref.objectId);
     if (!record) throw new ExpiredClosureInstanceError(ref.imageId, ref.objectId);
@@ -72,17 +88,25 @@ class ClosurePromoter {
     }
 
     const durable = objectRef(ref.imageId, durableIdFor(ref.objectId));
-    // Before any recursion. Everything below may reach this same instance again.
-    this.#memo.set([ref.imageId, ref.objectId], durable);
-
-    const environment = await this.#promoteEnvironment(ref.imageId, record.environment);
-    await ensureBlock(this.#images, ref.imageId, {
-      id: durable.objectId,
-      code: record.code,
-      environment,
-      metadata: {...record.metadata},
-    });
-    return durable;
+    // Reserved before any recursion. Everything below may reach this same instance again.
+    this.#memo.set(key, {ref: durable, status: 'in-progress'});
+    try {
+      const environment = await this.#promoteEnvironment(ref.imageId, record.environment);
+      await ensureBlock(this.#images, ref.imageId, {
+        id: durable.objectId,
+        code: record.code,
+        environment,
+        metadata: {...record.metadata},
+      });
+      this.#memo.set(key, {ref: durable, status: 'complete'});
+      return durable;
+    } catch (error) {
+      // A reservation nobody honoured must not survive as an answer. Dropping it costs only the
+      // work of re-running an exact-or-create publication, which converges whether the failed
+      // attempt wrote nothing or wrote everything and lost the acknowledgement.
+      this.#memo.delete(key);
+      throw error;
+    }
   }
 
   async #promoteEnvironment(imageId, environmentRef) {

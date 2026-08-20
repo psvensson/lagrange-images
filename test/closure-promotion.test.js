@@ -179,8 +179,11 @@ test('a promotion retried after a lost acknowledgement converges on the same ide
       /injected post-commit failure/,
     );
 
-    // A fresh arena and a fresh promoter, so the retry cannot lean on the failed run's memo:
-    // convergence has to come from the deterministic identity plus exact-or-create.
+    // A fresh arena and a fresh promoter. What this proves is narrower than it might look: that
+    // publication is deterministic given the same *logical* transient identity, independent of any
+    // promoter's local state. It does not claim a new execution could reconstruct an expired
+    // closure — it could not, and does not need to. The same-arena retry below is the recovery
+    // case that actually matters.
     const second = build();
     const retried = await new ClosurePromoter(runtime.images, second.arena).promoteValue(second.a);
 
@@ -190,6 +193,111 @@ test('a promotion retried after a lost acknowledgement converges on the same ide
     for (const record of [...written, ...(await environments(runtime))]) {
       assert.deepEqual(findTransientRefs(record), []);
     }
+  });
+});
+
+
+// --- recovery (the memo's three states) ----------------------------------------------------------
+
+// A reserved identity is not a published record. If a failure leaves the reservation behind, the
+// mechanism that breaks cycles becomes a way of answering a durable ref whose Block was never
+// written — a failed promotion reported as a success.
+//
+// Swept at both publication points and in both failure modes, and the retry always uses the SAME
+// arena, because that is where a stale reservation would live.
+for (const target of ['putLexicalEnvironment', 'putBlock']) {
+  for (const mode of ['pre-commit', 'lost-ack']) {
+    test(`a ${mode} failure at ${target} leaves no false promotion, and the same arena retries clean`, async () => {
+      await withRuntime(async (runtime) => {
+        const code = await base(runtime);
+        const arena = new LexicalCellArena();
+        const inner = arena.mintClosureBlock('app', {code});
+        const instance = arena.mintClosureBlock('app', {
+          code,
+          environment: arena.mintClosureEnvironment('app', {
+            bindings: {'b:held': {name: 'held', value: inner}},
+          }),
+        });
+
+        let armed = true;
+        const faulting = Object.create(runtime.images);
+        faulting[target] = async (imageId, input, options) => {
+          if (armed && mode === 'pre-commit') {
+            armed = false;
+            throw new Error(`injected pre-commit failure (${input.id})`);
+          }
+          const stored = await runtime.images[target](imageId, input, options);
+          if (armed) {
+            armed = false;
+            throw new Error(`injected post-commit failure (${input.id})`);
+          }
+          return stored;
+        };
+
+        await assert.rejects(
+          new ClosurePromoter(faulting, arena).promoteValue(instance),
+          /injected (pre|post)-commit failure/,
+        );
+
+        // The retry runs against the same arena, so a stale in-progress reservation would be
+        // consulted here — and would answer a ref whose Block may not exist.
+        const promoted = await new ClosurePromoter(runtime.images, arena).promoteValue(instance);
+
+        // The answer must be a real, resolvable Block, not merely a plausible ref.
+        const record = await runtime.images.getBlock('app', promoted.objectId);
+        assert.ok(record, `retry answered ${promoted.objectId}, which does not exist`);
+        assert.deepEqual(findTransientRefs(record), []);
+
+        // And the closure it captured resolves too, through a real environment.
+        const environment = await runtime.images.getLexicalEnvironment(
+          record.environment.imageId, record.environment.objectId,
+        );
+        assert.ok(environment, 'the promoted environment does not exist');
+        const heldRef = environment.bindings['b:held'].value;
+        assert.ok(!isTransientRef(heldRef));
+        assert.ok(await runtime.images.getBlock('app', heldRef.objectId), 'the captured closure was not published');
+
+        // Exactly two Blocks: the instance and the closure it held. A cleared reservation must not
+        // become a second identity for either.
+        assert.equal((await blocks(runtime)).length, 2);
+      });
+    });
+  }
+}
+
+// The distinction the three states exist for, stated directly.
+test('a failed promotion does not leave a memo entry that answers as success', async () => {
+  await withRuntime(async (runtime) => {
+    const code = await base(runtime);
+    const arena = new LexicalCellArena();
+    const instance = arena.mintClosureBlock('app', {code});
+
+    const failing = Object.create(runtime.images);
+    failing.putBlock = async () => { throw new Error('injected failure'); };
+    await assert.rejects(new ClosurePromoter(failing, arena).promoteValue(instance), /injected failure/);
+
+    // A promoter sharing the arena's memo must not answer from the abandoned reservation. If it
+    // did, this would return a ref with no record behind it rather than re-publishing.
+    const promoted = await new ClosurePromoter(runtime.images, arena).promoteValue(instance);
+    assert.ok(await runtime.images.getBlock('app', promoted.objectId));
+  });
+});
+
+test('a completed promotion is still answered from the memo without rewriting', async () => {
+  await withRuntime(async (runtime) => {
+    const code = await base(runtime);
+    const arena = new LexicalCellArena();
+    const instance = arena.mintClosureBlock('app', {code});
+    const promoter = new ClosurePromoter(runtime.images, arena);
+
+    const first = await promoter.promoteValue(instance);
+    let writes = 0;
+    const counting = Object.create(runtime.images);
+    counting.putBlock = async (...args) => { writes += 1; return await runtime.images.putBlock(...args); };
+
+    const second = await new ClosurePromoter(counting, arena).promoteValue(instance);
+    assert.deepEqual(second, first);
+    assert.equal(writes, 0, 'a complete entry must be answered from the memo, not re-published');
   });
 });
 
