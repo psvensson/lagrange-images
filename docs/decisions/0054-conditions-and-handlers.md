@@ -78,10 +78,14 @@ normally. No new ABI, no new export, no change to the compiler.
 Two consequences worth stating rather than discovering later:
 
 ```text
-resumption consumes a resumption   MAX_WASM_RESUMPTIONS already bounds these, and a
-                                   resumed signal counts like any other
-resumption does not re-enter       the handler runs in the *host*, above the guest; it does
-the guest                          not run inside the suspended WASM frame
+no extra resumption is charged     the executor increments its counter *before* running the
+                                   host effect, so a resumed signal rides the resumption that
+                                   send already booked. Counting the signal separately would
+                                   double-charge it against MAX_WASM_RESUMPTIONS and make a
+                                   handled loop fail sooner than the same loop unhandled.
+
+the handler does not re-enter      it runs in the *host*, above the guest, and never inside
+the guest                          the suspended WASM frame
 ```
 
 ### 4. Unwinding is one-way, and retires what it passes
@@ -100,6 +104,25 @@ resuming after unwinding           impossible, and refused explicitly rather tha
 An implementation must not "optimize" by pooling a retired instance. That is the one place where a
 correct-looking change would produce a guest resuming into another computation's locals.
 
+### 4a. Blocks receive the new selectors through a separate protocol object
+
+`on:do:`, `ensure:` and `ifCurtailed:` are Block selectors, and ADR 0044 decision 11 still leaves
+Blocks classless. ADR 0051 solved the same problem with a discoverable Block protocol object, so the
+mechanism exists — but that object is an *exact* two-slot protocol whose shape and both targets are
+validated, and the dispatcher recognizes exactly `whileTrue:`/`whileFalse:` against it.
+
+A second protocol object, not a wider first one:
+
+```text
+smalltalk-block-protocol/v1          unchanged — two slots, loop primitives, exact validation
+smalltalk-block-unwind-protocol/v1   new — the unwind selectors, same discovery convention
+```
+
+Widening v1 would change the shape of a durable record that existing images already hold, and would
+make its exactness check a migration rather than a guard. A separate object is discovered the same
+way, validated the same way, and an image with one protocol and not the other is coherent — which is
+the property that made ADR 0051's design worth copying rather than extending.
+
 ### 5. The handler stack is execution context
 
 A handler is transient in exactly the way `dispatchImage`, the authority context and ADR 0050's frame
@@ -117,31 +140,102 @@ established, and none of the ones from the execution it was created in — which
 0050 applies to frames, and for the same reason: the alternative is a durable, forgeable claim about
 a dead execution.
 
-### 6. A handler runs with its establisher's identity, not the signaller's
+### 6. A handler runs with its establisher's identity — and authority does *not* come free
 
-The handler is the `on:do:` caller's Block, so ADR 0050 decision 5a rule 3 already answers this: it
-restores the frame it was created in, so its `self` and its instance variables are the establisher's.
-Authority likewise attenuates from the establisher's context, not the signaller's — a handler must not
-become a way for signalling code to borrow rights it does not hold.
+Two halves, and they behave differently. Getting that wrong is a privilege escalation, so they are
+separated here rather than asserted together.
 
-That falls out of running the handler as an ordinary Block invocation. It is stated here because the
-opposite is easy to implement by accident: invoking the handler on the signalling stack makes the
-signaller's context the *ambient* one, and inheriting it would be a privilege escalation.
+```text
+self, instance variables   free. The handler is the establisher's Block, and ADR 0050 decision
+                           5a rule 3 restores the frame it was created in.
+
+authority                  NOT free, and must be captured explicitly.
+```
+
+Authority is propagated *dynamically* by the executor — a nested send inherits the current execution's
+authority context — so invoking the handler as an ordinary Block at the signal point would hand it the
+**signaller's** authority. Signalling code could then reach rights the establisher never held, simply
+by raising a condition inside a more privileged caller.
+
+So the handler entry retains the establisher's authority context at `on:do:` time, and the handler
+runs under that. The same applies to `ensure:` and `ifCurtailed:` blocks, which run during unwinding
+and would otherwise inherit whatever context the unwinding passes through.
+
+**Where that captured context lives is itself a decision.** ADR 0037 keeps authority out of Values,
+Blocks and executor-visible data, so it is *not* attached to the closure and does not become part of
+any durable record. It is retained privately on the transient handler or protection entry — the same
+lifetime as the entry itself, invisible to Smalltalk, and gone with the execution.
+
+### 6a. The transfer protocol
+
+Left unpinned, this is where an implementation invents something subtly different from every
+Smalltalk. The protocol is small and it is stated:
+
+```text
+anException signal          raise it; answers whatever the handler decides
+anException resume: value   the signalling send answers `value`; computation continues
+anException return: value   unwind to this handler's `on:do:`, which answers `value`
+```
+
+`resume:` and `return:` act on the **current signal occurrence**, which is transient execution state,
+not durable condition-object state. One condition object signalled twice — or signalled from two
+executions — has two occurrences, and neither may see the other's. Storing "am I being handled" on the
+object would make a durable record carry live control-flow state, which is the same mistake ADR 0050
+refused for defining frames.
+
+Two rules that fall out, and that a naive implementation gets wrong:
+
+```text
+a handler's ordinary value   means `return:` implicitly, so the natural idiom works:
+                             `[ ... ] on: Error do: [ :e | 0 ]` answers 0. Requiring an
+                             explicit `return:` would make the common case the verbose one.
+
+re-signalling disables       while a handler runs, its own entry is disabled, so a signal
+the running handler          raised inside it finds only *outer* handlers. Without that, a
+                             handler that signals the condition it is handling is an
+                             immediate infinite regress rather than a delegation upward.
+```
 
 ### 7. Unwind protection
 
 ```text
-ensure: aBlock        runs on both the normal and the unwinding path
-ifCurtailed: aBlock   runs only when unwound through
+ensure: aBlock        runs on every exit, normal or not
+ifCurtailed: aBlock   runs only on a non-normal exit
 ```
+
+**"Non-normal" means every non-normal exit, not only a Smalltalk condition.** A host trap crossing the
+protected scope — a depth-limit failure, an expired closure instance, a WASM error — must run the
+protection too, even though those are not themselves Smalltalk-catchable. Protection that only fired
+for catchable failures would be protection that stops working precisely when something unexpected
+happened, which is when it matters most.
 
 Both must run while the arena is still alive, since ADR 0052 makes a closure execution-local: an
 `ensure:` block that ran after the arena died could not reach its own captures.
 
-An `ensure:` block that itself signals during unwinding is the case that turns a simple mechanism
-into a hard one. It is decided rather than left open: the original condition continues unwinding, and
-the secondary one is reported as having occurred during unwinding rather than replacing it — losing
-the first failure is how a debuggable error becomes an inexplicable one.
+An `ensure:` block that itself signals while unwinding is the case that turns a simple mechanism into
+a hard one, and it is decided here rather than deferred. A cleanup failure is a real failure and stays
+catchable:
+
+```text
+P is unwinding
+  the ensure: block signals S
+    S gets an ordinary handler search, like any other signal
+
+    S handled locally (resumed, or returned to a handler inside the cleanup)
+      -> the ensure: block finishes normally
+      -> P carries on unwinding, unchanged
+
+    S escapes the ensure: block
+      -> S becomes the failure travelling outward
+      -> P is retained on it as the condition that was unwinding
+      -> neither failure is lost
+```
+
+An earlier draft had the primary always win, with the secondary merely reported. That protects the
+debugging goal — never lose the first failure — but pays for it by making a cleanup failure
+uncatchable, which is too high a price: a handler that exists specifically to deal with a failing
+cleanup would never run. Retaining the primary as the escaping condition's cause reaches the same
+debugging goal without suppressing anything.
 
 ### 8. What becomes signalable now, and what does not yet
 
@@ -177,12 +271,18 @@ signalling and handling
     the innermost applicable handler wins, with nested `on:do:` proven in both orders
     a handler for a superclass catches a subclass; an unrelated class does not catch
     a re-signal from inside a handler finds only *outer* handlers, never itself
+    a handler's ordinary returned value acts as `return:`, so `on: Error do: [ :e | 0 ]` answers 0
+    two signals of one condition object have independent occurrences, and the object holds
+        no handling state
+    the unwind selectors are reached through their own protocol object, and an image holding
+        the loop protocol but not the unwind protocol is coherent
 
 resumption
     `resume:` makes the signalling send answer the handler's value and continue
     proven in the WASM lane across a real suspension: the guest resumes at the effect site
     and its locals are intact
-    a resumed signal counts against MAX_WASM_RESUMPTIONS like any other resumption
+    a resumed signal charges no *extra* resumption: a loop that handles and resumes runs to
+        the same iteration count as the same loop with no handler at all
 
 unwinding
     `return:` unwinds to the establishing `on:do:`, which answers the handler's value
@@ -193,15 +293,22 @@ unwinding
 
 context
     a handler runs with its establisher's `self`, not the signaller's
-    a handler's authority is the establisher's; a signaller cannot borrow rights through it
+    a handler's authority is the establisher's, proven adversarially: a signal raised inside a
+        more privileged caller must not let the handler reach rights the establisher lacks
+    the same holds for `ensure:` and `ifCurtailed:` blocks running during unwinding
+    the retained authority context appears in no Value, no Block and no durable record
     an escaped Block signalling in a later execution sees that execution's handlers only
     the handler stack reaches no durable record, no Value and no activation field
 
 unwind protection
     `ensure:` runs on the normal path and on the unwinding path
     `ifCurtailed:` runs only when unwound through
+    both run for a non-catchable host failure crossing their scope, not only for conditions
     both run while the arena is alive, and can reach their own captures
-    a signal raised inside an unwinding `ensure:` does not replace the original condition
+    a signal raised inside an unwinding `ensure:` gets an ordinary handler search
+    handled locally, the cleanup completes and the original condition keeps unwinding
+    escaping, it becomes the outward failure and retains the original as its cause, so
+        neither failure is lost and the cleanup failure is itself catchable
 
 the library
     `at:` signals an index-out-of-range condition instead of sending a selector nobody implements
@@ -235,7 +342,17 @@ resumption rides the existing resumable ABI: a handled signal answers the host e
     guest resumes at its effect site with no new export or ABI change
 unwinding retires WASM instances; never return a mid-computation instance to the pool
 the handler stack is execution context — never durable, never a Value, never an activation field
-a handler runs with its establisher's self and authority, never the signaller's
+a handler runs with its establisher's self (free, via ADR 0050) and its authority (NOT free —
+    authority propagates dynamically, so it must be captured at `on:do:` time and retained
+    privately on the transient entry, never on the closure and never in a Value: ADR 0037)
+`ensure:` and `ifCurtailed:` capture the establisher's authority the same way
+the unwind selectors get their own protocol object; never widen the exact two-slot loop protocol
+`resume:`/`return:` act on the transient signal occurrence, never on durable condition state;
+    a handler's ordinary value means `return:`, and a running handler is disabled for re-signals
+a resumed signal charges no extra WASM resumption — the counter increments before the host effect
+unwind protection runs for every non-normal exit, including host failures that are not catchable
+a cleanup failure stays catchable: if it escapes it becomes the outward failure and retains the
+    original as its cause
 `ensure:` runs on both paths while the arena is still alive; a signal during unwinding does not
     replace the condition already unwinding
 this ADR makes failures catchable, not interceptable: `doesNotUnderstand:` stays deferred
