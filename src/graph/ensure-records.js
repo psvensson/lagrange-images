@@ -50,6 +50,14 @@ function blockProjection(record) {
   });
 }
 
+function lexicalEnvironmentProjection(record) {
+  return canonicalRecordJson({
+    parent: record.parent ?? null,
+    bindings: record.bindings ?? {},
+    metadata: record.metadata ?? {},
+  });
+}
+
 const defaultConflict = (kind, imageId, id) => new RecordConflictError(kind, imageId, id);
 
 async function ensureCodeArtifact(images, imageId, desired, {conflict = defaultConflict} = {}) {
@@ -70,6 +78,17 @@ async function ensureBlock(images, imageId, desired, {conflict = defaultConflict
   return existing;
 }
 
+// ADR 0052 decision 7a. Promotion writes at deterministic ids, so a retry after a lost
+// acknowledgement must converge rather than mint a second identity for one closure.
+async function ensureLexicalEnvironment(images, imageId, desired, {conflict = defaultConflict} = {}) {
+  const existing = await images.getLexicalEnvironment(imageId, desired.id);
+  if (!existing) return await images.putLexicalEnvironment(imageId, desired);
+  if (lexicalEnvironmentProjection(desired) !== lexicalEnvironmentProjection(existing)) {
+    throw conflict('lexical environment', imageId, desired.id);
+  }
+  return existing;
+}
+
 export {
   RecordConflictError,
   blockProjection,
@@ -77,4 +96,6 @@ export {
   codeArtifactProjection,
   ensureBlock,
   ensureCodeArtifact,
+  ensureLexicalEnvironment,
+  lexicalEnvironmentProjection,
 };
