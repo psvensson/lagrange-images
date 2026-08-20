@@ -174,6 +174,70 @@ expiry        a transient ref presented after its arena is gone fails closed, an
 Arena-first resolution is the whole point. If a Block argument has to become durable before the
 dispatcher will look at it, nothing has been fixed.
 
+### 5b. The runtime owns a reserved REF namespace, and the graph enforces it
+
+"Reserved namespace" is not yet a fact about this substrate, so decision 5a would be a convention
+rather than an invariant without this. Today:
+
+```text
+REF object ids       arbitrary non-empty text, with no reserved space
+record collection    one per image, holding every record kind keyed by that same id
+                     — `putLexicalEnvironment` even refuses an id already used by another kind
+```
+
+So a transient id is only distinguishable from a durable one if something owns the distinction. The
+runtime does, and the graph write seam enforces it:
+
+```text
+namespace     a syntactically recognizable, runtime-owned prefix on the object id, decidable
+              without any I/O. It belongs to the *runtime*, not to Symmetric Smalltalk: this
+              is generic execution infrastructure, and a language-specific carve-out in the
+              object store would be exactly the layering mistake ADR 0044 decision 9 avoids
+              elsewhere.
+
+refuse ids    the write seam refuses to create any durable record — of any kind — whose id
+              lies in that namespace.
+
+refuse refs   the write seam also refuses any durable record that *embeds* an unpromoted
+              transient REF in an authored field. This is the backstop that makes decision 6's
+              boundary list enforceable rather than aspirational: a write path nobody thought
+              of cannot quietly persist a reference to something that dies with the arena.
+
+ordering      the central promotion operation (decision 7a) runs *before* that guard and
+              rewrites transient refs to their promoted durable refs. The guard therefore
+              never fires in correct operation — it exists to catch a boundary that forgot to
+              promote, and to make forgetting a loud failure rather than a dangling ref.
+```
+
+The guard and the promotion operation are deliberately not the same thing. Promotion is the
+mechanism; the guard is the proof that the mechanism was used.
+
+### 5c. Compatibility: an existing record must never become transient by reinterpretation
+
+Object ids were unrestricted before this ADR, so a pre-existing image may hold a durable record whose
+id now falls inside the reserved namespace. That record is a durable Block or object that some other
+record legitimately points at, and it must not change meaning:
+
+```text
+never shadow    arena-first resolution must never mask a durable record. A reserved id that
+                resolves to a real durable record is not a stale transient instance and must
+                not be reported as an expired one.
+
+detect          the collision is a migration condition, reported explicitly — refused, or
+                migrated to a fresh id with its referrers rewritten. It is never resolved by
+                precedence, because precedence would mean one id space silently means two
+                things depending on which lookup ran first.
+
+cheaply         detection belongs where it costs nothing per closure: the write seam for
+                every new write, and an explicit image validation or migration pass for
+                existing images. It is not a per-resolution existence check, which would put
+                durable I/O back into the path this ADR exists to keep free.
+```
+
+After migration the invariant is total, and it is what makes decision 5a's expiry error rigorous:
+because a reserved id can never be a durable record, a reserved ref that is not in the arena is
+*known* to be an expired instance rather than possibly a missing Block.
+
 ### 6. The durability boundary, which is the actual decision
 
 Everything above is easy; this is the part that must be got right, because a boundary that is too
@@ -312,6 +376,14 @@ instances stay distinct
     two simultaneously live instances over different receivers act on their own self
     one instance invoked repeatedly keeps its own live cell
 
+the reserved namespace is owned, not merely named
+    a durable record of any kind cannot be created with a reserved id
+    a durable record embedding an unpromoted transient REF is refused at the write seam
+    that refusal is reachable only by bypassing promotion — the guard does not fire in
+        correct operation, proven by promoting through every boundary and seeing no refusal
+    a legacy durable record at a reserved id is reported as a migration condition, is never
+        shadowed by arena-first resolution, and is never reported as an expired instance
+
 execution-local instances are actually usable
     a transient closure is passed to ifTrue:, to do:, and to another closure, and invoked,
         without becoming durable — asserted by record count, not by inspection
@@ -324,7 +396,10 @@ promotion is one operation
     a closure written into two slots promotes once and is the same ref in both
     a transient outer capturing a transient inner promotes both, once, on the outer's escape,
         with the inner's durable ref substituted into the outer's environment
-    shared and cyclic capture structure terminates and stays shared
+    shared and cyclic capture structure terminates and stays shared, with preassigned
+        promotion identities — no atomic strongly-connected-component write is required,
+        because `putLexicalEnvironment` validates only the parent edge and does not require
+        snapshot binding refs to exist yet, so environments may be staged before their Blocks
     a promotion retried after a commit-then-lost-ack converges on one identity
     a cell whose contents happen to be a closure does NOT promote that closure
 
@@ -377,6 +452,12 @@ the promotion traversal walks snapshot captures only, never live-cell contents a
     defining frame: what is traversed is what is written
 a transient instance is an ordinary REF in a reserved arena namespace, resolved arena-first as
     execution context; never make the dispatcher see a closure by promoting it
+the reserved REF namespace is owned by the runtime and enforced at the graph write seam — no
+    durable record may take a reserved id, and none may embed an unpromoted transient ref;
+    it is generic infrastructure, never a Smalltalk-specific exception in the object store
+promotion runs before that guard; the guard exists to make a forgotten boundary loud
+arena-first resolution never shadows a durable record: a legacy id collision is detected and
+    migrated or refused, never resolved by precedence
 a promoted closure carries snapshots, carries {cell: true} without contents, and carries no frame
 per-site deterministic instance ids are rejected: the arena keys cells and frames on the instance
     ref, so two live instances of one site would alias quietly
