@@ -247,9 +247,10 @@ Next, ordered by architectural pressure rather than convenience:
       bound: measured at ~2.1 records per closure-creating iteration, strictly linear and never
       converging, against ~0 for a closure-free body. Recursion hid this — the 256-activation limit
       stopped any program before the growth mattered. Fixing it is a real decision — deterministic
-      per-creation-site closure ids, transient closures, or collection — and is now **ADR 0052**,
-      ahead of Integer ordering: unbounded durable image growth is a substrate and operational
-      problem, where a missing `<` is missing functionality.
+      per-creation-site closure ids, transient closures, or collection — and is decided by **ADR
+      0052**, which chose execution-local instances with promotion on escape, ahead of Integer
+      ordering: unbounded durable image growth is a substrate and operational problem, where a
+      missing `<` is missing functionality.
       Note the growth is the finding; the *timing* curve seen in tests (50/100/200 elements taking
       1.5s/4.7s/22.6s to build) is that growth amplified by the mock backend, which clones the whole
       database per transaction. Read-only traversal is linear. Do not cite the timings as evidence of
