@@ -44,14 +44,21 @@ method possible, and this ADR deliberately does not extend it.
 
 ### 2. One primitive, three derived methods
 
+The primitive is a captured Block invoked by ordinary semantic wrapper methods, exactly as every
+kernel primitive since ADR 0046 is reached — not something a method "is":
+
 ```text
 primitive          integer-less-than    two Integers -> canonical boolean
 
-Integer >> <       the primitive
-Integer >> >       the primitive, with the arguments the other way round
-Integer >> <=      not (other < self)
-Integer >> >=      not (self < other)
+Integer >> <       primitiveLessThan value: self value: other
+Integer >> >       primitiveLessThan value: other value: self      the same primitive, swapped
+Integer >> <=      if (primitiveLessThan value: other value: self) then false else true
+Integer >> >=      if (primitiveLessThan value: self  value: other) then false else true
 ```
+
+Each method is an ordinary installed method whose program captures the primitive Block by ref and
+sends it `value:value:`. Nothing about the dispatch path is special-cased: `<` is found by the same
+Behavior walk as `+` and `ifTrue:`.
 
 Four primitives would be four chances for the set to become inconsistent — a `>=` that disagrees with
 `<` at exactly one boundary is the classic bug, and it cannot happen if only one comparison exists.
@@ -65,11 +72,15 @@ surface, and `not` remains an open decision belonging to ADR 0045's deferred Boo
 ### 3. Arithmetic completes the same way
 
 ```text
-primitives     integer-subtract    integer-multiply
-               integer-divide      integer-modulo
+primitives     integer-subtract       integer-multiply
+               integer-floor-divide   integer-modulo
 
 methods        Integer >> -   *   //   \\
 ```
+
+`integer-floor-divide` is named for what it does rather than for the operator it backs. A primitive
+name becomes durable CodeArtifact content, so an image records `integer-floor-divide` forever; naming
+it `integer-divide` would durably imply host division semantics that decision 4 explicitly rejects.
 
 `+` keeps its existing `integer-add` implementation rather than being rewritten onto a primitive.
 Changing it would touch the one arithmetic path every existing test already exercises, for no gain
@@ -81,18 +92,25 @@ only purpose is tidiness. Its rewrite belongs with `lagrange-code/v1`'s eventual
 Division is where "obvious" implementations silently disagree, so both operations are pinned:
 
 ```text
-//    floored division      the quotient rounds toward negative infinity
-\\    modulo                the result takes the sign of the divisor
-      identity              (a // b) * b + (a \\ b) = a, for every b except zero
+//    floored division      q = floor(a / b)
+\\    modulo                r = a - q*b
+
+the invariant that actually distinguishes this from truncation:
+      for b > 0     0 <= r <  b
+      for b < 0     b <  r <= 0
 
 -7 // 2  =  -4        -7 \\ 2  =  1
  7 // -2 =  -4         7 \\ -2 = -1
 ```
 
-That is Smalltalk's convention, and it is chosen over truncation-toward-zero because the identity
-above holds for negative operands, which is what makes `\\` usable for indexing and hashing. Host
-`BigInt` division truncates toward zero, so this is an explicit correction rather than a pass-through
-— exactly the kind of place a "thin wrapper" quietly becomes wrong.
+Note what is *not* the distinguishing property: `(a // b) * b + (a \\ b) = a` holds for
+truncating division too, in all four sign quadrants, so stating it alone would specify nothing. The
+range of `r` is the real content — and specifically `0 <= r < b` for a positive divisor, which is
+what makes `\\` directly usable for hashing and index arithmetic without a corrective branch at every
+call site.
+
+Host `BigInt` division truncates toward zero, so this is an explicit correction rather than a
+pass-through — exactly the kind of place a "thin wrapper" quietly becomes wrong.
 
 **Division by zero is an explicit failure.** No infinity, no null, no zero. A Value cannot represent
 the result, and inventing one would put a non-number into an Integer-typed slot.
@@ -111,9 +129,15 @@ no host number path  the implementation never round-trips through a JavaScript n
 ### 6. Integers only; mixed-mode is deferred
 
 These primitives accept two Integers and refuse anything else explicitly, naming the kind they got.
-Float ordering and mixed Integer/Float arithmetic need coercion rules — which answers `1 < 1.5`, what
-`1 = 1.0` means, and whether a mixed operation answers a float — and that is a decision about the
-numeric tower, not about unblocking a collection. It is deferred rather than guessed at.
+Mixed *ordering* and mixed *arithmetic* need coercion rules — what `1 < 1.5` answers, and whether a
+mixed operation answers an Integer or a float — and that is a decision about the numeric tower rather
+than about unblocking a collection, so it is deferred rather than guessed at.
+
+Mixed **equality** is not deferred, because it is already decided: ADR 0048 says an Integer equals a
+finite, integral Float representing the same mathematical value, so `1 = 1.0` is true and hashes
+alike. This ADR changes nothing there. The distinction matters — equality is settled and must be
+preserved, while ordering is open — and blurring the two would look like this ADR quietly reopening
+a decision it has no business touching.
 
 Sending `<` to a Float receiver is therefore an ordinary message-not-understood: `Float` has no
 ordering protocol yet, and saying so is more honest than silently comparing through a coercion nobody
@@ -143,13 +167,16 @@ ordering
 
 arithmetic
     -, *, // and \\ answer correctly, including negative operands on both sides
-    (a // b) * b + (a \\ b) = a holds for the negative cases in decision 4
+    all four sign quadrants of // and \\ are covered explicitly: (+,+) (-,+) (+,-) (-,-)
+    the *range* invariant holds in each: 0 <= r < b for b > 0, and b < r <= 0 for b < 0
+        — the reconstruction identity alone would pass a truncating implementation
     a product beyond 2^53 is exact rather than rounded
     division and modulo by zero fail explicitly, and name the operation
 
 refusals
     a non-Integer argument is refused explicitly and names the kind it received
     a Float receiver answers message-not-understood, not a coerced comparison
+    ADR 0048's equality is unchanged: 1 = 1.0 is still true and still hashes alike
 
 the library
     OrderedCollection gains at:, first, last and removeLast
@@ -165,6 +192,8 @@ what must not have changed
     no new lagrange-code op, no new executable representation, no new Value kind
     the compiler recognizes no comparison or arithmetic selector
     `+` still runs through `integer-add`
+    each method is an ordinary installed method capturing the primitive Block and sending
+        `value:value:`, found by the same Behavior walk as `+`
 ```
 
 ## What is deferred
@@ -182,11 +211,16 @@ what must not have changed
 ordering is protocol backed by a primitive; lagrange-code stays frozen and gains no comparison op
 one comparison primitive, three derived methods — four primitives is four chances to disagree
 `not` is not invented here; the two negations live inside installed programs
-// floors and \\ takes the divisor's sign, so (a // b) * b + (a \\ b) = a for negative operands too;
-    host BigInt truncates, so this is a correction rather than a pass-through
+// floors and \\ satisfies 0 <= r < b for b > 0 and b < r <= 0 for b < 0; the reconstruction
+    identity alone does NOT distinguish floor from truncation, so never state it as the spec.
+    Host BigInt truncates, so this is a correction rather than a pass-through
+the durable primitive is named integer-floor-divide: the name outlives the decision in every image
+    that records it, so it must not imply host semantics
 division or modulo by zero fails explicitly; no infinity, no null, no zero
 arbitrary precision throughout; never round-trip an Integer through a host number
-two Integers only; a non-Integer is refused by name and mixed-mode stays deferred
+two Integers only; a non-Integer is refused by name, and mixed-mode *ordering and arithmetic*
+    stay deferred — mixed *equality* is already settled by ADR 0048 and must be preserved
+a primitive is a captured Block a wrapper method sends `value:value:`; a method never "is" one
 when the library's `=`-counting idiom becomes unnecessary, delete it — a gap signal must not
     outlive the gap
 ```
