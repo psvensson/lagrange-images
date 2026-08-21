@@ -295,6 +295,89 @@ test('an explicit capture colliding with a global binding id is refused', async 
   });
 });
 
+// The corollary of the collision test above: a capture id is not evidence of provenance. Whether a
+// capture is a global is decided by what compilation *resolved*, not by which ids happen to be
+// published. Inferring it from the id would silently swap the caller's value for the binding object
+// in exactly this shape.
+test('an explicit capture is bound to the caller value even when its id is a published binding id', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel} = await seed(runtime, 'app');
+    await publishGlobal({
+      images: runtime.images, imageId: 'app', name: 'Collide',
+      bindingId: globalBindingId('Collide'), value: kernel.integerClass,
+    });
+
+    // The source never mentions `Collide`, so no global is resolved here at all.
+    const installed = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'not-a-global', source: '[ Other ]',
+      captures: {Other: globalBindingId('Collide')},
+      environment: objectRef('app', (await runtime.images.putLexicalEnvironment('app', {
+        id: 'caller-supplied-env',
+        bindings: {[globalBindingId('Collide')]: {name: 'Other', value: textValue('caller value')}},
+      })).id),
+    });
+    assert.deepEqual(installed.globalBindingIdsUsed, [], 'compilation resolved no globals');
+    assert.deepEqual(
+      await runtime.executor.execute(
+        await runtime.invocations.invokeBlock(objectRef('app', installed.block.id), []),
+      ),
+      textValue('caller value'),
+      'the caller value must survive; the compiler must not substitute the GlobalBinding object',
+    );
+  });
+});
+
+test('a method capture is bound to the caller value even when its id is a published binding id', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel, options} = await seed(runtime, 'app');
+    await publishGlobal({
+      images: runtime.images, imageId: 'app', name: 'Collide',
+      bindingId: globalBindingId('Collide'), value: kernel.integerClass,
+    });
+    const shape = objectRef('app', (await runtime.images.putShape('app', {id: 'capture-holder-shape', slots: []})).id);
+    const holder = await defineClass({
+      images: runtime.images, imageId: 'app', name: 'CaptureHolder', instanceShapeRef: shape,
+    });
+    await defineMethodsFromSource({
+      ...options,
+      classRef: holder.classRef,
+      methods: [{
+        selector: 'answer',
+        source: '[ Other ]',
+        captures: [{name: 'Other', id: globalBindingId('Collide'), value: textValue('caller value')}],
+      }],
+    });
+    const instance = await evaluate(runtime, 'app', 'capture-holder', '[ :c | c new ]', [holder.classRef]);
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'ask-holder', '[ :o | o answer ]', [instance]),
+      textValue('caller value'),
+      'the caller value must survive; the compiler must not substitute the GlobalBinding object',
+    );
+  });
+});
+
+// The collision check distinguishes the compiler's own global captures from the caller's by exactly
+// one thing: the `$global:` key prefix. A caller able to supply that prefix could name a capture
+// that looks internal and walk straight past the check, so the whole prefix is refused as a name.
+test('a caller cannot supply an internal-looking $global: capture name', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel} = await seed(runtime, 'app');
+    const bindingId = globalBindingId('Sneaky');
+    await publishGlobal({images: runtime.images, imageId: 'app', name: 'Sneaky', bindingId, value: kernel.integerClass});
+
+    for (const name of [`$global:${bindingId}`, '$global:anything', '$global:']) {
+      await assert.rejects(
+        installSymmetricSmalltalkBlock({
+          images: runtime.images, imageId: 'app', id: `sneak-${name}`, source: '[ Sneaky ]',
+          captures: {[name]: 'caller/sneaky'},
+        }),
+        /belongs to the compiler/,
+        `capture name ${name} must be refused`,
+      );
+    }
+  });
+});
+
 test('two names resolving to one binding share a single capture', async () => {
   await withRuntime(async (runtime) => {
     const {kernel} = await seed(runtime, 'app');
@@ -422,14 +505,102 @@ test('publish, rebind, rename and remove are retry-safe', async () => {
     await rebindGlobal({images, imageId: 'app', bindingId, value: kernel.objectClass});
     assert.equal((await images.getObject('app', bindingId))._version, before, 'a no-op rebind must not write');
 
-    // A rename retried after a lost acknowledgement converges.
-    await renameGlobal({images, imageId: 'app', from: 'Retry', to: 'Retried'});
-    const again = await renameGlobal({images, imageId: 'app', from: 'Retry', to: 'Retried'});
+    // A rename retried after a lost acknowledgement converges -- but only because the retry names the
+    // identity it was moving. Convergence is "the binding I moved is now at the destination", not
+    // "something is at the destination".
+    await renameGlobal({images, imageId: 'app', from: 'Retry', to: 'Retried', bindingId});
+    const again = await renameGlobal({images, imageId: 'app', from: 'Retry', to: 'Retried', bindingId});
     assert.deepEqual(again, first, 'the rename already landed; the retry converges');
 
     // Removing an already-removed name is a no-op rather than a failure.
     assert.equal(await removeGlobal({images, imageId: 'app', name: 'Retried'}), true);
     assert.equal(await removeGlobal({images, imageId: 'app', name: 'Retried'}), false);
+  });
+});
+
+test('rename convergence is decided by binding identity, not by the destination being occupied', async () => {
+  await withRuntime(async (runtime) => {
+    const {images} = runtime;
+    const {kernel} = await seed(runtime, 'app');
+
+    const moved = await publishGlobal({images, imageId: 'app', name: 'Moved', bindingId: 'b/moved', value: kernel.objectClass});
+    const other = await publishGlobal({images, imageId: 'app', name: 'Other', bindingId: 'b/other', value: kernel.integerClass});
+
+    // The destination is occupied by an unrelated binding. A rename whose source is absent must not
+    // read that as "my rename already landed": nothing ever moved b/moved there.
+    await assert.rejects(
+      renameGlobal({images, imageId: 'app', from: 'NeverExisted', to: 'Other', bindingId: 'b/moved'}),
+      /is bound to b\/other, not the renamed binding/,
+      'an occupied destination is not evidence that this rename landed',
+    );
+
+    // Without an expected identity there is nothing to converge on, so an absent source stays an
+    // error even when the destination is occupied.
+    await assert.rejects(
+      renameGlobal({images, imageId: 'app', from: 'NeverExisted', to: 'Other'}),
+      /is bound to b\/other, not the renamed binding/,
+    );
+
+    // The source exists but holds a different binding than the caller expected: refuse rather than
+    // move whatever happens to be under the name now.
+    await assert.rejects(
+      renameGlobal({images, imageId: 'app', from: 'Moved', to: 'Elsewhere', bindingId: 'b/other'}),
+      /is bound to b\/moved, not b\/other/,
+    );
+
+    // The genuine converged case still converges.
+    await renameGlobal({images, imageId: 'app', from: 'Moved', to: 'Elsewhere', bindingId: 'b/moved'});
+    assert.deepEqual(
+      await renameGlobal({images, imageId: 'app', from: 'Moved', to: 'Elsewhere', bindingId: 'b/moved'}),
+      moved,
+    );
+    assert.deepEqual(await resolveGlobal({images, imageId: 'app', name: 'Other'}), other, 'the bystander is untouched');
+  });
+});
+
+test('a rejected publication leaves no orphan binding behind', async () => {
+  await withRuntime(async (runtime) => {
+    const {images} = runtime;
+    const {kernel} = await seed(runtime, 'app');
+    await publishGlobal({images, imageId: 'app', name: 'Taken', bindingId: 'b/taken', value: kernel.objectClass});
+
+    // The conflict is decided before any record is minted, so the losing binding is never created.
+    await assert.rejects(
+      publishGlobal({images, imageId: 'app', name: 'Taken', bindingId: 'b/loser', value: kernel.integerClass}),
+      /is already bound to smalltalk\/global-binding|is already bound to b\/taken/,
+    );
+    assert.equal(await images.getObject('app', 'b/loser'), null, 'no orphan GlobalBinding was created');
+  });
+});
+
+test('a stored mapping in non-canonical order is corrupt, not silently normalised', async () => {
+  await withRuntime(async (runtime) => {
+    const {images} = runtime;
+    const {kernel} = await seed(runtime, 'app');
+    await publishGlobal({images, imageId: 'app', name: 'Alpha', bindingId: 'b/alpha', value: kernel.objectClass});
+    await publishGlobal({images, imageId: 'app', name: 'Beta', bindingId: 'b/beta', value: kernel.integerClass});
+
+    const record = await images.getObject('app', 'smalltalk-global-namespace/v1');
+    const pairs = [];
+    for (let index = 0; index < record.indexed.length; index += 2) pairs.push(record.indexed.slice(index, index + 2));
+    const last = pairs.length - 1;
+    [pairs[last - 1], pairs[last]] = [pairs[last], pairs[last - 1]];
+
+    // Same content, an order the writer would never have produced.
+    await images.putObject('app', {
+      id: record.id,
+      shape: record.shape,
+      behavior: record.behavior,
+      slots: record.slots,
+      indexed: pairs.flat(),
+      metadata: record.metadata,
+    }, {expectedVersion: record._version});
+
+    await assert.rejects(
+      resolveGlobal({images, imageId: 'app', name: 'Alpha'}),
+      /not in canonical order/,
+      'reading must reject an order two writers could disagree about',
+    );
   });
 });
 
@@ -661,6 +832,51 @@ async function namespaceBase(runtime, imageId) {
   await installSmalltalkInstanceVariableProtocol({images: runtime.images, imageId});
   return {images: runtime.images, compilation: runtime.compilation, imageId};
 }
+
+// The sweep above covers installation. Rename, rebind and removal are the operations a *running*
+// image performs, and each is one mapping write whose acknowledgement can be lost. What has to hold
+// is that the identical retry converges rather than reporting a conflict against its own effect.
+test('rename, rebind and removal converge after a lost acknowledgement', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel} = await seed(runtime, 'app');
+    const bindingId = globalBindingId('Subject');
+    await publishGlobal({images: runtime.images, imageId: 'app', name: 'Subject', bindingId, value: kernel.integerClass});
+
+    // Fail after the mapping write commits: the effect landed, the caller never heard so.
+    const lose = () => faultingImages(runtime.images, {failAt: 1, commitThenThrow: true}).images;
+
+    await assert.rejects(
+      renameGlobal({images: lose(), imageId: 'app', from: 'Subject', to: 'Renamed', bindingId}),
+      /injected post-commit/,
+    );
+    assert.deepEqual(
+      await renameGlobal({images: runtime.images, imageId: 'app', from: 'Subject', to: 'Renamed', bindingId}),
+      objectRef('app', bindingId),
+      'the retry sees its own committed rename and converges',
+    );
+
+    await assert.rejects(
+      rebindGlobal({images: lose(), imageId: 'app', bindingId, value: kernel.objectClass}),
+      /injected post-commit/,
+    );
+    // Rebinding to the value already stored writes nothing at all, so the retry is a plain no-op.
+    await rebindGlobal({images: runtime.images, imageId: 'app', bindingId, value: kernel.objectClass});
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'lost-ack-read', '[ Renamed ]'),
+      kernel.objectClass,
+    );
+
+    await assert.rejects(
+      removeGlobal({images: lose(), imageId: 'app', name: 'Renamed'}),
+      /injected post-commit/,
+    );
+    assert.equal(
+      await removeGlobal({images: runtime.images, imageId: 'app', name: 'Renamed'}),
+      false,
+      'the name is already gone; the retry reports "nothing to do", not a failure',
+    );
+  });
+});
 
 for (const lane of ['neutral', 'wasm']) {
   test(`exhaustive-recovery: every write publishing the ${lane} global namespace`, async () => {

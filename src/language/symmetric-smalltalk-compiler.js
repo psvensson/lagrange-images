@@ -26,8 +26,9 @@ function compileSymmetricSmalltalkBlock(source, options = {}) {
   // Globals are different: they are image state, so an image-scoped caller reads them and hands the
   // resolved declarations down. This function stays synchronous and storage-free (ADR 0057), and a
   // caller with no declarations gets exactly today's behaviour.
-  const {syntax, program, representation} = compileSymmetricSmalltalkSemanticBlock(source, options);
-  return Object.freeze({syntax, semanticProgram: program, program, representation});
+  const {syntax, program, representation, globalBindingIdsUsed} =
+    compileSymmetricSmalltalkSemanticBlock(source, options);
+  return Object.freeze({syntax, semanticProgram: program, program, representation, globalBindingIdsUsed});
 }
 
 // Deterministic per Block, so an identical retry converges like every other write here.
@@ -36,10 +37,17 @@ function compileSymmetricSmalltalkBlock(source, options = {}) {
 // `${id}:nil-environment`, because renaming it would change the durable definition of every
 // pre-0057 nil Block and stop reinstallation converging. A Block that uses globals gets the broader
 // identity instead.
-async function ensureCompilerSuppliedEnvironment({images, imageId, id, parent, program, globals}) {
+async function ensureCompilerSuppliedEnvironment({
+  images, imageId, id, parent, program, globals, globalBindingIdsUsed,
+}) {
   const captureIds = new Set((program.captures ?? []).map(({id: captureId}) => captureId));
   const usesNil = captureIds.has(NIL_BINDING_ID);
-  const globalNames = Object.entries(globals ?? {}).filter(([, bindingId]) => captureIds.has(bindingId));
+  // Exactly the globals compilation resolved — never every published id that happens to appear
+  // among the captures. An explicit caller capture may legitimately use an id that is also a
+  // published binding, and substituting the binding object for the caller's value would collapse
+  // two meanings onto one identity.
+  const resolved = new Set(globalBindingIdsUsed ?? []);
+  const globalNames = Object.entries(globals ?? {}).filter(([, bindingId]) => resolved.has(bindingId));
   if (!usesNil && globalNames.length === 0) return parent;
 
   const bindings = {};
@@ -87,7 +95,8 @@ async function installSymmetricSmalltalkBlock({
   // The image-scoped seam: the namespace is read here, asynchronously, and passed into the
   // synchronous compiler as a transient name -> binding-id map.
   const globals = await globalDeclarations({images, imageId});
-  const {syntax, semanticProgram, representation} = compileSymmetricSmalltalkBlock(source, {captures, globals});
+  const {syntax, semanticProgram, representation, globalBindingIdsUsed} =
+    compileSymmetricSmalltalkBlock(source, {captures, globals});
 
   // Ensure-exact-or-create, like every other deterministic-id write in this repository. These were
   // direct `put`s, which made an *identical* retry fail on the first record — so a partially
@@ -142,7 +151,7 @@ async function installSymmetricSmalltalkBlock({
   //
   // One environment, not two wrappers, when a program uses both.
   const blockEnvironment = await ensureCompilerSuppliedEnvironment({
-    images, imageId, id, parent: environment, program: semanticProgram, globals,
+    images, imageId, id, parent: environment, program: semanticProgram, globals, globalBindingIdsUsed,
   });
 
   const block = await ensureBlock(images, imageId, {
@@ -155,6 +164,10 @@ async function installSymmetricSmalltalkBlock({
     syntax,
     semanticProgram,
     representation,
+    // Transient provenance: which global bindings this compilation actually resolved. It is not
+    // written to any artifact — lagrange-code stays a language-neutral representation — but callers
+    // that bind captures need it, because a capture id alone never says why the capture exists.
+    globalBindingIdsUsed,
     sourceArtifact,
     syntaxArtifact,
     semanticArtifact,

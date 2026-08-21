@@ -157,6 +157,9 @@ async function compileSymmetricSmalltalkMethod({
   selector,
   source,
   captures = {},
+  // ADR 0057: the caller's namespace snapshot, where it has one. Reading it again here would let a
+  // rename or removal between the two reads change what a batch of methods meant.
+  globals: suppliedGlobals = null,
 } = {}) {
   requiredText(selector, 'selector');
   const declared = normalizeCaptureDeclarations(captures);
@@ -164,7 +167,9 @@ async function compileSymmetricSmalltalkMethod({
   // The primitives arrive as ordinary root captures, so an instance-variable reference lowers to an
   // ordinary send and nothing downstream of the compiler learns a new concept. They are added only
   // when the source actually names an instance variable, so a method that uses none carries none.
-  const globals = await globalDeclarations({images, imageId});
+  // One namespace snapshot per batch, supplied by the caller where there is one: reading it twice
+  // would let a rename or removal between the reads change what compilation meant.
+  const globals = suppliedGlobals ?? await globalDeclarations({images, imageId});
   const compiled = compileSymmetricSmalltalkSemanticBlock(source, {
     globals,
     captures: {
@@ -196,6 +201,8 @@ async function compileSymmetricSmalltalkMethod({
     representation: compiled.representation,
     instanceVariables,
     captures: compiled.program.captures.map(({id, name}) => Object.freeze({id, name})),
+    // Transient provenance: which of those captures are globals this compilation resolved.
+    globalBindingIdsUsed: compiled.globalBindingIdsUsed,
   });
 }
 
@@ -210,13 +217,19 @@ async function defineMethodsFromSource({images, compilation, imageId, classRef, 
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const kernelNil = kernel.nil;
-  // Read once for the whole batch: which ids in these programs are global bindings.
-  const globalBindingIds = new Set(Object.values(await globalDeclarations({images, imageId})));
+  // One snapshot for the whole batch, used for compilation and nothing else. Global captures are
+  // identified by *provenance* below, never by testing an id against this map.
+  const globals = await globalDeclarations({images, imageId});
   const compiled = [];
   for (const {selector, source, captures} of methods) {
     const declared = normalizeCaptureDeclarations(captures ?? {});
     const supplied = new Map(declared.map(({id, value}) => [id, value]));
-    const method = await compileSymmetricSmalltalkMethod({images, imageId, classRef, selector, source, captures});
+    const method = await compileSymmetricSmalltalkMethod({
+      images, imageId, classRef, selector, source, captures, globals,
+    });
+    // Exactly what this method resolved as a global — so an explicit capture keeps its caller's
+    // value even when its id happens to equal a published binding id.
+    const resolvedGlobals = new Set(method.globalBindingIdsUsed ?? []);
     const bound = method.captures.map(({id, name}) => {
       if (primitiveIds.has(id)) return {id, name, value: objectRef(imageId, id)};
       // ADR 0056: the nil intrinsic resolves to this image's kernel nil, exactly as the slot
@@ -224,7 +237,7 @@ async function defineMethodsFromSource({images, compilation, imageId, classRef, 
       if (id === NIL_BINDING_ID) return {id, name, value: kernelNil};
       // ADR 0057: a resolved global binds to that binding object in *this* image. The artifact
       // carried only the id; the ref appears here, at installation.
-      if (globalBindingIds.has(id)) return {id, name, value: objectRef(imageId, id)};
+      if (resolvedGlobals.has(id)) return {id, name, value: objectRef(imageId, id)};
       const value = supplied.get(id);
       if (value === undefined) {
         throw new TypeError(

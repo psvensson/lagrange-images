@@ -20,6 +20,12 @@ function normalizeRootCaptures(captures) {
     // a caller bind the *id* under another name and shadow `nil`'s meaning from outside the
     // compiler — the same reason `$nonLocalReturn` and the slot primitives reserve both.
     if (name === NIL_CAPTURE) throw new TypeError(`capture name ${NIL_CAPTURE} is reserved for the nil intrinsic`);
+    // The compiler owns this whole key namespace. Reserving only the ids it happens to use would
+    // let a caller supply an internal-looking name and slip past the global collision check, which
+    // distinguishes its own captures by exactly this prefix.
+    if (name.startsWith(GLOBAL_CAPTURE_PREFIX)) {
+      throw new TypeError(`capture name ${name} is reserved: ${GLOBAL_CAPTURE_PREFIX} belongs to the compiler`);
+    }
     if (typeof id !== 'string' || id.length === 0) throw new TypeError(`capture binding id for ${name} must be non-empty text`);
     if (id === NIL_BINDING_ID) throw new TypeError(`capture binding id ${NIL_BINDING_ID} is reserved for the nil intrinsic`);
     if (ids.has(id)) throw new TypeError(`duplicate capture binding id: ${id}`);
@@ -92,6 +98,10 @@ class SemanticScope {
     // in. This compiler stays synchronous and image-independent: it never reads storage, and what it
     // emits is binding identity rather than any image-specific ref.
     this.globals = parent ? parent.globals : globals;
+    // ADR 0057. Which global bindings this compilation actually resolved. Transient compiler
+    // metadata — never part of `lagrange-code` — and the only correct answer to "is this capture a
+    // global?", because a capture id does not say *why* the capture exists.
+    this.globalsUsed = parent ? parent.globalsUsed : new Set();
     // ADR 0055. Reserved bindings the binder makes *available* without declaring. A declaration
     // becomes a program capture whether or not the source references it, so declaring the return
     // intrinsic eagerly would give every method a dependency it may never use. Requested on first
@@ -256,6 +266,7 @@ class SemanticScope {
     // class. It also makes an alias free: two names resolving to one binding share one capture,
     // which the closed capture grammar requires.
     const key = `${GLOBAL_CAPTURE_PREFIX}${bindingId}`;
+    this.globalsUsed.add(bindingId);
     if (!root.captures.has(key)) {
       root.captures.set(key, Object.freeze({id: bindingId, name, source: null, mutable: false}));
     }
@@ -510,6 +521,7 @@ function compileBlockSyntax(syntax, {
   return Object.freeze({
     program,
     captureInitializers: scope.captureInitializers(representation),
+    globalBindingIdsUsed: Object.freeze([...scope.globalsUsed]),
   });
 }
 
@@ -535,7 +547,12 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
     intrinsics: new Map([...Object.entries(intrinsics), [NIL_CAPTURE, NIL_BINDING_ID]]),
     globals: new Map(Object.entries(globals)),
   });
-  return Object.freeze({syntax, program: compiled.program, representation});
+  return Object.freeze({
+    syntax,
+    program: compiled.program,
+    representation,
+    globalBindingIdsUsed: compiled.globalBindingIdsUsed,
+  });
 }
 
 export {

@@ -70,6 +70,7 @@ function decodePairs(imageId, indexed) {
     throw new SmalltalkNamespaceError(imageId, `the mapping has an odd number of entries (${indexed.length})`);
   }
   const entries = new Map();
+  let previousName = null;
   for (let index = 0; index < indexed.length; index += 2) {
     const name = indexed[index];
     const binding = indexed[index + 1];
@@ -80,6 +81,14 @@ function decodePairs(imageId, indexed) {
       throw new SmalltalkNamespaceError(imageId, `entry ${name.value} must map to an unpinned local ref`);
     }
     if (entries.has(name.value)) throw new SmalltalkNamespaceError(imageId, `duplicate name ${name.value}`);
+    // The representation is *promised* canonical, so an out-of-order mapping is corrupt rather than
+    // something to quietly normalise on the next write. Accepting it would mean two images holding
+    // the same globals could hold different records, which is the property canonical order exists
+    // to rule out.
+    if (previousName !== null && previousName >= name.value) {
+      throw new SmalltalkNamespaceError(imageId, `entries are not in canonical order: ${previousName} before ${name.value}`);
+    }
+    previousName = name.value;
     entries.set(name.value, binding);
   }
   return entries;
@@ -225,6 +234,17 @@ async function publishGlobal({images, imageId, name, bindingId, value}) {
   requiredText(bindingId, 'global binding id');
   const namespace = await requireNamespace({images, imageId});
 
+  // Preflight, before anything is created. Checking the mapping only after minting the candidate
+  // would leave an orphan GlobalBinding behind on every rejected publication.
+  const mapped = namespace.entries.get(name);
+  if (mapped) {
+    if (mapped.objectId !== bindingId) {
+      throw new SmalltalkGlobalConflictError(name, `is already bound to ${mapped.objectId}, not ${bindingId}`);
+    }
+    await assertIsBinding({images, imageId, name, binding: mapped});
+    return objectRef(imageId, bindingId);
+  }
+
   const existingBinding = await images.getObject(imageId, bindingId);
   if (!existingBinding) {
     await images.putObject(imageId, {
@@ -235,14 +255,10 @@ async function publishGlobal({images, imageId, name, bindingId, value}) {
       metadata: {},
     }, {expectedVersion: 0});
   } else {
+    // Already there — keep the value it has. Re-running an installer must not undo a rebind.
     await assertIsBinding({images, imageId, name, binding: objectRef(imageId, bindingId)});
   }
 
-  const mapped = namespace.entries.get(name);
-  if (mapped) {
-    if (mapped.objectId === bindingId) return objectRef(imageId, bindingId);
-    throw new SmalltalkGlobalConflictError(name, `is already bound to ${mapped.objectId}, not ${bindingId}`);
-  }
   const entries = new Map(namespace.entries);
   entries.set(name, objectRef(imageId, bindingId));
   await writeMapping({images, imageId, namespace, entries});
@@ -274,21 +290,33 @@ async function rebindGlobal({images, imageId, bindingId, value}) {
 }
 
 // The same binding under a new name: identity survives, so compiled code is unaffected.
-async function renameGlobal({images, imageId, from, to}) {
+// `bindingId` is the identity the caller believes it is moving. Making it part of the operation is
+// what lets a retry be *converged* rather than merely optimistic: without it, a rename whose source
+// never existed would report success as soon as the destination happened to be bound to anything at
+// all — `rename('NeverExisted', 'Object')` would answer the Object binding.
+async function renameGlobal({images, imageId, from, to, bindingId = null}) {
   requiredText(from, 'global name');
   requiredText(to, 'global name');
   const namespace = await requireNamespace({images, imageId});
   const binding = namespace.entries.get(from);
+  const target = namespace.entries.get(to);
+
   if (!binding) {
-    // Retry after a lost acknowledgement: the rename already landed.
-    const already = namespace.entries.get(to);
-    if (already) return already;
+    // Converged only when the destination holds the identity this rename was moving.
+    if (target && bindingId !== null && target.objectId === bindingId) return target;
+    if (target) {
+      throw new SmalltalkGlobalConflictError(to, `is bound to ${target.objectId}, not the renamed binding`);
+    }
     throw new SmalltalkGlobalConflictError(from, 'is not published');
   }
-  const target = namespace.entries.get(to);
+  if (bindingId !== null && binding.objectId !== bindingId) {
+    throw new SmalltalkGlobalConflictError(from, `is bound to ${binding.objectId}, not ${bindingId}`);
+  }
   if (target && target.objectId !== binding.objectId) {
     throw new SmalltalkGlobalConflictError(to, `is already bound to ${target.objectId}`);
   }
+  // The desired mapping already exists to the expected binding: an ensure-style no-op.
+  if (target && from === to) return binding;
   const entries = new Map(namespace.entries);
   entries.delete(from);
   entries.set(to, binding);

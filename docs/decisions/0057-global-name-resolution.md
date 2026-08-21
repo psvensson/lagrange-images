@@ -157,6 +157,23 @@ authority contract          perform it
 The one thing fixed now is the target: an assignment, if it ever exists, acts on the binding the
 compiler already resolved. That constrains the future decision without making it.
 
+**A capture id does not say why the capture exists.** A caller may legitimately declare an explicit
+capture on an id that also happens to be a published binding — the id space is shared on purpose,
+which is what lets a program compiled elsewhere be installed here. So "is this capture a global?" is
+answered by *provenance*, never by testing the id against the namespace:
+
+```text
+compilation reports    the binding ids it actually resolved as globals, transiently, alongside the
+                       semantic program
+installation binds     exactly those to their binding objects; every other capture takes the
+                       caller's value
+never                  intersect the program's capture ids with the published namespace. That
+                       substitutes the GlobalBinding object for a caller's value whenever the two
+                       id spaces touch, silently, and only in the image where the name is published
+not in the artifact    provenance is compiler metadata; `lagrange-code` stays language-neutral and
+                       gains no notion of a global
+```
+
 ### 4. Resolution order
 
 ```text
@@ -202,6 +219,16 @@ missing     installing an artifact whose binding ids do not exist in the target 
             that the identity is the same one, and quietly substituting a different binding is
             the worst available outcome
 ```
+
+Each of these is one mapping write whose acknowledgement can be lost, so each must converge on an
+identical retry. Convergence is decided by *identity*, not by the destination being occupied: a
+rename states the binding it believes it is moving, and a retry succeeds only when that binding is
+where the rename was putting it. Without the expected identity, renaming a name that never existed
+would report success the moment anything happened to occupy the destination.
+
+Publication decides conflicts before it creates anything, so a rejected `publish` leaves no orphan
+binding behind; and the stored mapping is read back strictly in canonical order, because an order the
+writer would never have produced is corruption rather than something to normalise on the next write.
 
 ### 7. Bootstrap: the order works, confirmed by construction
 
