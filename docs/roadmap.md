@@ -242,6 +242,11 @@ listed below: removing the depth ceiling made a pre-existing per-evaluation allo
 
 Next, ordered by architectural pressure rather than convenience:
 
+- [ ] implement **ADR 0057**'s global name resolution: a compile-time lookup to a first-class
+      `GlobalBinding`, dereferenced at runtime by an ordinary `value` send. It retires the last of the
+      library's scaffolding — the explicit `ArrayClass`, `IndexError` and `EmptyError` captures — and
+      lets `OrderedCollection` say `Array` where it means `Array`. Bootstrap is confirmed clean: a
+      binding needs only the kernel and the instance-variable protocol, not `Association`
 - [x] closure identity (**ADR 0052**). A closure instance is execution-local and becomes durable only
       when it escapes, so 100,000 non-escaping closure evaluations produce **zero** durable records
       and wall-clock is linear in iteration count (1k/10k/100k at 0.97s/8.8s/87.6s).
