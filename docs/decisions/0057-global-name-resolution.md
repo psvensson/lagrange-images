@@ -108,11 +108,32 @@ the root namespace, so `ensureNamedClass` does not publish anything. Conflating 
 private or project namespace impossible later, and would mean every internal class became a global
 the moment it was created.
 
-### 2. The binding holds a value, not a name
+### 2. The binding holds a value, not a name — and reading it is not permission to write it
 
-`GlobalBinding` has one instance variable and answers `value` and `value:`. The *name* lives in the
-namespace mapping, which is what makes rename an operation on the mapping rather than on the binding
-— identity survives it because nothing about the binding mentions the name.
+```text
+GlobalBinding v1     one current-value slot
+                     an ordinary `value` read protocol, and nothing else
+```
+
+The *name* lives in the namespace mapping, which is what makes rename an operation on the mapping
+rather than on the binding: identity survives it because nothing about the binding mentions the name.
+
+**No `value:` in v1**, and the reason is architectural rather than stylistic. A compiled method
+necessarily retains the binding identity in order to *read* the global — that is the whole mechanism.
+If the binding answered an ordinary setter, possession of that identity would automatically confer
+permission to rebind, so every reader would be a writer and this ADR would have settled the authority
+question it says it defers.
+
+```text
+reference != authority
+```
+
+Keeping them separable is the elegant part of model C, and it would be a poor trade to establish the
+distinction and then make the binding an unrestricted mutable cell in the same decision.
+
+Rebinding therefore happens through the trusted namespace and language-management seam: the same
+stable identity, a new value in its slot, and already-compiled code observing the change. What is
+deferred is not rebinding — it is rebinding *from ordinary source*.
 
 ### 3. Compiled reads resolve identity, not value or name
 
@@ -121,9 +142,19 @@ compiles to a slot-primitive send. The capture's binding id **is the GlobalBindi
 the artifact carries a stable string and installation supplies `objectRef(thisImage, id)` — the
 pattern ADR 0055's `$nonLocalReturn` and ADR 0056's `nil` already use.
 
-Global *assignment* is the symmetric form: `Array := something` compiles to a `value:` send to the
-same binding. Whether assignment is permitted at all is a separate authority question this ADR does
-not settle; the shape is decided so that it cannot later be bolted on differently.
+Global **assignment is not part of this ADR**. Deciding its lowering now would decide its authority
+contract with it, for the reason decision 2 gives, so both are deferred together:
+
+```text
+source `Global := value`    not part of ADR 0057
+if later admitted           MUST target the already-resolved binding identity, never a fresh
+                            lookup by name at assignment time
+the operation and its       deferred together, because choosing the operation chooses who may
+authority contract          perform it
+```
+
+The one thing fixed now is the target: an assignment, if it ever exists, acts on the binding the
+compiler already resolved. That constrains the future decision without making it.
 
 ### 4. Resolution order
 
@@ -186,10 +217,16 @@ kernel identity and classes
   -> ordinary source resolves those names
 ```
 
-Verified against the current code rather than reasoned about: a `GlobalBinding` class installs with
-only the kernel and the instance-variable protocol present, a `value` send dereferences it, and
-rebinding it changes what an already-compiled Block answers with no recompilation. No allocation,
-equality, Dictionary or library protocol is involved.
+Verified against the current code rather than reasoned about: a `GlobalBinding` class and its
+**read** protocol install with only the kernel and the instance-variable protocol present, a `value`
+send dereferences it, and durably rebinding the same binding object changes what an already-compiled
+Block answers with no recompilation. No allocation, equality, Dictionary or library protocol is
+involved.
+
+The prototype used a `value:` method to perform that rebinding, which was convenient for the
+experiment and is *not* a v1 protocol commitment — it is evidence that the slot can be rebound and
+observed, not a decision that ordinary source may do the rebinding. The implementation rebinds
+through the namespace-management seam instead, per decision 2.
 
 ### 8. Standalone Blocks reuse ADR 0056's environment seam
 
@@ -214,7 +251,11 @@ resolution
     `true`, `false`, `nil` and `self` never reach global resolution
 
 lifecycle
-    rebinding a global changes what an already-compiled method answers, with no recompilation
+    rebinding a global changes what an already-compiled method answers, with no recompilation —
+        performed through the namespace-management seam, NOT by source assignment and not by an
+        exposed setter
+    `GlobalBinding` answers no unrestricted rebinding protocol: holding the ref does not let
+        ordinary source change what the global means
     renaming keeps the binding identity, and compiled code is unaffected
     removing a name leaves compiled code working and makes future compilation of that name fail
     class existence does not publish: a class installed without publication is unnameable
@@ -239,7 +280,8 @@ both lanes and durability
 
 ## What is deferred
 
-- global *assignment* as a permitted source operation, and whatever authority rule governs it
+- global *assignment* as a permitted source operation, its lowering, and the authority rule
+  governing it — deferred together, since choosing the operation chooses who may perform it
 - project, nested or private namespaces — the model admits them; this ADR ships one root
 - making the namespace a Smalltalk-visible Dictionary, and the reflective protocol over it
 - `Smalltalk at:put:`-style runtime publication from source
@@ -253,6 +295,10 @@ class existence is not publication — `ensureNamedClass` publishes nothing, and
     unnameable
 a compiled global read resolves the binding at COMPILE time and dereferences it at runtime with an
     ordinary send; never capture the current value, never look up the name at runtime
+a GlobalBinding ref identifies the binding; it does not grant authority to rebind it. Every reader
+    necessarily holds that ref, so an unrestricted setter would make every reader a writer
+rebinding goes through the trusted namespace/language-management seam; `Global := value` is not
+    part of ADR 0057, and if admitted must target the already-resolved binding identity
 an unknown global is a compile-time failure, not a runtime lookup
 globals resolve last, after instance variables; reserved pseudo-literals never reach resolution
 the artifact carries binding ids and no image-specific ref; a missing identity fails loudly and is
