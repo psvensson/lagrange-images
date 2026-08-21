@@ -534,7 +534,7 @@ const faultingServices = (images, options, fault) => {
 };
 
 for (const lane of ['neutral', 'wasm']) {
-  test(`every write publishing the ${lane} condition protocol is recoverable`, async () => {
+  test(`exhaustive-recovery: every write publishing the ${lane} condition protocol`, async () => {
     const total = await withRuntime(async (runtime) => {
       const options = await baseImage(runtime, 'count', lane);
       const {services, writeCount} = faultingServices(runtime.images, options, {});

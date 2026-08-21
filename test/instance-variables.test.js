@@ -772,7 +772,7 @@ async function publishAll(images, compilation, imageId, classRef, lane) {
 }
 
 for (const lane of ['neutral', 'wasm']) {
-  test(`every write publishing a ${lane} instance-variable method is recoverable`, async () => {
+  test(`exhaustive-recovery: every write publishing a ${lane} instance-variable method`, async () => {
     const total = await withRuntime(async (runtime) => {
       const point = await baseForRecovery(runtime, 'count', lane);
       const {images, writeCount} = faultingImages(runtime.images);

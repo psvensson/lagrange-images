@@ -512,7 +512,7 @@ async function baseForRecovery(runtime, imageId, lane) {
 
 for (const lane of ['neutral', 'wasm']) {
   for (const shape of RECOVERY_SHAPES) {
-    test(`every write publishing a ${lane} ${shape.label} nested-Block method is recoverable`, async () => {
+    test(`exhaustive-recovery: every write publishing a ${lane} ${shape.label} nested-Block method`, async () => {
       const total = await withRuntime(async (runtime) => {
         const counter = await baseForRecovery(runtime, 'count', lane);
         const {images, writeCount} = faultingImages(runtime.images);

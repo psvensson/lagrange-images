@@ -437,7 +437,7 @@ async function indexedInstallWriteCount(lane) {
 }
 
 for (const lane of ['neutral', 'wasm']) {
-  test(`every write installing the ${lane} indexed protocol is recoverable by an identical retry`, async () => {
+  test(`exhaustive-recovery: every write installing the ${lane} indexed protocol`, async () => {
     const total = await indexedInstallWriteCount(lane);
     assert.ok(total > 10, `expected a multi-record publication in the ${lane} lane, saw ${total} writes`);
 
