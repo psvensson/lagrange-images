@@ -37,6 +37,11 @@ function needsMutableLexicalState(syntax) {
       return syntax.statements.some((statement) => needsMutableLexicalState(statement));
     case 'block':
       return needsMutableLexicalState(syntax.body);
+    // ADR 0055. A return wraps an ordinary expression, so v1 features hidden under one — an
+    // assignment, a multi-statement Block — must still be seen. Omitting this case classifies
+    // `^ [ | t | t := 1. t ]` as v0 and the artifact is then rejected against the closed v0 grammar.
+    case 'return':
+      return needsMutableLexicalState(syntax.value);
     case 'send':
       return needsMutableLexicalState(syntax.receiver)
         || syntax.arguments.some((argument) => needsMutableLexicalState(argument));
@@ -64,8 +69,13 @@ const INSTANCE_SLOT_WRITE_CAPTURE = '$instanceSlotWrite';
 class SemanticScope {
   constructor({
     parent = null, path, parameters = [], rootCaptures = new Map(), instanceVariables = new Map(),
-    methodHome = false,
+    methodHome = false, intrinsics = new Map(),
   } = {}) {
+    // ADR 0055. Reserved bindings the binder makes *available* without declaring. A declaration
+    // becomes a program capture whether or not the source references it, so declaring the return
+    // intrinsic eagerly would give every method a dependency it may never use. Requested on first
+    // lowering instead, which needs no second inspection of the source.
+    this.intrinsics = parent ? parent.intrinsics : intrinsics;
     // ADR 0055. Whether this compilation has a method to return from. Carried explicitly rather
     // than inferred from the presence of instance variables — a method with no instance variables
     // still has a home, and a standalone Block with captures still has none.
@@ -142,11 +152,29 @@ class SemanticScope {
   // ADR 0055. `^ expr` lowers to `$nonLocalReturn value: expr` — an ordinary send, so
   // `lagrange-code` gains no operation for it. `resolveName` walks the capture chain exactly as it
   // does for the slot primitives, so a nested Block inherits the binding by ordinary propagation.
+  rootScope() {
+    let scope = this;
+    while (scope.parent) scope = scope.parent;
+    return scope;
+  }
+
+  // Seeds the reserved binding at the root the first time a `^` is lowered, then resolves it by the
+  // ordinary capture walk — so a nested Block inherits it exactly as it inherits anything else.
+  requireIntrinsic(name) {
+    const root = this.rootScope();
+    const id = root.intrinsics.get(name);
+    if (!id) throw new TypeError(`no ${name} intrinsic is available in this compilation`);
+    if (!root.captures.has(name)) {
+      root.captures.set(name, Object.freeze({id, name, source: null, mutable: false}));
+    }
+    return this.resolveName(name);
+  }
+
   nonLocalReturn(valueExpression) {
     return Object.freeze({
       op: 'send',
       languageId: SYMMETRIC_SMALLTALK_ID,
-      receiver: this.resolveName(NON_LOCAL_RETURN_CAPTURE),
+      receiver: this.requireIntrinsic(NON_LOCAL_RETURN_CAPTURE),
       message: textValue('value:'),
       arguments: Object.freeze([valueExpression]),
     });
@@ -380,9 +408,10 @@ function compileBlockSyntax(syntax, {
   instanceVariables = new Map(),
   representation = LAGRANGE_CODE_V0,
   methodHome = false,
+  intrinsics = new Map(),
 } = {}) {
   const scope = new SemanticScope({
-    parent, path, parameters: syntax.parameters, rootCaptures, instanceVariables, methodHome,
+    parent, path, parameters: syntax.parameters, rootCaptures, instanceVariables, methodHome, intrinsics,
   });
   const state = {path, nextBlock: 0, representation};
   const body = compileBody(syntax.body, scope, state);
@@ -405,7 +434,7 @@ function compileBlockSyntax(syntax, {
 }
 
 function compileSymmetricSmalltalkSemanticBlock(source, {
-  captures = {}, instanceVariables = {}, methodHome = false,
+  captures = {}, instanceVariables = {}, methodHome = false, intrinsics = {},
 } = {}) {
   const syntax = parseSymmetricSmalltalkBlock(source);
   const representation = selectSemanticRepresentation(syntax);
@@ -415,6 +444,7 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
     instanceVariables: new Map(Object.entries(instanceVariables)),
     representation,
     methodHome,
+    intrinsics: new Map(Object.entries(intrinsics)),
   });
   return Object.freeze({syntax, program: compiled.program, representation});
 }

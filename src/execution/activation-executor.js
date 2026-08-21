@@ -18,12 +18,7 @@ const MAX_ACTIVATION_DEPTH = 256;
 // crosses the primitive boundary is a capability (ADR 0037).
 const CAPTURED_AUTHORITY = new WeakMap();
 
-// ADR 0055 decision 4. Liveness of a home method activation, keyed by its ADR 0050 frame — which is
-// only ever a key here. The frame's shape is validated as exactly {self, definingBehavior} at the
-// dispatch seam, and liveness is execution state rather than identity, so it must not become a
-// field. A dead entry is retained while the frame is reachable, which is what keeps "already
-// returned" distinguishable from "no home available".
-const HOME_ACTIVATIONS = new WeakSet();
+
 
 function normalizeObjectRef(value, label) {
   const normalized = canonicalizeValue(value);
@@ -83,6 +78,25 @@ class ActivationExecutor {
   // before the lanes diverge — while the policy comes from the language: ADR 0044 wires one that
   // answers the dispatch image's Smalltalk `nil` for Symmetric Smalltalk artifacts, and nothing
   // otherwise, in which case a temporary starts UNBOUND exactly as ADR 0043 decided.
+  // ADR 0055 decision 4. Liveness of a home method activation, keyed by its ADR 0050 frame — which
+  // is only ever a key here. The frame's shape is validated as exactly {self, definingBehavior} at
+  // the dispatch seam, and liveness is execution state rather than identity, so it must not become a
+  // field.
+  //
+  // Three states, not two, and per executor rather than module-global. A *missing* entry means this
+  // executor never ran that frame as a home, which is not the same as one that ran and returned —
+  // collapsing them would report "already returned" for a frame that never was a home here. And a
+  // dead entry is retained while the frame is reachable, which is what keeps the two apart.
+  #homeActivations = new WeakMap();
+
+  homeActivationState(frame) {
+    return this.#homeActivations.get(frame) ?? 'absent';
+  }
+
+  markHomeActivation(frame, state) {
+    this.#homeActivations.set(frame, state);
+  }
+
   constructor({
     images,
     executors = new CodeExecutorRegistry(),
@@ -293,7 +307,7 @@ class ActivationExecutor {
     // with the home frame at the moment it raises, would catch its own transfer.
     const ownsFrame = activeFrame !== null
       && (invocationFrame !== null || this.invocations?.frameFor?.(activation) != null);
-    if (ownsFrame) HOME_ACTIVATIONS.add(activeFrame);
+    if (ownsFrame) this.markHomeActivation(activeFrame, 'live');
 
     // ADR 0044 decision 5a. A root activation dispatches in its own Block's image; a nested one
     // inherits what its sender computed. Context, never a field on the activation.
@@ -352,7 +366,7 @@ class ActivationExecutor {
           // establisher's `self` for free.
           // ADR 0055. The primitive asks whether the frame it was handed still has a running
           // owner; it never sees the registry, and a frame is only ever a key in it.
-          isLiveHome: whileActive('isLiveHome', (frame) => HOME_ACTIVATIONS.has(frame)),
+          homeActivationState: whileActive('homeActivationState', (frame) => this.homeActivationState(frame)),
           invoke: whileActive('invoke', async (token, blockRef, args = []) => {
             if (!CAPTURED_AUTHORITY.has(token)) throw new TypeError('unknown captured authority token');
             if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
@@ -471,7 +485,12 @@ class ActivationExecutor {
     } catch (error) {
       // Only the owner stops a return naming its own frame; a borrower lets it travel on.
       if (ownsFrame && error instanceof NonLocalReturnTransfer && error.frame === activeFrame) {
-        return canonicalizeValue(error.value);
+        const answer = canonicalizeValue(error.value);
+        // The same escape boundary an ordinary return crosses (ADR 0052 decision 6): a root
+        // execution's answer is promoted before leaving, while the arena still exists. Returning
+        // this value unpromoted would let `^ [ ... ]` hand a transient closure to a caller that has
+        // no arena to resolve it in.
+        return ownsArena ? await promoteClosure(this.images, arena, answer) : answer;
       }
       throw error;
     } finally {
@@ -479,7 +498,9 @@ class ActivationExecutor {
       lifetime.active = false;
       // Dead from here on. Retained rather than deleted: while the frame is still reachable, a
       // `^` naming it must be told the method returned rather than that it has no home.
-      if (ownsFrame) HOME_ACTIVATIONS.delete(activeFrame);
+      // Marked dead rather than deleted: while the frame is still reachable, a `^` naming it must
+      // be told the method returned rather than that it has no home.
+      if (ownsFrame) this.markHomeActivation(activeFrame, 'dead');
     }
   }
 }

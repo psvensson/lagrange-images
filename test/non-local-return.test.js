@@ -102,6 +102,37 @@ test('a recursive method returns from its own activation, not an outer one', asy
   });
 });
 
+// The recursive test above proves owner-versus-borrower, but its target is the innermost owner
+// anyway — so a structural match would happen to agree. This is the discriminating case: a Block
+// whose home is the OUTER activation, invoked underneath structurally identical inner ones. A
+// structural match would stop at the innermost owner, which has an equal {self, definingBehavior}
+// and is the wrong home.
+test('a return targets its own home even under structurally identical inner activations', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel, options} = await seed(runtime, 'app');
+    await defineMethodsFromSource({
+      ...options,
+      classRef: kernel.integerClass,
+      methods: [
+        // `outer` makes a Block homed in ITS activation, then recurses twice on the same receiver
+        // before running it. When the Block finally returns, three activations of `deeper:` and one
+        // of `outer` are live, all with the same self.
+        method('outer', '[ | escape | escape := [ ^ 42. 1000 ]. (self deeper: 3 with: escape) + 500 ]'),
+        method('deeper:with:', `[ :n :aBlock |
+          (n = 0)
+            ifTrue: [ aBlock value. 2000 ]
+            ifFalse: [ (self deeper: (n - 1) with: aBlock) + 1 ] ]`),
+      ],
+    });
+
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'outer-home', '[ 0 outer ]'),
+      integerValue(42),
+      'a structural frame match would stop at the innermost deeper: and answer 2000-ish instead',
+    );
+  });
+});
+
 test('the return primitive does not catch its own transfer', async () => {
   await withRuntime(async (runtime) => {
     const {kernel, options} = await seed(runtime, 'app');
@@ -187,6 +218,35 @@ test('a Block whose home already returned fails, and does not answer locally', a
   });
 });
 
+// Distinct from the test above, which spans two executions. Here the home method returns and the
+// Block is invoked *within the same execution*, so its frame is still reachable — which is the case
+// the liveness registry's dead state exists to report precisely.
+test('a Block whose home returned in this same execution reports that, not "no home"', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel, options} = await seed(runtime, 'app');
+    await defineMethodsFromSource({
+      ...options,
+      classRef: kernel.integerClass,
+      methods: [
+        method('makeEscapee', '[ [ ^ 1 ] ]'),
+        // Obtains the Block from a method that has already returned, then runs it — all inside one
+        // execution, so the arena is alive and the frame is still reachable.
+        method('runAfterReturn', '[ | b | b := self makeEscapee. b value. 99 ]'),
+      ],
+    });
+
+    await assert.rejects(
+      evaluate(runtime, 'app', 'same-execution-dead', '[ 0 runAfterReturn ]'),
+      (error) => {
+        assert.equal(error.name, 'NonLocalReturnHomeError');
+        assert.match(error.message, /already returned/,
+          'a reachable-but-finished home must be reported as returned, not as absent');
+        return true;
+      },
+    );
+  });
+});
+
 test('a standalone Block containing a return is refused at compile time', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');
@@ -215,12 +275,84 @@ test('cleanup runs on the way past, and a transferring cleanup supersedes', asyn
         method('ensureValue', '[ [ ^ 1 ] ensure: [ 2 ] ]'),
         // A cleanup that transfers: supersedes the return already unwinding.
         method('ensureTransfers', '[ [ ^ 1 ] ensure: [ ^ 2 ] ]'),
-        // And the cleanup really did run on the unwinding path.
-        method('ensureRan', '[ | log | log := 0. [ [ ^ 1 ] ensure: [ log := 9 ] ] value. log ]'),
       ],
     });
     assert.deepEqual(await evaluate(runtime, 'app', 'ev', '[ 0 ensureValue ]'), integerValue(1));
     assert.deepEqual(await evaluate(runtime, 'app', 'et', '[ 0 ensureTransfers ]'), integerValue(2));
+  });
+});
+
+// The cleanup must actually run on the unwinding path, not merely fail to change the answer. Read
+// through an object, since a temporary of the returning method is unreachable once it has returned.
+test('cleanup observably runs while a non-local return unwinds past it', async () => {
+  await withRuntime(async (runtime) => {
+    const {options} = await seed(runtime, 'app');
+    const {defineClass} = await import('../src/runtime.js');
+    const shape = objectRef('app', (await runtime.images.putShape('app', {
+      id: 'nlr-log-shape', slots: [{id: 'log-slot', name: 'log'}],
+    })).id);
+    const logger = await defineClass({images: runtime.images, imageId: 'app', name: 'NlrLog', instanceShapeRef: shape});
+    await defineMethodsFromSource({
+      ...options,
+      classRef: logger.classRef,
+      methods: [
+        method('init', '[ log := 0 ]'),
+        method('log', '[ log ]'),
+        method('mark', '[ log := 9 ]'),
+        method('returnsThroughEnsure', '[ [ ^ 1 ] ensure: [ self mark ]. 99 ]'),
+        method('returnsThroughCurtailed', '[ [ ^ 2 ] ifCurtailed: [ self mark ]. 99 ]'),
+        // A normal exit must NOT run ifCurtailed:.
+        method('normalThroughCurtailed', '[ [ 3 ] ifCurtailed: [ self mark ] ]'),
+      ],
+    });
+
+    for (const [selector, answer] of [['returnsThroughEnsure', 1], ['returnsThroughCurtailed', 2]]) {
+      const instance = await evaluate(runtime, 'app', `mk-${selector}`,
+        '[ :c | | o | o := c new. o init. o ]', [logger.classRef]);
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `run-${selector}`, `[ :o | o ${selector} ]`, [instance]),
+        integerValue(answer),
+      );
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `log-${selector}`, '[ :o | o log ]', [instance]),
+        integerValue(9),
+        `${selector}: the cleanup must run while the return unwinds past it`,
+      );
+    }
+
+    const normal = await evaluate(runtime, 'app', 'mk-normal',
+      '[ :c | | o | o := c new. o init. o ]', [logger.classRef]);
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'run-normal', '[ :o | o normalThroughCurtailed ]', [normal]),
+      integerValue(3),
+    );
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'log-normal', '[ :o | o log ]', [normal]),
+      integerValue(0),
+      'ifCurtailed: must not run on a normal exit',
+    );
+  });
+});
+
+// ADR 0055 decision 6: a `^` inside a handler returns from the handler Block's *home method*, not to
+// the `on:do:` that invoked it.
+test('a return from inside a condition handler leaves the handler home method', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel, conditions, options} = await seed(runtime, 'app');
+    await defineMethodsFromSource({
+      ...options,
+      classRef: kernel.integerClass,
+      methods: [{
+        selector: 'handlerReturns',
+        source: '[ [ (ErrorClass new) signal. 50 ] on: ErrorClass do: [ :e | ^ 11. 1000 ]. 99 ]',
+        captures: [{name: 'ErrorClass', id: 'test/handler-return-error', value: conditions.Error}],
+      }],
+    });
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'handler-returns', '[ 0 handlerReturns ]'),
+      integerValue(11),
+      'the return must leave the method, not merely answer the on:do:',
+    );
   });
 });
 
@@ -323,6 +455,59 @@ test('a caret is not absorbed into an adjacent binary selector', async () => {
   assert.ok(adjacent.includes('caret'));
 });
 
+// ADR 0055's library obligation: a search over a thousand elements, and early stopping that is
+// *observed* rather than inferred from the answer.
+test('a search over a thousand elements stops early', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel, options} = await seed(runtime, 'app');
+    const {installSmalltalkIndexedProtocol} = await import('../src/runtime.js');
+    await installSmalltalkIndexedProtocol(options);
+
+    // A counter on the receiver records how many elements the search actually examined, so stopping
+    // early is measured rather than assumed from `includes:` answering true.
+    const {defineClass} = await import('../src/runtime.js');
+    const shape = objectRef('app', (await runtime.images.putShape('app', {
+      id: 'scan-shape', slots: [{id: 'scan-seen', name: 'seen'}, {id: 'scan-items', name: 'items'}],
+    })).id);
+    const scanner = await defineClass({images: runtime.images, imageId: 'app', name: 'Scanner', instanceShapeRef: shape});
+    await defineMethodsFromSource({
+      ...options,
+      classRef: scanner.classRef,
+      methods: [
+        {selector: 'fill:', source: `[ :c | | i |
+          items := c new: 1000. seen := 0. i := 1.
+          [ i <= 1000 ] whileTrue: [ items at: i put: i. i := i + 1 ].
+          self ]`},
+        {selector: 'seen', source: '[ seen ]'},
+        // Answers from inside the loop the moment it matches, counting every element examined.
+        {selector: 'find:', source: `[ :target | | i |
+          i := 1.
+          [ i <= 1000 ] whileTrue: [
+            seen := seen + 1.
+            ((items at: i) = target) ifTrue: [ ^ i ] ifFalse: [ 1 ].
+            i := i + 1 ].
+          0 ]`},
+      ],
+    });
+
+    const arrayClass = objectRef('app', 'smalltalk/class/Array');
+    const scan = await evaluate(runtime, 'app', 'scan',
+      '[ :c :a | (c new) fill: a ]', [scanner.classRef, arrayClass]);
+
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'find-early', '[ :s | s find: 5 ]', [scan]),
+      integerValue(5),
+      'the search answers from inside its loop',
+    );
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'seen-early', '[ :s | s seen ]', [scan]),
+      integerValue(5),
+      'and examined only five of a thousand elements — early stopping, observed',
+    );
+    void kernel;
+  });
+});
+
 test('includes: answers from inside its loop', async () => {
   await withRuntime(async (runtime) => {
     const {options} = await seed(runtime, 'app');
@@ -340,5 +525,95 @@ test('includes: answers from inside its loop', async () => {
       await evaluate(runtime, 'app', 'hasnt', '[ :oc | oc includes: 9 ]', [collection]),
       booleanValue(false),
     );
+  });
+});
+
+// --- the three defects this pass fixed --------------------------------------------------------------
+
+// `needsMutableLexicalState` must recurse through a return node, or v1 features hidden under `^`
+// classify as v0 and the artifact is rejected against the closed v0 grammar.
+test('v1 features under a return are classified as v1', async () => {
+  const {parseSymmetricSmalltalkBlock} = await import('../src/language/symmetric-smalltalk-parser.js');
+  const {selectSemanticRepresentation} = await import('../src/language/symmetric-smalltalk-semantic.js');
+  assert.equal(selectSemanticRepresentation(parseSymmetricSmalltalkBlock('[ ^ 1 ]')), 'lagrange-code/v0');
+  assert.equal(
+    selectSemanticRepresentation(parseSymmetricSmalltalkBlock('[ ^ [ :x | | t | t := x. t ] ]')),
+    'lagrange-code/v1',
+    'an assignment under a return still needs v1',
+  );
+  assert.equal(
+    selectSemanticRepresentation(parseSymmetricSmalltalkBlock('[ ^ [ 1. 2 ] ]')),
+    'lagrange-code/v1',
+  );
+});
+
+test('a method returning a v1 Block compiles and runs', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel, options} = await seed(runtime, 'app');
+    await defineMethodsFromSource({
+      ...options,
+      classRef: kernel.integerClass,
+      methods: [method('returnsCounter', '[ ^ [ :n | | t | t := n + 1. t ]. 99 ]')],
+    });
+    const block = await evaluate(runtime, 'app', 'get-counter', '[ 0 returnsCounter ]');
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'use-counter', '[ :b | b value: 1 ]', [block]),
+      integerValue(2),
+    );
+  });
+});
+
+// ADR 0052 decision 6: a root execution promotes the value it answers, and a non-local return is
+// still a root answer. Returning it unpromoted would hand a caller a transient ref its arena is gone.
+test('a returned closure is promoted when it leaves a root execution', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel, options} = await seed(runtime, 'app');
+    await defineMethodsFromSource({
+      ...options,
+      classRef: kernel.integerClass,
+      methods: [method('returnsBlock', '[ ^ [ 7 ]. 99 ]')],
+    });
+
+    // Dispatched as the ROOT activation, not through a wrapper Block. That is the case the defect
+    // lived in: when the method that catches the return is itself the root, nothing above it runs
+    // the ordinary promotion, so the caught value has to go through it here.
+    const dispatched = await runtime.invocations.prepareDispatch({
+      languageId: 'symmetric-smalltalk',
+      receiver: integerValue(0),
+      message: (await import('../src/runtime.js')).textValue('returnsBlock'),
+      arguments: [],
+    }, {dispatchImage: 'app'});
+    const returned = await runtime.executor.execute(dispatched.activation, {
+      dispatchImage: 'app', invocationFrame: dispatched.frame,
+    });
+    const {isTransientRef} = await import('../src/value/transient-ref.js');
+    assert.ok(!isTransientRef(returned), 'a non-local return must not answer a transient closure');
+    assert.ok(
+      await runtime.images.getBlock(returned.imageId, returned.objectId),
+      'the returned closure must be a published Block',
+    );
+    // And it still works in a later execution, which is what promotion is for.
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'use-returned', '[ :b | b value ]', [returned]),
+      integerValue(7),
+    );
+  });
+});
+
+// The liveness registry is per executor and has three states. A frame this executor never ran as a
+// home is "absent", which must not be reported as "already returned".
+test('the liveness registry is executor-owned and distinguishes absent from dead', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    const frame = Object.freeze({self: objectRef('app', 'nobody'), definingBehavior: objectRef('app', 'nothing')});
+    assert.equal(runtime.executor.homeActivationState(frame), 'absent');
+
+    // A second runtime must not see the first one's homes.
+    const other = await createRuntime({backend: {mode: 'mock'}});
+    try {
+      assert.equal(other.executor.homeActivationState(frame), 'absent');
+    } finally {
+      await other.close();
+    }
   });
 });

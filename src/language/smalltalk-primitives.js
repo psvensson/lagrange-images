@@ -979,15 +979,21 @@ function nonLocalReturn({activation, context, primitive}) {
       'the Block has no home frame; it outlived the execution that created it',
     );
   }
-  if (typeof context.conditions?.isLiveHome !== 'function') {
+  if (typeof context.conditions?.homeActivationState !== 'function') {
     throw new TypeError(`Symmetric Smalltalk ${primitive} primitive requires a condition runtime`);
   }
-  if (!context.conditions.isLiveHome(frame)) {
+  const state = context.conditions.homeActivationState(frame);
+  if (state === 'dead') {
     // The frame is still reachable, so its identity is known — and it is known to be finished.
     // Saying so beats the vaguer "no home", which is why the registry retains dead entries.
     throw new NonLocalReturnHomeError(
       `the home method activation has already returned (${frame.definingBehavior?.objectId ?? 'unknown'})`,
     );
+  }
+  if (state !== 'live') {
+    // A frame this executor never ran as a home: distinct from one that ran and returned, and the
+    // reason the registry has three states rather than two.
+    throw new NonLocalReturnHomeError('the frame in force is not a home method activation');
   }
   throw new NonLocalReturnTransfer(frame, canonicalizeValue(activation.arguments[0]));
 }

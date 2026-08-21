@@ -164,10 +164,12 @@ async function compileSymmetricSmalltalkMethod({
       ...Object.fromEntries(declared.map(({name, id}) => [name, id])),
       [INSTANCE_SLOT_READ_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ],
       [INSTANCE_SLOT_WRITE_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE],
-      // ADR 0055: injected unconditionally rather than only when `^` occurs, for the same reason
-      // the slot primitives are declared per method — a declaration that nothing references still
-      // becomes a binding, and deciding by inspection would mean two places that must agree about
-      // whether the source contains a return.
+    },
+    // ADR 0055: made *available* rather than declared. A declaration becomes a program capture
+    // whether or not the source references it, so declaring this eagerly would give every method a
+    // dependency it may never use. The lowering requests it on first `^`, which needs no second
+    // inspection of the source.
+    intrinsics: {
       [NON_LOCAL_RETURN_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN],
     },
     instanceVariables,
