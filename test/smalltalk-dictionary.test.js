@@ -648,7 +648,7 @@ async function installWriteCount(lane) {
 // Enumerated rather than sampled, in both lanes, with a commit-then-throw variant that models a lost
 // acknowledgement — after which the identical install must be an idempotent success.
 for (const lane of ['neutral', 'wasm']) {
-  test(`every write installing the ${lane} equality/Dictionary protocol is recoverable`, async () => {
+  test(`exhaustive-recovery: every write installing the ${lane} equality/Dictionary protocol`, async () => {
     const total = await installWriteCount(lane);
     assert.ok(total > 10, `expected many writes in the ${lane} lane, saw ${total}`);
 

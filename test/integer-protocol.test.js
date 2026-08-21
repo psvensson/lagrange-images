@@ -368,7 +368,7 @@ const faultingServices = (images, options, fault) => {
 };
 
 for (const lane of ['neutral', 'wasm']) {
-  test(`every write publishing the ${lane} Integer protocol is recoverable`, async () => {
+  test(`exhaustive-recovery: every write publishing the ${lane} Integer protocol`, async () => {
     // Enumerated after binding both services, so the count covers compiler-internal writes too.
     const total = await withRuntime(async (runtime) => {
       const options = await baseImage(runtime, 'count', lane);

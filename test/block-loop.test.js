@@ -1163,7 +1163,7 @@ function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
 // Every write publishing the protocol is swept twice: interrupted before the commit, and committed
 // with the acknowledgement lost. Both must leave an image a retry can complete, because a
 // half-installed routing authority is the one thing discovery must never find.
-test('every write publishing the Block protocol is recoverable', async () => {
+test('exhaustive-recovery: every write publishing the Block protocol', async () => {
   const total = await withRuntime(async (runtime) => {
     await seed(runtime, 'blank', {blockProtocol: false});
     const {images, writeCount} = faultingImages(runtime.images);

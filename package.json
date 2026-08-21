@@ -25,18 +25,28 @@
     "start": "node src/server.js",
     "demo": "node examples/graph-demo.js",
     "test": "node --test",
+    "test:fast": "node --test --test-skip-pattern=\"exhaustive-recovery:\"",
+    "test:recovery": "node --test --test-name-pattern=\"exhaustive-recovery:\"",
     "integration:setup": "scripts/integration-setup.sh",
     "test:integration": "bash -c 'source scripts/integration-env.sh && node --test test/opensmalltalk-cuis-real.test.js test/opensmalltalk-cuis-toolchain-real.test.js test/two-lane-callable-real.test.js'"
   },
-  "engines": {"node": ">=22"},
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@bytecodealliance/jco": ">=1.9.0",
     "lagrange-server": ">=0.1.0"
   },
   "peerDependenciesMeta": {
-    "@bytecodealliance/jco": {"optional": true},
-    "lagrange-server": {"optional": true}
+    "@bytecodealliance/jco": {
+      "optional": true
+    },
+    "lagrange-server": {
+      "optional": true
+    }
   },
-  "devDependencies": {"@bytecodealliance/jco": "^1.29.0"},
+  "devDependencies": {
+    "@bytecodealliance/jco": "^1.29.0"
+  },
   "license": "GPL-3.0"
 }

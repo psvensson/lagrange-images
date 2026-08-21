@@ -880,7 +880,7 @@ async function installWriteCount(lane) {
 }
 
 for (const lane of ['neutral', 'wasm']) {
-  test(`every write installing the ${lane} allocation protocol is recoverable by an identical retry`, async () => {
+  test(`exhaustive-recovery: every write installing the ${lane} allocation protocol`, async () => {
     const total = await installWriteCount(lane);
     assert.ok(total > 5, `expected several writes in the ${lane} lane, saw ${total}`);
 

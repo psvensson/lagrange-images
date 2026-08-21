@@ -7,10 +7,24 @@ somebody real time.
 ## Running the suite
 
 ```sh
-npm test                  # unit + in-process proofs, no external assets
+npm test                  # unit + in-process proofs, no external assets — still means everything
+npm run test:fast         # the same, minus the exhaustive recovery sweeps (what CI's node-test runs)
+npm run test:recovery     # only those sweeps (what CI's recovery-test runs)
 npm run demo              # examples/graph-demo.js, also run by CI
 npm run test:integration  # the real proofs; needs scripts/integration-setup.sh first
 ```
+
+### CI splits the suite; `npm test` does not
+
+CI runs `test:fast` and `test:recovery` as two required jobs, because the exhaustive
+publication-recovery sweeps grow with every new protocol and were pushing the general gate toward
+its ten-minute timeout. The split is about budgets, not coverage: **nothing is sampled**, every
+sweep still visits every write in both lanes under pre-commit and commit-then-lost-ack failure, and
+a local `npm test` still runs the lot.
+
+A new sweep must carry the `exhaustive-recovery:` prefix in its test name, or it silently rejoins
+the general gate. `test/ci-split.test.js` enforces that in both directions — an unprefixed sweep
+fails it, and so does a cheap test wearing the prefix.
 
 ### `npm test` skipping is not the same as passing
 

@@ -8,6 +8,9 @@ permissions:
   contents: read
 
 jobs:
+  # The ordinary gate: everything except the exhaustive publication-recovery sweeps, which run
+  # beside it in `recovery-test`. Split for headroom rather than coverage — nothing is sampled, and
+  # `npm test` still runs the whole suite locally.
   node-test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -17,8 +20,22 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts
-      - run: npm test
+      - run: npm run test:fast
       - run: npm run demo
+
+  # Every write, both lanes, pre-commit and commit-then-lost-ack. These sweeps grow with each new
+  # protocol, so they get their own budget: a protocol added later lengthens this job rather than
+  # pushing the general gate toward its timeout.
+  recovery-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts
+      - run: npm run test:recovery
 
   lagrange-backend-integration:
     runs-on: ubuntu-latest
