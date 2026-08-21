@@ -7,6 +7,7 @@ import {
   findSmalltalkKernel,
   installSmalltalkAllocationProtocol,
   installSmalltalkBlockProtocol,
+  installSmalltalkConditionProtocol,
   installSmalltalkIntegerProtocol,
   installSmalltalkControlFlow,
   installSmalltalkEqualityProtocol,
@@ -56,6 +57,7 @@ async function seed(runtime, imageId, {lane = 'neutral'} = {}) {
   await installSmalltalkInstanceVariableProtocol({images: runtime.images, imageId});
   await installSmalltalkBlockProtocol({images: runtime.images, imageId});
   await installSmalltalkIntegerProtocol(options);
+  await installSmalltalkConditionProtocol(options);
   const kernel = await findSmalltalkKernel({images: runtime.images, imageId});
   await defineMethods({...options, classRef: kernel.integerClass, methods: [PLUS]});
   const library = await installSmalltalkLibrary(options);
@@ -276,19 +278,25 @@ test('every library method is an ordinary Smalltalk method with a semantic artif
 
 // No collection-specific host operation was added. The primitive family is exactly what ADRs
 // 0046-0051 installed, and the library reaches storage only through Array's ordinary protocol.
-// ADR 0051's loop primitives and ADR 0053's Integer primitives are language operations, not
-// collection operations: no method in this library names any of them. They are reached by
+// The loop (ADR 0051), Integer (ADR 0053) and condition (ADR 0054) primitives are language
+// operations, not collection operations: no method in this library names any of them. They are reached by
 // dispatching `whileTrue:`/`whileFalse:` and `<`/`<=`/`-` like any other message.
 test('the library adds no new kernel primitive', async () => {
   const {SMALLTALK_PRIMITIVE_NAMES} = await import('../src/language/smalltalk-primitives.js');
   assert.deepEqual([...SMALLTALK_PRIMITIVE_NAMES].sort(), [
     'basic-new',
     'basic-new-sized',
+    'block-ensure',
+    'block-if-curtailed',
+    'block-on-do',
     'block-while-false',
     'block-while-true',
     'built-in-equals',
     'built-in-hash',
     'class-of',
+    'condition-resume',
+    'condition-return',
+    'condition-signal',
     'dictionary-at',
     'dictionary-at-put',
     'dictionary-includes-key',
@@ -538,7 +546,7 @@ test('at: bounds by tally, not by the backing Array capacity', async () => {
     for (const index of [2, 3, 4]) {
       await assert.rejects(
         evaluate(runtime, 'app', `at-slack-${index}`, `[ :oc | oc at: ${index} ]`, [collection]),
-        /errorIndexOutOfBounds:/,
+        /unhandled Smalltalk condition/,
         `index ${index} is within the backing Array but outside the collection`,
       );
     }
@@ -563,7 +571,7 @@ test('at: refuses an index below one and past the end', async () => {
     for (const index of ['0', '(0 - 1)', '4']) {
       await assert.rejects(
         evaluate(runtime, 'app', `at-bad-${index}`, `[ :oc | oc at: ${index} ]`, [collection]),
-        /errorIndexOutOfBounds:/,
+        /unhandled Smalltalk condition/,
         `index ${index}`,
       );
     }
@@ -584,16 +592,16 @@ test('first, last and removeLast work, and refuse on an empty collection', async
     // Removing does not make the removed element reachable again through at:.
     await assert.rejects(
       evaluate(runtime, 'app', 'at-removed', '[ :oc | oc at: 3 ]', [collection]),
-      /errorIndexOutOfBounds:/,
+      /unhandled Smalltalk condition/,
     );
 
     // Empty: every accessor refuses rather than answering the backing Array's nil.
     const empty = await evaluate(runtime, 'app', 'empty', '[ :c | c new ]', [library.orderedCollection]);
-    await assert.rejects(evaluate(runtime, 'app', 'e-first', '[ :oc | oc first ]', [empty]), /errorIndexOutOfBounds:/);
-    await assert.rejects(evaluate(runtime, 'app', 'e-last', '[ :oc | oc last ]', [empty]), /errorIndexOutOfBounds:/);
+    await assert.rejects(evaluate(runtime, 'app', 'e-first', '[ :oc | oc first ]', [empty]), /unhandled Smalltalk condition/);
+    await assert.rejects(evaluate(runtime, 'app', 'e-last', '[ :oc | oc last ]', [empty]), /unhandled Smalltalk condition/);
     await assert.rejects(
       evaluate(runtime, 'app', 'e-rm', '[ :oc | oc removeLast ]', [empty]),
-      /errorEmptyCollection/,
+      /unhandled Smalltalk condition/,
     );
   });
 });
@@ -637,7 +645,34 @@ test('removeLast down to empty, then refuses', async () => {
     assert.deepEqual(await evaluate(runtime, 'app', 'd-empty', '[ :oc | oc isEmpty ]', [collection]), booleanValue(true));
     await assert.rejects(
       evaluate(runtime, 'app', 'd3', '[ :oc | oc removeLast ]', [collection]),
-      /errorEmptyCollection/,
+      /unhandled Smalltalk condition/,
+    );
+  });
+});
+
+// ADR 0054's payoff for the library: a refusal is catchable, so the alternative-value idiom is
+// ordinary Smalltalk rather than a second primitive.
+test('at:ifAbsent: handles the collection own signal', async () => {
+  await withRuntime(async (runtime) => {
+    const {library} = await seed(runtime, 'app');
+    const collection = await evaluate(runtime, 'app', 'ifabs',
+      '[ :c | | oc | oc := c new. oc add: 5. oc ]', [library.orderedCollection]);
+
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'present', '[ :oc | oc at: 1 ifAbsent: [ 99 ] ]', [collection]),
+      integerValue(5),
+    );
+    for (const index of ['0', '2', '(0 - 1)']) {
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `absent-${index}`, `[ :oc | oc at: ${index} ifAbsent: [ 99 ] ]`, [collection]),
+        integerValue(99),
+        `index ${index} must take the absent branch rather than failing`,
+      );
+    }
+    // The signal is still a signal: unhandled, it fails.
+    await assert.rejects(
+      evaluate(runtime, 'app', 'still-fails', '[ :oc | oc at: 2 ]', [collection]),
+      /unhandled Smalltalk condition/,
     );
   });
 });

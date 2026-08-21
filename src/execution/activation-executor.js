@@ -12,6 +12,11 @@ import {
 
 const MAX_ACTIVATION_DEPTH = 256;
 
+// ADR 0054. Authority captured at `on:do:`/`ensure:` establishment, reachable only through the
+// opaque token handed back — so a primitive can carry it without holding it, and nothing that
+// crosses the primitive boundary is a capability (ADR 0037).
+const CAPTURED_AUTHORITY = new WeakMap();
+
 function normalizeObjectRef(value, label) {
   const normalized = canonicalizeValue(value);
   if (!isObjectRef(normalized)) throw new TypeError(`${label} must be an unpinned object ref`);
@@ -212,6 +217,7 @@ class ActivationExecutor {
     dispatchImage = null,
     invocationFrame = null,
     inheritedFrame = null,
+    conditionRuntime = null,
   } = {}) {
     if (!Number.isInteger(depth) || depth < 0) throw new TypeError('activation depth must be a non-negative integer');
     if (depth > MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
@@ -231,6 +237,11 @@ class ActivationExecutor {
     // already draws that line exactly: the root is the execution that was given no arena.
     const ownsArena = !cellArena;
     const arena = cellArena ?? new LexicalCellArena();
+    // ADR 0054: one execution-wide condition runtime, owned beside the arena and living exactly as
+    // long. Nested sends share it, so a handler established anywhere in the execution is found from
+    // anywhere else in it — including across a WASM boundary, which contributes no machinery of its
+    // own.
+    const conditions = conditionRuntime ?? arena.conditionRuntime();
     // ADR 0052 decision 5a: one resolution rule for this execution, shared by the executors, the
     // dispatcher and this class's own reads. Identical to `this.images` when there is no arena.
     const view = arenaImagesView(this.images, arena);
@@ -297,6 +308,44 @@ class ActivationExecutor {
       {activation, code},
       {
         images: view,
+        // ADR 0054. Primitives reach the condition runtime through this facade and never through
+        // an authority context: `establish` hands back a scope id, and the *invoker* it stores
+        // closes over the authority in force here. A handler therefore runs with its establisher's
+        // rights without any capability crossing the primitive boundary (ADR 0037).
+        conditions: Object.freeze({
+          runtime: conditions,
+          // Captures the authority in force *here*, and nothing else. An opaque handle rather than
+          // the context itself, so a primitive can carry it to a handler entry without ever holding
+          // a capability (ADR 0037).
+          captureAuthority: whileActive('captureAuthority', () => {
+            const token = Object.freeze({});
+            CAPTURED_AUTHORITY.set(token, authority);
+            return token;
+          }),
+          // Invoked from whichever frame is *running* the Block, not from the frame that captured
+          // the token. Depth is therefore the depth at the signal point — a handler on a deep
+          // signalling stack must not be measured from where `on:do:` was written — and the
+          // dispatch image is the Block's own, which is the ordinary rule for any Block and is what
+          // keeps a cross-image handler using its own kernel rather than the establisher's.
+          //
+          // Invoking a Block rather than dispatching a selector keeps this language-neutral, and
+          // lets ADR 0050 restore the Block's creation frame, which is what gives a handler its
+          // establisher's `self` for free.
+          invoke: whileActive('invoke', async (token, blockRef, args = []) => {
+            if (!CAPTURED_AUTHORITY.has(token)) throw new TypeError('unknown captured authority token');
+            if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
+            const activation = await this.invocations.prepareActivation({
+              block: blockRef, arguments: args, images: view,
+            });
+            return await this.execute(activation, {
+              depth: depth + 1,
+              authority: CAPTURED_AUTHORITY.get(token),
+              cellArena: arena,
+              conditionRuntime: conditions,
+              dispatchImage: normalizeObjectRef(blockRef, 'condition block').imageId,
+            });
+          }),
+        }),
         // ADR 0052 decision 7a. The boundary that creates durable reachability calls this before
         // its write; the graph guard stays a tripwire proving a boundary was not forgotten, rather
         // than becoming the mechanism. A value with nothing transient in it comes straight back.
@@ -380,6 +429,7 @@ class ActivationExecutor {
             depth: depth + 1,
             authority: nestedAuthority,
             cellArena: arena,
+            conditionRuntime: conditions,
             dispatchImage: nextDispatchImage,
             invocationFrame: dispatched.frame,
             // Offered only where the language said this callee is its own host operation. An

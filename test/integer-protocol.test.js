@@ -417,8 +417,11 @@ test('a half-installed Integer protocol is not mistaken for a complete one', asy
     const options = await baseImage(runtime, 'app', 'neutral');
     // The library checks for its Array class before it checks Integer, so that prerequisite has to
     // be satisfied for this test to reach the check it is actually about.
-    const {installSmalltalkIndexedProtocol} = await import('../src/runtime.js');
+    const {installSmalltalkIndexedProtocol, installSmalltalkConditionProtocol} = await import('../src/runtime.js');
     await installSmalltalkIndexedProtocol(options);
+    // Likewise the condition protocol, which the library checks before Integer. Only the Integer
+    // protocol may be missing here, or the test proves a different refusal than it claims.
+    await installSmalltalkConditionProtocol(options);
     // Fail at the first *method* write, leaving all five primitive Blocks published.
     let seenPrimitiveBlocks = 0;
     const faulting = Object.create(runtime.images);

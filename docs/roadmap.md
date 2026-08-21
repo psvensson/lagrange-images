@@ -269,12 +269,13 @@ Next, ordered by architectural pressure rather than convenience:
       promotion, and whether persisting one object persists everything it reaches. Potentially a
       large simplification of the image model, potentially too expensive
 - [ ] basic collections, at which point a MethodDictionary can stop being represented by a Shape
-- [ ] implement **ADR 0054**'s conditions and handlers. The decision is that a handler runs at the
+- [x] conditions and handlers (**ADR 0054**). The decision is that a handler runs at the
       signal point *before* unwinding, so it may `resume:` the signalling computation or `return:`
       through its `on:do:` — which is the only shape under which resumption works in the WASM lane,
       since a retired instance's frames are gone for good. Resumption rides the existing resumable
-      ABI unchanged. It replaces `OrderedCollection >> at:`'s `errorIndexOutOfBounds:` placeholder,
-      which ADR 0053 could only spell as a deliberate message-not-understood
+      ABI unchanged. `OrderedCollection >> at:` now signals a catchable `IndexOutOfRange` instead of
+      the `errorIndexOutOfBounds:` placeholder, and `at:ifAbsent:` is written in ordinary Smalltalk
+      by handling that signal rather than needing a second primitive
 - [ ] the rest of the boolean protocol — `not`, `and:`, `or:` — which runs ADR 0045's bridge
       backwards: a boolean-*answering* method has to decide whether it answers the canonical Value
       or the singleton. ADR 0053 needed negation for `<=`/`>=` and used the neutral `if` inside two
