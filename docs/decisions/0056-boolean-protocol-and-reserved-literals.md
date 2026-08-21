@@ -93,6 +93,27 @@ previously wrote none — but it is the right one:
 Nested Blocks need nothing new: the binding propagates by the ordinary capture walk, as
 `$nonLocalReturn` and the slot primitives already do.
 
+**The intrinsic environment composes with the caller's; it does not replace it.** A standalone Block
+may already be installed with an environment supplying the caller's own captures, and a Block that
+also uses `nil` needs both. The rule:
+
+```text
+no nil                      the environment path is exactly what it is today, and no extra
+                            record is written
+
+nil, no caller environment  a deterministic environment holding only the intrinsic binding
+
+nil, caller environment     a deterministic environment holding only the intrinsic binding,
+                            whose PARENT is the caller's environment
+```
+
+Parenting rather than merging, for two reasons. Copying the caller's bindings into a new record
+would duplicate durable state that already exists and could then drift from it — the caller's
+environment is a record with its own lifecycle, and a copy is a second answer to the same question.
+And the lexical environment chain is already the mechanism for exactly this: `lookupBindingRecord`
+walks parents, so composing is what the substrate is for, while flattening would be a private
+re-implementation of the walk.
+
 ### 3. All three are reserved pseudo-literals
 
 ```text
@@ -152,7 +173,12 @@ nil
     the semantic artifact contains no image-specific ref — proven by inspecting the artifact,
         and by compiling once and installing into two images with different nil identities
     a nested Block using `nil` binds it by the ordinary capture walk
-    a Block that does not use `nil` still installs with no lexical environment
+    a Block that does not use `nil` still installs with no lexical environment, and its
+        environment path is byte-for-byte what it is today
+    a Block using `nil` *and* caller-supplied captures resolves both, with the intrinsic
+        environment's parent pointing at the caller's rather than copying its bindings
+    the caller's environment record is unchanged by that composition
+    installing the same standalone Block twice converges, including its intrinsic environment
 
 reserved names
     true, false and nil are refused as parameters, temporaries, capture names and assignment
@@ -195,6 +221,8 @@ nil lowers to a reserved image-bound binding; the semantic artifact carries a bi
     an image-specific ref, and the generic Value model gains no nil kind
 `nil` in a standalone Block makes its installer write a lexical environment it otherwise would not;
     write it only when the program actually binds the intrinsic
+the intrinsic environment PARENTS the caller-supplied one, never flattens or copies it — the
+    chain walk is already the composition mechanism, and a copy is a second answer that can drift
 true, false and nil are reserved: not parameters, temporaries, captures, assignment targets, and
     not shadowable by a later namespace
 not/and:/or: are ordinary methods through ADR 0045's bridge; the compiler recognizes no selector
