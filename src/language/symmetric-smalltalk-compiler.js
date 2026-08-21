@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {ensureBlock, ensureCodeArtifact} from '../graph/ensure-records.js';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
 import {LAGRANGE_CODE_V1} from '../code/lagrange-code-v1.js';
 import {CompilationService, createDefaultCodeCompilerRegistry} from '../compilation/index.js';
@@ -44,21 +45,25 @@ async function installSymmetricSmalltalkBlock({
   const compiler = resolveCompilation(images, compilation);
   const {syntax, semanticProgram, representation} = compileSymmetricSmalltalkBlock(source, {captures});
 
-  const sourceArtifact = await images.putCodeArtifact(imageId, {
+  // Ensure-exact-or-create, like every other deterministic-id write in this repository. These were
+  // direct `put`s, which made an *identical* retry fail on the first record — so a partially
+  // completed installation could not be completed by repeating it. Pre-existing and unrelated to
+  // any one feature; converted here because ADR 0056 is the first thing to depend on it.
+  const sourceArtifact = await ensureCodeArtifact(images, imageId, {
     id: `${id}:source`,
     languageId: SYMMETRIC_SMALLTALK_ID,
     representation: SYMMETRIC_SMALLTALK_SOURCE_V0,
     content: textValue(source),
     metadata,
   });
-  const syntaxArtifact = await images.putCodeArtifact(imageId, {
+  const syntaxArtifact = await ensureCodeArtifact(images, imageId, {
     id: `${id}:syntax`,
     languageId: SYMMETRIC_SMALLTALK_ID,
     representation: SYMMETRIC_SMALLTALK_SYNTAX_V0,
     content: textValue(JSON.stringify(syntax)),
     derivedFrom: [objectRef(imageId, sourceArtifact.id)],
   });
-  const semanticArtifact = await images.putCodeArtifact(imageId, {
+  const semanticArtifact = await ensureCodeArtifact(images, imageId, {
     id: `${id}:semantic`,
     languageId: SYMMETRIC_SMALLTALK_ID,
     representation,
@@ -83,7 +88,7 @@ async function installSymmetricSmalltalkBlock({
       options: {blockPrototypes},
     },
   );
-  const block = await images.putBlock(imageId, {
+  const block = await ensureBlock(images, imageId, {
     id,
     code: objectRef(imageId, codeArtifact.id),
     environment,
