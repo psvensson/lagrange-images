@@ -67,7 +67,17 @@ class Parser {
     const statements = [];
     for (;;) {
       if (this.current().type === terminator) break;
-      statements.push(this.parseExpression());
+      // ADR 0055. A return is a *statement*, not an expression: `^ a foo` returns the whole send,
+      // and `x := ^ 1` is not a thing. Parsing it here rather than in `parseExpression` is what
+      // makes that true by construction.
+      if (this.current().type === 'caret') {
+        const caret = this.advance();
+        statements.push(node('return', {value: this.parseExpression(), start: caret.start}));
+      } else {
+        statements.push(this.parseExpression());
+      }
+      // Statements after a return still *parse*: they are unreachable, not ill-formed, and the ADR
+      // requires proving that they do not run rather than that they cannot be written.
       if (!this.match('.')) break;
     }
     if (statements.length === 0) {

@@ -101,6 +101,15 @@ function tokenizeSymmetricSmalltalk(source) {
       continue;
     }
 
+    // ADR 0055: `^` is syntax, not a binary selector, so it gets its own token and cannot be
+    // absorbed into an adjacent operator the way `^=` otherwise would be.
+    if (char === '^') {
+      const start = index;
+      index += 1;
+      push('caret', '^', start);
+      continue;
+    }
+
     if ('[]()|:.'.includes(char)) {
       const start = index;
       index += 1;

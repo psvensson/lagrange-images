@@ -23,6 +23,24 @@ class ConditionTransfer extends Error {
   }
 }
 
+// ADR 0055. A transfer that names a *home method activation* rather than a handler scope, which is
+// why `on:do:` cannot intercept one: it is a different class and carries a frame, not a scope id.
+class NonLocalReturnTransfer extends Error {
+  constructor(frame, value) {
+    super('non-local return');
+    this.name = 'NonLocalReturnTransfer';
+    this.frame = frame;
+    this.value = value;
+  }
+}
+
+class NonLocalReturnHomeError extends TypeError {
+  constructor(detail) {
+    super(`non-local return has no live home method activation: ${detail}`);
+    this.name = 'NonLocalReturnHomeError';
+  }
+}
+
 class SmalltalkUnhandledConditionError extends TypeError {
   constructor(description) {
     super(`unhandled Smalltalk condition: ${description}`);
@@ -113,6 +131,8 @@ class ConditionRuntime {
 
 export {
   ConditionRuntime,
+  NonLocalReturnHomeError,
+  NonLocalReturnTransfer,
   ConditionTransfer,
   SmalltalkNoActiveOccurrenceError,
   SmalltalkUnhandledConditionError,

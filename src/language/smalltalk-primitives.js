@@ -4,6 +4,8 @@ import {SHAPE_INDEXED, shapeIndexedKind} from '../object/model.js';
 import {EXCEPTION_SHAPE_ID, HOST_CONDITION_CLASS} from './smalltalk-condition-ids.js';
 import {
   ConditionTransfer,
+  NonLocalReturnHomeError,
+  NonLocalReturnTransfer,
   SmalltalkNoActiveOccurrenceError,
   SmalltalkUnhandledConditionError,
 } from '../execution/conditions.js';
@@ -89,6 +91,8 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   CONDITION_SIGNAL: 'condition-signal',
   CONDITION_RESUME: 'condition-resume',
   CONDITION_RETURN: 'condition-return',
+  // ADR 0055. Reached by a send the compiler lowers `^` to; never written by a programmer.
+  NON_LOCAL_RETURN: 'non-local-return',
 });
 
 // Dispatched with the protected Block as receiver, exactly like the loop primitives — so they share
@@ -137,6 +141,7 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.CONDITION_SIGNAL]: 1,
   [SMALLTALK_PRIMITIVE.CONDITION_RESUME]: 2,
   [SMALLTALK_PRIMITIVE.CONDITION_RETURN]: 2,
+  [SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN]: 1,
 });
 
 // One locality rule for every primitive. A foreign primitive Block must fail rather than answer a
@@ -957,6 +962,44 @@ async function integerOperation(primitive, left, right, {
   }
 }
 
+// ADR 0055. `^ expr` lowers to `$nonLocalReturn value: expr`, so this primitive runs with the home
+// method's frame already in hand: a kernel-primitive send INHERITS the caller's frame (ADR 0050 rule
+// 2), and a closure activation RESTORES the frame it was created in (rule 3). Chained, those two
+// rules hand it the home frame with no new propagation.
+//
+// It never catches its own transfer, because it only *borrows* that frame — decision 3a makes
+// stopping the transfer the owner's job.
+function nonLocalReturn({activation, context, primitive}) {
+  const frame = context?.invocationFrame ?? null;
+  if (!frame) {
+    // No frame at all: the Block outlived the execution that created it, so its home is
+    // unreachable — the same fail-closed shape ADR 0050 decision 10a gives an escaped
+    // ivar-dependent closure, and for the same reason.
+    throw new NonLocalReturnHomeError(
+      'the Block has no home frame; it outlived the execution that created it',
+    );
+  }
+  if (typeof context.conditions?.homeActivationState !== 'function') {
+    throw new TypeError(`Symmetric Smalltalk ${primitive} primitive requires a condition runtime`);
+  }
+  const state = context.conditions.homeActivationState(frame);
+  if (state === 'dead') {
+    // The frame is still reachable, so its identity is known — and it is known to be finished.
+    // Saying so beats the vaguer "no home", which is why the registry retains dead entries.
+    const selector = context.conditions.homeActivationSelector?.(frame) ?? null;
+    const behavior = frame.definingBehavior?.objectId ?? 'unknown';
+    throw new NonLocalReturnHomeError(
+      `the home method activation has already returned: ${behavior}${selector ? ` >> ${selector}` : ''}`,
+    );
+  }
+  if (state !== 'live') {
+    // A frame this executor never ran as a home: distinct from one that ran and returned, and the
+    // reason the registry has three states rather than two.
+    throw new NonLocalReturnHomeError('the frame in force is not a home method activation');
+  }
+  throw new NonLocalReturnTransfer(frame, canonicalizeValue(activation.arguments[0]));
+}
+
 // ADR 0054 decision 8. A host failure that has a condition class becomes an ordinary Smalltalk
 // signal, so it is catchable — and resumable, since a handler's `resume:` answers the operation.
 //
@@ -1293,6 +1336,9 @@ function createSmalltalkKernelPrimitiveV1Executor({
           images, activation, context, primitive,
           onlyWhenCurtailed: primitive === SMALLTALK_PRIMITIVE.BLOCK_IF_CURTAILED,
         });
+      }
+      if (primitive === SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN) {
+        return nonLocalReturn({activation, context, primitive});
       }
       if (primitive === SMALLTALK_PRIMITIVE.CONDITION_SIGNAL) {
         return await conditionSignal({images, primitiveImage, activation, context, primitive});

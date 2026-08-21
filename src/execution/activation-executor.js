@@ -1,6 +1,7 @@
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
 import {arenaImagesView} from './lexical-cells.js';
 import {promoteClosure} from './closure-promotion.js';
+import {NonLocalReturnTransfer} from './conditions.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 import {
   EscapingMutableClosureError,
@@ -16,6 +17,8 @@ const MAX_ACTIVATION_DEPTH = 256;
 // opaque token handed back — so a primitive can carry it without holding it, and nothing that
 // crosses the primitive boundary is a capability (ADR 0037).
 const CAPTURED_AUTHORITY = new WeakMap();
+
+
 
 function normalizeObjectRef(value, label) {
   const normalized = canonicalizeValue(value);
@@ -75,6 +78,34 @@ class ActivationExecutor {
   // before the lanes diverge — while the policy comes from the language: ADR 0044 wires one that
   // answers the dispatch image's Smalltalk `nil` for Symmetric Smalltalk artifacts, and nothing
   // otherwise, in which case a temporary starts UNBOUND exactly as ADR 0043 decided.
+  // ADR 0055 decision 4. Liveness of a home method activation, keyed by its ADR 0050 frame — which
+  // is only ever a key here. The frame's shape is validated as exactly {self, definingBehavior} at
+  // the dispatch seam, and liveness is execution state rather than identity, so it must not become a
+  // field.
+  //
+  // Three states, not two, and per executor rather than module-global. A *missing* entry means this
+  // executor never ran that frame as a home, which is not the same as one that ran and returned —
+  // collapsing them would report "already returned" for a frame that never was a home here. And a
+  // dead entry is retained while the frame is reachable, which is what keeps the two apart.
+  #homeActivations = new WeakMap();
+
+  homeActivationState(frame) {
+    return this.#homeActivations.get(frame)?.state ?? 'absent';
+  }
+
+  // The selector the home was dispatched with, so a dead-home failure can name the *method* rather
+  // than only its class — `definingBehavior` alone identifies the class, which is not what ADR 0055
+  // asks the diagnosis to say.
+  homeActivationSelector(frame) {
+    return this.#homeActivations.get(frame)?.selector ?? null;
+  }
+
+  // Private: ADR 0055 requires that outside code cannot forge liveness. A frame is only ever a key
+  // here, and only this class writes.
+  #markHomeActivation(frame, state, selector) {
+    this.#homeActivations.set(frame, Object.freeze({state, selector}));
+  }
+
   constructor({
     images,
     executors = new CodeExecutorRegistry(),
@@ -276,6 +307,20 @@ class ActivationExecutor {
       ?? arena.frameFor?.(activation.block)
       ?? null;
 
+    // ADR 0055 decision 3a. Computed *alongside* the expression above rather than by refactoring it,
+    // so ADR 0050's priority semantics are reused rather than re-derived.
+    //
+    // Only a dispatch-supplied frame is owned. A kernel primitive inherits one and a closure restores
+    // one — both are borrowers holding the very same object — so ownership, not frame equality, is
+    // what decides where a non-local return stops. Otherwise the return primitive, which is running
+    // with the home frame at the moment it raises, would catch its own transfer.
+    const ownsFrame = activeFrame !== null
+      && (invocationFrame !== null || this.invocations?.frameFor?.(activation) != null);
+    // Marked live inside the protected region below, not here: a failure between this point and the
+    // `try` — temporary initialization, for instance — would otherwise leave a frame permanently
+    // live, and a later `^` naming it would be told its home is still running.
+    const homeSelector = ownsFrame ? (activation.dispatch?.message?.value ?? null) : null;
+
     // ADR 0044 decision 5a. A root activation dispatches in its own Block's image; a nested one
     // inherits what its sender computed. Context, never a field on the activation.
     const activeDispatchImage = dispatchImage ?? activation.block.imageId;
@@ -304,6 +349,7 @@ class ActivationExecutor {
     };
 
     try {
+      if (ownsFrame) this.#markHomeActivation(activeFrame, 'live', homeSelector);
       const result = await executor.execute(
       {activation, code},
       {
@@ -331,6 +377,10 @@ class ActivationExecutor {
           // Invoking a Block rather than dispatching a selector keeps this language-neutral, and
           // lets ADR 0050 restore the Block's creation frame, which is what gives a handler its
           // establisher's `self` for free.
+          // ADR 0055. The primitive asks whether the frame it was handed still has a running
+          // owner; it never sees the registry, and a frame is only ever a key in it.
+          homeActivationState: whileActive('homeActivationState', (frame) => this.homeActivationState(frame)),
+          homeActivationSelector: whileActive('homeActivationSelector', (frame) => this.homeActivationSelector(frame)),
           invoke: whileActive('invoke', async (token, blockRef, args = []) => {
             if (!CAPTURED_AUTHORITY.has(token)) throw new TypeError('unknown captured authority token');
             if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
@@ -446,9 +496,25 @@ class ActivationExecutor {
       // already have been refused at the graph write seam. Walking a returned object graph would be
       // I/O spent re-proving what the write boundary guarantees.
       return ownsArena ? await promoteClosure(this.images, arena, answer) : answer;
+    } catch (error) {
+      // Only the owner stops a return naming its own frame; a borrower lets it travel on.
+      if (ownsFrame && error instanceof NonLocalReturnTransfer && error.frame === activeFrame) {
+        const answer = canonicalizeValue(error.value);
+        // The same escape boundary an ordinary return crosses (ADR 0052 decision 6): a root
+        // execution's answer is promoted before leaving, while the arena still exists. Returning
+        // this value unpromoted would let `^ [ ... ]` hand a transient closure to a caller that has
+        // no arena to resolve it in.
+        return ownsArena ? await promoteClosure(this.images, arena, answer) : answer;
+      }
+      throw error;
     } finally {
       // Also on the exceptional path: a trapping guest must not leave a live context behind.
       lifetime.active = false;
+      // Dead from here on. Retained rather than deleted: while the frame is still reachable, a
+      // `^` naming it must be told the method returned rather than that it has no home.
+      // Marked dead rather than deleted: while the frame is still reachable, a `^` naming it must
+      // be told the method returned rather than that it has no home.
+      if (ownsFrame) this.#markHomeActivation(activeFrame, 'dead', homeSelector);
     }
   }
 }

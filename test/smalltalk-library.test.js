@@ -278,8 +278,9 @@ test('every library method is an ordinary Smalltalk method with a semantic artif
 
 // No collection-specific host operation was added. The primitive family is exactly what ADRs
 // 0046-0051 installed, and the library reaches storage only through Array's ordinary protocol.
-// The loop (ADR 0051), Integer (ADR 0053) and condition (ADR 0054) primitives are language
-// operations, not collection operations: no method in this library names any of them. They are reached by
+// The loop (ADR 0051), Integer (ADR 0053), condition (ADR 0054) and non-local-return (ADR 0055)
+// primitives are language operations, not collection operations. `non-local-return` is reached only
+// by the compiler's `^` lowering and is never named in source. They are reached by
 // dispatching `whileTrue:`/`whileFalse:` and `<`/`<=`/`-` like any other message.
 test('the library adds no new kernel primitive', async () => {
   const {SMALLTALK_PRIMITIVE_NAMES} = await import('../src/language/smalltalk-primitives.js');
@@ -312,6 +313,7 @@ test('the library adds no new kernel primitive', async () => {
     'integer-modulo',
     'integer-multiply',
     'integer-subtract',
+    'non-local-return',
   ]);
 });
 
@@ -689,6 +691,11 @@ test('the count-up-and-compare-with-= idiom is gone from the library', async () 
       `${selector} still counts up to tally + 1 instead of bounding with <=`,
     );
   }
+  // And `includes:` answers from its loop rather than carrying a flag out (ADR 0055).
+  const includes = ORDERED_COLLECTION_METHODS.find(({selector}) => selector === 'includes:');
+  assert.ok(!/found/.test(includes.source), 'the found temporary must be gone, not merely unused');
+  assert.match(includes.source, /\^/, 'includes: must answer with a non-local return');
+
   // And the traversals do state their bound.
   const traversals = ORDERED_COLLECTION_METHODS.filter(({selector}) => ['do:', 'copyInto:'].includes(selector));
   assert.equal(traversals.length, 2);

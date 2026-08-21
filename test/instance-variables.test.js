@@ -742,7 +742,17 @@ const servicesFor = (images) => new CompilationService({images, compilers: creat
 
 // A v1 method: it assigns, so it exercises the representation `defineMethods` could not publish
 // before this PR, in both lanes.
-const IVAR_METHODS = [{selector: 'setX:', source: '[ :v | x := v ]'}, {selector: 'x', source: '[ x ]'}];
+// ADR 0055 added a third primitive pair to this installer, so those two writes are already inside
+// the exhaustive sweep below. What the sweep did not exercise is a *method containing `^`*, which is
+// what actually depends on the new pair — so the recovered protocol is proven by running one.
+const IVAR_METHODS = [
+  {selector: 'setX:', source: '[ :v | x := v ]'},
+  {selector: 'x', source: '[ x ]'},
+  // Deliberately without a nested Block: the WASM lane would then compile a shared-module group and
+  // this sweep's services would need group compilers, widening it for an unrelated reason. The dead
+  // `99` still proves the return took effect.
+  {selector: 'earlyX', source: '[ ^ x. 99 ]'},
+];
 
 async function baseForRecovery(runtime, imageId, lane) {
   await runtime.images.createImage({id: imageId});
@@ -790,6 +800,13 @@ for (const lane of ['neutral', 'wasm']) {
             await evaluate(runtime, 'app', `rec-get-${lane}-${failAt}-${commitThenThrow}`, '[ :o | o x ]', [instance]),
             integerValue(2),
             `${lane}: not usable after retrying past write ${failAt}`,
+          );
+          // The non-local-return primitive is published by this installer too, so the recovered
+          // protocol has to answer a `^` and not merely a slot read.
+          assert.deepEqual(
+            await evaluate(runtime, 'app', `rec-early-${lane}-${failAt}-${commitThenThrow}`, '[ :o | o earlyX ]', [instance]),
+            integerValue(2),
+            `${lane}: non-local return not usable after retrying past write ${failAt}`,
           );
         });
       }

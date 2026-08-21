@@ -14,16 +14,16 @@ import {objectRef} from '../value/index.js';
 //
 //   no false literal         `1 = 2` is how a Boolean false is spelled
 //   no `or:` / `not`         a two-part bounds test is written as nested `ifTrue:ifFalse:`
-//   no non-local return      a search carries its answer out in a `found` temporary
 //   no conditions            a refusal is signalled by sending a selector nothing implements, so
 //                            an out-of-range access fails as a message-not-understood naming the
 //                            collection's own concept rather than raising anything
 //
-// Two of those gaps are now closed, and the awkwardness went with them. ADR 0051 gave Blocks
+// Three of those gaps are now closed, and the awkwardness went with each. ADR 0051 gave Blocks
 // `whileTrue:`/`whileFalse:`, so iteration is a loop rather than recursion under the 256-activation
 // limit. ADR 0053 gave Integer `<=`, so a traversal states its bound instead of counting up to
 // `tally + 1` and comparing with `=` — and `at:`, `first`, `last` and `removeLast` become possible,
-// because each is a bounds check and a bounds check is an ordering question.
+// because each is a bounds check and a bounds check is an ordering question. ADR 0055 gave `^` a
+// home, so `includes:` answers from inside its loop instead of carrying a `found` flag out.
 //
 // Each of those is a general language gap rather than a collection concern, and each is recorded in
 // `docs/roadmap.md` rather than papered over here.
@@ -108,17 +108,17 @@ const ORDERED_COLLECTION_METHODS = [
         aBlock value: (contents at: index).
         index := index + 1 ] ]`,
   },
-  // `found` still carries the answer out of the loop, because a Block has no non-local return. That
-  // gap is unchanged by ADR 0053 and remains the next one this style of code runs into.
+  // Answers from inside the loop (ADR 0055). The `found` temporary this used to carry existed only
+  // because a Block could not return from its enclosing method; it went with the gap rather than
+  // surviving as decoration.
   {
     selector: 'includes:',
-    source: `[ :item | | index found |
-      index := 1. found := 1 = 2.
-      [ found ifTrue: [ 1 = 2 ] ifFalse: [ index <= tally ] ]
-        whileTrue: [
-          (item = (contents at: index)) ifTrue: [ found := 1 = 1 ] ifFalse: [ 1 = 2 ].
-          index := index + 1 ].
-      found ]`,
+    source: `[ :item | | index |
+      index := 1.
+      [ index <= tally ] whileTrue: [
+        (item = (contents at: index)) ifTrue: [ ^ 1 = 1 ] ifFalse: [ 1 = 2 ].
+        index := index + 1 ].
+      1 = 2 ]`,
   },
   // ADR 0053's point. Each of these is a bounds check, which is why none existed before an ordering
   // comparison did.
