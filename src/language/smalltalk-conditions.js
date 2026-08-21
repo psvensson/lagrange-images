@@ -209,10 +209,12 @@ async function installSmalltalkConditionProtocol({images, compilation, imageId, 
         },
         captures: [{...returnCapture, value: conditionPrimitives[SMALLTALK_PRIMITIVE.CONDITION_RETURN]}],
       },
-      {
-        selector: 'messageText',
-        program: {parameters: [], captures: [], body: {op: 'literal', value: textValue('')}},
-      },
+      // No `messageText` accessor yet. It was a literal `''` — which is worse than absent, since it
+      // silently answered the wrong thing for a condition that *does* carry text. Reading the slot
+      // needs ADR 0050's instance-slot primitive, so this protocol would have to depend on the
+      // instance-variable protocol; that dependency is a decision rather than a detail. The text is
+      // still stored on every host-generated condition, so the accessor can arrive without a
+      // migration.
     ],
   });
 

@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  AuthorityError,
   CompilationService,
+  WASM_FUNCTION_V1,
+  createAuthorityService,
   createDefaultCodeCompilerRegistry,
   createDefaultCompilationGroupCompilerRegistry,
   createRuntime,
@@ -17,6 +20,7 @@ import {
   installSymmetricSmalltalkBlock,
   integerValue,
   objectRef,
+  textValue,
 } from '../src/runtime.js';
 import {installWasmBlockTree} from '../src/wasm/tree-installer.js';
 import {findSmalltalkBlockUnwindProtocol} from '../src/language/smalltalk-conditions.js';
@@ -567,45 +571,105 @@ for (const lane of ['neutral', 'wasm']) {
 
 // --- the remaining load-bearing proofs -------------------------------------------------------------
 
+const poolStats = (runtime) => runtime.codeExecutors.get(WASM_FUNCTION_V1).instancePool.stats();
+
 test('unwinding past a suspended WASM activation retires the instance', async () => {
   await withRuntime(async (runtime) => {
     const {conditions} = await seed(runtime, 'app', {lane: 'wasm'});
     // The signal happens at a *non-tail* send, so the guest is genuinely suspended when the unwind
-    // passes it, and its instance cannot be reused.
+    // passes it and its instance holds mid-computation state.
     const protectedBlock = await wasmBlock(runtime, 'app', 'retire-me',
       '[ :E | | a | a := 1. a + ((E new) signal) ]');
 
-    const before = runtime.executor.stats?.() ?? null;
-    void before;
+    // Warm the pool so `created` and `retired` deltas are about this activation, not about first use.
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'retire-warm', '[ :p :E | [ p value: E ] on: E do: [ :e | 9 ] ]',
+        [protectedBlock, conditions.Error]),
+      integerValue(9),
+    );
+    const before = poolStats(runtime);
+
     assert.deepEqual(
       await evaluate(runtime, 'app', 'retire', '[ :p :E | [ p value: E ] on: E do: [ :e | 9 ] ]',
         [protectedBlock, conditions.Error]),
       integerValue(9),
     );
-    // Running it again must still work: a retired instance is not reused, and a fresh one is made.
-    assert.deepEqual(
-      await evaluate(runtime, 'app', 'retire-again', '[ :p :E | [ p value: E ] on: E do: [ :e | 9 ] ]',
-        [protectedBlock, conditions.Error]),
-      integerValue(9),
-      'a retired instance must not be handed to the next activation',
-    );
+    const after = poolStats(runtime);
+
+    // Measured, not inferred: the unwind retired an instance and had to create a fresh one, rather
+    // than returning a mid-computation instance to the pool.
+    assert.equal(after.retired - before.retired, 1, 'the suspended instance must be retired');
+    assert.equal(after.created - before.created, 1, 'and a fresh instance created for this run');
+    assert.equal(after.inUse, 0, 'no lease is left outstanding');
   });
 });
 
+// The distinction ADR 0054 decision 4 draws: a tail effect's lease is already released *normally*
+// before the effect runs, so a signal there retires nothing and must not release the lease twice.
+test('a signal out of a tail effect retires nothing and releases nothing twice', async () => {
+  await withRuntime(async (runtime) => {
+    const {conditions} = await seed(runtime, 'app', {lane: 'wasm'});
+    // The signal *is* the activation's last act, so it compiles as a tail effect: nothing follows
+    // it in the guest, and the guest has already returned when the host runs it.
+    const tailBlock = await wasmBlock(runtime, 'app', 'tail-signal', '[ :E | (E new) signal ]');
+
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'tail-warm', '[ :p :E | [ p value: E ] on: E do: [ :e | 3 ] ]',
+        [tailBlock, conditions.Error]),
+      integerValue(3),
+    );
+    const before = poolStats(runtime);
+
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'tail-unwind', '[ :p :E | [ p value: E ] on: E do: [ :e | 3 ] ]',
+        [tailBlock, conditions.Error]),
+      integerValue(3),
+    );
+    const after = poolStats(runtime);
+
+    assert.equal(after.retired - before.retired, 0,
+      'a tail effect has no live instance to retire, because its lease was already released');
+    assert.equal(after.discarded - before.discarded, 0, 'and nothing was discarded');
+    assert.equal(after.inUse, 0, 'no lease is left outstanding, and none was released twice');
+  });
+});
+
+test('a signal resumed out of a tail effect answers the activation', async () => {
+  await withRuntime(async (runtime) => {
+    const {conditions} = await seed(runtime, 'app', {lane: 'wasm'});
+    const tailBlock = await wasmBlock(runtime, 'app', 'tail-resume', '[ :E | (E new) signal ]');
+    const before = poolStats(runtime);
+
+    // Resuming a tail effect does not re-enter a guest — there is none left — so the handler's
+    // value simply becomes the activation's result.
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'tail-resumed', '[ :p :E | [ p value: E ] on: E do: [ :e | e resume: 6 ] ]',
+        [tailBlock, conditions.Error]),
+      integerValue(6),
+    );
+    assert.equal(poolStats(runtime).retired - before.retired, 0, 'a resumed tail effect retires nothing');
+  });
+});
+
+// MAX_WASM_RESUMPTIONS is 256. Each of these signals is a *sequential* send in one activation, so
+// they all charge against the same counter — 129 correct charges pass, while double-charging would
+// book 258 and exceed the limit. Putting them in a loop body would defeat the test, since each
+// iteration gets a fresh activation and a fresh counter.
 test('a resumed signal charges no extra WASM resumption', async () => {
   await withRuntime(async (runtime) => {
     const {conditions} = await seed(runtime, 'app', {lane: 'wasm'});
-    // A loop whose body signals and is resumed, at a count high enough that double-charging against
-    // MAX_WASM_RESUMPTIONS would fail it. The same loop without a handler is the control.
-    const handled = await wasmBlock(runtime, 'app', 'resumed-loop', `[ :E |
-      | i total | i := 0. total := 0.
-      [ i < 100 ] whileTrue: [ total := total + ((E new) signal). i := i + 1 ].
-      total ]`);
+    // Bare statements, so each one is a single `signal` send. Combining them with `+` would add a
+    // send per term and blow the budget for a reason that has nothing to do with signalling.
+    const signals = Array.from({length: 129}, () => 'c signal.').join(' ');
+    const straightLine = await wasmBlock(runtime, 'app', 'sequential-signals',
+      `[ :E | | c | c := E new. ${signals} 7 ]`);
+
     assert.deepEqual(
-      await evaluate(runtime, 'app', 'resumed-loop-run',
-        '[ :p :E | [ p value: E ] on: E do: [ :e | e resume: 1 ] ]', [handled, conditions.Error]),
-      integerValue(100),
-      'a hundred handled-and-resumed signals must not exhaust the resumption budget',
+      await evaluate(runtime, 'app', 'budget',
+        '[ :p :E | [ p value: E ] on: E do: [ :e | e resume: 1 ] ]', [straightLine, conditions.Error]),
+      integerValue(7),
+      '129 sequential handled-and-resumed signals in one activation must stay within the budget; '
+      + 'double-charging them would book 258 and exceed 256',
     );
   });
 });
@@ -662,6 +726,218 @@ test('the handler runtime does not outlive its execution', async () => {
       evaluate(runtime, 'app', 'later-signal', '[ :b | b value ]', [escaped]),
       /unhandled Smalltalk condition/,
       'a handler from a finished execution must not be found',
+    );
+  });
+});
+
+// --- authority: the security proof ----------------------------------------------------------------
+
+// ADR 0054 decision 6. `self` comes free from ADR 0050, but authority propagates *dynamically*, so a
+// handler invoked naively would inherit the signaller's. This is the adversarial shape: a richly
+// authorized establisher, a signalling path that has been attenuated down, and a handler that needs
+// the grant the establisher held. If the handler ran with the signaller's authority it would be
+// refused.
+const CONDITION_PROBE = 'condition-authority-probe/v0';
+const READ = 'host-value/read';
+
+function createConditionProbeExecutor() {
+  return Object.freeze({
+    async execute({activation, code}, context) {
+      const plan = JSON.parse(code.content.value);
+      if (plan.attenuateAndSend) {
+        // Narrows authority, then invokes an ordinary Smalltalk Block. The executor never receives
+        // the resulting context and cannot observe what it became.
+        return await context.sendMessage({
+          languageId: 'symmetric-smalltalk',
+          receiver: objectRef('app', plan.attenuateAndSend.block),
+          message: textValue('value'),
+          arguments: [],
+        }, {attenuate: plan.attenuateAndSend.grants});
+      }
+      context.require({operation: READ, resource: plan.resource});
+      return textValue(`read:${plan.resource}`);
+    },
+  });
+}
+
+test('a handler runs with its establisher authority, not the signaller', async () => {
+  const authority = createAuthorityService();
+  const runtime = await createRuntime({
+    backend: {mode: 'mock'},
+    authority,
+    codeExecutors: {[CONDITION_PROBE]: createConditionProbeExecutor()},
+  });
+  try {
+    const {conditions} = await seed(runtime, 'app');
+
+    const installProbe = async (id, plan) => {
+      const code = await runtime.images.putCodeArtifact('app', {
+        id: `${id}-code`, representation: CONDITION_PROBE, content: textValue(JSON.stringify(plan)),
+      });
+      await runtime.images.putBlock('app', {id, code: objectRef('app', code.id), environment: null});
+      return objectRef('app', id);
+    };
+
+    // The Smalltalk Block that signals, reached only through the attenuating probe.
+    const signaller = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'attenuated-signaller',
+      source: '[ :E | (E new) signal ]',
+      captures: {},
+    });
+    // `value` with no arguments, so the signaller closes over the class instead of taking it.
+    const signalNoArgs = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'signal-no-args',
+      source: '[ (ErrorClass new) signal ]',
+      captures: {ErrorClass: 'test/authority-error-class'},
+      environment: objectRef('app', (await runtime.images.putLexicalEnvironment('app', {
+        id: 'authority-env',
+        bindings: {'test/authority-error-class': {name: 'ErrorClass', value: conditions.Error}},
+      })).id),
+    });
+    void signaller;
+
+    // Drops the private grant on the way to the signal.
+    const attenuator = await installProbe('attenuating-caller', {
+      attenuateAndSend: {
+        block: signalNoArgs.block.id,
+        grants: [{operation: READ, resource: 'public-message'}],
+      },
+    });
+    // The handler needs the grant the *establisher* held and the signaller no longer has.
+    const handler = await installProbe('privileged-handler', {resource: 'private-message'});
+
+    const driver = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'authority-driver',
+      source: '[ :att :E :h | [ att value ] on: E do: h ]',
+    });
+    const activation = await runtime.invocations.invokeBlock(objectRef('app', driver.block.id), [
+      attenuator, conditions.Error, handler,
+    ]);
+    const context = authority.issue({
+      principal: 'alice',
+      grants: [
+        {operation: READ, resource: 'private-message'},
+        {operation: READ, resource: 'public-message'},
+      ],
+    });
+
+    assert.deepEqual(
+      await runtime.executor.execute(activation, {authority: context}),
+      textValue('read:private-message'),
+      'the handler must run with the rights held where on:do: was written, not where the signal was raised',
+    );
+
+    // The control: the same handler invoked from *inside* the attenuated path is refused, so the
+    // assertion above is about who the handler runs as and not about the grant being ambient.
+    const insideAttenuated = await installProbe('inside-attenuated', {
+      attenuateAndSend: {
+        block: (await installSymmetricSmalltalkBlock({
+          images: runtime.images, imageId: 'app', id: 'call-handler-directly',
+          source: '[ HandlerBlock value: 1 ]',
+          captures: {HandlerBlock: 'test/handler-block'},
+          environment: objectRef('app', (await runtime.images.putLexicalEnvironment('app', {
+            id: 'handler-env', bindings: {'test/handler-block': {name: 'HandlerBlock', value: handler}},
+          })).id),
+        })).block.id,
+        grants: [{operation: READ, resource: 'public-message'}],
+      },
+    });
+    await assert.rejects(
+      runtime.executor.execute(
+        await runtime.invocations.invokeBlock(insideAttenuated, []),
+        {authority: context},
+      ),
+      AuthorityError,
+      'the attenuated path really has lost the private grant',
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
+// --- cross-image handler ---------------------------------------------------------------------------
+
+// Pins the defect just fixed: the invoker must not freeze the establisher's dispatch image, because
+// a Block executes in its own image. A handler from image B must use B's immediate-value protocol.
+test('a handler Block from another image uses its own image protocol', async () => {
+  await withRuntime(async (runtime) => {
+    const home = await seed(runtime, 'home');
+    const away = await seed(runtime, 'away');
+
+    // The same selector, different answers per image.
+    for (const [imageId, value] of [['home', 1], ['away', 7]]) {
+      const kernel = await findSmalltalkKernel({images: runtime.images, imageId});
+      await defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId, lane: 'neutral',
+        classRef: kernel.integerClass,
+        methods: [{selector: 'tag', program: {parameters: [], captures: [], body: {op: 'literal', value: integerValue(value)}}}],
+      });
+    }
+
+    // The handler lives in `away` and sends `tag` to an immediate Integer, which resolves through
+    // whichever image the handler is dispatched in.
+    const handler = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'away', id: 'away-handler', source: '[ :e | 0 tag ]',
+    });
+
+    assert.deepEqual(
+      await evaluate(runtime, 'home', 'cross-image-handler',
+        '[ :E :h | [ (E new) signal ] on: E do: h ]',
+        [home.conditions.Error, objectRef('away', handler.block.id)]),
+      integerValue(7),
+      'the handler used away tag, not home tag — a Block executes in its own image',
+    );
+    void away;
+  });
+});
+
+// --- consumer readiness ---------------------------------------------------------------------------
+
+// The unwind protocol object is published before the classes and methods, so a Block-existence check
+// would pass on a half-installed protocol. The recovery sweep proves convergence, not this.
+test('a half-installed condition protocol is refused by the library', async () => {
+  await withRuntime(async (runtime) => {
+    const options = await baseImage(runtime, 'app', 'neutral');
+    const {installSmalltalkIndexedProtocol, installSmalltalkLibrary} = await import('../src/runtime.js');
+    await installSmalltalkIndexedProtocol(options);
+
+    // Fail on the first *method* write, after the protocol object and classes exist.
+    const faulting = Object.create(runtime.images);
+    let protocolObjectWritten = false;
+    faulting.putObject = async (imageId, input, opts) => {
+      const stored = await runtime.images.putObject(imageId, input, opts);
+      if (input.id === 'smalltalk-block-unwind-protocol/v1') protocolObjectWritten = true;
+      return stored;
+    };
+    faulting.putCodeArtifact = async (imageId, input) => {
+      if (protocolObjectWritten && !input.id?.startsWith('smalltalk/primitive/')) {
+        throw new Error('injected failure before the Exception methods');
+      }
+      return await runtime.images.putCodeArtifact(imageId, input);
+    };
+    await assert.rejects(
+      installSmalltalkConditionProtocol({...options, images: faulting}),
+      /injected/,
+    );
+
+    // The protocol object discovers cleanly...
+    assert.ok(await findSmalltalkBlockUnwindProtocol({images: runtime.images, imageId: 'app'}));
+    // ...but `Exception >> signal` does not exist, which is exactly what a protocol-object check
+    // would miss.
+    const {methodBlockRef} = await import('../src/language/smalltalk-class-builder.js');
+    assert.equal(
+      await methodBlockRef({
+        images: runtime.images, imageId: 'app',
+        classRef: objectRef('app', 'smalltalk/class/Exception'), selector: 'signal',
+      }),
+      null,
+      'the fixture must leave signal absent for this test to mean anything',
+    );
+
+    await assert.rejects(
+      installSmalltalkLibrary(options),
+      /has no Exception signal method/,
+      'the library must check for the installed method, not the protocol object',
     );
   });
 });

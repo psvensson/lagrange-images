@@ -402,7 +402,9 @@ async function indexedSize({images, primitiveImage, value}) {
 
 // ADR 0054 decision 8. `zeroBasedIndex` stays synchronous and keeps throwing — it is used where
 // there is no execution context — so the signalling wrapper lives at the two sites that have one.
-async function boundedIndex({images, primitiveImage, context, newObjectId, indexValue, length, primitive}) {
+async function boundedIndex({
+  images, primitiveImage, context, newObjectId, maxIdentityAttempts, indexValue, length, primitive,
+}) {
   try {
     return {index: zeroBasedIndex(indexValue, length, primitive)};
   } catch (error) {
@@ -415,17 +417,18 @@ async function boundedIndex({images, primitiveImage, context, newObjectId, index
         classId: HOST_CONDITION_CLASS.indexBounds,
         hostError: error,
         newObjectId,
+        maxIdentityAttempts,
       }),
     };
   }
 }
 
-async function indexedAt({images, primitiveImage, value, indexValue, context, newObjectId}) {
+async function indexedAt({images, primitiveImage, value, indexValue, context, newObjectId, maxIdentityAttempts}) {
   const record = await loadIndexedObject({
     images, primitiveImage, value, primitive: SMALLTALK_PRIMITIVE.INDEXED_AT,
   });
   const bounded = await boundedIndex({
-    images, primitiveImage, context, newObjectId, indexValue,
+    images, primitiveImage, context, newObjectId, maxIdentityAttempts, indexValue,
     length: record.indexed.length, primitive: SMALLTALK_PRIMITIVE.INDEXED_AT,
   });
   // A handler that resumed answers the access itself.
@@ -433,12 +436,14 @@ async function indexedAt({images, primitiveImage, value, indexValue, context, ne
   return record.indexed[bounded.index];
 }
 
-async function indexedAtPut({images, primitiveImage, value, indexValue, newValue, context, newObjectId}) {
+async function indexedAtPut({
+  images, primitiveImage, value, indexValue, newValue, context, newObjectId, maxIdentityAttempts,
+}) {
   const record = await loadIndexedObject({
     images, primitiveImage, value, primitive: SMALLTALK_PRIMITIVE.INDEXED_AT_PUT,
   });
   const bounded = await boundedIndex({
-    images, primitiveImage, context, newObjectId, indexValue,
+    images, primitiveImage, context, newObjectId, maxIdentityAttempts, indexValue,
     length: record.indexed.length, primitive: SMALLTALK_PRIMITIVE.INDEXED_AT_PUT,
   });
   if (Object.hasOwn(bounded, 'resumed')) return bounded.resumed;
@@ -671,7 +676,9 @@ async function dictionaryIncludesKey({images, primitiveImage, value, keyValue, s
   return booleanValue(found !== null);
 }
 
-async function dictionaryAt({images, primitiveImage, value, keyValue, sendMessage, context, newObjectId}) {
+async function dictionaryAt({
+  images, primitiveImage, value, keyValue, sendMessage, context, newObjectId, maxIdentityAttempts,
+}) {
   const {found, table} = await dictionaryLookup({
     images, primitiveImage, value, keyValue, sendMessage,
     primitive: SMALLTALK_PRIMITIVE.DICTIONARY_AT,
@@ -686,6 +693,7 @@ async function dictionaryAt({images, primitiveImage, value, keyValue, sendMessag
       classId: HOST_CONDITION_CLASS.keyNotFound,
       hostError: new SmalltalkDictionaryKeyNotFoundError(value),
       newObjectId,
+      maxIdentityAttempts,
     });
   }
   return table.buckets[found].value;
@@ -915,7 +923,9 @@ function floorDivide(a, b) {
   return (a % b !== 0n) && ((a < 0n) !== (b < 0n)) ? quotient - 1n : quotient;
 }
 
-async function integerOperation(primitive, left, right, {images, primitiveImage, context, newObjectId}) {
+async function integerOperation(primitive, left, right, {
+  images, primitiveImage, context, newObjectId, maxIdentityAttempts,
+}) {
   const [a, b] = integerOperands(primitive, left, right);
   // ADR 0054 decision 8: divide-by-zero is a catchable `ZeroDivide`, and a handler that resumes
   // answers the division. Absent the condition protocol it stays the host error it was.
@@ -926,6 +936,7 @@ async function integerOperation(primitive, left, right, {images, primitiveImage,
     classId: HOST_CONDITION_CLASS.zeroDivide,
     hostError: new SmalltalkDivideByZeroError(primitive),
     newObjectId,
+    maxIdentityAttempts,
   });
   switch (primitive) {
     case SMALLTALK_PRIMITIVE.INTEGER_LESS_THAN:
@@ -951,20 +962,41 @@ async function integerOperation(primitive, left, right, {images, primitiveImage,
 //
 // Absent the condition protocol, the host error is thrown as before. That is what keeps an image
 // without ADR 0054 working unchanged rather than acquiring a dependency it never installed.
-async function signalHostCondition({images, primitiveImage, context, classId, hostError, newObjectId}) {
+async function signalHostCondition({
+  images, primitiveImage, context, classId, hostError, newObjectId, maxIdentityAttempts,
+}) {
   const facade = context?.conditions;
   const sendMessage = context?.sendMessage;
   if (!facade || typeof sendMessage !== 'function') throw hostError;
   const classRecord = await images.getObject(primitiveImage, classId);
   if (!classRecord) throw hostError;
 
-  const instance = await images.putObject(primitiveImage, {
-    id: newObjectId(),
-    shape: objectRef(primitiveImage, EXCEPTION_SHAPE_ID),
-    behavior: objectRef(primitiveImage, classId),
-    slots: {'exception-message-text': textValue(hostError.message)},
-    metadata: {},
-  }, {expectedVersion: 0});
+  // ADR 0054 decision 1a: a condition is an ordinary object, so it is allocated by ordinary rules —
+  // including ADR 0046's identity retry. Writing once at `expectedVersion: 0` would turn an id
+  // collision into a failure where every other allocation simply picks another candidate.
+  const instance = await (async () => {
+    for (let attempt = 0; attempt < maxIdentityAttempts; attempt += 1) {
+      const candidate = newObjectId();
+      if (typeof candidate !== 'string' || candidate.length === 0) {
+        throw new TypeError('Smalltalk object identity generator must answer non-empty text');
+      }
+      try {
+        return await images.putObject(primitiveImage, {
+          id: candidate,
+          shape: objectRef(primitiveImage, EXCEPTION_SHAPE_ID),
+          behavior: objectRef(primitiveImage, classId),
+          slots: {'exception-message-text': textValue(hostError.message)},
+          metadata: {},
+        }, {expectedVersion: 0});
+      } catch (error) {
+        if (error?.name !== 'VersionConflictError') throw error;
+      }
+    }
+    throw new TypeError(
+      `Symmetric Smalltalk could not find a free object identity in ${primitiveImage} `
+      + `after ${maxIdentityAttempts} attempts`,
+    );
+  })();
 
   // An ordinary send, so the handler search, the transfer protocol and resumption are exactly the
   // ones Smalltalk code gets — this is not a second signalling path.
@@ -1281,7 +1313,7 @@ function createSmalltalkKernelPrimitiveV1Executor({
       }
       if (Object.hasOwn(SMALLTALK_INTEGER_ARITY, primitive)) {
         return await integerOperation(primitive, value, second, {
-          images, primitiveImage, context, newObjectId,
+          images, primitiveImage, context, newObjectId, maxIdentityAttempts,
         });
       }
       if (isLoop) {
@@ -1307,10 +1339,13 @@ function createSmalltalkKernelPrimitiveV1Executor({
         case SMALLTALK_PRIMITIVE.INDEXED_SIZE:
           return await indexedSize({images, primitiveImage, value});
         case SMALLTALK_PRIMITIVE.INDEXED_AT:
-          return await indexedAt({images, primitiveImage, value, indexValue: second, context, newObjectId});
+          return await indexedAt({
+            images, primitiveImage, value, indexValue: second, context, newObjectId, maxIdentityAttempts,
+          });
         case SMALLTALK_PRIMITIVE.INDEXED_AT_PUT:
           return await indexedAtPut({
             images, primitiveImage, value, indexValue: second, newValue: third, context, newObjectId,
+            maxIdentityAttempts,
           });
         case SMALLTALK_PRIMITIVE.BUILT_IN_EQUALS:
           return await builtInEqualsPrimitive({images, primitiveImage, left: value, right: second});
@@ -1337,7 +1372,7 @@ function createSmalltalkKernelPrimitiveV1Executor({
         case SMALLTALK_PRIMITIVE.DICTIONARY_AT:
           return await dictionaryAt({
             images, primitiveImage, value, keyValue: second, sendMessage: requireSendMessage(context, primitive),
-            context, newObjectId,
+            context, newObjectId, maxIdentityAttempts,
           });
         case SMALLTALK_PRIMITIVE.DICTIONARY_AT_PUT:
           return await dictionaryAtPut({
