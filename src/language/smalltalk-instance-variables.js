@@ -36,9 +36,11 @@ const PRIMITIVE_BLOCK_ID = Object.freeze({
 
 // Owned by the class-scoped binder, which injects them for instance-variable access and for `^`.
 const RESERVED_CAPTURE_NAMES = new Set([
-  INSTANCE_SLOT_READ_CAPTURE, INSTANCE_SLOT_WRITE_CAPTURE, NON_LOCAL_RETURN_CAPTURE,
+  INSTANCE_SLOT_READ_CAPTURE, INSTANCE_SLOT_WRITE_CAPTURE, NON_LOCAL_RETURN_CAPTURE, NIL_CAPTURE,
 ]);
-const RESERVED_CAPTURE_IDS = new Set(Object.values(PRIMITIVE_BLOCK_ID));
+// The nil binding id joins the primitive ids: reserving a name without its id would let a caller
+// bind the same id under a different name and shadow the intrinsic from outside the compiler.
+const RESERVED_CAPTURE_IDS = new Set([...Object.values(PRIMITIVE_BLOCK_ID), NIL_BINDING_ID]);
 
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be non-empty text`);
@@ -173,8 +175,8 @@ async function compileSymmetricSmalltalkMethod({
     // inspection of the source.
     intrinsics: {
       [NON_LOCAL_RETURN_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN],
-      // ADR 0056: same seam, same laziness — requested on first `nil` rather than declared.
-      [NIL_CAPTURE]: NIL_BINDING_ID,
+      // `nil` is deliberately absent: the semantic compiler owns that intrinsic and offers it to
+      // every compilation, so declaring it here would be a second definition to keep in step.
     },
     instanceVariables,
     // This entry point is the class-scoped one, so its compilations have a method to return from.

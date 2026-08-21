@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {ensureBlock, ensureCodeArtifact, ensureLexicalEnvironment} from '../graph/ensure-records.js';
-import {NIL_BINDING_ID, NIL_CAPTURE} from './symmetric-smalltalk-semantic.js';
+import {NIL_BINDING_ID} from './symmetric-smalltalk-semantic.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
 import {LAGRANGE_CODE_V1} from '../code/lagrange-code-v1.js';
@@ -19,12 +19,9 @@ const SYMMETRIC_SMALLTALK_SOURCE_V0 = 'symmetric-smalltalk/source-v0';
 const SYMMETRIC_SMALLTALK_SYNTAX_V0 = 'symmetric-smalltalk/syntax-v0';
 
 function compileSymmetricSmalltalkBlock(source, options = {}) {
-  const {syntax, program, representation} = compileSymmetricSmalltalkSemanticBlock(source, {
-    ...options,
-    // ADR 0056: `nil` is available to any Symmetric Smalltalk compilation, not only to methods.
-    // Offered, not declared — a program that never writes `nil` carries no binding for it.
-    intrinsics: {[NIL_CAPTURE]: NIL_BINDING_ID, ...(options.intrinsics ?? {})},
-  });
+  // `nil` needs nothing here: the semantic compiler owns that intrinsic and offers it to every
+  // compilation (ADR 0056), so this wrapper cannot get it wrong or out of step.
+  const {syntax, program, representation} = compileSymmetricSmalltalkSemanticBlock(source, options);
   return Object.freeze({syntax, semanticProgram: program, program, representation});
 }
 

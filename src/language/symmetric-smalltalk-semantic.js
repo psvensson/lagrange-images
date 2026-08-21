@@ -16,7 +16,12 @@ function normalizeRootCaptures(captures) {
     // The fourth site of ADR 0056 decision 3, and the one the parser cannot reach: captures are
     // supplied programmatically rather than written in source.
     if (isReservedWord(name)) throw new TypeError(`capture name ${name} is a reserved word`);
+    // The compiler's own intrinsic, reserved in both directions. Reserving only the name would let
+    // a caller bind the *id* under another name and shadow `nil`'s meaning from outside the
+    // compiler — the same reason `$nonLocalReturn` and the slot primitives reserve both.
+    if (name === NIL_CAPTURE) throw new TypeError(`capture name ${NIL_CAPTURE} is reserved for the nil intrinsic`);
     if (typeof id !== 'string' || id.length === 0) throw new TypeError(`capture binding id for ${name} must be non-empty text`);
+    if (id === NIL_BINDING_ID) throw new TypeError(`capture binding id ${NIL_BINDING_ID} is reserved for the nil intrinsic`);
     if (ids.has(id)) throw new TypeError(`duplicate capture binding id: ${id}`);
     ids.add(id);
     result.set(name, id);
@@ -456,6 +461,14 @@ function compileBlockSyntax(syntax, {
 function compileSymmetricSmalltalkSemanticBlock(source, {
   captures = {}, instanceVariables = {}, methodHome = false, intrinsics = {},
 } = {}) {
+  // ADR 0056: `nil` is the compiler's own intrinsic, so it is supplied here rather than by each
+  // caller. Centralised for two reasons — every Symmetric Smalltalk compilation can write `nil`
+  // whatever entry point it came through, and no caller can redefine what `nil` means. A caller may
+  // still add intrinsics of its own; it may not replace this one, and saying so beats silently
+  // winning an ordering race with it.
+  if (Object.hasOwn(intrinsics, NIL_CAPTURE)) {
+    throw new TypeError(`the ${NIL_CAPTURE} intrinsic is owned by the compiler and cannot be replaced`);
+  }
   const syntax = parseSymmetricSmalltalkBlock(source);
   const representation = selectSemanticRepresentation(syntax);
   const compiled = compileBlockSyntax(syntax, {
@@ -464,7 +477,7 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
     instanceVariables: new Map(Object.entries(instanceVariables)),
     representation,
     methodHome,
-    intrinsics: new Map(Object.entries(intrinsics)),
+    intrinsics: new Map([...Object.entries(intrinsics), [NIL_CAPTURE, NIL_BINDING_ID]]),
   });
   return Object.freeze({syntax, program: compiled.program, representation});
 }

@@ -39,7 +39,18 @@ const CONDITIONAL_PROTOCOL = Object.freeze([
   {selector: 'or:', parameters: ['aBlock'], True: true, False: 0},
 ]);
 
-const SMALLTALK_CONDITIONAL_SELECTORS = Object.freeze(CONDITIONAL_PROTOCOL.map(({selector}) => selector));
+// ADR 0056 added three rows to the table above, so these are derived by *role* rather than by
+// "everything in the table". `SMALLTALK_CONDITIONAL_SELECTORS` is public and has always meant the
+// four conditionals; silently widening it would change what an existing name means, which is exactly
+// the drift the reserved-word rule guards against one level down.
+const BOOLEAN_SELECTORS = Object.freeze(['not', 'and:', 'or:']);
+
+const SMALLTALK_CONDITIONAL_SELECTORS = Object.freeze(
+  CONDITIONAL_PROTOCOL.map(({selector}) => selector).filter((selector) => !BOOLEAN_SELECTORS.includes(selector)),
+);
+const SMALLTALK_BOOLEAN_SELECTORS = Object.freeze([...BOOLEAN_SELECTORS]);
+// Everything this installer publishes, for callers that mean exactly that.
+const SMALLTALK_CONTROL_FLOW_SELECTORS = Object.freeze(CONDITIONAL_PROTOCOL.map(({selector}) => selector));
 
 // The kernel slot naming each singleton, and the class it is an instance of. `True` and `False` have
 // no kernel slot of their own, so the class is read from the singleton rather than named here.
@@ -144,12 +155,14 @@ async function installSmalltalkControlFlow({images, compilation, imageId, lane =
   return Object.freeze({
     trueClass: installed.True,
     falseClass: installed.False,
-    selectors: SMALLTALK_CONDITIONAL_SELECTORS,
+    selectors: SMALLTALK_CONTROL_FLOW_SELECTORS,
   });
 }
 
 export {
   NIL_CAPTURE as SMALLTALK_CONTROL_FLOW_NIL_CAPTURE,
+  SMALLTALK_BOOLEAN_SELECTORS,
   SMALLTALK_CONDITIONAL_SELECTORS,
+  SMALLTALK_CONTROL_FLOW_SELECTORS,
   installSmalltalkControlFlow,
 };

@@ -146,32 +146,35 @@ test('no durable Boolean wrapper is created by using the literals', async () => 
 // --- nil ---------------------------------------------------------------------------------------------
 
 test('the semantic artifact for nil contains no image-specific ref', () => {
-  const {program} = compileSymmetricSmalltalkSemanticBlock('[ nil ]', {
-    intrinsics: {$nil: 'smalltalk/intrinsic/nil'},
-  });
+  // No intrinsic is supplied: the compiler owns it, which is the point of centralising it.
+  const {program} = compileSymmetricSmalltalkSemanticBlock('[ nil ]');
   assert.deepEqual(program.body, {op: 'binding', id: 'smalltalk/intrinsic/nil'});
   const json = JSON.stringify(program);
   assert.ok(!/"kind":"ref"/.test(json), 'the artifact must carry a binding id and no ref at all');
 });
 
-// The sharpest test of image-independence: one compiled artifact, two images whose nil objects are
-// different records, each answering its own.
-test('one compiled program answers each image its own nil', async () => {
+// Image-independence, stated precisely. A CodeArtifact's identity is image-scoped, so this is not
+// one durable artifact shared by two images — it is the *same semantic program* installed into each,
+// with each binding its own nil. That is the property the ADR actually claims, and it is proven by
+// compiling once here and asserting both installed artifacts equal that single result.
+test('the same semantic program installs into two images and binds each one its own nil', async () => {
   await withRuntime(async (runtime) => {
     for (const imageId of ['first', 'second']) await seed(runtime, imageId);
-    // A second image whose nil is a *different* record, so answering the wrong one is visible.
+
+    const compiledOnce = JSON.stringify(compileSymmetricSmalltalkSemanticBlock('[ nil ]').program);
+
     const answers = [];
     for (const imageId of ['first', 'second']) {
       answers.push(await evaluate(runtime, imageId, 'nil-here', '[ nil ]'));
+      const artifact = await runtime.images.getCodeArtifact(imageId, 'nil-here:semantic');
+      assert.equal(artifact.content.value, compiledOnce,
+        `${imageId} installed something other than the single compiled program`);
     }
+
+    // Different records, so answering the wrong one would be visible.
     assert.deepEqual(answers[0], objectRef('first', 'smalltalk/nil'));
     assert.deepEqual(answers[1], objectRef('second', 'smalltalk/nil'));
     assert.notDeepEqual(answers[0], answers[1], 'each image must answer its own nil');
-
-    // And the two semantic artifacts are identical, which is what "image-independent" means.
-    const artifacts = await Promise.all(['first', 'second'].map(async (imageId) =>
-      (await runtime.images.getCodeArtifact(imageId, 'nil-here:semantic')).content.value));
-    assert.equal(artifacts[0], artifacts[1]);
   });
 });
 
@@ -294,6 +297,74 @@ test('true, false and nil cannot be declared, assigned or captured', () => {
       `capture named ${name}`,
     );
   }
+});
+
+// ADR 0056 says `nil` cannot be shadowed. Protecting only the source word would leave the
+// compiler-owned binding open from every programmatic direction, so all five routes are closed and
+// each is proven separately — a fix for the observed route alone would pass a weaker test.
+test('the nil intrinsic cannot be shadowed from any capture or intrinsic route', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel, options} = await seed(runtime, 'app');
+
+    // 1. A standalone capture wearing the intrinsic's name.
+    assert.throws(
+      () => compileSymmetricSmalltalkSemanticBlock('[ 1 ]', {captures: {$nil: 'caller/binding'}}),
+      /\$nil is reserved for the nil intrinsic/,
+    );
+    // 2. A standalone capture wearing its id under another name — reserving the name alone would
+    //    let this through and change what `nil` resolves to.
+    assert.throws(
+      () => compileSymmetricSmalltalkSemanticBlock('[ 1 ]', {captures: {other: 'smalltalk/intrinsic/nil'}}),
+      /smalltalk\/intrinsic\/nil is reserved for the nil intrinsic/,
+    );
+    // 3. The public compiler entry point cannot replace the intrinsic itself.
+    assert.throws(
+      () => compileSymmetricSmalltalkSemanticBlock('[ nil ]', {intrinsics: {$nil: 'attacker/binding'}}),
+      /owned by the compiler and cannot be replaced/,
+    );
+
+    // 4 and 5. The same two routes through the class-scoped entry point.
+    await assert.rejects(
+      defineMethodsFromSource({
+        ...options,
+        classRef: kernel.integerClass,
+        methods: [{selector: 'shadowName', source: '[ 1 ]', captures: [{name: '$nil', id: 'caller/binding', value: integerValue(1)}]}],
+      }),
+      /reserved/,
+    );
+    await assert.rejects(
+      defineMethodsFromSource({
+        ...options,
+        classRef: kernel.integerClass,
+        methods: [{selector: 'shadowId', source: '[ 1 ]', captures: [{name: 'other', id: 'smalltalk/intrinsic/nil', value: integerValue(1)}]}],
+      }),
+      /reserved/,
+    );
+  });
+});
+
+test('unrelated caller captures and intrinsics still work', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel, options} = await seed(runtime, 'app');
+    // An ordinary caller intrinsic alongside the compiler's own.
+    const compiled = compileSymmetricSmalltalkSemanticBlock('[ nil ]', {intrinsics: {$other: 'caller/other'}});
+    assert.deepEqual(compiled.program.body, {op: 'binding', id: 'smalltalk/intrinsic/nil'});
+
+    // And an ordinary method capture beside `nil` in the same method.
+    await defineMethodsFromSource({
+      ...options,
+      classRef: kernel.integerClass,
+      methods: [{
+        selector: 'nilAndCapture',
+        source: '[ (Marker = 7) ifTrue: [ nil ] ifFalse: [ Marker ] ]',
+        captures: [{name: 'Marker', id: 'caller/marker', value: integerValue(7)}],
+      }],
+    });
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'nil-and-marker', '[ 0 nilAndCapture ]'),
+      kernel.nil,
+    );
+  });
 });
 
 test('a reserved word is a pseudo-literal, not a name, in the syntax tree', () => {
