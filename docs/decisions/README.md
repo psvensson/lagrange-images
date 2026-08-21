@@ -104,6 +104,7 @@ move in. Never move it the other way to make a claim easier to write.
 - [0054 — conditions and handlers](0054-conditions-and-handlers.md): a condition is an ordinary object and signalling an ordinary send; a handler runs at the signal point before unwinding, so it may resume the signalling computation or unwind to its `on:do:`.
 - [0055 — non-local return](0055-non-local-return.md): `^` is syntax compiled to an ordinary send to a language-owned primitive, unwinding to the home method activation identified by the ADR 0050 frame the Block was created in.
 - [0056 — Boolean protocol and reserved literals](0056-boolean-protocol-and-reserved-literals.md): `true`/`false` are source spellings of the canonical boolean Values, `nil` lowers to an image-bound intrinsic binding so the artifact stays image-independent, and `not`/`and:`/`or:` are ordinary lazy methods on True and False.
+- [0057 — global name resolution](0057-global-name-resolution.md): a global name resolves at compile time to a stable first-class `GlobalBinding` identity and is dereferenced at runtime by an ordinary `value` send, so rebinding is visible to compiled code and the artifact carries a binding id rather than an image ref.
 
 ## Reading rule
 
