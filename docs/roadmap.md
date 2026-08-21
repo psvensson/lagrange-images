@@ -287,17 +287,15 @@ Next, ordered by architectural pressure rather than convenience:
       ABI unchanged. `OrderedCollection >> at:` now signals a catchable `IndexOutOfRange` instead of
       the `errorIndexOutOfBounds:` placeholder, and `at:ifAbsent:` is written in ordinary Smalltalk
       by handling that signal rather than needing a second primitive
-- [ ] the rest of the boolean protocol — `not`, `and:`, `or:` — which runs ADR 0045's bridge
-      backwards: a boolean-*answering* method has to decide whether it answers the canonical Value
-      or the singleton. ADR 0053 needed negation for `<=`/`>=` and used the neutral `if` inside two
-      kernel-authored programs rather than pull this decision forward, so the library still spells a
-      two-part bounds test as nested `ifTrue:ifFalse:` and `false` as `1 = 2`
+- [ ] implement **ADR 0056**: `not`/`and:`/`or:` as ordinary lazy methods through ADR 0045's bridge,
+      plus `true`/`false`/`nil` as reserved source literals. The bridge question it once posed is
+      answered — a boolean-answering method answers the canonical *Value*, and the singleton is only
+      ever a transient dispatch receiver. It retires the `1 = 2` spellings and the NilObject-only
+      captures, and lets a two-part bounds test stop being nested `ifTrue:ifFalse:`
 - [ ] primitive-backed methods beyond `+`. ADR 0044 decides how immediate Values dispatch and how
       a primitive-backed method is written; the remaining work is which primitives the kernel needs
 - [x] ADR 0051's constant-stack `whileTrue:`/`whileFalse:`. `OrderedCollection`'s traversals are
       loops rather than recursion, so `do:` and `includes:` work past the old ~100-element ceiling
-- [ ] `true`, `false` and `nil` as source literals, plus `and:`/`or:`/`not` — the rest of ADR 0045's
-      deferred Boolean protocol
 - [ ] a way to name a class from source; today a method captures one explicitly
 - [ ] cascades, and `true`/`false`/`nil` as source literals — both surface syntax rather than
       semantic decisions, and both cheap once the decisions above are made
