@@ -422,6 +422,13 @@ test('a half-installed Integer protocol is not mistaken for a complete one', asy
     // Likewise the condition protocol, which the library checks before Integer. Only the Integer
     // protocol may be missing here, or the test proves a different refusal than it claims.
     await installSmalltalkConditionProtocol(options);
+    // ADR 0057: the library also requires its globals to be published, and that check runs before
+    // the Integer one — so publish them, or this test proves a different refusal than it claims.
+    const {installSmalltalkGlobalNamespace, publishSmalltalkClassGlobals} = await import('../src/runtime.js');
+    await installSmalltalkGlobalNamespace(options);
+    await publishSmalltalkClassGlobals({
+      images: runtime.images, imageId: 'app', names: ['Array', 'IndexOutOfRange', 'EmptyCollection'],
+    });
     // Fail at the first *method* write, leaving all five primitive Blocks published.
     let seenPrimitiveBlocks = 0;
     const faulting = Object.create(runtime.images);

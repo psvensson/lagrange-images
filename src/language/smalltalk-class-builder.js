@@ -153,8 +153,15 @@ function normalizeMethodCaptures(selector, program, captures) {
   if (!Array.isArray(captures)) throw new TypeError(`method ${selector} captures must be an array`);
   const declared = program?.captures ?? [];
   if (captures.length !== declared.length) {
+    // Name the unsupplied ids. A program compiled elsewhere may declare a binding identity this
+    // image does not have — an ADR 0057 global, say — and "1 captures but 0 values" leaves the
+    // reader to guess which. The identity is exactly what has to be reported, because matching a
+    // *name* is not evidence the identity is the same one.
+    const supplied = new Set(captures.map((capture) => capture?.id));
+    const missing = declared.map(({id}) => id).filter((id) => !supplied.has(id));
     throw new TypeError(
-      `method ${selector} declares ${declared.length} captures but supplies ${captures.length} values`,
+      `method ${selector} declares ${declared.length} captures but supplies ${captures.length} values`
+      + (missing.length > 0 ? `; no value for ${missing.join(', ')}` : ''),
     );
   }
   // Matching counts is not matching bindings. The environment is keyed by capture id, so two

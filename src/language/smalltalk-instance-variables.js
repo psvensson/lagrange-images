@@ -5,6 +5,7 @@ import {
   ensureCodeArtifact,
 } from './smalltalk-class-builder.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
+import {globalDeclarations} from './smalltalk-globals.js';
 import {visibleInstanceShape} from './smalltalk-lookup.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
@@ -163,7 +164,9 @@ async function compileSymmetricSmalltalkMethod({
   // The primitives arrive as ordinary root captures, so an instance-variable reference lowers to an
   // ordinary send and nothing downstream of the compiler learns a new concept. They are added only
   // when the source actually names an instance variable, so a method that uses none carries none.
+  const globals = await globalDeclarations({images, imageId});
   const compiled = compileSymmetricSmalltalkSemanticBlock(source, {
+    globals,
     captures: {
       ...Object.fromEntries(declared.map(({name, id}) => [name, id])),
       [INSTANCE_SLOT_READ_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ],
@@ -207,6 +210,8 @@ async function defineMethodsFromSource({images, compilation, imageId, classRef, 
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const kernelNil = kernel.nil;
+  // Read once for the whole batch: which ids in these programs are global bindings.
+  const globalBindingIds = new Set(Object.values(await globalDeclarations({images, imageId})));
   const compiled = [];
   for (const {selector, source, captures} of methods) {
     const declared = normalizeCaptureDeclarations(captures ?? {});
@@ -217,6 +222,9 @@ async function defineMethodsFromSource({images, compilation, imageId, classRef, 
       // ADR 0056: the nil intrinsic resolves to this image's kernel nil, exactly as the slot
       // primitives resolve to this image's Blocks.
       if (id === NIL_BINDING_ID) return {id, name, value: kernelNil};
+      // ADR 0057: a resolved global binds to that binding object in *this* image. The artifact
+      // carried only the id; the ref appears here, at installation.
+      if (globalBindingIds.has(id)) return {id, name, value: objectRef(imageId, id)};
       const value = supplied.get(id);
       if (value === undefined) {
         throw new TypeError(

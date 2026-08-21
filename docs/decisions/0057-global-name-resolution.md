@@ -1,6 +1,7 @@
 # ADR 0057: Global name resolution
 
-Status: accepted — a global name is resolved at compile time to a stable first-class `GlobalBinding` identity and dereferenced at runtime by an ordinary `value` send, so rebinding is visible to already-compiled code, renaming preserves identity, and the semantic artifact carries a binding id rather than an image-specific ref.
+Status: implemented — a global name is resolved at compile time to a stable first-class `GlobalBinding` identity and dereferenced at runtime by an ordinary `value` send, so rebinding is visible to already-compiled code, renaming preserves identity, and the semantic artifact carries a binding id rather than an image-specific ref.
+Proven by: test/global-names.test.js, test/smalltalk-library.test.js
 
 ## Problem
 
@@ -211,7 +212,7 @@ both available immediately after the kernel:
 ```text
 kernel identity and classes
   -> instance-variable protocol
-  -> GlobalBinding class, with `value` and `value:` as ordinary methods
+  -> GlobalBinding class, with `value` as its only method
   -> namespace root, and publication of the kernel classes that already exist
   -> later installers publish Array, Dictionary, the condition classes explicitly
   -> ordinary source resolves those names
@@ -223,10 +224,9 @@ send dereferences it, and durably rebinding the same binding object changes what
 Block answers with no recompilation. No allocation, equality, Dictionary or library protocol is
 involved.
 
-The prototype used a `value:` method to perform that rebinding, which was convenient for the
-experiment and is *not* a v1 protocol commitment — it is evidence that the slot can be rebound and
-observed, not a decision that ordinary source may do the rebinding. The implementation rebinds
-through the namespace-management seam instead, per decision 2.
+The shipped `GlobalBinding` answers `value` and nothing else, and rebinding goes through the
+namespace-management seam, per decision 2. (The pre-ADR prototype used a `value:` method to perform
+that rebinding, which was convenient for the experiment and was never a protocol commitment.)
 
 ### 8. Standalone Blocks reuse ADR 0056's environment seam
 

@@ -439,6 +439,7 @@ function createSmalltalkTemporaryInitializer() {
 
 export {
   BEHAVIOR_SHAPE_ID,
+  KERNEL_CLASSES,
   ensureEmptyMethodDictionary,
   isLegacyMethodDictionary,
   createSmalltalkTemporaryInitializer,
