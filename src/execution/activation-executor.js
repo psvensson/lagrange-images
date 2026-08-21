@@ -90,11 +90,20 @@ class ActivationExecutor {
   #homeActivations = new WeakMap();
 
   homeActivationState(frame) {
-    return this.#homeActivations.get(frame) ?? 'absent';
+    return this.#homeActivations.get(frame)?.state ?? 'absent';
   }
 
-  markHomeActivation(frame, state) {
-    this.#homeActivations.set(frame, state);
+  // The selector the home was dispatched with, so a dead-home failure can name the *method* rather
+  // than only its class — `definingBehavior` alone identifies the class, which is not what ADR 0055
+  // asks the diagnosis to say.
+  homeActivationSelector(frame) {
+    return this.#homeActivations.get(frame)?.selector ?? null;
+  }
+
+  // Private: ADR 0055 requires that outside code cannot forge liveness. A frame is only ever a key
+  // here, and only this class writes.
+  #markHomeActivation(frame, state, selector) {
+    this.#homeActivations.set(frame, Object.freeze({state, selector}));
   }
 
   constructor({
@@ -307,7 +316,10 @@ class ActivationExecutor {
     // with the home frame at the moment it raises, would catch its own transfer.
     const ownsFrame = activeFrame !== null
       && (invocationFrame !== null || this.invocations?.frameFor?.(activation) != null);
-    if (ownsFrame) this.markHomeActivation(activeFrame, 'live');
+    // Marked live inside the protected region below, not here: a failure between this point and the
+    // `try` — temporary initialization, for instance — would otherwise leave a frame permanently
+    // live, and a later `^` naming it would be told its home is still running.
+    const homeSelector = ownsFrame ? (activation.dispatch?.message?.value ?? null) : null;
 
     // ADR 0044 decision 5a. A root activation dispatches in its own Block's image; a nested one
     // inherits what its sender computed. Context, never a field on the activation.
@@ -337,6 +349,7 @@ class ActivationExecutor {
     };
 
     try {
+      if (ownsFrame) this.#markHomeActivation(activeFrame, 'live', homeSelector);
       const result = await executor.execute(
       {activation, code},
       {
@@ -367,6 +380,7 @@ class ActivationExecutor {
           // ADR 0055. The primitive asks whether the frame it was handed still has a running
           // owner; it never sees the registry, and a frame is only ever a key in it.
           homeActivationState: whileActive('homeActivationState', (frame) => this.homeActivationState(frame)),
+          homeActivationSelector: whileActive('homeActivationSelector', (frame) => this.homeActivationSelector(frame)),
           invoke: whileActive('invoke', async (token, blockRef, args = []) => {
             if (!CAPTURED_AUTHORITY.has(token)) throw new TypeError('unknown captured authority token');
             if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
@@ -500,7 +514,7 @@ class ActivationExecutor {
       // `^` naming it must be told the method returned rather than that it has no home.
       // Marked dead rather than deleted: while the frame is still reachable, a `^` naming it must
       // be told the method returned rather than that it has no home.
-      if (ownsFrame) this.markHomeActivation(activeFrame, 'dead');
+      if (ownsFrame) this.#markHomeActivation(activeFrame, 'dead', homeSelector);
     }
   }
 }

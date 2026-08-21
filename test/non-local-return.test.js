@@ -17,6 +17,7 @@ import {
   installSymmetricSmalltalkBlock,
   integerValue,
   objectRef,
+  textValue,
 } from '../src/runtime.js';
 import {defineMethodsFromSource} from '../src/language/smalltalk-instance-variables.js';
 
@@ -241,6 +242,10 @@ test('a Block whose home returned in this same execution reports that, not "no h
         assert.equal(error.name, 'NonLocalReturnHomeError');
         assert.match(error.message, /already returned/,
           'a reachable-but-finished home must be reported as returned, not as absent');
+        // ADR 0055 says the diagnosis names the *method*. `definingBehavior` alone names only the
+        // class, so the selector has to be recorded alongside liveness for this to be sayable.
+        assert.match(error.message, />> makeEscapee/,
+          `the failure must name the method, saw: ${error.message}`);
         return true;
       },
     );
@@ -610,11 +615,53 @@ test('a returned closure is promoted when it leaves a root execution', async () 
 
 // The liveness registry is per executor and has three states. A frame this executor never ran as a
 // home is "absent", which must not be reported as "already returned".
+// The live mark must sit inside the protected region. Marking before the `try` leaves a frame
+// permanently live when anything between the two throws — temporary initialization, for instance —
+// and a later `^` naming that frame would be told its home is still running.
+test('a failure before the body runs does not leave a frame falsely live', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel, options} = await seed(runtime, 'app');
+    await defineMethodsFromSource({
+      ...options,
+      classRef: kernel.integerClass,
+      methods: [method('boom', '[ ^ 1 ]')],
+    });
+
+    // Dispatched here so the frame is in hand and can be inspected after the failure.
+    const dispatched = await runtime.invocations.prepareDispatch({
+      languageId: 'symmetric-smalltalk',
+      receiver: integerValue(0),
+      message: textValue('boom'),
+      arguments: [],
+    }, {dispatchImage: 'app'});
+    assert.ok(dispatched.frame, 'a method dispatch must supply a frame');
+
+    const executor = runtime.executor;
+    const previous = executor.temporaryInitializer;
+    executor.temporaryInitializer = async () => { throw new Error('injected initializer failure'); };
+    try {
+      await assert.rejects(
+        executor.execute(dispatched.activation, {dispatchImage: 'app', invocationFrame: dispatched.frame}),
+        /injected initializer failure/,
+      );
+    } finally {
+      executor.temporaryInitializer = previous;
+    }
+
+    assert.notEqual(
+      executor.homeActivationState(dispatched.frame), 'live',
+      'a frame whose activation never ran its body must not be left live',
+    );
+  });
+});
+
 test('the liveness registry is executor-owned and distinguishes absent from dead', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');
     const frame = Object.freeze({self: objectRef('app', 'nobody'), definingBehavior: objectRef('app', 'nothing')});
     assert.equal(runtime.executor.homeActivationState(frame), 'absent');
+    // The mutator is private: outside code must not be able to forge liveness (ADR 0055).
+    assert.equal(typeof runtime.executor.markHomeActivation, 'undefined');
 
     // A second runtime must not see the first one's homes.
     const other = await createRuntime({backend: {mode: 'mock'}});

@@ -986,8 +986,10 @@ function nonLocalReturn({activation, context, primitive}) {
   if (state === 'dead') {
     // The frame is still reachable, so its identity is known — and it is known to be finished.
     // Saying so beats the vaguer "no home", which is why the registry retains dead entries.
+    const selector = context.conditions.homeActivationSelector?.(frame) ?? null;
+    const behavior = frame.definingBehavior?.objectId ?? 'unknown';
     throw new NonLocalReturnHomeError(
-      `the home method activation has already returned (${frame.definingBehavior?.objectId ?? 'unknown'})`,
+      `the home method activation has already returned: ${behavior}${selector ? ` >> ${selector}` : ''}`,
     );
   }
   if (state !== 'live') {
