@@ -13,6 +13,7 @@ import {
 } from './smalltalk-primitives.js';
 import {
   INSTANCE_SLOT_READ_CAPTURE,
+  NON_LOCAL_RETURN_CAPTURE,
   INSTANCE_SLOT_WRITE_CAPTURE,
   compileSymmetricSmalltalkSemanticBlock,
 } from './symmetric-smalltalk-semantic.js';
@@ -27,10 +28,14 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 const PRIMITIVE_BLOCK_ID = Object.freeze({
   [SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ]: 'smalltalk/primitive/instance-slot-read',
   [SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE]: 'smalltalk/primitive/instance-slot-write',
+  // ADR 0055. `^` lowers to a send to this, bound through the same seam and reserved the same way.
+  [SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN]: 'smalltalk/primitive/non-local-return',
 });
 
-// Owned by the class-scoped binder, which injects them for instance-variable access.
-const RESERVED_CAPTURE_NAMES = new Set([INSTANCE_SLOT_READ_CAPTURE, INSTANCE_SLOT_WRITE_CAPTURE]);
+// Owned by the class-scoped binder, which injects them for instance-variable access and for `^`.
+const RESERVED_CAPTURE_NAMES = new Set([
+  INSTANCE_SLOT_READ_CAPTURE, INSTANCE_SLOT_WRITE_CAPTURE, NON_LOCAL_RETURN_CAPTURE,
+]);
 const RESERVED_CAPTURE_IDS = new Set(Object.values(PRIMITIVE_BLOCK_ID));
 
 function requiredText(value, label) {
@@ -61,12 +66,13 @@ async function installSmalltalkInstanceVariableProtocol({images, imageId} = {}) 
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const installed = {};
-  for (const primitive of [SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ, SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE]) {
+  for (const primitive of Object.keys(PRIMITIVE_BLOCK_ID)) {
     installed[primitive] = await installPrimitiveBlock({images, imageId, primitive});
   }
   return Object.freeze({
     readPrimitive: installed[SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ],
     writePrimitive: installed[SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE],
+    nonLocalReturnPrimitive: installed[SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN],
   });
 }
 
@@ -158,8 +164,15 @@ async function compileSymmetricSmalltalkMethod({
       ...Object.fromEntries(declared.map(({name, id}) => [name, id])),
       [INSTANCE_SLOT_READ_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ],
       [INSTANCE_SLOT_WRITE_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE],
+      // ADR 0055: injected unconditionally rather than only when `^` occurs, for the same reason
+      // the slot primitives are declared per method — a declaration that nothing references still
+      // becomes a binding, and deciding by inspection would mean two places that must agree about
+      // whether the source contains a return.
+      [NON_LOCAL_RETURN_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN],
     },
     instanceVariables,
+    // This entry point is the class-scoped one, so its compilations have a method to return from.
+    methodHome: true,
   });
 
   // Every declaration becomes a program capture, referenced or not — that is the block compiler's

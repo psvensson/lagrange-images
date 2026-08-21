@@ -320,7 +320,7 @@ pooled instance != activation state
 - Source has no global namespace: a class a method needs is an explicit captured ref, supplied at install time. Compilation takes capture *declarations* (name -> stable id) and installation binds *values*, because a declaration is image-independent and a value is not. Every declaration becomes a binding whether or not the source mentions it, so every declaration needs a value — uniform, rather than a special case depending on whether the compiler kept the reference.
 - Duplicate capture names or ids are refused, never resolved by position: a repeated name would make a source name mean whichever declaration came last. The binder's own capture names and ids are reserved for the same reason — they are spread after the caller's, so a collision would silently replace a caller declaration and its value.
 - "Whole immutable definition" includes deterministically written `metadata`. Exclude a field from rediscovery only when it has a lifecycle of its own, as a method dictionary does; metadata has none. `compileSymmetricSmalltalkMethod` takes capture values for exactly this.
-- The awkward spellings in library source are deliberate signals, not style: `1 = 2` marks the missing false literal, nested `ifTrue:ifFalse:` marks the missing `or:`, and a `found` temporary marks the missing non-local return. Do not tidy them away without removing the underlying gap. Three signals are already gone because their gaps were closed rather than hidden: the recursive-helper spelling (ADR 0051), counting up to `tally + 1` to compare with `=` (ADR 0053), and the unimplemented `errorIndexOutOfBounds:` refusal (ADR 0054).
+- The awkward spellings in library source are deliberate signals, not style: `1 = 2` marks the missing false literal and nested `ifTrue:ifFalse:` marks the missing `or:`. Do not tidy them away without removing the underlying gap. Four signals are already gone because their gaps were closed rather than hidden: the recursive-helper spelling (ADR 0051), counting up to `tally + 1` to compare with `=` (ADR 0053), the unimplemented `errorIndexOutOfBounds:` refusal (ADR 0054), and the `found` temporary carrying a search result out of its loop (ADR 0055).
 - A collection's bound is its own logical size, never its backing store's capacity. `contents at:` succeeds for any index up to capacity, so an accessor that delegates its bounds check to the Array will happily answer whatever slack the growth policy left behind.
 - Traversals loop; they do not recurse. A recursive traversal is correct and unusable — every element costs an activation, and the limit is 256. `installSmalltalkLibrary` therefore requires the Block protocol, so an image missing it is refused at install rather than failing on first use.
 
@@ -355,6 +355,16 @@ pooled instance != activation state
 - A cleanup failure stays catchable: if it escapes it becomes the outward failure and retains the original as `duringUnwind`, so neither is lost.
 - `resume:`/`return:` act on the receiver's currently *active* occurrence, and fail explicitly when there is none. A condition object carries no handling state — one object signalled twice has two independent occurrences.
 - A condition object is an ordinary durable object. ADR 0054 adds no second category of object; only the signal occurrence is transient.
+
+### Non-local return
+
+- `^` is syntax the compiler learns, lowered to an ordinary send to `$nonLocalReturn` (ADR 0055). `lagrange-code` gains no return op and the compiler still recognizes no *selector*. A return is a statement, not an expression: `^` cannot appear mid-expression, and statements after it parse but do not run.
+- The home is the ADR 0050 frame the Block was created in, matched by **object identity**. Two activations of one method on one receiver have equal `{self, definingBehavior}` and are different homes.
+- **Ownership, not frame equality, decides where a return stops.** A kernel-primitive send inherits the frame and a closure restores it, so the return primitive itself and every intervening Block hold the very same object. Only the dispatch-created activation owns it, marks it live/dead, and catches a transfer naming it. Compute ownership alongside the existing `activeFrame` priority expression — do not refactor that expression.
+- Liveness lives in an executor-owned WeakSet keyed by the frame, never as a frame field: the dispatch seam validates the shape as exactly `{self, definingBehavior}`. A dead entry is retained while the frame is reachable, which is what keeps "already returned" distinguishable from "no home available".
+- Returning to a dead home fails explicitly and is **never** converted into a local return — that would compute a wrong answer rather than stopping.
+- A standalone Block containing `^` is refused at compile time; an escaped method Block fails at invocation. Different diagnoses for different mistakes.
+- `[ ^ 1 ] ensure: [ ^ 2 ]` answers 2: a cleanup that transfers supersedes the transfer already unwinding, while an ordinary cleanup value is still discarded.
 
 ### Mutable lexical state
 

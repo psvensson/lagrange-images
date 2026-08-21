@@ -257,11 +257,12 @@ Next, ordered by architectural pressure rather than convenience:
       ordinary methods over language-owned primitives, `lagrange-code/v0` is unchanged, and
       `OrderedCollection` gained `at:`, `first`, `last` and `removeLast` with real bounds checks.
       The count-up-and-compare-with-`=` idiom is retired
-- [ ] implement **ADR 0055**'s non-local return. `^` becomes syntax compiled to an ordinary send, so
+- [x] non-local return (**ADR 0055**). `^` becomes syntax compiled to an ordinary send, so
       `lagrange-code` stays frozen and the compiler still recognizes no selector. The target is the
       ADR 0050 frame the Block was created in — the identity already exists — with liveness in an
       executor-owned side table, and returning to an activation that has already returned is an
-      explicit failure rather than a local return. It retires `includes:`'s `found` temporary
+      explicit failure rather than a local return. `includes:` now answers from inside its loop and
+      its `found` temporary is gone
 - [ ] general object residency: should a newly allocated image object begin execution-local and
       become durable only on crossing a durability boundary, as ADR 0052 made closures? One object
       kind and one ObjectRef, with residency as a lifetime state. ADR 0054 raised it by declining

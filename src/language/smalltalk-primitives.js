@@ -4,6 +4,8 @@ import {SHAPE_INDEXED, shapeIndexedKind} from '../object/model.js';
 import {EXCEPTION_SHAPE_ID, HOST_CONDITION_CLASS} from './smalltalk-condition-ids.js';
 import {
   ConditionTransfer,
+  NonLocalReturnHomeError,
+  NonLocalReturnTransfer,
   SmalltalkNoActiveOccurrenceError,
   SmalltalkUnhandledConditionError,
 } from '../execution/conditions.js';
@@ -89,6 +91,8 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   CONDITION_SIGNAL: 'condition-signal',
   CONDITION_RESUME: 'condition-resume',
   CONDITION_RETURN: 'condition-return',
+  // ADR 0055. Reached by a send the compiler lowers `^` to; never written by a programmer.
+  NON_LOCAL_RETURN: 'non-local-return',
 });
 
 // Dispatched with the protected Block as receiver, exactly like the loop primitives — so they share
@@ -137,6 +141,7 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.CONDITION_SIGNAL]: 1,
   [SMALLTALK_PRIMITIVE.CONDITION_RESUME]: 2,
   [SMALLTALK_PRIMITIVE.CONDITION_RETURN]: 2,
+  [SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN]: 1,
 });
 
 // One locality rule for every primitive. A foreign primitive Block must fail rather than answer a
@@ -957,6 +962,36 @@ async function integerOperation(primitive, left, right, {
   }
 }
 
+// ADR 0055. `^ expr` lowers to `$nonLocalReturn value: expr`, so this primitive runs with the home
+// method's frame already in hand: a kernel-primitive send INHERITS the caller's frame (ADR 0050 rule
+// 2), and a closure activation RESTORES the frame it was created in (rule 3). Chained, those two
+// rules hand it the home frame with no new propagation.
+//
+// It never catches its own transfer, because it only *borrows* that frame — decision 3a makes
+// stopping the transfer the owner's job.
+function nonLocalReturn({activation, context, primitive}) {
+  const frame = context?.invocationFrame ?? null;
+  if (!frame) {
+    // No frame at all: the Block outlived the execution that created it, so its home is
+    // unreachable — the same fail-closed shape ADR 0050 decision 10a gives an escaped
+    // ivar-dependent closure, and for the same reason.
+    throw new NonLocalReturnHomeError(
+      'the Block has no home frame; it outlived the execution that created it',
+    );
+  }
+  if (typeof context.conditions?.isLiveHome !== 'function') {
+    throw new TypeError(`Symmetric Smalltalk ${primitive} primitive requires a condition runtime`);
+  }
+  if (!context.conditions.isLiveHome(frame)) {
+    // The frame is still reachable, so its identity is known — and it is known to be finished.
+    // Saying so beats the vaguer "no home", which is why the registry retains dead entries.
+    throw new NonLocalReturnHomeError(
+      `the home method activation has already returned (${frame.definingBehavior?.objectId ?? 'unknown'})`,
+    );
+  }
+  throw new NonLocalReturnTransfer(frame, canonicalizeValue(activation.arguments[0]));
+}
+
 // ADR 0054 decision 8. A host failure that has a condition class becomes an ordinary Smalltalk
 // signal, so it is catchable — and resumable, since a handler's `resume:` answers the operation.
 //
@@ -1293,6 +1328,9 @@ function createSmalltalkKernelPrimitiveV1Executor({
           images, activation, context, primitive,
           onlyWhenCurtailed: primitive === SMALLTALK_PRIMITIVE.BLOCK_IF_CURTAILED,
         });
+      }
+      if (primitive === SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN) {
+        return nonLocalReturn({activation, context, primitive});
       }
       if (primitive === SMALLTALK_PRIMITIVE.CONDITION_SIGNAL) {
         return await conditionSignal({images, primitiveImage, activation, context, primitive});

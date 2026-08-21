@@ -57,10 +57,19 @@ function selectSemanticRepresentation(syntax) {
 // learns a new concept. These names are internal to the binder and cannot collide with source names,
 // which the tokenizer restricts to identifier characters.
 const INSTANCE_SLOT_READ_CAPTURE = '$instanceSlotRead';
+// ADR 0055: reserved for the compiler's `^` lowering, like the slot-primitive captures above.
+const NON_LOCAL_RETURN_CAPTURE = '$nonLocalReturn';
 const INSTANCE_SLOT_WRITE_CAPTURE = '$instanceSlotWrite';
 
 class SemanticScope {
-  constructor({parent = null, path, parameters = [], rootCaptures = new Map(), instanceVariables = new Map()} = {}) {
+  constructor({
+    parent = null, path, parameters = [], rootCaptures = new Map(), instanceVariables = new Map(),
+    methodHome = false,
+  } = {}) {
+    // ADR 0055. Whether this compilation has a method to return from. Carried explicitly rather
+    // than inferred from the presence of instance variables — a method with no instance variables
+    // still has a home, and a standalone Block with captures still has none.
+    this.methodHome = methodHome || parent?.methodHome === true;
     this.parent = parent;
     this.instanceVariables = parent ? parent.instanceVariables : instanceVariables;
     this.path = path;
@@ -116,6 +125,10 @@ class SemanticScope {
   // Built in the *originating* scope, so `self` and the primitive capture resolve through this
   // scope's own chain. That is what makes an instance variable inside a nested Block mean the
   // defining method's receiver (ADR 0050 decision 10).
+  canReturn() {
+    return this.methodHome === true;
+  }
+
   instanceSlotRead(slotId) {
     return Object.freeze({
       op: 'send',
@@ -123,6 +136,19 @@ class SemanticScope {
       receiver: this.resolveName(INSTANCE_SLOT_READ_CAPTURE),
       message: textValue('value:value:'),
       arguments: Object.freeze([this.resolveSelf(), Object.freeze({op: 'literal', value: textValue(slotId)})]),
+    });
+  }
+
+  // ADR 0055. `^ expr` lowers to `$nonLocalReturn value: expr` — an ordinary send, so
+  // `lagrange-code` gains no operation for it. `resolveName` walks the capture chain exactly as it
+  // does for the slot primitives, so a nested Block inherits the binding by ordinary propagation.
+  nonLocalReturn(valueExpression) {
+    return Object.freeze({
+      op: 'send',
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: this.resolveName(NON_LOCAL_RETURN_CAPTURE),
+      message: textValue('value:'),
+      arguments: Object.freeze([valueExpression]),
     });
   }
 
@@ -291,6 +317,16 @@ function compileExpression(syntax, scope, state) {
       return scope.resolveSelf();
     case 'name':
       return scope.resolveName(syntax.name);
+    case 'return': {
+      // A Block compiled with no method context has no home to return from, and never could have —
+      // that is a fact about the compilation, so it is reported here rather than at invocation. It
+      // is deliberately distinct from an escaped method Block, which compiled legitimately and
+      // fails later because its home died.
+      if (!scope.canReturn()) {
+        throw new TypeError('non-local return requires a method home: `^` is only valid inside a method');
+      }
+      return scope.nonLocalReturn(compileExpression(syntax.value, scope, state));
+    }
     case 'assign': {
       const target = scope.resolveWrite(syntax.name);
       const value = compileExpression(syntax.value, scope, state);
@@ -343,8 +379,11 @@ function compileBlockSyntax(syntax, {
   rootCaptures = new Map(),
   instanceVariables = new Map(),
   representation = LAGRANGE_CODE_V0,
+  methodHome = false,
 } = {}) {
-  const scope = new SemanticScope({parent, path, parameters: syntax.parameters, rootCaptures, instanceVariables});
+  const scope = new SemanticScope({
+    parent, path, parameters: syntax.parameters, rootCaptures, instanceVariables, methodHome,
+  });
   const state = {path, nextBlock: 0, representation};
   const body = compileBody(syntax.body, scope, state);
   const program = representation === LAGRANGE_CODE_V1
@@ -365,7 +404,9 @@ function compileBlockSyntax(syntax, {
   });
 }
 
-function compileSymmetricSmalltalkSemanticBlock(source, {captures = {}, instanceVariables = {}} = {}) {
+function compileSymmetricSmalltalkSemanticBlock(source, {
+  captures = {}, instanceVariables = {}, methodHome = false,
+} = {}) {
   const syntax = parseSymmetricSmalltalkBlock(source);
   const representation = selectSemanticRepresentation(syntax);
   const compiled = compileBlockSyntax(syntax, {
@@ -373,12 +414,14 @@ function compileSymmetricSmalltalkSemanticBlock(source, {captures = {}, instance
     rootCaptures: normalizeRootCaptures(captures),
     instanceVariables: new Map(Object.entries(instanceVariables)),
     representation,
+    methodHome,
   });
   return Object.freeze({syntax, program: compiled.program, representation});
 }
 
 export {
   INSTANCE_SLOT_READ_CAPTURE,
+  NON_LOCAL_RETURN_CAPTURE,
   INSTANCE_SLOT_WRITE_CAPTURE,
   compileSymmetricSmalltalkSemanticBlock,
   needsMutableLexicalState,

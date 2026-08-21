@@ -1,6 +1,7 @@
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
 import {arenaImagesView} from './lexical-cells.js';
 import {promoteClosure} from './closure-promotion.js';
+import {NonLocalReturnTransfer} from './conditions.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 import {
   EscapingMutableClosureError,
@@ -16,6 +17,13 @@ const MAX_ACTIVATION_DEPTH = 256;
 // opaque token handed back — so a primitive can carry it without holding it, and nothing that
 // crosses the primitive boundary is a capability (ADR 0037).
 const CAPTURED_AUTHORITY = new WeakMap();
+
+// ADR 0055 decision 4. Liveness of a home method activation, keyed by its ADR 0050 frame — which is
+// only ever a key here. The frame's shape is validated as exactly {self, definingBehavior} at the
+// dispatch seam, and liveness is execution state rather than identity, so it must not become a
+// field. A dead entry is retained while the frame is reachable, which is what keeps "already
+// returned" distinguishable from "no home available".
+const HOME_ACTIVATIONS = new WeakSet();
 
 function normalizeObjectRef(value, label) {
   const normalized = canonicalizeValue(value);
@@ -276,6 +284,17 @@ class ActivationExecutor {
       ?? arena.frameFor?.(activation.block)
       ?? null;
 
+    // ADR 0055 decision 3a. Computed *alongside* the expression above rather than by refactoring it,
+    // so ADR 0050's priority semantics are reused rather than re-derived.
+    //
+    // Only a dispatch-supplied frame is owned. A kernel primitive inherits one and a closure restores
+    // one — both are borrowers holding the very same object — so ownership, not frame equality, is
+    // what decides where a non-local return stops. Otherwise the return primitive, which is running
+    // with the home frame at the moment it raises, would catch its own transfer.
+    const ownsFrame = activeFrame !== null
+      && (invocationFrame !== null || this.invocations?.frameFor?.(activation) != null);
+    if (ownsFrame) HOME_ACTIVATIONS.add(activeFrame);
+
     // ADR 0044 decision 5a. A root activation dispatches in its own Block's image; a nested one
     // inherits what its sender computed. Context, never a field on the activation.
     const activeDispatchImage = dispatchImage ?? activation.block.imageId;
@@ -331,6 +350,9 @@ class ActivationExecutor {
           // Invoking a Block rather than dispatching a selector keeps this language-neutral, and
           // lets ADR 0050 restore the Block's creation frame, which is what gives a handler its
           // establisher's `self` for free.
+          // ADR 0055. The primitive asks whether the frame it was handed still has a running
+          // owner; it never sees the registry, and a frame is only ever a key in it.
+          isLiveHome: whileActive('isLiveHome', (frame) => HOME_ACTIVATIONS.has(frame)),
           invoke: whileActive('invoke', async (token, blockRef, args = []) => {
             if (!CAPTURED_AUTHORITY.has(token)) throw new TypeError('unknown captured authority token');
             if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
@@ -446,9 +468,18 @@ class ActivationExecutor {
       // already have been refused at the graph write seam. Walking a returned object graph would be
       // I/O spent re-proving what the write boundary guarantees.
       return ownsArena ? await promoteClosure(this.images, arena, answer) : answer;
+    } catch (error) {
+      // Only the owner stops a return naming its own frame; a borrower lets it travel on.
+      if (ownsFrame && error instanceof NonLocalReturnTransfer && error.frame === activeFrame) {
+        return canonicalizeValue(error.value);
+      }
+      throw error;
     } finally {
       // Also on the exceptional path: a trapping guest must not leave a live context behind.
       lifetime.active = false;
+      // Dead from here on. Retained rather than deleted: while the frame is still reachable, a
+      // `^` naming it must be told the method returned rather than that it has no home.
+      if (ownsFrame) HOME_ACTIVATIONS.delete(activeFrame);
     }
   }
 }

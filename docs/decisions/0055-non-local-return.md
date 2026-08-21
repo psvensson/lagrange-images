@@ -1,6 +1,7 @@
 # ADR 0055: Non-local return
 
-Status: accepted — `^` is syntax the compiler learns, compiled to an ordinary send to a language-owned primitive that unwinds to the home method activation, which is identified by the ADR 0050 frame the Block was created in rather than by any new notion of activation identity.
+Status: implemented — `^` is syntax the compiler learns, compiled to an ordinary send to a language-owned primitive that unwinds to the home method activation, which is identified by the ADR 0050 frame the Block was created in rather than by any new notion of activation identity.
+Proven by: test/non-local-return.test.js, test/smalltalk-library.test.js
 
 ## Problem
 
