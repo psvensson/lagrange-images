@@ -1,5 +1,18 @@
 const BINARY_SELECTOR_CHARS = new Set('+-*/=<>~&,@%?!\\'.split(''));
 
+// ADR 0056 decision 3. Reserved pseudo-literals: they read as identifiers but are not names, so
+// nothing may declare, capture, shadow or assign to one.
+//
+// Owned here, in one place, because the checks that enforce it are spread across block parameters,
+// temporaries, assignment targets and explicit captures — four sites that would otherwise drift, as
+// they already had: `self` was refused as a temporary and as an assignment target but accepted as a
+// block parameter.
+const RESERVED_WORDS = Object.freeze(new Set(['self', 'true', 'false', 'nil']));
+
+function isReservedWord(name) {
+  return RESERVED_WORDS.has(name);
+}
+
 class SymmetricSmalltalkSyntaxError extends SyntaxError {
   constructor(message, position) {
     super(`${message} at ${position}`);
@@ -125,6 +138,8 @@ function tokenizeSymmetricSmalltalk(source) {
 }
 
 export {
+  RESERVED_WORDS,
+  isReservedWord,
   SymmetricSmalltalkSyntaxError,
   tokenizeSymmetricSmalltalk,
 };

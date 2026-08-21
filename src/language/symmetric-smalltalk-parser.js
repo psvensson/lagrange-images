@@ -1,7 +1,17 @@
 import {
   SymmetricSmalltalkSyntaxError,
   tokenizeSymmetricSmalltalk,
+  isReservedWord,
 } from './symmetric-smalltalk-tokenizer.js';
+
+// One rule, one message shape, for every site that would otherwise decide independently.
+function assertNotReserved(token, action) {
+  if (isReservedWord(token.value)) {
+    throw new SymmetricSmalltalkSyntaxError(
+      `cannot ${action} ${token.value}: it is a reserved word`, token.start,
+    );
+  }
+}
 
 function node(kind, fields = {}) {
   return Object.freeze({kind, ...fields});
@@ -50,9 +60,7 @@ class Parser {
   parseExpression() {
     if (this.current().type === 'identifier' && this.peek().type === 'assign') {
       const target = this.advance();
-      if (target.value === 'self') {
-        throw new SymmetricSmalltalkSyntaxError('cannot assign to self', target.start);
-      }
+      assertNotReserved(target, 'assign to');
       this.advance();
       return node('assign', {name: target.value, value: this.parseExpression()});
     }
@@ -96,9 +104,7 @@ class Parser {
     const names = [];
     while (this.current().type === 'identifier') {
       const token = this.advance();
-      if (token.value === 'self') {
-        throw new SymmetricSmalltalkSyntaxError('cannot declare a temporary named self', token.start);
-      }
+      assertNotReserved(token, 'declare a temporary named');
       if (names.includes(token.value)) {
         throw new SymmetricSmalltalkSyntaxError(`duplicate temporary ${token.value}`, token.start);
       }
@@ -161,9 +167,13 @@ class Parser {
     }
     if (token.type === 'identifier') {
       this.advance();
-      return token.value === 'self'
-        ? node('self')
-        : node('name', {name: token.value});
+      // The reserved words read as identifiers and are not names: each becomes its own syntax
+      // node, so no later stage can mistake one for something bindable.
+      if (token.value === 'self') return node('self');
+      if (token.value === 'true') return node('true');
+      if (token.value === 'false') return node('false');
+      if (token.value === 'nil') return node('nil');
+      return node('name', {name: token.value});
     }
     if (this.match('(')) {
       const expression = this.parseExpression();
@@ -178,6 +188,7 @@ class Parser {
     const parameters = [];
     while (this.match(':')) {
       const nameToken = this.expect('identifier', 'expected block parameter name');
+      assertNotReserved(nameToken, 'declare a block parameter named');
       if (parameters.includes(nameToken.value)) {
         throw new SymmetricSmalltalkSyntaxError(`duplicate block parameter ${nameToken.value}`, nameToken.start);
       }

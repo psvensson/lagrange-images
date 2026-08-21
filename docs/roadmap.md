@@ -287,11 +287,11 @@ Next, ordered by architectural pressure rather than convenience:
       ABI unchanged. `OrderedCollection >> at:` now signals a catchable `IndexOutOfRange` instead of
       the `errorIndexOutOfBounds:` placeholder, and `at:ifAbsent:` is written in ordinary Smalltalk
       by handling that signal rather than needing a second primitive
-- [ ] implement **ADR 0056**: `not`/`and:`/`or:` as ordinary lazy methods through ADR 0045's bridge,
+- [x] **ADR 0056**: `not`/`and:`/`or:` as ordinary lazy methods through ADR 0045's bridge,
       plus `true`/`false`/`nil` as reserved source literals. The bridge question it once posed is
       answered — a boolean-answering method answers the canonical *Value*, and the singleton is only
       ever a transient dispatch receiver. It retires the `1 = 2` spellings and the NilObject-only
-      captures, and lets a two-part bounds test stop being nested `ifTrue:ifFalse:`
+      captures. `Association >> =` now reads `(key = other key) and: [ value = other value ]`
 - [ ] primitive-backed methods beyond `+`. ADR 0044 decides how immediate Values dispatch and how
       a primitive-backed method is written; the remaining work is which primitives the kernel needs
 - [x] ADR 0051's constant-stack `whileTrue:`/`whileFalse:`. `OrderedCollection`'s traversals are

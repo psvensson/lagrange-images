@@ -1,6 +1,7 @@
 # ADR 0056: Boolean protocol and reserved literals
 
-Status: accepted — `true` and `false` are source spellings of the canonical boolean Values, `nil` is reserved syntax lowering to an image-bound intrinsic binding so the semantic artifact stays image-independent, and `not`/`and:`/`or:` are ordinary lazy methods on `True` and `False`.
+Status: implemented — `true` and `false` are source spellings of the canonical boolean Values, `nil` is reserved syntax lowering to an image-bound intrinsic binding so the semantic artifact stays image-independent, and `not`/`and:`/`or:` are ordinary lazy methods on `True` and `False`.
+Proven by: test/reserved-literals.test.js, test/smalltalk-control-flow.test.js
 
 ## Problem
 
@@ -170,8 +171,11 @@ literals
 
 nil
     `nil` evaluates to the image's exact kernel nil, in both lanes
-    the semantic artifact contains no image-specific ref — proven by inspecting the artifact,
-        and by compiling once and installing into two images with different nil identities
+    the semantic artifact contains no image-specific ref — proven by inspecting the artifact, and
+        by compiling the semantic program once and asserting the artifact installed into each of two
+        images equals that single result while each binds its own nil. Not one durable artifact
+        shared by two images: a CodeArtifact's identity is image-scoped, and the claim is about the
+        *program* being image-independent rather than the record being shared
     a nested Block using `nil` binds it by the ordinary capture walk
     a Block that does not use `nil` still installs with no lexical environment, and its
         environment path is byte-for-byte what it is today
@@ -223,6 +227,10 @@ nil lowers to a reserved image-bound binding; the semantic artifact carries a bi
     write it only when the program actually binds the intrinsic
 the intrinsic environment PARENTS the caller-supplied one, never flattens or copies it — the
     chain walk is already the composition mechanism, and a copy is a second answer that can drift
+the nil intrinsic is owned by the semantic compiler and offered to every compilation; a caller may
+    add intrinsics but may not replace `$nil`, and both `$nil` and `smalltalk/intrinsic/nil` are
+    reserved at every programmatic capture entry point. Reserving the name without the id would let
+    a caller bind the id under another name and shadow `nil` from outside the compiler
 true, false and nil are reserved: not parameters, temporaries, captures, assignment targets, and
     not shadowable by a later namespace
 not/and:/or: are ordinary methods through ADR 0045's bridge; the compiler recognizes no selector

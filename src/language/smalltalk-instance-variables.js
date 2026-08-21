@@ -13,6 +13,8 @@ import {
 } from './smalltalk-primitives.js';
 import {
   INSTANCE_SLOT_READ_CAPTURE,
+  NIL_BINDING_ID,
+  NIL_CAPTURE,
   NON_LOCAL_RETURN_CAPTURE,
   INSTANCE_SLOT_WRITE_CAPTURE,
   compileSymmetricSmalltalkSemanticBlock,
@@ -34,9 +36,11 @@ const PRIMITIVE_BLOCK_ID = Object.freeze({
 
 // Owned by the class-scoped binder, which injects them for instance-variable access and for `^`.
 const RESERVED_CAPTURE_NAMES = new Set([
-  INSTANCE_SLOT_READ_CAPTURE, INSTANCE_SLOT_WRITE_CAPTURE, NON_LOCAL_RETURN_CAPTURE,
+  INSTANCE_SLOT_READ_CAPTURE, INSTANCE_SLOT_WRITE_CAPTURE, NON_LOCAL_RETURN_CAPTURE, NIL_CAPTURE,
 ]);
-const RESERVED_CAPTURE_IDS = new Set(Object.values(PRIMITIVE_BLOCK_ID));
+// The nil binding id joins the primitive ids: reserving a name without its id would let a caller
+// bind the same id under a different name and shadow the intrinsic from outside the compiler.
+const RESERVED_CAPTURE_IDS = new Set([...Object.values(PRIMITIVE_BLOCK_ID), NIL_BINDING_ID]);
 
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be non-empty text`);
@@ -171,6 +175,8 @@ async function compileSymmetricSmalltalkMethod({
     // inspection of the source.
     intrinsics: {
       [NON_LOCAL_RETURN_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN],
+      // `nil` is deliberately absent: the semantic compiler owns that intrinsic and offers it to
+      // every compilation, so declaring it here would be a second definition to keep in step.
     },
     instanceVariables,
     // This entry point is the class-scoped one, so its compilations have a method to return from.
@@ -196,6 +202,11 @@ async function compileSymmetricSmalltalkMethod({
 async function defineMethodsFromSource({images, compilation, imageId, classRef, methods, lane = 'neutral'} = {}) {
   if (!Array.isArray(methods) || methods.length === 0) throw new TypeError('methods must be a non-empty array');
   const primitiveIds = new Set(Object.values(PRIMITIVE_BLOCK_ID));
+  // Resolved once: `nil` means this image's kernel nil, and a method that never writes it carries
+  // no binding to resolve.
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  const kernelNil = kernel.nil;
   const compiled = [];
   for (const {selector, source, captures} of methods) {
     const declared = normalizeCaptureDeclarations(captures ?? {});
@@ -203,6 +214,9 @@ async function defineMethodsFromSource({images, compilation, imageId, classRef, 
     const method = await compileSymmetricSmalltalkMethod({images, imageId, classRef, selector, source, captures});
     const bound = method.captures.map(({id, name}) => {
       if (primitiveIds.has(id)) return {id, name, value: objectRef(imageId, id)};
+      // ADR 0056: the nil intrinsic resolves to this image's kernel nil, exactly as the slot
+      // primitives resolve to this image's Blocks.
+      if (id === NIL_BINDING_ID) return {id, name, value: kernelNil};
       const value = supplied.get(id);
       if (value === undefined) {
         throw new TypeError(

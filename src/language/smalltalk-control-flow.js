@@ -1,4 +1,4 @@
-import {isObjectRef, textValue} from '../value/index.js';
+import {booleanValue, isObjectRef, textValue} from '../value/index.js';
 import {defineMethods} from './smalltalk-class-builder.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
@@ -16,17 +16,41 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 // kernel and no control-flow protocol fails as message-not-understood, which is a coherent state.
 const NIL_CAPTURE = Object.freeze({id: 'smalltalk/control-flow/nil', name: 'nil'});
 
-// Which argument each class evaluates, or `null` for the arm that answers nil. Written as one table
-// rather than eight hand-built programs so the symmetry is checkable by reading it: every selector
-// appears once per class, and no two entries can drift apart in shape.
+// What each class does for each selector. Written as one table rather than hand-built programs so
+// the symmetry is checkable by reading it: every selector appears once per class, and no two entries
+// can drift apart in shape.
+//
+//   a number   evaluate that argument, by sending it `value`
+//   null       answer nil
+//   a boolean  answer that canonical boolean Value (ADR 0056)
+//
+// The Boolean protocol needed no second publication surface: `and:`/`or:` are the same shape as the
+// conditionals — evaluate an argument, or answer without mentioning it — and their laziness falls
+// out of that rather than being arranged. An arm that answers a literal never names the argument, so
+// the Block simply is not evaluated.
 const CONDITIONAL_PROTOCOL = Object.freeze([
   {selector: 'ifTrue:', parameters: ['aBlock'], True: 0, False: null},
   {selector: 'ifFalse:', parameters: ['aBlock'], True: null, False: 0},
   {selector: 'ifTrue:ifFalse:', parameters: ['trueBlock', 'falseBlock'], True: 0, False: 1},
   {selector: 'ifFalse:ifTrue:', parameters: ['falseBlock', 'trueBlock'], True: 1, False: 0},
+  // ADR 0056 decision 4. Ordinary methods through ADR 0045's bridge; the compiler learns nothing.
+  {selector: 'not', parameters: [], True: false, False: true},
+  {selector: 'and:', parameters: ['aBlock'], True: 0, False: false},
+  {selector: 'or:', parameters: ['aBlock'], True: true, False: 0},
 ]);
 
-const SMALLTALK_CONDITIONAL_SELECTORS = Object.freeze(CONDITIONAL_PROTOCOL.map(({selector}) => selector));
+// ADR 0056 added three rows to the table above, so these are derived by *role* rather than by
+// "everything in the table". `SMALLTALK_CONDITIONAL_SELECTORS` is public and has always meant the
+// four conditionals; silently widening it would change what an existing name means, which is exactly
+// the drift the reserved-word rule guards against one level down.
+const BOOLEAN_SELECTORS = Object.freeze(['not', 'and:', 'or:']);
+
+const SMALLTALK_CONDITIONAL_SELECTORS = Object.freeze(
+  CONDITIONAL_PROTOCOL.map(({selector}) => selector).filter((selector) => !BOOLEAN_SELECTORS.includes(selector)),
+);
+const SMALLTALK_BOOLEAN_SELECTORS = Object.freeze([...BOOLEAN_SELECTORS]);
+// Everything this installer publishes, for callers that mean exactly that.
+const SMALLTALK_CONTROL_FLOW_SELECTORS = Object.freeze(CONDITIONAL_PROTOCOL.map(({selector}) => selector));
 
 // The kernel slot naming each singleton, and the class it is an instance of. `True` and `False` have
 // no kernel slot of their own, so the class is read from the singleton rather than named here.
@@ -48,6 +72,20 @@ function conditionalMethod({selector, parameters, evaluate, nilRef}) {
     id: `${selector}:parameter:${index}`,
     name,
   }));
+  // ADR 0056: an arm that answers a boolean answers the canonical *Value*, not the singleton — the
+  // singleton is a dispatch personality (ADR 0045), and a boolean-answering method must not quietly
+  // convert one into the other.
+  if (typeof evaluate === 'boolean') {
+    return {
+      selector,
+      program: {
+        parameters: parameterDescriptors,
+        captures: [],
+        body: {op: 'literal', value: booleanValue(evaluate)},
+      },
+      captures: [],
+    };
+  }
   if (evaluate === null) {
     return {
       selector,
@@ -117,12 +155,14 @@ async function installSmalltalkControlFlow({images, compilation, imageId, lane =
   return Object.freeze({
     trueClass: installed.True,
     falseClass: installed.False,
-    selectors: SMALLTALK_CONDITIONAL_SELECTORS,
+    selectors: SMALLTALK_CONTROL_FLOW_SELECTORS,
   });
 }
 
 export {
   NIL_CAPTURE as SMALLTALK_CONTROL_FLOW_NIL_CAPTURE,
+  SMALLTALK_BOOLEAN_SELECTORS,
   SMALLTALK_CONDITIONAL_SELECTORS,
+  SMALLTALK_CONTROL_FLOW_SELECTORS,
   installSmalltalkControlFlow,
 };
