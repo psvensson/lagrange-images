@@ -257,7 +257,11 @@ test('every library method is an ordinary Smalltalk method with a semantic artif
 
     for (const [classRef, selectors] of [
       [library.association, ['key', 'value', 'key:value:', 'value:', '=', 'hash']],
-      [library.orderedCollection, ['initialize', 'size', 'isEmpty', 'add:', 'do:', 'includes:', 'asArray']],
+      [library.orderedCollection, [
+        'initialize', 'size', 'isEmpty', 'add:', 'do:', 'includes:', 'asArray',
+        // The enumeration slice: ordinary methods like the rest, with no primitive of their own.
+        'collect:', 'select:', 'detect:ifNone:', 'inject:into:',
+      ]],
     ]) {
       const behavior = await runtime.images.getObject('app', classRef.objectId);
       const dictionary = await runtime.images.getObject(
@@ -702,4 +706,186 @@ test('the count-up-and-compare-with-= idiom is gone from the library', async () 
   for (const {selector, source} of traversals) {
     assert.match(source, /index <= tally/, `${selector} must bound with <=`);
   }
+});
+
+// --- higher-order enumeration ----------------------------------------------------------------------
+
+// Built on `do:` rather than on four more indexed loops, so what these tests are really about is
+// whether library protocol can now compose library protocol: a Block passed through a method, a
+// loop inside that method, a `^` crossing back out, and mutable capture along the way.
+
+const collectionOf = (runtime, imageId, id, library, items) => evaluate(
+  runtime, imageId, id,
+  `[ :c | | x | x := c new. ${items.map((item) => `x add: ${item}. `).join('')}x ]`,
+  [library.orderedCollection],
+);
+
+for (const lane of ['neutral', 'wasm']) {
+  test(`collect: transforms every element in order through the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      const {library} = await seed(runtime, 'app', {lane});
+      const source = await collectionOf(runtime, 'app', `c-src-${lane}`, library, [1, 2, 3]);
+      const mapped = await evaluate(runtime, 'app', `c-map-${lane}`,
+        '[ :x | x collect: [ :e | e + 10 ] ]', [source]);
+
+      assert.deepEqual(await evaluate(runtime, 'app', `c-size-${lane}`, '[ :m | m size ]', [mapped]), integerValue(3));
+      // Order preserved, every element transformed.
+      for (const [index, expected] of [[1, 11], [2, 12], [3, 13]]) {
+        assert.deepEqual(
+          await evaluate(runtime, 'app', `c-at-${lane}-${index}`, `[ :m | m at: ${index} ]`, [mapped]),
+          integerValue(expected),
+        );
+      }
+      // A distinct collection, and the receiver is untouched.
+      assert.notEqual(mapped.objectId, source.objectId);
+      assert.deepEqual(await evaluate(runtime, 'app', `c-src-size-${lane}`, '[ :x | x size ]', [source]), integerValue(3));
+      assert.deepEqual(await evaluate(runtime, 'app', `c-src-at-${lane}`, '[ :x | x at: 1 ]', [source]), integerValue(1));
+    });
+  });
+
+  test(`select: keeps matching elements in order through the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      const {library} = await seed(runtime, 'app', {lane});
+      const source = await collectionOf(runtime, 'app', `s-src-${lane}`, library, [1, 2, 3, 4]);
+
+      // None, some and all.
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `s-none-${lane}`, '[ :x | (x select: [ :e | e = 9 ]) size ]', [source]),
+        integerValue(0),
+      );
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `s-all-${lane}`, '[ :x | (x select: [ :e | e <= 4 ]) size ]', [source]),
+        integerValue(4),
+      );
+      const some = await evaluate(runtime, 'app', `s-some-${lane}`,
+        '[ :x | x select: [ :e | e >= 3 ] ]', [source]);
+      assert.deepEqual(await evaluate(runtime, 'app', `s-some-size-${lane}`, '[ :m | m size ]', [some]), integerValue(2));
+      assert.deepEqual(await evaluate(runtime, 'app', `s-some-1-${lane}`, '[ :m | m at: 1 ]', [some]), integerValue(3));
+      assert.deepEqual(await evaluate(runtime, 'app', `s-some-2-${lane}`, '[ :m | m at: 2 ]', [some]), integerValue(4));
+
+      assert.deepEqual(await evaluate(runtime, 'app', `s-src-size-${lane}`, '[ :x | x size ]', [source]), integerValue(4));
+    });
+  });
+
+  // The ADR 0055 pressure test, in ordinary library clothing: the `^` originates in a predicate
+  // Block that `do:` invokes, and must leave the enclosing `detect:ifNone:` activation through
+  // `do:`, its loop, and the intervening Block machinery.
+  //
+  // The counter is what makes a local Block return fail rather than accidentally pass: a local
+  // return would let `do:` run to the end (count 4) and `detect:ifNone:` fall through to its
+  // `noneBlock`, answering 0 instead of the element.
+  test(`detect:ifNone: answers the first match and stops, through the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      const {library} = await seed(runtime, 'app', {lane});
+      const source = await collectionOf(runtime, 'app', `d-src-${lane}`, library, [5, 6, 7, 8]);
+
+      // `count` is a mutable temporary of the *caller*, captured by the predicate — so it also
+      // exercises lexical capture across the whole composition.
+      const found = await evaluate(runtime, 'app', `d-found-${lane}`, `[ :x | | count answer |
+        count := 0.
+        answer := x detect: [ :e | count := count + 1. e = 6 ] ifNone: [ 0 ].
+        (answer * 100) + count ]`, [source]);
+      assert.deepEqual(
+        found, integerValue(602),
+        'expected element 6 after 2 predicate evaluations; a local Block return would answer 4 (0 * 100 + 4)',
+      );
+
+      // The ifNone: Block runs exactly when nothing matches, and not otherwise.
+      const missing = await evaluate(runtime, 'app', `d-none-${lane}`, `[ :x | | count answer noneRan |
+        count := 0. noneRan := 0.
+        answer := x detect: [ :e | count := count + 1. e = 99 ] ifNone: [ noneRan := 1. 42 ].
+        (answer * 100) + ((count * 10) + noneRan) ]`, [source]);
+      assert.deepEqual(
+        missing, integerValue(4241),
+        'expected 42 after all 4 elements with the none Block run once',
+      );
+
+      const present = await evaluate(runtime, 'app', `d-none-not-run-${lane}`, `[ :x | | noneRan |
+        noneRan := 0.
+        x detect: [ :e | e = 5 ] ifNone: [ noneRan := 1. 0 ].
+        noneRan ]`, [source]);
+      assert.deepEqual(present, integerValue(0), 'the none Block must not run when an element matches');
+    });
+  });
+
+  // Decimal accumulation rather than a sum: reversing the Block's arguments would still answer
+  // correctly for a commutative fold, and would not here.
+  test(`inject:into: folds left with the arguments in order, through the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      const {library} = await seed(runtime, 'app', {lane});
+      const source = await collectionOf(runtime, 'app', `i-src-${lane}`, library, [1, 2, 3]);
+
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `i-fold-${lane}`,
+          '[ :x | x inject: 0 into: [ :acc :e | (acc * 10) + e ] ]', [source]),
+        integerValue(123),
+        'reversed Block arguments would answer 3 * 10 + accumulator instead',
+      );
+      // The initial value is used, and used first.
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `i-seed-${lane}`,
+          '[ :x | x inject: 9 into: [ :acc :e | (acc * 10) + e ] ]', [source]),
+        integerValue(9123),
+      );
+    });
+  });
+}
+
+test('all four enumeration protocols handle an empty collection', async () => {
+  await withRuntime(async (runtime) => {
+    const {library} = await seed(runtime, 'app');
+    const empty = await evaluate(runtime, 'app', 'empty-coll', '[ :c | c new ]', [library.orderedCollection]);
+
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'e-collect', '[ :x | (x collect: [ :e | e + 1 ]) size ]', [empty]),
+      integerValue(0),
+    );
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'e-select', '[ :x | (x select: [ :e | e = 1 ]) size ]', [empty]),
+      integerValue(0),
+    );
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'e-detect', '[ :x | x detect: [ :e | e = 1 ] ifNone: [ 77 ] ]', [empty]),
+      integerValue(77),
+      'an empty collection must reach the none Block',
+    );
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'e-inject', '[ :x | x inject: 5 into: [ :acc :e | acc + e ] ]', [empty]),
+      integerValue(5),
+      'an empty fold answers its initial value',
+    );
+  });
+});
+
+test('select: preserves element identity rather than copying', async () => {
+  await withRuntime(async (runtime) => {
+    const {library} = await seed(runtime, 'app');
+    // Associations, so identity is observable as a ref rather than as an equal Integer.
+    const pair = await evaluate(runtime, 'app', 'ident-pair',
+      "[ :c | (c new) key: 'k' value: 1 ]", [library.association]);
+    const collection = await evaluate(runtime, 'app', 'ident-coll',
+      '[ :c :p | | x | x := c new. x add: p. x ]', [library.orderedCollection, pair]);
+
+    const selected = await evaluate(runtime, 'app', 'ident-select',
+      '[ :x | x select: [ :e | 1 = 1 ] ]', [collection]);
+    const element = await evaluate(runtime, 'app', 'ident-at', '[ :m | m at: 1 ]', [selected]);
+    assert.deepEqual(element, pair, 'select: must keep the element itself, not a copy');
+  });
+});
+
+test('enumeration composes with mutable lexical capture', async () => {
+  await withRuntime(async (runtime) => {
+    const {library} = await seed(runtime, 'app');
+    const source = await collectionOf(runtime, 'app', 'cap-src', library, [1, 2, 3, 4]);
+    // A running total in a caller temporary, written from inside a Block that `collect:` passes to
+    // `do:` — the cell has to survive the whole composition.
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'cap-run', `[ :x | | total mapped |
+        total := 0.
+        mapped := x collect: [ :e | total := total + e. e * 2 ].
+        (total * 1000) + ((mapped at: 4) + (mapped size)) ]`, [source]),
+      integerValue(10012),
+      'total 10, last element 8, size 4',
+    );
+  });
 });

@@ -272,7 +272,14 @@ Next, ordered by architectural pressure rather than convenience:
       graph, so this must first answer aliasing, cycles, promotion atomicity, identity across
       promotion, and whether persisting one object persists everything it reaches. Potentially a
       large simplification of the image model, potentially too expensive
-- [ ] basic collections, at which point a MethodDictionary can stop being represented by a Shape
+- [ ] basic collections, at which point a MethodDictionary can stop being represented by a Shape.
+      Higher-order enumeration is no longer part of this frontier: `collect:`, `select:`,
+      `detect:ifNone:` and `inject:into:` are ordinary image-resident Smalltalk built on `do:`, with
+      no primitive, no compiler change and no ADR — they fell out of the language ADRs 0051 to 0055
+      already decided. `detect:ifNone:` in particular is `^` from a predicate Block returning through
+      `do:` and its loop, which is ADR 0055 doing ordinary library work. What remains here is the
+      *shape* of the hierarchy — `Collection`, `species`, and how `collect:` chooses its answer's
+      class — rather than whether the language can express enumeration
 - [x] conditions and handlers (**ADR 0054**). The decision is that a handler runs at the
       signal point *before* unwinding, so it may `resume:` the signalling computation or `return:`
       through its `on:do:` — which is the only shape under which resumption works in the WASM lane,

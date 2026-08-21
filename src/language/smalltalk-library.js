@@ -165,6 +165,43 @@ const ORDERED_COLLECTION_METHODS = [
           tally := tally - 1.
           item ] ]`,
   },
+  // Higher-order enumeration, built on `do:` rather than on four more indexed loops. That is the
+  // point of the slice: there is now enough language for library protocol to compose library
+  // protocol, so these say what they mean and none of them touches `contents` or `tally`.
+  //
+  // `self class new` is deliberately as far as this goes. Generalising the answer's class properly
+  // is `species`, and inventing it here would be recreating the collection hierarchy ahead of
+  // needing it.
+  {
+    selector: 'collect:',
+    source: `[ :aBlock | | result |
+      result := self class new.
+      self do: [ :each | result add: (aBlock value: each) ].
+      ^ result ]`,
+  },
+  {
+    selector: 'select:',
+    source: `[ :aBlock | | result |
+      result := self class new.
+      self do: [ :each | (aBlock value: each) ifTrue: [ result add: each ] ].
+      ^ result ]`,
+  },
+  // The `^` originates in a Block that `do:` invokes, and returns from *this* activation through
+  // `do:` and its loop — ADR 0055's owner rule doing ordinary library work rather than a contrived
+  // test. It is also what makes the search stop: without it the predicate would run to the end.
+  {
+    selector: 'detect:ifNone:',
+    source: `[ :aBlock :noneBlock |
+      self do: [ :each | (aBlock value: each) ifTrue: [ ^ each ] ].
+      ^ noneBlock value ]`,
+  },
+  {
+    selector: 'inject:into:',
+    source: `[ :initial :binaryBlock | | accumulator |
+      accumulator := initial.
+      self do: [ :each | accumulator := binaryBlock value: accumulator value: each ].
+      ^ accumulator ]`,
+  },
   {
     captures: [ARRAY_CLASS_CAPTURE],
     selector: 'asArray',
