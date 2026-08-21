@@ -1,6 +1,7 @@
 # ADR 0056: Boolean protocol and reserved literals
 
-Status: accepted — `true` and `false` are source spellings of the canonical boolean Values, `nil` is reserved syntax lowering to an image-bound intrinsic binding so the semantic artifact stays image-independent, and `not`/`and:`/`or:` are ordinary lazy methods on `True` and `False`.
+Status: implemented — `true` and `false` are source spellings of the canonical boolean Values, `nil` is reserved syntax lowering to an image-bound intrinsic binding so the semantic artifact stays image-independent, and `not`/`and:`/`or:` are ordinary lazy methods on `True` and `False`.
+Proven by: test/reserved-literals.test.js, test/smalltalk-control-flow.test.js
 
 ## Problem
 

@@ -12,8 +12,6 @@ import {objectRef} from '../value/index.js';
 // It is a substrate exercise as much as a library. Where an idiom is unavailable the code uses what
 // exists rather than reaching for a host operation, and the awkwardness is left visible on purpose:
 //
-//   no false literal         `1 = 2` is how a Boolean false is spelled
-//   no `or:` / `not`         a two-part bounds test is written as nested `ifTrue:ifFalse:`
 //   no conditions            a refusal is signalled by sending a selector nothing implements, so
 //                            an out-of-range access fails as a message-not-understood naming the
 //                            collection's own concept rather than raising anything
@@ -37,14 +35,13 @@ const ASSOCIATION_METHODS = [
   {selector: 'key:value:', source: '[ :aKey :aValue | key := aKey. value := aValue. self ]'},
   {selector: 'value:', source: '[ :aValue | value := aValue. self ]'},
   // A same-class guard first, because sending `key` to an arbitrary object would be
-  // message-not-understood rather than an answer of false. `1 = 2` is a false literal spelled the
-  // only way the language currently offers.
+  // message-not-understood rather than an answer of false.
   {
     selector: '=',
     source: `[ :other |
       (other class = self class)
-        ifTrue: [ (key = other key) ifTrue: [ value = other value ] ifFalse: [ 1 = 2 ] ]
-        ifFalse: [ 1 = 2 ] ]`,
+        ifTrue: [ (key = other key) and: [ value = other value ] ]
+        ifFalse: [ false ] ]`,
   },
   // Equal Associations must hash alike (ADR 0048 decision 4). Hashing the key alone satisfies that
   // and is what a Dictionary of Associations wants.
@@ -56,11 +53,6 @@ const ASSOCIATION_METHODS = [
 // name the compiler could resolve. A declaration is a binding whether or not the source mentions it,
 // so only the methods that need the class declare it.
 const ARRAY_CLASS_CAPTURE = Object.freeze({name: 'ArrayClass', id: 'smalltalk/library/array-class'});
-
-// Removing an element must *clear* the slot it vacated, and clearing needs a nil to write. There is
-// no nil literal in source, so it arrives the same way `Array` does: an explicit captured ref bound
-// at install time.
-const NIL_CAPTURE = Object.freeze({name: 'NilObject', id: 'smalltalk/library/nil'});
 
 // ADR 0054. A refusal is a signal now, not a selector nobody implements, so the collection needs the
 // condition classes the same way it needs `Array` — as explicit captured refs.
@@ -116,9 +108,9 @@ const ORDERED_COLLECTION_METHODS = [
     source: `[ :item | | index |
       index := 1.
       [ index <= tally ] whileTrue: [
-        (item = (contents at: index)) ifTrue: [ ^ 1 = 1 ] ifFalse: [ 1 = 2 ].
+        (item = (contents at: index)) ifTrue: [ ^ true ] ifFalse: [ false ].
         index := index + 1 ].
-      1 = 2 ]`,
+      false ]`,
   },
   // ADR 0053's point. Each of these is a bounds check, which is why none existed before an ordering
   // comparison did.
@@ -154,14 +146,14 @@ const ORDERED_COLLECTION_METHODS = [
   // the backing Array is a durable object: leaving the ref there keeps the removed element
   // graph-reachable, so a large collection drained to empty would retain every element it ever held.
   {
-    captures: [NIL_CAPTURE, EMPTY_ERROR_CAPTURE],
+    captures: [EMPTY_ERROR_CAPTURE],
     selector: 'removeLast',
     source: `[ | item |
       (tally < 1)
         ifTrue: [ (EmptyError new) signal ]
         ifFalse: [
           item := contents at: tally.
-          contents at: tally put: NilObject.
+          contents at: tally put: nil.
           tally := tally - 1.
           item ] ]`,
   },
@@ -295,7 +287,6 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
   }
   const captureValues = Object.freeze({
     [ARRAY_CLASS_CAPTURE.id]: arrayClassRef,
-    [NIL_CAPTURE.id]: kernel.nil,
     [INDEX_ERROR_CAPTURE.id]: objectRef(imageId, 'smalltalk/class/IndexOutOfRange'),
     [EMPTY_ERROR_CAPTURE.id]: objectRef(imageId, 'smalltalk/class/EmptyCollection'),
   });

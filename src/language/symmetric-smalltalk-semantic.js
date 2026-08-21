@@ -1,7 +1,8 @@
-import {integerValue, textValue} from '../value/index.js';
+import {booleanValue, integerValue, textValue} from '../value/index.js';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
 import {LAGRANGE_CODE_V1} from '../code/lagrange-code-v1.js';
 import {parseSymmetricSmalltalkBlock} from './symmetric-smalltalk-parser.js';
+import {isReservedWord} from './symmetric-smalltalk-tokenizer.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 function normalizeRootCaptures(captures) {
@@ -12,6 +13,9 @@ function normalizeRootCaptures(captures) {
   const ids = new Set();
   for (const [name, id] of Object.entries(captures)) {
     if (!name) throw new TypeError('capture name must not be empty');
+    // The fourth site of ADR 0056 decision 3, and the one the parser cannot reach: captures are
+    // supplied programmatically rather than written in source.
+    if (isReservedWord(name)) throw new TypeError(`capture name ${name} is a reserved word`);
     if (typeof id !== 'string' || id.length === 0) throw new TypeError(`capture binding id for ${name} must be non-empty text`);
     if (ids.has(id)) throw new TypeError(`duplicate capture binding id: ${id}`);
     ids.add(id);
@@ -64,6 +68,11 @@ function selectSemanticRepresentation(syntax) {
 const INSTANCE_SLOT_READ_CAPTURE = '$instanceSlotRead';
 // ADR 0055: reserved for the compiler's `^` lowering, like the slot-primitive captures above.
 const NON_LOCAL_RETURN_CAPTURE = '$nonLocalReturn';
+// ADR 0056 decision 2. `nil` is a language-owned image object, so it cannot be a literal Value —
+// the generic model has no nil kind and does not get one. It lowers to a reserved binding whose id
+// is stable across images; installation supplies that image's kernel nil.
+const NIL_CAPTURE = '$nil';
+const NIL_BINDING_ID = 'smalltalk/intrinsic/nil';
 const INSTANCE_SLOT_WRITE_CAPTURE = '$instanceSlotWrite';
 
 class SemanticScope {
@@ -343,6 +352,17 @@ function compileExpression(syntax, scope, state) {
       return Object.freeze({op: 'literal', value: textValue(syntax.value)});
     case 'self':
       return scope.resolveSelf();
+    // ADR 0056 decision 1: the canonical boolean Values themselves, not the kernel singletons. The
+    // singleton is only ever a *dispatch* personality (ADR 0045), so compiling the literal to a ref
+    // would undo that separation at the source level.
+    case 'true':
+      return Object.freeze({op: 'literal', value: booleanValue(true)});
+    case 'false':
+      return Object.freeze({op: 'literal', value: booleanValue(false)});
+    // Requested lazily, so a program that never writes `nil` carries no binding for it and its
+    // installer writes no environment (ADR 0055's rule, applied again).
+    case 'nil':
+      return scope.requireIntrinsic(NIL_CAPTURE);
     case 'name':
       return scope.resolveName(syntax.name);
     case 'return': {
@@ -451,6 +471,8 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
 
 export {
   INSTANCE_SLOT_READ_CAPTURE,
+  NIL_BINDING_ID,
+  NIL_CAPTURE,
   NON_LOCAL_RETURN_CAPTURE,
   INSTANCE_SLOT_WRITE_CAPTURE,
   compileSymmetricSmalltalkSemanticBlock,

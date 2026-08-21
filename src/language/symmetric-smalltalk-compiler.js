@@ -1,5 +1,7 @@
 import {randomUUID} from 'node:crypto';
-import {ensureBlock, ensureCodeArtifact} from '../graph/ensure-records.js';
+import {ensureBlock, ensureCodeArtifact, ensureLexicalEnvironment} from '../graph/ensure-records.js';
+import {NIL_BINDING_ID, NIL_CAPTURE} from './symmetric-smalltalk-semantic.js';
+import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
 import {LAGRANGE_CODE_V1} from '../code/lagrange-code-v1.js';
 import {CompilationService, createDefaultCodeCompilerRegistry} from '../compilation/index.js';
@@ -17,8 +19,25 @@ const SYMMETRIC_SMALLTALK_SOURCE_V0 = 'symmetric-smalltalk/source-v0';
 const SYMMETRIC_SMALLTALK_SYNTAX_V0 = 'symmetric-smalltalk/syntax-v0';
 
 function compileSymmetricSmalltalkBlock(source, options = {}) {
-  const {syntax, program, representation} = compileSymmetricSmalltalkSemanticBlock(source, options);
+  const {syntax, program, representation} = compileSymmetricSmalltalkSemanticBlock(source, {
+    ...options,
+    // ADR 0056: `nil` is available to any Symmetric Smalltalk compilation, not only to methods.
+    // Offered, not declared — a program that never writes `nil` carries no binding for it.
+    intrinsics: {[NIL_CAPTURE]: NIL_BINDING_ID, ...(options.intrinsics ?? {})},
+  });
   return Object.freeze({syntax, semanticProgram: program, program, representation});
+}
+
+// Deterministic per Block, so an identical retry converges like every other write here.
+async function ensureNilEnvironment({images, imageId, id, parent}) {
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel; nil has no value there`);
+  const record = await ensureLexicalEnvironment(images, imageId, {
+    id: `${id}:nil-environment`,
+    ...(parent ? {parent} : {}),
+    bindings: {[NIL_BINDING_ID]: {name: 'nil', value: kernel.nil}},
+  });
+  return objectRef(imageId, record.id);
 }
 
 function resolveCompilation(images, compilation) {
@@ -88,10 +107,20 @@ async function installSymmetricSmalltalkBlock({
       options: {blockPrototypes},
     },
   );
+  // ADR 0056 decision 2a. Only a program that actually binds the nil intrinsic needs an
+  // environment, so a Block without `nil` keeps today's path exactly and writes no extra record.
+  //
+  // When one is needed it *parents* the caller's rather than copying its bindings: the caller's
+  // environment is a record with its own lifecycle, and a copy would be a second answer to the same
+  // question that could later drift from it. The chain walk is already the composition mechanism.
+  const blockEnvironment = semanticProgram.captures?.some(({id: captureId}) => captureId === NIL_BINDING_ID)
+    ? await ensureNilEnvironment({images, imageId, id, parent: environment})
+    : environment;
+
   const block = await ensureBlock(images, imageId, {
     id,
     code: objectRef(imageId, codeArtifact.id),
-    environment,
+    environment: blockEnvironment,
     metadata,
   });
   return Object.freeze({

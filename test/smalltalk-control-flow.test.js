@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CompilationService,
   booleanValue,
+  createDefaultCodeCompilerRegistry,
+  createDefaultCompilationGroupCompilerRegistry,
   createRuntime,
   defineMethods,
   findSmalltalkKernel,
@@ -598,3 +601,190 @@ test('a kernel without the control-flow protocol fails as message-not-understood
     );
   });
 });
+
+// --- ADR 0056: the Boolean protocol --------------------------------------------------------------
+
+// `not`, `and:` and `or:` are ordinary methods through the same bridge as the conditionals, derived
+// independently per lane from one semantic definition — so this is two derivations proven, not one
+// Block called twice.
+for (const lane of ['neutral', 'wasm']) {
+  test(`not, and: and or: answer correctly through the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      await seed(runtime, 'app', {lane});
+      const cases = [
+        ['true not', false], ['false not', true],
+        ['true and: [ true ]', true], ['true and: [ false ]', false],
+        ['false and: [ true ]', false], ['false and: [ false ]', false],
+        ['true or: [ true ]', true], ['true or: [ false ]', true],
+        ['false or: [ true ]', true], ['false or: [ false ]', false],
+      ];
+      for (const [expression, expected] of cases) {
+        assert.deepEqual(
+          await evaluate(runtime, 'app', `bool-${lane}-${expression}`, `[ ${expression} ]`),
+          booleanValue(expected),
+          expression,
+        );
+      }
+    });
+  });
+
+  // Laziness is the reason these are methods on True and False rather than eager operators, so it is
+  // proven by observation: the skipped Block must not run at all.
+  test(`and: and or: short-circuit through the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      const kernel = await seed(runtime, 'app', {lane});
+      await defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
+        classRef: kernel.integerClass, methods: [PLUS],
+      });
+
+      // The skipped arm would set the counter; the answer carries it out.
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `lazy-and-${lane}`,
+          '[ | ran | ran := 0. false and: [ ran := 1. true ]. ran ]'),
+        integerValue(0),
+        'false and: must not evaluate its Block',
+      );
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `lazy-or-${lane}`,
+          '[ | ran | ran := 0. true or: [ ran := 1. false ]. ran ]'),
+        integerValue(0),
+        'true or: must not evaluate its Block',
+      );
+      // And an evaluated Block runs exactly once, not zero or twice.
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `once-and-${lane}`,
+          '[ | ran | ran := 0. true and: [ ran := ran + 1. true ]. ran ]'),
+        integerValue(1),
+      );
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `once-or-${lane}`,
+          '[ | ran | ran := 0. false or: [ ran := ran + 1. true ]. ran ]'),
+        integerValue(1),
+      );
+    });
+  });
+}
+
+test('the Boolean protocol composes as a non-tail WASM effect', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app', {lane: 'wasm'});
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane: 'wasm',
+      classRef: kernel.integerClass, methods: [PLUS],
+    });
+    // The `and:` result feeds a further send, so it cannot compile as a tail call.
+    assert.deepEqual(
+      await evaluateThroughWasm(runtime, 'app', 'bool-nontail',
+        '[ ((true and: [ false ]) not) ifTrue: [ 7 ] ifFalse: [ 8 ] ]'),
+      integerValue(7),
+    );
+  });
+});
+
+test('and: answers its evaluated Block value as-is, with no re-boxing', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    // The Block answers a canonical boolean, and that exact Value comes back — no second
+    // conversion step, and no singleton substituted for it.
+    const answer = await evaluate(runtime, 'app', 'and-value', '[ true and: [ false ] ]');
+    assert.deepEqual(answer, booleanValue(false));
+    assert.equal(answer.kind, 'boolean', 'the answer must stay a canonical boolean Value');
+  });
+});
+
+test('not, and: and or: compile to ordinary sends, and the compiler knows no selector', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    const installed = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'bool-shape', source: '[ true and: [ false not ] ]',
+    });
+    const program = JSON.parse(
+      (await runtime.images.getCodeArtifact('app', installed.semanticArtifact.id)).content.value,
+    );
+    const json = JSON.stringify(program);
+    assert.match(json, /"message":\{"kind":"text","value":"and:"\}/);
+    assert.match(json, /"message":\{"kind":"text","value":"not"\}/);
+    assert.ok(!/"op":"(not|and|or)"/.test(json), 'lagrange-code must gain no boolean operation');
+
+    const {readFileSync} = await import('node:fs');
+    for (const path of ['src/language/symmetric-smalltalk-semantic.js', 'src/language/symmetric-smalltalk-parser.js']) {
+      const source = readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+      assert.ok(!/'and:'|'or:'|'not'/.test(source), `${path} must recognize no boolean selector`);
+    }
+  });
+});
+
+// The control-flow installer now publishes seven selectors per singleton rather than four, so it
+// joins the exhaustive sweeps rather than being trusted to be idempotent.
+const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
+
+function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
+  let writes = 0;
+  const wrapped = Object.create(Object.getPrototypeOf(images));
+  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
+    if (typeof images[key] !== 'function' || key === 'constructor') continue;
+    wrapped[key] = (...args) => images[key](...args);
+  }
+  for (const [key, value] of Object.entries(images)) {
+    wrapped[key] = typeof value === 'function' ? (...args) => images[key](...args) : value;
+  }
+  for (const method of WRITE_METHODS) {
+    wrapped[method] = async (imageId, input, options) => {
+      writes += 1;
+      const hit = writes === failAt;
+      if (hit && !commitThenThrow) throw new Error(`injected failure at write ${writes} (${input?.id})`);
+      const result = await images[method](imageId, input, options);
+      if (hit && commitThenThrow) throw new Error(`injected post-commit failure at write ${writes} (${input?.id})`);
+      return result;
+    };
+  }
+  return {images: wrapped, writeCount: () => writes};
+}
+
+const servicesFor = (images) => new CompilationService({
+  images,
+  compilers: createDefaultCodeCompilerRegistry(),
+  groupCompilers: createDefaultCompilationGroupCompilerRegistry(),
+});
+
+for (const lane of ['neutral', 'wasm']) {
+  test(`exhaustive-recovery: every write publishing the ${lane} Boolean protocol`, async () => {
+    const total = await withRuntime(async (runtime) => {
+      await runtime.images.createImage({id: 'count'});
+      await installSmalltalkKernel({images: runtime.images, imageId: 'count'});
+      const {images, writeCount} = faultingImages(runtime.images);
+      await installSmalltalkControlFlow({
+        images, compilation: servicesFor(images), imageId: 'count', lane,
+      });
+      return writeCount();
+    });
+    assert.ok(total > 10, `expected many writes across seven selectors and two singletons, saw ${total}`);
+
+    for (let failAt = 1; failAt <= total; failAt += 1) {
+      for (const commitThenThrow of [false, true]) {
+        await withRuntime(async (runtime) => {
+          await runtime.images.createImage({id: 'app'});
+          await installSmalltalkKernel({images: runtime.images, imageId: 'app'});
+          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+
+          await assert.rejects(
+            installSmalltalkControlFlow({images, compilation: servicesFor(images), imageId: 'app', lane}),
+            /injected/,
+            `${lane} write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
+          );
+
+          // Retried with clean services, then exercised: converging on records is not the claim.
+          await installSmalltalkControlFlow({
+            images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
+          });
+          assert.deepEqual(
+            await evaluate(runtime, 'app', `rec-${lane}-${failAt}-${commitThenThrow}`,
+              '[ (true and: [ false ]) not ]'),
+            booleanValue(true),
+          );
+        });
+      }
+    }
+  });
+}
