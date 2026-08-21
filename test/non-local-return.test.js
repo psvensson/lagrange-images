@@ -455,56 +455,64 @@ test('a caret is not absorbed into an adjacent binary selector', async () => {
   assert.ok(adjacent.includes('caret'));
 });
 
-// ADR 0055's library obligation: a search over a thousand elements, and early stopping that is
-// *observed* rather than inferred from the answer.
+// ADR 0055's library obligation: a search over a thousand elements, with early stopping *counted*
+// rather than inferred from the answer.
+//
+// Two things are deliberately cheap here, because the search is what is under test and not the
+// scaffolding. The Array is built in a single durable write rather than by a thousand `at:put:`
+// sends — the mock backend clones the whole database per transaction, so building it in Smalltalk
+// costs minutes. And the counter is a *temporary*, which is a transient cell: counting in an
+// instance variable would make every iteration a durable write and reintroduce the same cost.
 test('a search over a thousand elements stops early', async () => {
   await withRuntime(async (runtime) => {
-    const {kernel, options} = await seed(runtime, 'app');
-    const {installSmalltalkIndexedProtocol} = await import('../src/runtime.js');
+    const {options} = await seed(runtime, 'app');
+    const {installSmalltalkIndexedProtocol, defineClass} = await import('../src/runtime.js');
     await installSmalltalkIndexedProtocol(options);
 
-    // A counter on the receiver records how many elements the search actually examined, so stopping
-    // early is measured rather than assumed from `includes:` answering true.
-    const {defineClass} = await import('../src/runtime.js');
+    const items = objectRef('app', (await runtime.images.putObject('app', {
+      id: 'thousand-items',
+      shape: objectRef('app', 'smalltalk/array-instance-shape/v1'),
+      behavior: objectRef('app', 'smalltalk/class/Array'),
+      slots: {},
+      indexed: Array.from({length: 1000}, (unused, index) => integerValue(index + 1)),
+      metadata: {},
+    }, {expectedVersion: 0})).id);
+
     const shape = objectRef('app', (await runtime.images.putShape('app', {
-      id: 'scan-shape', slots: [{id: 'scan-seen', name: 'seen'}, {id: 'scan-items', name: 'items'}],
+      id: 'scan-shape', slots: [{id: 'scan-items', name: 'items'}],
     })).id);
     const scanner = await defineClass({images: runtime.images, imageId: 'app', name: 'Scanner', instanceShapeRef: shape});
     await defineMethodsFromSource({
       ...options,
       classRef: scanner.classRef,
       methods: [
-        {selector: 'fill:', source: `[ :c | | i |
-          items := c new: 1000. seen := 0. i := 1.
-          [ i <= 1000 ] whileTrue: [ items at: i put: i. i := i + 1 ].
-          self ]`},
-        {selector: 'seen', source: '[ seen ]'},
-        // Answers from inside the loop the moment it matches, counting every element examined.
-        {selector: 'find:', source: `[ :target | | i |
-          i := 1.
+        method('items:', '[ :a | items := a. self ]'),
+        // Answers how many elements it examined: the index on a hit, and 1000 on a miss. Counting
+        // and answering in one value is what makes early stopping observable rather than inferred.
+        method('scanFor:', `[ :target | | i seen |
+          i := 1. seen := 0.
           [ i <= 1000 ] whileTrue: [
             seen := seen + 1.
-            ((items at: i) = target) ifTrue: [ ^ i ] ifFalse: [ 1 ].
+            ((items at: i) = target) ifTrue: [ ^ seen ] ifFalse: [ 1 ].
             i := i + 1 ].
-          0 ]`},
+          seen ]`),
       ],
     });
 
-    const arrayClass = objectRef('app', 'smalltalk/class/Array');
     const scan = await evaluate(runtime, 'app', 'scan',
-      '[ :c :a | (c new) fill: a ]', [scanner.classRef, arrayClass]);
+      '[ :c :a | (c new) items: a ]', [scanner.classRef, items]);
 
     assert.deepEqual(
-      await evaluate(runtime, 'app', 'find-early', '[ :s | s find: 5 ]', [scan]),
+      await evaluate(runtime, 'app', 'scan-early', '[ :s | s scanFor: 5 ]', [scan]),
       integerValue(5),
-      'the search answers from inside its loop',
+      'a hit at index 5 must examine exactly five of a thousand elements',
     );
+    // And the loop really can traverse the whole thousand, so stopping at 5 is early stopping and
+    // not a bound the search could never have exceeded.
     assert.deepEqual(
-      await evaluate(runtime, 'app', 'seen-early', '[ :s | s seen ]', [scan]),
-      integerValue(5),
-      'and examined only five of a thousand elements — early stopping, observed',
+      await evaluate(runtime, 'app', 'scan-miss', '[ :s | s scanFor: 4321 ]', [scan]),
+      integerValue(1000),
     );
-    void kernel;
   });
 });
 
