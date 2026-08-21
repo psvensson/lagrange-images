@@ -12,6 +12,11 @@ import {
 
 const MAX_ACTIVATION_DEPTH = 256;
 
+// ADR 0054. Authority captured at `on:do:`/`ensure:` establishment, reachable only through the
+// opaque token handed back — so a primitive can carry it without holding it, and nothing that
+// crosses the primitive boundary is a capability (ADR 0037).
+const CAPTURED_AUTHORITY = new WeakMap();
+
 function normalizeObjectRef(value, label) {
   const normalized = canonicalizeValue(value);
   if (!isObjectRef(normalized)) throw new TypeError(`${label} must be an unpinned object ref`);
@@ -309,24 +314,36 @@ class ActivationExecutor {
         // rights without any capability crossing the primitive boundary (ADR 0037).
         conditions: Object.freeze({
           runtime: conditions,
-          // Invoking a Block rather than dispatching a selector, so this stays language-neutral and
-          // so ADR 0050 restores the Block's own creation frame — which is what gives a handler its
+          // Captures the authority in force *here*, and nothing else. An opaque handle rather than
+          // the context itself, so a primitive can carry it to a handler entry without ever holding
+          // a capability (ADR 0037).
+          captureAuthority: whileActive('captureAuthority', () => {
+            const token = Object.freeze({});
+            CAPTURED_AUTHORITY.set(token, authority);
+            return token;
+          }),
+          // Invoked from whichever frame is *running* the Block, not from the frame that captured
+          // the token. Depth is therefore the depth at the signal point — a handler on a deep
+          // signalling stack must not be measured from where `on:do:` was written — and the
+          // dispatch image is the Block's own, which is the ordinary rule for any Block and is what
+          // keeps a cross-image handler using its own kernel rather than the establisher's.
+          //
+          // Invoking a Block rather than dispatching a selector keeps this language-neutral, and
+          // lets ADR 0050 restore the Block's creation frame, which is what gives a handler its
           // establisher's `self` for free.
-          establishInvoker: whileActive('establishInvoker', () => {
-            const capturedAuthority = authority;
-            return async (blockRef, args = []) => {
-              if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
-              const activation = await this.invocations.prepareActivation({
-                block: blockRef, arguments: args, images: view,
-              });
-              return await this.execute(activation, {
-                depth: depth + 1,
-                authority: capturedAuthority,
-                cellArena: arena,
-                conditionRuntime: conditions,
-                dispatchImage: activeDispatchImage,
-              });
-            };
+          invoke: whileActive('invoke', async (token, blockRef, args = []) => {
+            if (!CAPTURED_AUTHORITY.has(token)) throw new TypeError('unknown captured authority token');
+            if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
+            const activation = await this.invocations.prepareActivation({
+              block: blockRef, arguments: args, images: view,
+            });
+            return await this.execute(activation, {
+              depth: depth + 1,
+              authority: CAPTURED_AUTHORITY.get(token),
+              cellArena: arena,
+              conditionRuntime: conditions,
+              dispatchImage: normalizeObjectRef(blockRef, 'condition block').imageId,
+            });
           }),
         }),
         // ADR 0052 decision 7a. The boundary that creates durable reachability calls this before

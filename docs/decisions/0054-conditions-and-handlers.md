@@ -318,7 +318,10 @@ debugging goal without suppressing anything.
 now      the collection refusals ADR 0053 could only spell as message-not-understood:
          index out of range, empty collection
          division by zero, indexed bounds, dictionary key absent
-         — existing host errors gain a Smalltalk-visible condition class
+         — existing host errors gain a Smalltalk-visible condition class, raised by the
+         primitive as an ordinary send so the handler search, transfer protocol and
+         resumption are the same ones Smalltalk code gets. An image without the condition
+         protocol keeps the original host error, so nothing acquires a dependency on it.
 
 not yet  message-not-understood as a *signalable* condition, i.e. `doesNotUnderstand:`.
          That is a metaobject-protocol decision, not a condition-system one: it lets any

@@ -4,9 +4,11 @@ import {ensureObject, ensureShape, findSmalltalkKernel, isLocalRef} from './smal
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
   SMALLTALK_PRIMITIVE,
+  parsePrimitiveCode,
   primitiveCodeContent,
 } from './smalltalk-primitives.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
+import {EXCEPTION_SHAPE_ID} from './smalltalk-condition-ids.js';
 
 // ADR 0054: conditions and handlers.
 //
@@ -62,9 +64,14 @@ const CONDITION_CLASSES = Object.freeze([
   {name: 'Error', superclass: 'Exception'},
   {name: 'IndexOutOfRange', superclass: 'Error'},
   {name: 'EmptyCollection', superclass: 'Error'},
+  // ADR 0054 decision 8's "now" set: the existing host errors that gain a Smalltalk-visible class.
+  {name: 'ZeroDivide', superclass: 'Error'},
+  {name: 'IndexBounds', superclass: 'Error'},
+  {name: 'KeyNotFound', superclass: 'Error'},
 ]);
 
-const EXCEPTION_SHAPE_ID = 'smalltalk/exception-instance-shape/v1';
+
+
 
 class SmalltalkConditionProtocolError extends TypeError {
   constructor(imageId, detail) {
@@ -236,12 +243,27 @@ async function findSmalltalkBlockUnwindProtocol({images, imageId} = {}) {
       throw new SmalltalkConditionProtocolError(imageId, `slot ${slot.name} must be an unpinned local ref`);
     }
     const block = await images.getBlock(value.imageId, value.objectId);
-    const code = block?.code && await images.getCodeArtifact(block.code.imageId, block.code.objectId);
-    if (!code || code.representation !== SMALLTALK_KERNEL_PRIMITIVE_V1) {
+    if (!block) throw new SmalltalkConditionProtocolError(imageId, `slot ${slot.name} does not reference a Block`);
+    const code = block.code && await images.getCodeArtifact(block.code.imageId, block.code.objectId);
+    if (!code) {
+      throw new SmalltalkConditionProtocolError(imageId, `slot ${slot.name} references a Block with no code artifact`);
+    }
+    if (code.representation !== SMALLTALK_KERNEL_PRIMITIVE_V1) {
       throw new SmalltalkConditionProtocolError(imageId, `slot ${slot.name} does not reference a kernel primitive`);
     }
-    if (JSON.parse(code.content.value).primitive !== slot.primitive) {
-      throw new SmalltalkConditionProtocolError(imageId, `slot ${slot.name} references the wrong primitive`);
+    // The same strict contract ADR 0051 uses, not a private JSON read: this object routes dispatch,
+    // so a malformed declaration must be refused by the parser that owns that format rather than
+    // by whatever a local `JSON.parse` happens to tolerate.
+    let declared;
+    try {
+      declared = parsePrimitiveCode(code);
+    } catch (error) {
+      throw new SmalltalkConditionProtocolError(imageId, `slot ${slot.name} references an unreadable primitive`, {cause: error});
+    }
+    if (declared !== slot.primitive) {
+      throw new SmalltalkConditionProtocolError(
+        imageId, `slot ${slot.name} references the ${declared} primitive, not ${slot.primitive}`,
+      );
     }
     refs[slot.name] = value;
   }

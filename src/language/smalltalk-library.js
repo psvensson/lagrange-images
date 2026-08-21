@@ -218,9 +218,22 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
       {id: 'ordered-collection-tally', name: 'tally'},
     ],
   });
-  const conditions = await findSmalltalkBlockUnwindProtocol({images, imageId});
-  if (!conditions) {
+  // The unwind protocol object is published *before* the condition classes and their methods, so
+  // checking only for it would pass on a half-installed protocol with `Exception >> signal` still
+  // missing — the same partial-install hazard the Integer check already closes. Checked as an
+  // installed method on a class this library actually signals.
+  if (!await findSmalltalkBlockUnwindProtocol({images, imageId})) {
     throw new TypeError(`image ${imageId} has no Smalltalk condition protocol; install it first`);
+  }
+  const exceptionClass = objectRef(imageId, 'smalltalk/class/Exception');
+  if (!await images.getObject(imageId, exceptionClass.objectId)
+    || !await methodBlockRef({images, imageId, classRef: exceptionClass, selector: 'signal'})) {
+    throw new TypeError(`image ${imageId} has no Exception signal method; install the condition protocol first`);
+  }
+  for (const name of ['IndexOutOfRange', 'EmptyCollection']) {
+    if (!await images.getObject(imageId, `smalltalk/class/${name}`)) {
+      throw new TypeError(`image ${imageId} has no ${name} class; install the condition protocol first`);
+    }
   }
   const arrayClassRef = objectRef(imageId, 'smalltalk/class/Array');
   if (!await images.getObject(imageId, arrayClassRef.objectId)) {

@@ -42,18 +42,19 @@ class ConditionRuntime {
   #occurrences = [];
   #nextId = 0;
 
-  // `invoke` is supplied by the executor and closes over the authority in force *here*, at
-  // establishment. Primitives never see an authority context — they hand back a callable and the
-  // executor keeps the capability side private (ADR 0037).
-  enterHandler({conditionClass, block, invoke}) {
+  // `authorityToken` is an opaque handle to the authority in force at establishment. The runtime
+  // carries it and never reads it; only the executor can resolve it (ADR 0037). Deliberately *not*
+  // a bound invoker: binding one would freeze the establishment frame's depth and dispatch image
+  // too, and a handler must run at the signal point's depth and in its own Block's image.
+  enterHandler({conditionClass, block, authorityToken}) {
     const scopeId = (this.#nextId += 1);
-    this.#scopes.push({scopeId, kind: 'handler', conditionClass, block, invoke, active: true});
+    this.#scopes.push({scopeId, kind: 'handler', conditionClass, block, authorityToken, active: true});
     return scopeId;
   }
 
-  enterProtection({kind, block, invoke}) {
+  enterProtection({kind, block, authorityToken}) {
     const scopeId = (this.#nextId += 1);
-    this.#scopes.push({scopeId, kind, block, invoke, active: true});
+    this.#scopes.push({scopeId, kind, block, authorityToken, active: true});
     return scopeId;
   }
 

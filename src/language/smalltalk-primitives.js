@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {assertBlockApplicationReceiver} from '../execution/block-application.js';
 import {SHAPE_INDEXED, shapeIndexedKind} from '../object/model.js';
+import {EXCEPTION_SHAPE_ID, HOST_CONDITION_CLASS} from './smalltalk-condition-ids.js';
 import {
   ConditionTransfer,
   SmalltalkNoActiveOccurrenceError,
@@ -399,19 +400,49 @@ async function indexedSize({images, primitiveImage, value}) {
   return integerValue(record.indexed.length);
 }
 
-async function indexedAt({images, primitiveImage, value, indexValue}) {
+// ADR 0054 decision 8. `zeroBasedIndex` stays synchronous and keeps throwing — it is used where
+// there is no execution context — so the signalling wrapper lives at the two sites that have one.
+async function boundedIndex({images, primitiveImage, context, newObjectId, indexValue, length, primitive}) {
+  try {
+    return {index: zeroBasedIndex(indexValue, length, primitive)};
+  } catch (error) {
+    if (!(error instanceof SmalltalkIndexedBoundsError)) throw error;
+    return {
+      resumed: await signalHostCondition({
+        images,
+        primitiveImage,
+        context,
+        classId: HOST_CONDITION_CLASS.indexBounds,
+        hostError: error,
+        newObjectId,
+      }),
+    };
+  }
+}
+
+async function indexedAt({images, primitiveImage, value, indexValue, context, newObjectId}) {
   const record = await loadIndexedObject({
     images, primitiveImage, value, primitive: SMALLTALK_PRIMITIVE.INDEXED_AT,
   });
-  const index = zeroBasedIndex(indexValue, record.indexed.length, SMALLTALK_PRIMITIVE.INDEXED_AT);
-  return record.indexed[index];
+  const bounded = await boundedIndex({
+    images, primitiveImage, context, newObjectId, indexValue,
+    length: record.indexed.length, primitive: SMALLTALK_PRIMITIVE.INDEXED_AT,
+  });
+  // A handler that resumed answers the access itself.
+  if (Object.hasOwn(bounded, 'resumed')) return bounded.resumed;
+  return record.indexed[bounded.index];
 }
 
-async function indexedAtPut({images, primitiveImage, value, indexValue, newValue, context}) {
+async function indexedAtPut({images, primitiveImage, value, indexValue, newValue, context, newObjectId}) {
   const record = await loadIndexedObject({
     images, primitiveImage, value, primitive: SMALLTALK_PRIMITIVE.INDEXED_AT_PUT,
   });
-  const index = zeroBasedIndex(indexValue, record.indexed.length, SMALLTALK_PRIMITIVE.INDEXED_AT_PUT);
+  const bounded = await boundedIndex({
+    images, primitiveImage, context, newObjectId, indexValue,
+    length: record.indexed.length, primitive: SMALLTALK_PRIMITIVE.INDEXED_AT_PUT,
+  });
+  if (Object.hasOwn(bounded, 'resumed')) return bounded.resumed;
+  const index = bounded.index;
   const storedValue = canonicalizeValue(await promoted(context, newValue));
   const indexed = [...record.indexed];
   indexed[index] = storedValue;
@@ -640,12 +671,23 @@ async function dictionaryIncludesKey({images, primitiveImage, value, keyValue, s
   return booleanValue(found !== null);
 }
 
-async function dictionaryAt({images, primitiveImage, value, keyValue, sendMessage}) {
+async function dictionaryAt({images, primitiveImage, value, keyValue, sendMessage, context, newObjectId}) {
   const {found, table} = await dictionaryLookup({
     images, primitiveImage, value, keyValue, sendMessage,
     primitive: SMALLTALK_PRIMITIVE.DICTIONARY_AT,
   });
-  if (found === null) throw new SmalltalkDictionaryKeyNotFoundError(value);
+  // ADR 0054 decision 8: a missing key is a catchable `KeyNotFound`, so `at:ifAbsent:` over a
+  // Dictionary is writable in Smalltalk for the same reason it is over an OrderedCollection.
+  if (found === null) {
+    return await signalHostCondition({
+      images,
+      primitiveImage,
+      context,
+      classId: HOST_CONDITION_CLASS.keyNotFound,
+      hostError: new SmalltalkDictionaryKeyNotFoundError(value),
+      newObjectId,
+    });
+  }
   return table.buckets[found].value;
 }
 
@@ -873,8 +915,18 @@ function floorDivide(a, b) {
   return (a % b !== 0n) && ((a < 0n) !== (b < 0n)) ? quotient - 1n : quotient;
 }
 
-function integerOperation(primitive, left, right) {
+async function integerOperation(primitive, left, right, {images, primitiveImage, context, newObjectId}) {
   const [a, b] = integerOperands(primitive, left, right);
+  // ADR 0054 decision 8: divide-by-zero is a catchable `ZeroDivide`, and a handler that resumes
+  // answers the division. Absent the condition protocol it stays the host error it was.
+  const divideByZero = async () => await signalHostCondition({
+    images,
+    primitiveImage,
+    context,
+    classId: HOST_CONDITION_CLASS.zeroDivide,
+    hostError: new SmalltalkDivideByZeroError(primitive),
+    newObjectId,
+  });
   switch (primitive) {
     case SMALLTALK_PRIMITIVE.INTEGER_LESS_THAN:
       return booleanValue(a < b);
@@ -883,15 +935,45 @@ function integerOperation(primitive, left, right) {
     case SMALLTALK_PRIMITIVE.INTEGER_MULTIPLY:
       return integerValue(a * b);
     case SMALLTALK_PRIMITIVE.INTEGER_FLOOR_DIVIDE:
-      if (b === 0n) throw new SmalltalkDivideByZeroError(primitive);
+      if (b === 0n) return await divideByZero();
       return integerValue(floorDivide(a, b));
     default:
       // r = a - q*b, so the remainder takes the divisor's sign: 0 <= r < b for b > 0, and
       // b < r <= 0 for b < 0. That range — not the reconstruction identity, which a truncating
       // implementation also satisfies — is what makes `\\` usable for hashing and indexing.
-      if (b === 0n) throw new SmalltalkDivideByZeroError(primitive);
+      if (b === 0n) return await divideByZero();
       return integerValue(a - floorDivide(a, b) * b);
   }
+}
+
+// ADR 0054 decision 8. A host failure that has a condition class becomes an ordinary Smalltalk
+// signal, so it is catchable — and resumable, since a handler's `resume:` answers the operation.
+//
+// Absent the condition protocol, the host error is thrown as before. That is what keeps an image
+// without ADR 0054 working unchanged rather than acquiring a dependency it never installed.
+async function signalHostCondition({images, primitiveImage, context, classId, hostError, newObjectId}) {
+  const facade = context?.conditions;
+  const sendMessage = context?.sendMessage;
+  if (!facade || typeof sendMessage !== 'function') throw hostError;
+  const classRecord = await images.getObject(primitiveImage, classId);
+  if (!classRecord) throw hostError;
+
+  const instance = await images.putObject(primitiveImage, {
+    id: newObjectId(),
+    shape: objectRef(primitiveImage, EXCEPTION_SHAPE_ID),
+    behavior: objectRef(primitiveImage, classId),
+    slots: {'exception-message-text': textValue(hostError.message)},
+    metadata: {},
+  }, {expectedVersion: 0});
+
+  // An ordinary send, so the handler search, the transfer protocol and resumption are exactly the
+  // ones Smalltalk code gets — this is not a second signalling path.
+  return await sendMessage({
+    languageId: SYMMETRIC_SMALLTALK_ID,
+    receiver: objectRef(primitiveImage, instance.id),
+    message: textValue('signal'),
+    arguments: [],
+  });
 }
 
 // ADR 0054. The unwind operations and the transfer protocol.
@@ -900,7 +982,7 @@ function integerOperation(primitive, left, right) {
 // runtime, run the protected Block, and leave the scope on the way out however that happens.
 function requireConditions(context, primitive) {
   const facade = context?.conditions;
-  if (!facade || typeof facade.establishInvoker !== 'function') {
+  if (!facade || typeof facade.captureAuthority !== 'function' || typeof facade.invoke !== 'function') {
     throw new TypeError(`Symmetric Smalltalk ${primitive} primitive requires a condition runtime`);
   }
   return facade;
@@ -941,13 +1023,13 @@ async function blockOnDo({images, activation, context, primitive}) {
   const facade = requireConditions(context, primitive);
   // Captured here, at establishment: the handler runs with the rights in force where `on:do:` was
   // written, never with the signaller's.
-  const invoke = facade.establishInvoker();
+  const authorityToken = facade.captureAuthority();
 
   const scopeId = facade.runtime.enterHandler({
-    conditionClass: canonicalizeValue(conditionClass), block: handler, invoke,
+    conditionClass: canonicalizeValue(conditionClass), block: handler, authorityToken,
   });
   try {
-    return await invoke(protectedBlock, []);
+    return await facade.invoke(authorityToken, protectedBlock, []);
   } catch (error) {
     // `return:` — including a handler's ordinary value, which means `return:` implicitly — lands
     // here, and only for *this* scope. Anything aimed at an outer scope keeps travelling.
@@ -968,13 +1050,13 @@ async function blockEnsure({images, activation, context, primitive, onlyWhenCurt
     images, value: activation.arguments[0], primitive, role: 'cleanup block',
   });
   const facade = requireConditions(context, primitive);
-  const invoke = facade.establishInvoker();
-  const scopeId = facade.runtime.enterProtection({kind: primitive, block: cleanupBlock, invoke});
+  const authorityToken = facade.captureAuthority();
+  const scopeId = facade.runtime.enterProtection({kind: primitive, block: cleanupBlock, authorityToken});
 
   let result = null;
   let primary = null;
   try {
-    result = await invoke(protectedBlock, []);
+    result = await facade.invoke(authorityToken, protectedBlock, []);
   } catch (error) {
     primary = error;
   } finally {
@@ -988,7 +1070,7 @@ async function blockEnsure({images, activation, context, primitive, onlyWhenCurt
     try {
       // The cleanup Block's own value is discarded — cleanup runs for its effect, and letting it
       // replace the answer would make adding a logging line change what the expression evaluates to.
-      await invoke(cleanupBlock, []);
+      await facade.invoke(authorityToken, cleanupBlock, []);
     } catch (secondary) {
       // A cleanup failure is a real failure and stays catchable. It becomes the failure travelling
       // outward, retaining the one that was already unwinding so neither is lost.
@@ -1021,7 +1103,10 @@ async function conditionSignal({images, primitiveImage, activation, context, pri
   try {
     // Disabled while it runs, so a re-signal from inside the handler delegates to an *outer*
     // handler rather than recursing into itself.
-    const answer = await facade.runtime.withDisabled(scope, async () => await scope.invoke(scope.block, [condition]));
+    const answer = await facade.runtime.withDisabled(
+      scope,
+      async () => await facade.invoke(scope.authorityToken, scope.block, [condition]),
+    );
     // A handler's ordinary value means `return:`.
     throw new ConditionTransfer('return', scope.scopeId, canonicalizeValue(answer));
   } catch (error) {
@@ -1195,7 +1280,9 @@ function createSmalltalkKernelPrimitiveV1Executor({
         });
       }
       if (Object.hasOwn(SMALLTALK_INTEGER_ARITY, primitive)) {
-        return integerOperation(primitive, value, second);
+        return await integerOperation(primitive, value, second, {
+          images, primitiveImage, context, newObjectId,
+        });
       }
       if (isLoop) {
         return await blockWhile({
@@ -1220,9 +1307,11 @@ function createSmalltalkKernelPrimitiveV1Executor({
         case SMALLTALK_PRIMITIVE.INDEXED_SIZE:
           return await indexedSize({images, primitiveImage, value});
         case SMALLTALK_PRIMITIVE.INDEXED_AT:
-          return await indexedAt({images, primitiveImage, value, indexValue: second});
+          return await indexedAt({images, primitiveImage, value, indexValue: second, context, newObjectId});
         case SMALLTALK_PRIMITIVE.INDEXED_AT_PUT:
-          return await indexedAtPut({images, primitiveImage, value, indexValue: second, newValue: third, context});
+          return await indexedAtPut({
+            images, primitiveImage, value, indexValue: second, newValue: third, context, newObjectId,
+          });
         case SMALLTALK_PRIMITIVE.BUILT_IN_EQUALS:
           return await builtInEqualsPrimitive({images, primitiveImage, left: value, right: second});
         case SMALLTALK_PRIMITIVE.BUILT_IN_HASH:
@@ -1248,6 +1337,7 @@ function createSmalltalkKernelPrimitiveV1Executor({
         case SMALLTALK_PRIMITIVE.DICTIONARY_AT:
           return await dictionaryAt({
             images, primitiveImage, value, keyValue: second, sendMessage: requireSendMessage(context, primitive),
+            context, newObjectId,
           });
         case SMALLTALK_PRIMITIVE.DICTIONARY_AT_PUT:
           return await dictionaryAtPut({
