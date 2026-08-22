@@ -174,6 +174,12 @@ not in the artifact    provenance is compiler metadata; `lagrange-code` stays la
                        gains no notion of a global
 ```
 
+The namespace has finished its job once compilation resolves a name to identity. A standalone
+compiler environment therefore takes the binding's display name from the semantic capture descriptor,
+not by re-enumerating the current namespace. Adding a second alias for the same binding after a Block
+was compiled cannot change that Block's durable environment or make an identical fixed-id reinstall
+conflict.
+
 ### 4. Resolution order
 
 ```text
@@ -220,11 +226,12 @@ missing     installing an artifact whose binding ids do not exist in the target 
             the worst available outcome
 ```
 
-Each of these is one mapping write whose acknowledgement can be lost, so each must converge on an
-identical retry. Convergence is decided by *identity*, not by the destination being occupied: a
-rename states the binding it believes it is moving, and a retry succeeds only when that binding is
-where the rename was putting it. Without the expected identity, renaming a name that never existed
-would report success the moment anything happened to occupy the destination.
+Management mutations can lose their acknowledgement, so identical retries must converge without
+silently acting on a different identity. `renameGlobal` and `removeGlobal` therefore both require the
+binding id the caller believes it is changing. A rename retry succeeds only when that same binding is
+already at the destination; a removal retry is a no-op only while the name remains absent. If the
+spelling is later republished to another binding, either retry conflicts instead of accepting or
+deleting the replacement. Retry safety is one contract, not an optional stronger mode.
 
 Publication decides conflicts before it creates anything, so a rejected `publish` leaves no orphan
 binding behind; and the stored mapping is read back strictly in canonical order, because an order the
@@ -285,6 +292,8 @@ lifecycle
         ordinary source change what the global means
     renaming keeps the binding identity, and compiled code is unaffected
     removing a name leaves compiled code working and makes future compilation of that name fail
+    rename and remove require the binding identity; immediate lost-ack retries converge, while an
+        ABA replacement under the same spelling causes a conflict and is never touched
     class existence does not publish: a class installed without publication is unnameable
 
 artifacts and images
@@ -302,6 +311,8 @@ both lanes and durability
     neutral and WASM agree on reads, and on a rebinding observed after compilation
     a standalone Block referencing a global gets one environment holding the bindings it uses,
         parented to any caller-supplied environment, and none when it references no global
+    adding an alias for an already-resolved binding does not change a fixed-id Block's compiler
+        environment or prevent an identical reinstall from converging
     installation is exact-or-create and idempotent, and joins the exhaustive recovery sweeps
 ```
 
@@ -326,6 +337,10 @@ a GlobalBinding ref identifies the binding; it does not grant authority to rebin
     necessarily holds that ref, so an unrestricted setter would make every reader a writer
 rebinding goes through the trusted namespace/language-management seam; `Global := value` is not
     part of ADR 0057, and if admitted must target the already-resolved binding identity
+rename and remove are identity-scoped management operations: both require the expected binding id,
+    so a retry never acts on an ABA replacement that merely reused the spelling
+namespace aliases participate only in compile-time lookup; once a global capture is resolved, its
+    durable environment metadata comes from the semantic capture, not from later namespace aliases
 an unknown global is a compile-time failure, not a runtime lookup
 globals resolve last, after instance variables; reserved pseudo-literals never reach resolution
 the artifact carries binding ids and no image-specific ref; a missing identity fails loudly and is
