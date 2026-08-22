@@ -1,4 +1,3 @@
-import {objectRef} from '../value/index.js';
 import {defineMethods} from './smalltalk-class-builder.js';
 import {installSmalltalkAllocationProtocol} from './smalltalk-allocation.js';
 import {installSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
@@ -68,8 +67,14 @@ async function installSymmetricSmalltalkStandardImage({
 } = {}) {
   requiredText(imageId, 'image id');
   if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
-  if (!images || typeof images.getObject !== 'function') {
-    throw new TypeError('images service is required');
+  // Composition has stronger requirements than any one low-level installer, so validate them before
+  // publishing the first kernel record. A missing dependency is a caller error, not a recoverable
+  // partial standard-image installation.
+  if (!images || typeof images.getImage !== 'function' || typeof images.getObject !== 'function') {
+    throw new TypeError('images service with getImage/getObject is required');
+  }
+  if (!compilation || typeof compilation.compileArtifact !== 'function') {
+    throw new TypeError('compilation service with compileArtifact is required');
   }
 
   // The image lifecycle belongs to the caller. Refuse an absent image instead of silently creating
@@ -130,7 +135,7 @@ async function installSymmetricSmalltalkStandardImage({
       Dictionary: dictionary.classRef,
       Association: library.association,
       OrderedCollection: library.orderedCollection,
-      ...Object.fromEntries(CONDITION_CLASSES.map(({name}) => [name, objectRef(imageId, `smalltalk/class/${name}`)])),
+      ...Object.fromEntries(CONDITION_CLASSES.map(({name}) => [name, conditions[name]])),
     }),
     library,
   });
