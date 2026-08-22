@@ -147,14 +147,16 @@ test('binding identity is independent of the name and of the value', async () =>
     assert.deepEqual(await resolveGlobal({images: runtime.images, imageId: 'app', name: 'Thing'}), binding);
 
     // Renaming does not change identity either.
-    await renameGlobal({images: runtime.images, imageId: 'app', from: 'Thing', to: 'Widget'});
+    await renameGlobal({
+      images: runtime.images, imageId: 'app', from: 'Thing', to: 'Widget', bindingId: binding.objectId,
+    });
     assert.deepEqual(await resolveGlobal({images: runtime.images, imageId: 'app', name: 'Widget'}), binding);
     assert.equal(await resolveGlobal({images: runtime.images, imageId: 'app', name: 'Thing'}), null);
 
     // And the id was supplied, not derived: removing and republishing the same *spelling* with a
     // different id gives a different identity, which is what stops a name accidentally recovering
     // an old binding.
-    await removeGlobal({images: runtime.images, imageId: 'app', name: 'Widget'});
+    await removeGlobal({images: runtime.images, imageId: 'app', name: 'Widget', bindingId: binding.objectId});
     const second = await publishGlobal({
       images: runtime.images, imageId: 'app', name: 'Widget',
       bindingId: 'smalltalk/global-binding/thing-2', value: kernel.integerClass,
@@ -458,14 +460,14 @@ test('renaming keeps compiled code working; removal breaks only future compilati
     );
     assert.deepEqual(await read(), kernel.integerClass);
 
-    await renameGlobal({images: runtime.images, imageId: 'app', from: 'Movable', to: 'Renamed'});
+    await renameGlobal({images: runtime.images, imageId: 'app', from: 'Movable', to: 'Renamed', bindingId});
     assert.deepEqual(await read(), kernel.integerClass, 'compiled code never held the name');
     await assert.rejects(
       installSymmetricSmalltalkBlock({images: runtime.images, imageId: 'app', id: 'old-name', source: '[ Movable ]'}),
       /unbound Symmetric Smalltalk name: Movable/,
     );
 
-    await removeGlobal({images: runtime.images, imageId: 'app', name: 'Renamed'});
+    await removeGlobal({images: runtime.images, imageId: 'app', name: 'Renamed', bindingId});
     assert.deepEqual(await read(), kernel.integerClass,
       'removal withdraws a name, not an identity someone already holds');
     await assert.rejects(
@@ -505,16 +507,31 @@ test('publish, rebind, rename and remove are retry-safe', async () => {
     await rebindGlobal({images, imageId: 'app', bindingId, value: kernel.objectClass});
     assert.equal((await images.getObject('app', bindingId))._version, before, 'a no-op rebind must not write');
 
-    // A rename retried after a lost acknowledgement converges -- but only because the retry names the
-    // identity it was moving. Convergence is "the binding I moved is now at the destination", not
-    // "something is at the destination".
+    // A rename retried after a lost acknowledgement converges because identity is part of the one
+    // operation contract, never an optional stronger mode.
     await renameGlobal({images, imageId: 'app', from: 'Retry', to: 'Retried', bindingId});
     const again = await renameGlobal({images, imageId: 'app', from: 'Retry', to: 'Retried', bindingId});
     assert.deepEqual(again, first, 'the rename already landed; the retry converges');
 
-    // Removing an already-removed name is a no-op rather than a failure.
-    assert.equal(await removeGlobal({images, imageId: 'app', name: 'Retried'}), true);
-    assert.equal(await removeGlobal({images, imageId: 'app', name: 'Retried'}), false);
+    // Removing an already-removed name is a no-op rather than a failure, for the same identity.
+    assert.equal(await removeGlobal({images, imageId: 'app', name: 'Retried', bindingId}), true);
+    assert.equal(await removeGlobal({images, imageId: 'app', name: 'Retried', bindingId}), false);
+  });
+});
+
+test('rename and removal require the binding identity', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel} = await seed(runtime, 'app');
+    await publishGlobal({images: runtime.images, imageId: 'app', name: 'Exact', bindingId: 'b/exact', value: kernel.objectClass});
+
+    await assert.rejects(
+      renameGlobal({images: runtime.images, imageId: 'app', from: 'Exact', to: 'Elsewhere'}),
+      /global binding id must be non-empty text/,
+    );
+    await assert.rejects(
+      removeGlobal({images: runtime.images, imageId: 'app', name: 'Exact'}),
+      /global binding id must be non-empty text/,
+    );
   });
 });
 
@@ -530,15 +547,8 @@ test('rename convergence is decided by binding identity, not by the destination 
     // read that as "my rename already landed": nothing ever moved b/moved there.
     await assert.rejects(
       renameGlobal({images, imageId: 'app', from: 'NeverExisted', to: 'Other', bindingId: 'b/moved'}),
-      /is bound to b\/other, not the renamed binding/,
+      /is bound to b\/other, not b\/moved/,
       'an occupied destination is not evidence that this rename landed',
-    );
-
-    // Without an expected identity there is nothing to converge on, so an absent source stays an
-    // error even when the destination is occupied.
-    await assert.rejects(
-      renameGlobal({images, imageId: 'app', from: 'NeverExisted', to: 'Other'}),
-      /is bound to b\/other, not the renamed binding/,
     );
 
     // The source exists but holds a different binding than the caller expected: refuse rather than
@@ -555,6 +565,36 @@ test('rename convergence is decided by binding identity, not by the destination 
       moved,
     );
     assert.deepEqual(await resolveGlobal({images, imageId: 'app', name: 'Other'}), other, 'the bystander is untouched');
+  });
+});
+
+test('rename and removal retries reject an ABA replacement under the same name', async () => {
+  await withRuntime(async (runtime) => {
+    const {images} = runtime;
+    const {kernel} = await seed(runtime, 'app');
+
+    await publishGlobal({images, imageId: 'app', name: 'RenameA', bindingId: 'b/rename-x', value: kernel.objectClass});
+    await renameGlobal({images, imageId: 'app', from: 'RenameA', to: 'RenameB', bindingId: 'b/rename-x'});
+    await removeGlobal({images, imageId: 'app', name: 'RenameB', bindingId: 'b/rename-x'});
+    await publishGlobal({images, imageId: 'app', name: 'RenameB', bindingId: 'b/rename-y', value: kernel.integerClass});
+
+    await assert.rejects(
+      renameGlobal({images, imageId: 'app', from: 'RenameA', to: 'RenameB', bindingId: 'b/rename-x'}),
+      /is bound to b\/rename-y, not b\/rename-x/,
+      'a retry must not accept a different binding that appeared after the original rename',
+    );
+    assert.equal((await resolveGlobal({images, imageId: 'app', name: 'RenameB'})).objectId, 'b/rename-y');
+
+    await publishGlobal({images, imageId: 'app', name: 'RemoveA', bindingId: 'b/remove-x', value: kernel.objectClass});
+    await removeGlobal({images, imageId: 'app', name: 'RemoveA', bindingId: 'b/remove-x'});
+    await publishGlobal({images, imageId: 'app', name: 'RemoveA', bindingId: 'b/remove-y', value: kernel.integerClass});
+
+    await assert.rejects(
+      removeGlobal({images, imageId: 'app', name: 'RemoveA', bindingId: 'b/remove-x'}),
+      /is bound to b\/remove-y, not b\/remove-x/,
+      'a retry must not delete a different binding republished after the original removal',
+    );
+    assert.equal((await resolveGlobal({images, imageId: 'app', name: 'RemoveA'})).objectId, 'b/remove-y');
   });
 });
 
@@ -718,6 +758,29 @@ test('compiler-supplied environments hold exactly what the program uses', async 
   });
 });
 
+test('namespace aliases do not change an already-resolved compiler environment on retry', async () => {
+  await withRuntime(async (runtime) => {
+    const {kernel} = await seed(runtime, 'app');
+    const bindingId = 'b/alias-stable';
+    await publishGlobal({images: runtime.images, imageId: 'app', name: 'Alpha', bindingId, value: kernel.integerClass});
+
+    const options = {images: runtime.images, imageId: 'app', id: 'alias-stable', source: '[ Alpha ]'};
+    const first = await installSymmetricSmalltalkBlock(options);
+    const before = await runtime.images.getLexicalEnvironment('app', 'alias-stable:compiler-environment');
+    assert.equal(before.bindings[bindingId].name, 'Alpha');
+
+    // Alias publication changes what future source names may resolve, but it does not change the
+    // capture descriptor already produced by `[ Alpha ]`.
+    await publishGlobal({images: runtime.images, imageId: 'app', name: 'Zulu', bindingId, value: kernel.objectClass});
+    const second = await installSymmetricSmalltalkBlock(options);
+    const after = await runtime.images.getLexicalEnvironment('app', 'alias-stable:compiler-environment');
+
+    assert.equal(after._version, before._version, 'retry writes no different environment after an alias is added');
+    assert.equal(after.bindings[bindingId].name, 'Alpha', 'the semantic capture spelling remains the durable name');
+    assert.deepEqual(second.block, first.block, 'the fixed-id Block converges unchanged');
+  });
+});
+
 test('a compiler-supplied environment parents a caller environment without mutating it', async () => {
   await withRuntime(async (runtime) => {
     const {kernel} = await seed(runtime, 'app');
@@ -867,11 +930,11 @@ test('rename, rebind and removal converge after a lost acknowledgement', async (
     );
 
     await assert.rejects(
-      removeGlobal({images: lose(), imageId: 'app', name: 'Renamed'}),
+      removeGlobal({images: lose(), imageId: 'app', name: 'Renamed', bindingId}),
       /injected post-commit/,
     );
     assert.equal(
-      await removeGlobal({images: runtime.images, imageId: 'app', name: 'Renamed'}),
+      await removeGlobal({images: runtime.images, imageId: 'app', name: 'Renamed', bindingId}),
       false,
       'the name is already gone; the retry reports "nothing to do", not a failure',
     );
