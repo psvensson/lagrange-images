@@ -289,30 +289,29 @@ async function rebindGlobal({images, imageId, bindingId, value}) {
   return objectRef(imageId, bindingId);
 }
 
-// The same binding under a new name: identity survives, so compiled code is unaffected.
-// `bindingId` is the identity the caller believes it is moving. Making it part of the operation is
-// what lets a retry be *converged* rather than merely optimistic: without it, a rename whose source
-// never existed would report success as soon as the destination happened to be bound to anything at
-// all — `rename('NeverExisted', 'Object')` would answer the Object binding.
-async function renameGlobal({images, imageId, from, to, bindingId = null}) {
+// The same binding under a new name: identity survives, so compiled code is unaffected. The caller
+// must name the identity it believes it is moving. That makes retry convergence part of the one API
+// contract rather than an optional stronger mode: after a lost acknowledgement, the retry succeeds
+// only when that same identity is already at the destination.
+async function renameGlobal({images, imageId, from, to, bindingId}) {
   requiredText(from, 'global name');
   requiredText(to, 'global name');
+  requiredText(bindingId, 'global binding id');
   const namespace = await requireNamespace({images, imageId});
   const binding = namespace.entries.get(from);
   const target = namespace.entries.get(to);
 
   if (!binding) {
-    // Converged only when the destination holds the identity this rename was moving.
-    if (target && bindingId !== null && target.objectId === bindingId) return target;
+    if (target && target.objectId === bindingId) return target;
     if (target) {
-      throw new SmalltalkGlobalConflictError(to, `is bound to ${target.objectId}, not the renamed binding`);
+      throw new SmalltalkGlobalConflictError(to, `is bound to ${target.objectId}, not ${bindingId}`);
     }
     throw new SmalltalkGlobalConflictError(from, 'is not published');
   }
-  if (bindingId !== null && binding.objectId !== bindingId) {
+  if (binding.objectId !== bindingId) {
     throw new SmalltalkGlobalConflictError(from, `is bound to ${binding.objectId}, not ${bindingId}`);
   }
-  if (target && target.objectId !== binding.objectId) {
+  if (target && target.objectId !== bindingId) {
     throw new SmalltalkGlobalConflictError(to, `is already bound to ${target.objectId}`);
   }
   // The desired mapping already exists to the expected binding: an ensure-style no-op.
@@ -324,12 +323,19 @@ async function renameGlobal({images, imageId, from, to, bindingId = null}) {
   return binding;
 }
 
-// Withdraws a *name*. The binding object stays, so code already holding it keeps working — removing
-// a name is not removing an identity someone already has (ADR 0057 decision 6).
-async function removeGlobal({images, imageId, name}) {
+// Withdraws a *name*, but only for the identity the caller names. The binding object stays, so code
+// already holding it keeps working. Identity is required for the same ABA reason as rename: if a
+// removal commits, its acknowledgement is lost, and another actor republishes the same spelling to a
+// different binding, the original retry must conflict rather than delete the new binding.
+async function removeGlobal({images, imageId, name, bindingId}) {
   requiredText(name, 'global name');
+  requiredText(bindingId, 'global binding id');
   const namespace = await requireNamespace({images, imageId});
-  if (!namespace.entries.has(name)) return false;
+  const mapped = namespace.entries.get(name);
+  if (!mapped) return false;
+  if (mapped.objectId !== bindingId) {
+    throw new SmalltalkGlobalConflictError(name, `is bound to ${mapped.objectId}, not ${bindingId}`);
+  }
   const entries = new Map(namespace.entries);
   entries.delete(name);
   await writeMapping({images, imageId, namespace, entries});
