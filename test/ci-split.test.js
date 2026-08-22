@@ -5,14 +5,20 @@ import {readFileSync, readdirSync} from 'node:fs';
 // The CI split is a naming convention, and a convention with no check is a convention that decays.
 //
 // `node-test` runs everything *except* names carrying the prefix, and `recovery-test` runs exactly
-// those. So a new exhaustive sweep that forgets the prefix does not fail — it quietly joins the
-// general gate and pushes it toward its ten-minute timeout, which is the failure this guards.
+// those. Most prefixed tests are exhaustive write sweeps. The standard-image installer also has one
+// deliberately representative orchestration-recovery test: replaying whole images is expensive,
+// while the component installers already own exhaustive write-by-write coverage.
 const PREFIX = 'exhaustive-recovery:';
 const TEST_DIR = new URL('./', import.meta.url);
 
 function testNames(source) {
   // Both spellings the suite uses: a plain string and a template literal.
   return [...source.matchAll(/\btest\(\s*(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g)].map((match) => match[2]);
+}
+
+function belongsInRecoveryJob(name) {
+  if (/every write (publishing|installing)/.test(name)) return true;
+  return /representative .* standard-image stage failures replay cleanly/.test(name);
 }
 
 test('every exhaustive publication-recovery sweep carries the CI prefix', () => {
@@ -41,9 +47,9 @@ test('the prefix is only used by tests the recovery job should run', () => {
   }
   // Cheap tests wearing the prefix would be excluded from the ordinary gate for no reason, which is
   // the opposite mistake and just as quiet.
-  assert.ok(prefixed.length >= 6, `expected the known sweeps to be prefixed, saw ${prefixed.length}`);
+  assert.ok(prefixed.length >= 6, `expected the known recovery tests to be prefixed, saw ${prefixed.length}`);
   for (const name of prefixed) {
-    assert.match(name, /every write (publishing|installing)/, `${name} is prefixed but is not a sweep`);
+    assert.ok(belongsInRecoveryJob(name), `${name} is prefixed but does not belong in the recovery job`);
   }
 });
 
