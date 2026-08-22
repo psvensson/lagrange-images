@@ -1,5 +1,6 @@
 import {findSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
 import {findSmalltalkBlockUnwindProtocol} from './smalltalk-conditions.js';
+import {resolveGlobal} from './smalltalk-globals.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
@@ -48,22 +49,12 @@ const ASSOCIATION_METHODS = [
   {selector: 'hash', source: '[ key hash ]'},
 ];
 
-// Source has no global namespace, so a class a method needs is an explicit captured ref, declared
-// per method that uses it. That is a language gap rather than a collection concern: `Array` is not a
-// name the compiler could resolve. A declaration is a binding whether or not the source mentions it,
-// so only the methods that need the class declare it.
-const ARRAY_CLASS_CAPTURE = Object.freeze({name: 'ArrayClass', id: 'smalltalk/library/array-class'});
 
-// ADR 0054. A refusal is a signal now, not a selector nobody implements, so the collection needs the
-// condition classes the same way it needs `Array` — as explicit captured refs.
-const INDEX_ERROR_CAPTURE = Object.freeze({name: 'IndexError', id: 'smalltalk/library/index-error'});
-const EMPTY_ERROR_CAPTURE = Object.freeze({name: 'EmptyError', id: 'smalltalk/library/empty-error'});
 
 const ORDERED_COLLECTION_METHODS = [
   {
     selector: 'initialize',
-    source: '[ contents := ArrayClass new: 4. tally := 0. self ]',
-    captures: [ARRAY_CLASS_CAPTURE],
+    source: '[ contents := Array new: 4. tally := 0. self ]',
   },
   {selector: 'size', source: '[ tally ]'},
   {selector: 'isEmpty', source: '[ tally = 0 ]'},
@@ -73,10 +64,9 @@ const ORDERED_COLLECTION_METHODS = [
   {selector: 'add:', source: '[ :item | self ensureRoom. tally := tally + 1. contents at: tally put: item. item ]'},
   {selector: 'ensureRoom', source: '[ (tally = contents size) ifTrue: [ self grow ] ]'},
   {
-    captures: [ARRAY_CLASS_CAPTURE],
     selector: 'grow',
     source: `[ | bigger |
-      bigger := ArrayClass new: (contents size + contents size).
+      bigger := Array new: (contents size + contents size).
       self copyInto: bigger.
       contents := bigger.
       self ]`,
@@ -124,21 +114,19 @@ const ORDERED_COLLECTION_METHODS = [
   // this sent `errorIndexOutOfBounds:`, which nothing implemented, so the failure arrived as a
   // message-not-understood that no one could catch.
   {
-    captures: [INDEX_ERROR_CAPTURE],
     selector: 'at:',
     source: `[ :index |
       (index < 1)
-        ifTrue: [ (IndexError new) signal ]
+        ifTrue: [ (IndexOutOfRange new) signal ]
         ifFalse: [ (index <= tally)
           ifTrue: [ contents at: index ]
-          ifFalse: [ (IndexError new) signal ] ] ]`,
+          ifFalse: [ (IndexOutOfRange new) signal ] ] ]`,
   },
   // Expressible only because the refusal is catchable: the alternative Block is evaluated by
   // handling the collection's own signal, with no new protocol underneath it.
   {
-    captures: [INDEX_ERROR_CAPTURE],
     selector: 'at:ifAbsent:',
-    source: '[ :index :aBlock | [ self at: index ] on: IndexError do: [ :e | aBlock value ] ]',
+    source: '[ :index :aBlock | [ self at: index ] on: IndexOutOfRange do: [ :e | aBlock value ] ]',
   },
   {selector: 'first', source: '[ self at: 1 ]'},
   {selector: 'last', source: '[ self at: tally ]'},
@@ -146,11 +134,10 @@ const ORDERED_COLLECTION_METHODS = [
   // the backing Array is a durable object: leaving the ref there keeps the removed element
   // graph-reachable, so a large collection drained to empty would retain every element it ever held.
   {
-    captures: [EMPTY_ERROR_CAPTURE],
     selector: 'removeLast',
     source: `[ | item |
       (tally < 1)
-        ifTrue: [ (EmptyError new) signal ]
+        ifTrue: [ (EmptyCollection new) signal ]
         ifFalse: [
           item := contents at: tally.
           contents at: tally put: nil.
@@ -195,10 +182,9 @@ const ORDERED_COLLECTION_METHODS = [
       ^ accumulator ]`,
   },
   {
-    captures: [ARRAY_CLASS_CAPTURE],
     selector: 'asArray',
     source: `[ | result |
-      result := ArrayClass new: tally.
+      result := Array new: tally.
       self copyInto: result.
       result ]`,
   },
@@ -247,6 +233,20 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
       {id: 'ordered-collection-tally', name: 'tally'},
     ],
   });
+  // Restored prerequisites. Every traversal loops, so an image without ADR 0051's Block protocol
+  // would install methods that compile cleanly and fail with "Block does not understand:
+  // whileFalse:" on first use. Refused here instead, where the cause is still visible.
+  if (!await findSmalltalkBlockProtocol({images, imageId})) {
+    throw new TypeError(`image ${imageId} has no Smalltalk Block protocol; install it first`);
+  }
+  // Checked as installed *methods*, not as the presence of the primitive Blocks: the Integer
+  // installer publishes its primitives before its methods, so a Block-existence check would pass on
+  // a half-installed protocol with `<`, `<=` and `-` still absent.
+  for (const selector of ['<', '<=', '-']) {
+    if (!await methodBlockRef({images, imageId, classRef: kernel.integerClass, selector})) {
+      throw new TypeError(`image ${imageId} has no Integer ${selector} method; install the Integer protocol first`);
+    }
+  }
   // The unwind protocol object is published *before* the condition classes and their methods, so
   // checking only for it would pass on a half-installed protocol with `Exception >> signal` still
   // missing — the same partial-install hazard the Integer check already closes. Checked as an
@@ -264,44 +264,24 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
       throw new TypeError(`image ${imageId} has no ${name} class; install the condition protocol first`);
     }
   }
-  const arrayClassRef = objectRef(imageId, 'smalltalk/class/Array');
-  if (!await images.getObject(imageId, arrayClassRef.objectId)) {
-    throw new TypeError(`image ${imageId} has no Array class; install the indexed protocol first`);
-  }
-  // Every traversal below loops, so an image without ADR 0051's Block protocol would install
-  // methods that compile cleanly and then fail with "Block does not understand: whileFalse:" on
-  // first use. Refused here instead, where the cause is still visible.
-  if (!await findSmalltalkBlockProtocol({images, imageId})) {
-    throw new TypeError(`image ${imageId} has no Smalltalk Block protocol; install it first`);
-  }
-  // Every traversal states its bound with `<=` and every bounds check uses `<`, so an image without
-  // ADR 0053's Integer protocol would install methods that compile cleanly and fail on first use.
-  // Checked as an installed *method*, not as the presence of the primitive Block. The Integer
-  // installer publishes its primitives before its methods, so a partial install would satisfy a
-  // Block-existence check with `<`, `<=` and `-` still absent — and this library would then compile
-  // cleanly and fail on first use, which is exactly what the check exists to prevent.
-  for (const selector of ['<', '<=', '-']) {
-    if (!await methodBlockRef({images, imageId, classRef: kernel.integerClass, selector})) {
-      throw new TypeError(`image ${imageId} has no Integer ${selector} method; install the Integer protocol first`);
+  // ADR 0057: this library's source names `Array`, `IndexOutOfRange` and `EmptyCollection`, so
+  // those globals must have been published. Checked here, where the cause is visible, rather than
+  // failing later as an unbound name inside a method body.
+  for (const name of ['Array', 'IndexOutOfRange', 'EmptyCollection']) {
+    if (!await resolveGlobal({images, imageId, name})) {
+      throw new TypeError(`image ${imageId} has not published the global ${name}; publish it first`);
     }
   }
-  const captureValues = Object.freeze({
-    [ARRAY_CLASS_CAPTURE.id]: arrayClassRef,
-    [INDEX_ERROR_CAPTURE.id]: objectRef(imageId, 'smalltalk/class/IndexOutOfRange'),
-    [EMPTY_ERROR_CAPTURE.id]: objectRef(imageId, 'smalltalk/class/EmptyCollection'),
-  });
+
   await defineMethodsFromSource({
     images,
     compilation,
     imageId,
     lane,
     classRef: orderedCollectionRef,
-    methods: ORDERED_COLLECTION_METHODS.map((method) => (method.captures
-      ? {
-        ...method,
-        captures: method.captures.map((capture) => ({...capture, value: captureValues[capture.id]})),
-      }
-      : method)),
+    // No captures at all: every class these methods name is resolved through the image's namespace
+    // (ADR 0057), so the installer no longer has to know which classes each method mentions.
+    methods: ORDERED_COLLECTION_METHODS,
   });
 
   return Object.freeze({association: associationRef, orderedCollection: orderedCollectionRef});

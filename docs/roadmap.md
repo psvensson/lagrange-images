@@ -212,41 +212,45 @@ ordinary programs.
 
 `Association` and a minimal `OrderedCollection` are now ordinary Smalltalk classes, written over
 allocation, instance variables, `Array`, equality, conditionals and Blocks, with no collection
-primitive added. Writing them was a substrate test, and it found the following. None of these is a
-collection concern; each is a general language capability that is missing.
+primitive added. Writing them was a substrate test. This is the list it produced, kept as the record
+of what one honest library exposed and what closed each gap — none of them a collection concern, each
+a general language capability that was missing.
 
 ```text
-no ordering comparison    Integer has =, and nothing else. Loops must count *up* and stop on `=`,
-                          and an indexed read cannot bounds-check, so `at:`, `first`, `last` and
-                          `removeLast` are omitted rather than written incorrectly
-no general subtraction    `integer-add` is the only arithmetic op, and `lagrange-code/v0` is frozen
+no ordering comparison    CLOSED by ADR 0053. Integer had = and nothing else, so loops counted *up*
+                          and stopped on `=`, and an indexed read could not bounds-check; `at:`,
+                          `first`, `last` and `removeLast` were omitted rather than written wrong
+no general subtraction    CLOSED by ADR 0053, on `lagrange-code/v1` rather than by unfreezing v0
 no loop construct         CLOSED by ADR 0051. A Block now answers `whileTrue:`/`whileFalse:`, so
                           iteration costs no activation depth. Before it, `do:` succeeded over 50
                           elements and exceeded the depth limit by 100
-no true/false/nil literal a Boolean false is spelled `1 = 2`
-no and:/or:/not           deferred with the rest of the Boolean protocol; nested `ifTrue:ifFalse:`
-                          stands in
-no global namespace       a class cannot be named in source. `Array` is an explicitly captured ref,
-                          which this work plumbed through the class-scoped compiler
-no conditions             a collection cannot report a range error, which is why the operations that
-                          would need one are absent rather than faked
-no ^ return, no cascades  surface syntax, already known
+no true/false/nil literal CLOSED by ADR 0056. `false` was spelled `1 = 2`
+no and:/or:/not           CLOSED by ADR 0056, with the rest of the Boolean protocol
+no global namespace       CLOSED by ADR 0057. A class could not be named in source; `Array` was an
+                          explicitly captured ref plumbed through the class-scoped compiler
+no conditions             CLOSED by ADR 0054. A collection could not report a range error, which is
+                          why the operations needing one were absent rather than faked
+no ^ return               CLOSED by ADR 0055
+no cascades               OPEN. Surface syntax, already known, and the only row still open
 ```
 
-The two with the most leverage are **ordering comparison** and a **loop construct**: between them they
-are the difference between a collection that is correct-but-crippled and one that is ordinary. Both
-are language decisions rather than library ones — ordering because `lagrange-code/v0` is a frozen
-grammar with no comparison op, and looping because Blocks were not yet objects that could answer
-`whileTrue:`. Looping is now closed by ADR 0051, which in turn exposed the closure-identity cost
-listed below: removing the depth ceiling made a pre-existing per-evaluation allocation observable.
+Every capability gap this exercise found is now closed; `OrderedCollection` and the library it lives
+in are written in ordinary Smalltalk against ordinary protocols, with cascades the one piece of
+surface syntax still missing. Two of these closures produced follow-on work rather than ending it:
+ADR 0051 removed the depth ceiling and thereby made a pre-existing per-evaluation closure allocation
+observable (ADR 0052), and ADR 0054's handlers made non-local return (ADR 0055) the next thing the
+library needed.
 
 Next, ordered by architectural pressure rather than convenience:
 
-- [ ] implement **ADR 0057**'s global name resolution: a compile-time lookup to a first-class
-      `GlobalBinding`, dereferenced at runtime by an ordinary `value` send. It retires the last of the
-      library's scaffolding — the explicit `ArrayClass`, `IndexError` and `EmptyError` captures — and
-      lets `OrderedCollection` say `Array` where it means `Array`. Bootstrap is confirmed clean: a
-      binding needs only the kernel and the instance-variable protocol, not `Association`
+- [x] global name resolution (**ADR 0057**): a compile-time lookup to a first-class
+      `GlobalBinding`, dereferenced at runtime by an ordinary `value` send. The library's last
+      scaffolding is gone — the `ArrayClass`, `IndexError` and `EmptyError` captures — and
+      `OrderedCollection` says `Array` where it means `Array`. A binding needs only the kernel and
+      the instance-variable protocol, not `Association`. What remains here is a namespace that is
+      Smalltalk-visible, nested/project namespaces, and whether global assignment is admitted at
+      all — deferred with its authority contract, since a compiled method must hold the binding to
+      read it
 - [x] closure identity (**ADR 0052**). A closure instance is execution-local and becomes durable only
       when it escapes, so 100,000 non-escaping closure evaluations produce **zero** durable records
       and wall-clock is linear in iteration count (1k/10k/100k at 0.97s/8.8s/87.6s).

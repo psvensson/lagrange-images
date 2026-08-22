@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  installSmalltalkGlobalNamespace,
+  publishSmalltalkClassGlobals,
   WASM_FUNCTION_V1,
   booleanValue,
   createRuntime,
@@ -526,6 +528,10 @@ test('includes: answers from inside its loop', async () => {
     const {options} = await seed(runtime, 'app');
     const {installSmalltalkIndexedProtocol, installSmalltalkLibrary} = await import('../src/runtime.js');
     await installSmalltalkIndexedProtocol(options);
+    await installSmalltalkGlobalNamespace(options);
+    await publishSmalltalkClassGlobals({
+      images: runtime.images, imageId: 'app', names: ['Array', 'IndexOutOfRange', 'EmptyCollection'],
+    });
     const library = await installSmalltalkLibrary(options);
 
     const collection = await evaluate(runtime, 'app', 'coll',

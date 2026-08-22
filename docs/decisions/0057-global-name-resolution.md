@@ -1,6 +1,7 @@
 # ADR 0057: Global name resolution
 
-Status: accepted — a global name is resolved at compile time to a stable first-class `GlobalBinding` identity and dereferenced at runtime by an ordinary `value` send, so rebinding is visible to already-compiled code, renaming preserves identity, and the semantic artifact carries a binding id rather than an image-specific ref.
+Status: implemented — a global name is resolved at compile time to a stable first-class `GlobalBinding` identity and dereferenced at runtime by an ordinary `value` send, so rebinding is visible to already-compiled code, renaming preserves identity, and the semantic artifact carries a binding id rather than an image-specific ref.
+Proven by: test/global-names.test.js, test/smalltalk-library.test.js
 
 ## Problem
 
@@ -156,6 +157,29 @@ authority contract          perform it
 The one thing fixed now is the target: an assignment, if it ever exists, acts on the binding the
 compiler already resolved. That constrains the future decision without making it.
 
+**A capture id does not say why the capture exists.** A caller may legitimately declare an explicit
+capture on an id that also happens to be a published binding — the id space is shared on purpose,
+which is what lets a program compiled elsewhere be installed here. So "is this capture a global?" is
+answered by *provenance*, never by testing the id against the namespace:
+
+```text
+compilation reports    the binding ids it actually resolved as globals, transiently, alongside the
+                       semantic program
+installation binds     exactly those to their binding objects; every other capture takes the
+                       caller's value
+never                  intersect the program's capture ids with the published namespace. That
+                       substitutes the GlobalBinding object for a caller's value whenever the two
+                       id spaces touch, silently, and only in the image where the name is published
+not in the artifact    provenance is compiler metadata; `lagrange-code` stays language-neutral and
+                       gains no notion of a global
+```
+
+The namespace has finished its job once compilation resolves a name to identity. A standalone
+compiler environment therefore takes the binding's display name from the semantic capture descriptor,
+not by re-enumerating the current namespace. Adding a second alias for the same binding after a Block
+was compiled cannot change that Block's durable environment or make an identical fixed-id reinstall
+conflict.
+
 ### 4. Resolution order
 
 ```text
@@ -202,6 +226,17 @@ missing     installing an artifact whose binding ids do not exist in the target 
             the worst available outcome
 ```
 
+Management mutations can lose their acknowledgement, so identical retries must converge without
+silently acting on a different identity. `renameGlobal` and `removeGlobal` therefore both require the
+binding id the caller believes it is changing. A rename retry succeeds only when that same binding is
+already at the destination; a removal retry is a no-op only while the name remains absent. If the
+spelling is later republished to another binding, either retry conflicts instead of accepting or
+deleting the replacement. Retry safety is one contract, not an optional stronger mode.
+
+Publication decides conflicts before it creates anything, so a rejected `publish` leaves no orphan
+binding behind; and the stored mapping is read back strictly in canonical order, because an order the
+writer would never have produced is corruption rather than something to normalise on the next write.
+
 ### 7. Bootstrap: the order works, confirmed by construction
 
 The feared cycle — bindings needing the `Association` library, which needs classes, which need
@@ -211,7 +246,7 @@ both available immediately after the kernel:
 ```text
 kernel identity and classes
   -> instance-variable protocol
-  -> GlobalBinding class, with `value` and `value:` as ordinary methods
+  -> GlobalBinding class, with `value` as its only method
   -> namespace root, and publication of the kernel classes that already exist
   -> later installers publish Array, Dictionary, the condition classes explicitly
   -> ordinary source resolves those names
@@ -223,10 +258,9 @@ send dereferences it, and durably rebinding the same binding object changes what
 Block answers with no recompilation. No allocation, equality, Dictionary or library protocol is
 involved.
 
-The prototype used a `value:` method to perform that rebinding, which was convenient for the
-experiment and is *not* a v1 protocol commitment — it is evidence that the slot can be rebound and
-observed, not a decision that ordinary source may do the rebinding. The implementation rebinds
-through the namespace-management seam instead, per decision 2.
+The shipped `GlobalBinding` answers `value` and nothing else, and rebinding goes through the
+namespace-management seam, per decision 2. (The pre-ADR prototype used a `value:` method to perform
+that rebinding, which was convenient for the experiment and was never a protocol commitment.)
 
 ### 8. Standalone Blocks reuse ADR 0056's environment seam
 
@@ -258,6 +292,8 @@ lifecycle
         ordinary source change what the global means
     renaming keeps the binding identity, and compiled code is unaffected
     removing a name leaves compiled code working and makes future compilation of that name fail
+    rename and remove require the binding identity; immediate lost-ack retries converge, while an
+        ABA replacement under the same spelling causes a conflict and is never touched
     class existence does not publish: a class installed without publication is unnameable
 
 artifacts and images
@@ -275,6 +311,8 @@ both lanes and durability
     neutral and WASM agree on reads, and on a rebinding observed after compilation
     a standalone Block referencing a global gets one environment holding the bindings it uses,
         parented to any caller-supplied environment, and none when it references no global
+    adding an alias for an already-resolved binding does not change a fixed-id Block's compiler
+        environment or prevent an identical reinstall from converging
     installation is exact-or-create and idempotent, and joins the exhaustive recovery sweeps
 ```
 
@@ -299,6 +337,10 @@ a GlobalBinding ref identifies the binding; it does not grant authority to rebin
     necessarily holds that ref, so an unrestricted setter would make every reader a writer
 rebinding goes through the trusted namespace/language-management seam; `Global := value` is not
     part of ADR 0057, and if admitted must target the already-resolved binding identity
+rename and remove are identity-scoped management operations: both require the expected binding id,
+    so a retry never acts on an ABA replacement that merely reused the spelling
+namespace aliases participate only in compile-time lookup; once a global capture is resolved, its
+    durable environment metadata comes from the semantic capture, not from later namespace aliases
 an unknown global is a compile-time failure, not a runtime lookup
 globals resolve last, after instance variables; reserved pseudo-literals never reach resolution
 the artifact carries binding ids and no image-specific ref; a missing identity fails loudly and is

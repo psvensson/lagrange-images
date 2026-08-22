@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  installSmalltalkGlobalNamespace,
+  publishSmalltalkClassGlobals,
   booleanValue,
   createRuntime,
   defineMethods,
@@ -60,6 +62,10 @@ async function seed(runtime, imageId, {lane = 'neutral'} = {}) {
   await installSmalltalkConditionProtocol(options);
   const kernel = await findSmalltalkKernel({images: runtime.images, imageId});
   await defineMethods({...options, classRef: kernel.integerClass, methods: [PLUS]});
+  await installSmalltalkGlobalNamespace(options);
+  await publishSmalltalkClassGlobals({
+    images: runtime.images, imageId, names: ['Array', 'IndexOutOfRange', 'EmptyCollection'],
+  });
   const library = await installSmalltalkLibrary(options);
   return {kernel, library};
 }

@@ -20,6 +20,12 @@ function normalizeRootCaptures(captures) {
     // a caller bind the *id* under another name and shadow `nil`'s meaning from outside the
     // compiler — the same reason `$nonLocalReturn` and the slot primitives reserve both.
     if (name === NIL_CAPTURE) throw new TypeError(`capture name ${NIL_CAPTURE} is reserved for the nil intrinsic`);
+    // The compiler owns this whole key namespace. Reserving only the ids it happens to use would
+    // let a caller supply an internal-looking name and slip past the global collision check, which
+    // distinguishes its own captures by exactly this prefix.
+    if (name.startsWith(GLOBAL_CAPTURE_PREFIX)) {
+      throw new TypeError(`capture name ${name} is reserved: ${GLOBAL_CAPTURE_PREFIX} belongs to the compiler`);
+    }
     if (typeof id !== 'string' || id.length === 0) throw new TypeError(`capture binding id for ${name} must be non-empty text`);
     if (id === NIL_BINDING_ID) throw new TypeError(`capture binding id ${NIL_BINDING_ID} is reserved for the nil intrinsic`);
     if (ids.has(id)) throw new TypeError(`duplicate capture binding id: ${id}`);
@@ -78,13 +84,24 @@ const NON_LOCAL_RETURN_CAPTURE = '$nonLocalReturn';
 // is stable across images; installation supplies that image's kernel nil.
 const NIL_CAPTURE = '$nil';
 const NIL_BINDING_ID = 'smalltalk/intrinsic/nil';
+// Internal capture key for a resolved global. Prefixed so it cannot collide with any source name —
+// the tokenizer restricts those to identifier characters.
+const GLOBAL_CAPTURE_PREFIX = '$global:';
 const INSTANCE_SLOT_WRITE_CAPTURE = '$instanceSlotWrite';
 
 class SemanticScope {
   constructor({
     parent = null, path, parameters = [], rootCaptures = new Map(), instanceVariables = new Map(),
-    methodHome = false, intrinsics = new Map(),
+    methodHome = false, intrinsics = new Map(), globals = new Map(),
   } = {}) {
+    // ADR 0057. Name -> binding id, resolved from the image's namespace by the *caller* and handed
+    // in. This compiler stays synchronous and image-independent: it never reads storage, and what it
+    // emits is binding identity rather than any image-specific ref.
+    this.globals = parent ? parent.globals : globals;
+    // ADR 0057. Which global bindings this compilation actually resolved. Transient compiler
+    // metadata — never part of `lagrange-code` — and the only correct answer to "is this capture a
+    // global?", because a capture id does not say *why* the capture exists.
+    this.globalsUsed = parent ? parent.globalsUsed : new Set();
     // ADR 0055. Reserved bindings the binder makes *available* without declaring. A declaration
     // becomes a program capture whether or not the source references it, so declaring the return
     // intrinsic eagerly would give every method a dependency it may never use. Requested on first
@@ -219,7 +236,47 @@ class SemanticScope {
     if (provided) return Object.freeze({op: 'binding', id: this.addCapture(name, provided).id});
     const slotId = this.instanceSlot(name);
     if (slotId) return this.instanceSlotRead(slotId);
+    // Globals resolve LAST, so no future publication can change what a name already means inside a
+    // method that binds it lexically or as an instance variable.
+    const global = this.resolveGlobal(name);
+    if (global) return global;
     throw new TypeError(`unbound Symmetric Smalltalk name: ${name}`);
+  }
+
+  // A global read is a `value` send to the binding — an ordinary send, so `lagrange-code` gains
+  // nothing. The capture is requested on first use, so a method mentioning no global carries none,
+  // and a nested Block that is the only user still acquires it through the ordinary capture walk.
+  resolveGlobal(name) {
+    const bindingId = this.globals.get(name);
+    if (!bindingId) return null;
+    const root = this.rootScope();
+
+    // An explicit caller capture must not silently share a durable binding id with a resolved
+    // global: two different meanings collapsing onto one environment key is exactly the sort of
+    // aliasing that answers the wrong object.
+    for (const [key, capture] of root.captures) {
+      if (capture.id === bindingId && !key.startsWith(GLOBAL_CAPTURE_PREFIX)) {
+        throw new TypeError(`capture ${key} collides with the global binding id ${bindingId}`);
+      }
+    }
+
+    // Keyed by the *binding*, not by the source name. Keying by name would make the capture shadow
+    // the global on every later read — `resolveName` finds a capture before it reaches global
+    // resolution, so the second `Array` in a method would answer the binding object rather than the
+    // class. It also makes an alias free: two names resolving to one binding share one capture,
+    // which the closed capture grammar requires.
+    const key = `${GLOBAL_CAPTURE_PREFIX}${bindingId}`;
+    this.globalsUsed.add(bindingId);
+    if (!root.captures.has(key)) {
+      root.captures.set(key, Object.freeze({id: bindingId, name, source: null, mutable: false}));
+    }
+    return Object.freeze({
+      op: 'send',
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: this.resolveName(key),
+      message: textValue('value'),
+      arguments: Object.freeze([]),
+    });
   }
 
   // Assignment needs a cell, so only a temporary — or a capture that resolves to one — qualifies.
@@ -244,6 +301,13 @@ class SemanticScope {
     }
     const slotId = this.instanceSlot(name);
     if (slotId) return {kind: 'instance', slotId};
+    // ADR 0057: assignment never reaches a global, and the check sits *last* so it matches the read
+    // order — a temporary or instance variable of the same name shadows a global for writes exactly
+    // as it does for reads. A known global then gets a diagnosis saying what is actually wrong,
+    // rather than being reported as an unbound name; nothing is lowered and no setter exists.
+    if (this.globals.has(name)) {
+      throw new TypeError(`global assignment is not supported: ${name}`);
+    }
     throw new TypeError(`unbound Symmetric Smalltalk name: ${name}`);
   }
 
@@ -434,9 +498,11 @@ function compileBlockSyntax(syntax, {
   representation = LAGRANGE_CODE_V0,
   methodHome = false,
   intrinsics = new Map(),
+  globals = new Map(),
 } = {}) {
   const scope = new SemanticScope({
-    parent, path, parameters: syntax.parameters, rootCaptures, instanceVariables, methodHome, intrinsics,
+    parent, path, parameters: syntax.parameters, rootCaptures, instanceVariables, methodHome,
+    intrinsics, globals,
   });
   const state = {path, nextBlock: 0, representation};
   const body = compileBody(syntax.body, scope, state);
@@ -455,11 +521,12 @@ function compileBlockSyntax(syntax, {
   return Object.freeze({
     program,
     captureInitializers: scope.captureInitializers(representation),
+    globalBindingIdsUsed: Object.freeze([...scope.globalsUsed]),
   });
 }
 
 function compileSymmetricSmalltalkSemanticBlock(source, {
-  captures = {}, instanceVariables = {}, methodHome = false, intrinsics = {},
+  captures = {}, instanceVariables = {}, methodHome = false, intrinsics = {}, globals = {},
 } = {}) {
   // ADR 0056: `nil` is the compiler's own intrinsic, so it is supplied here rather than by each
   // caller. Centralised for two reasons — every Symmetric Smalltalk compilation can write `nil`
@@ -478,8 +545,14 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
     representation,
     methodHome,
     intrinsics: new Map([...Object.entries(intrinsics), [NIL_CAPTURE, NIL_BINDING_ID]]),
+    globals: new Map(Object.entries(globals)),
   });
-  return Object.freeze({syntax, program: compiled.program, representation});
+  return Object.freeze({
+    syntax,
+    program: compiled.program,
+    representation,
+    globalBindingIdsUsed: compiled.globalBindingIdsUsed,
+  });
 }
 
 export {
