@@ -84,7 +84,7 @@ test('the standard installer requires an existing image and does not own image l
         compilation: runtime.compilation,
         imageId: 'missing',
       }),
-      /image missing does not exist; create it before installing the standard image/,
+      /image not found: missing/,
     );
   });
 });
