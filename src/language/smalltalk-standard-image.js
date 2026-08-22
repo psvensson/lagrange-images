@@ -77,20 +77,27 @@ async function installSymmetricSmalltalkStandardImage({
     throw new TypeError('compilation service with compileArtifact is required');
   }
 
-  // The image lifecycle belongs to the caller. Refuse an absent image instead of silently creating
-  // one here: installation and image creation are separate operations with separate failure policy.
-  if (!await images.getImage(imageId)) {
-    throw new TypeError(`image ${imageId} does not exist; create it before installing the standard image`);
-  }
+  // The image lifecycle belongs to the caller. `getImage` owns the missing-image diagnosis; this
+  // installer merely requires the image to exist and never creates one as a side effect.
+  await images.getImage(imageId);
 
   const options = {images, compilation, imageId, lane};
 
-  // This order is intentionally boring and mirrors the dependency order the first real library
-  // forced tests to spell by hand. A stage may assume everything above it, and nothing below it.
-  const kernelInstall = await installSmalltalkKernel({images, imageId});
-  const kernel = await findSmalltalkKernel({images, imageId});
+  // Bootstrap and standard-image replay are intentionally different operations. Once the kernel
+  // exists its method dictionaries are expected to grow, so rerunning the bootstrap installer would
+  // incorrectly compare those live dictionaries with bootstrap's empty definitions. Rediscover an
+  // existing kernel instead. If an interrupted bootstrap never published the kernel record, rerun
+  // the bootstrap installer from the start and let its ensure-exact writes converge.
+  let kernel = await findSmalltalkKernel({images, imageId});
+  let kernelInstall = null;
+  if (!kernel) {
+    kernelInstall = await installSmalltalkKernel({images, imageId});
+    kernel = await findSmalltalkKernel({images, imageId});
+  }
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel after installation`);
 
+  // This order is intentionally boring and mirrors the dependency order the first real library
+  // forced tests to spell by hand. A stage may assume everything above it, and nothing below it.
   const allocation = await installSmalltalkAllocationProtocol(options);
   const equality = await installSmalltalkEqualityProtocol(options);
   const controlFlow = await installSmalltalkControlFlow(options);
