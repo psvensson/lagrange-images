@@ -156,17 +156,12 @@ function compilationFor(images) {
   });
 }
 
-// Component installers own their write-by-write recovery sweeps. This is the integration proof that
-// the *composition* can be replayed after failures spanning its dependency chain, in both lanes.
+// Component installers own their write-by-write recovery sweeps. This proof is deliberately only
+// about orchestration: replay the one public operation after representative failures spanning the
+// dependency chain, rather than multiplying every component's exhaustive sweep by a full image.
 const RECOVERY_TARGETS = Object.freeze([
   'smalltalk-kernel/v1',
-  'smalltalk/primitive/basic-new',
   'smalltalk/class/Array',
-  'smalltalk/primitive/instance-slot-read',
-  'smalltalk-block-protocol/v1',
-  'smalltalk/primitive/integer-modulo',
-  'smalltalk-block-unwind-protocol/v1',
-  'smalltalk/class/Dictionary',
   'smalltalk-global-namespace/v1',
   'smalltalk/class/OrderedCollection',
 ]);
