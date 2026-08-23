@@ -57,6 +57,12 @@ function needsMutableLexicalState(syntax) {
     // `^ [ | t | t := 1. t ]` as v0 and the artifact is then rejected against the closed v0 grammar.
     case 'return':
       return needsMutableLexicalState(syntax.value);
+    // A cascade always lowers to hidden temporaries plus a statement sequence: the receiver must be
+    // evaluated once even when it is already a plain name, because the alternative — replaying the
+    // receiver expression per message — evaluates a send several times. So a cascade needs v1
+    // regardless of what it is made of.
+    case 'cascade':
+      return true;
     case 'send':
       return needsMutableLexicalState(syntax.receiver)
         || syntax.arguments.some((argument) => needsMutableLexicalState(argument));
@@ -142,6 +148,16 @@ class SemanticScope {
         name,
       }));
     });
+  }
+
+  // Compiler-introduced bindings the source cannot name or collide with — `$` is not an identifier
+  // character, so nothing reachable through `resolveName` ever reads one. A cascade uses these for
+  // the shared receiver and the first message's answer.
+  declareHiddenTemporary(key) {
+    if (this.temporaries.has(key)) throw new TypeError(`duplicate hidden temporary ${key}`);
+    const id = `${this.path}:${key}`;
+    this.temporaries.set(key, Object.freeze({id, name: key}));
+    return id;
   }
 
   addCapture(key, provided) {
@@ -413,6 +429,18 @@ class SemanticScope {
   }
 }
 
+// `receiverExpression` is already lowered: cascades compile their receiver once into a hidden
+// temporary and hand every message the same binding read.
+function compileSend(receiverExpression, selector, args, scope, state) {
+  return Object.freeze({
+    op: 'send',
+    languageId: SYMMETRIC_SMALLTALK_ID,
+    receiver: receiverExpression,
+    message: textValue(selector),
+    arguments: Object.freeze(args.map((entry) => compileExpression(entry, scope, state))),
+  });
+}
+
 function compileExpression(syntax, scope, state) {
   switch (syntax.kind) {
     case 'integer':
@@ -452,13 +480,41 @@ function compileExpression(syntax, scope, state) {
         : Object.freeze({op: 'binding-write', id: target.id, value});
     }
     case 'send':
-      return Object.freeze({
-        op: 'send',
-        languageId: SYMMETRIC_SMALLTALK_ID,
-        receiver: compileExpression(syntax.receiver, scope, state),
-        message: textValue(syntax.selector),
-        arguments: Object.freeze(syntax.arguments.map((entry) => compileExpression(entry, scope, state))),
-      });
+      return compileSend(
+        compileExpression(syntax.receiver, scope, state), syntax.selector, syntax.arguments, scope, state,
+      );
+    // `receiver m1; m2; m3` lowers to ordinary v1 state and sends — the IR gains no cascade op:
+    //
+    //   $recv := <receiver>.
+    //   $first := $recv m1.
+    //   $recv m2.
+    //   $recv m3.
+    //   $first
+    //
+    // which is exactly the cascade contract: the receiver is evaluated once, every message goes to
+    // that object in source order, and the cascade answers the first message's value. Hidden
+    // temporaries carry both, so nothing the source wrote is rewritten and no name can collide.
+    case 'cascade': {
+      const receiverId = scope.declareHiddenTemporary(`$cascadeReceiver:${state.nextCascade}`);
+      const answerId = scope.declareHiddenTemporary(`$cascadeAnswer:${state.nextCascade}`);
+      state.nextCascade += 1;
+      const receiverRead = Object.freeze({op: 'binding', id: receiverId});
+      const statements = [
+        Object.freeze({
+          op: 'binding-write',
+          id: receiverId,
+          value: compileExpression(syntax.receiver, scope, state),
+        }),
+        ...syntax.messages.map(({selector, arguments: args}, index) => {
+          const send = compileSend(receiverRead, selector, args, scope, state);
+          return index === 0
+            ? Object.freeze({op: 'binding-write', id: answerId, value: send})
+            : send;
+        }),
+        Object.freeze({op: 'binding', id: answerId}),
+      ];
+      return Object.freeze({op: 'sequence', statements: Object.freeze(statements)});
+    }
     case 'block': {
       const blockId = `${state.path}/block:${state.nextBlock}`;
       state.nextBlock += 1;
@@ -504,7 +560,7 @@ function compileBlockSyntax(syntax, {
     parent, path, parameters: syntax.parameters, rootCaptures, instanceVariables, methodHome,
     intrinsics, globals,
   });
-  const state = {path, nextBlock: 0, representation};
+  const state = {path, nextBlock: 0, nextCascade: 0, representation};
   const body = compileBody(syntax.body, scope, state);
   const program = representation === LAGRANGE_CODE_V1
     ? Object.freeze({

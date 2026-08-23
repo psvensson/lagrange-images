@@ -64,7 +64,45 @@ class Parser {
       this.advance();
       return node('assign', {name: target.value, value: this.parseExpression()});
     }
-    return this.parseKeywordMessage();
+    const expression = this.parseKeywordMessage();
+    return this.parseCascadesAfter(expression);
+  }
+
+  // A cascade binds tighter than assignment: `x := self foo; bar` cascades on the *value*, so the
+  // whole thing is the assigned expression, and `x` receives `self foo` — the first message's
+  // answer, as Smalltalk defines a cascade's value.
+  //
+  // The cascaded receiver is the receiver of the first message, not the first message's answer:
+  // `OrderedCollection new add: 1; add: 2` sends both `add:` to the *collection*, exactly as `;`
+  // means in Smalltalk. So the cascade node keeps the receiver and each message's selector and
+  // arguments, and the compiler decides how the receiver is evaluated once.
+  parseCascadesAfter(expression) {
+    if (expression.kind !== 'send' || this.current().type !== ';') return expression;
+    const first = {selector: expression.selector, arguments: expression.arguments};
+    const messages = [first];
+    while (this.match(';')) {
+      if (this.current().type === 'identifier') {
+        messages.push({selector: this.advance().value, arguments: Object.freeze([])});
+        continue;
+      }
+      if (this.current().type === 'binary') {
+        const selector = this.advance().value;
+        messages.push({selector, arguments: Object.freeze([this.parseUnaryMessage()])});
+        continue;
+      }
+      if (this.current().type === 'keyword') {
+        let selector = '';
+        const argumentsList = [];
+        while (this.current().type === 'keyword') {
+          selector += this.advance().value;
+          argumentsList.push(this.parseBinaryMessage());
+        }
+        messages.push({selector, arguments: Object.freeze(argumentsList)});
+        continue;
+      }
+      throw new SymmetricSmalltalkSyntaxError('expected a message after ;', this.current().start);
+    }
+    return node('cascade', {receiver: expression.receiver, messages: Object.freeze(messages)});
   }
 
   // `| a b |` declarations followed by `.`-separated statements. A single statement with no

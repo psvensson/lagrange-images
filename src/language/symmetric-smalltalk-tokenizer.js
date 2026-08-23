@@ -123,7 +123,7 @@ function tokenizeSymmetricSmalltalk(source) {
       continue;
     }
 
-    if ('[]()|:.'.includes(char)) {
+    if ('[]()|:.;'.includes(char)) {
       const start = index;
       index += 1;
       push(char, char, start);

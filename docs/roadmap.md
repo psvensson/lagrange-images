@@ -27,7 +27,10 @@ Keep language work here when it is language semantics or execution substrate rat
 
 Next pressures:
 
-- [ ] cascades and remaining surface syntax gaps
+- [x] cascades: `receiver m1; m2; m3` sends every message to the receiver of the first message and
+      answers the first message's value. The parser keeps receiver and messages apart; the compiler
+      lowers the cascade to hidden temporaries, a sequence and ordinary sends, so `lagrange-code`
+      gains no op and no selector is recognized
 - [ ] finish the basic collection hierarchy and `species` conventions
 - [ ] primitive-backed methods beyond the current kernel minimum where real library code demands them
 - [ ] nested namespace semantics, including how language namespaces relate to Projects
