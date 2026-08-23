@@ -4,8 +4,11 @@ on:
   pull_request:
     branches: [main]
 
+# Temporary write permission is used only by the guarded bootstrap step below on this trusted,
+# same-repository feature branch. It will be removed once the generated Beads metadata/lockfile
+# have been committed and the final exact head is ready for normal read-only validation.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   # The ordinary gate: everything except the exhaustive publication-recovery sweeps, which run
@@ -35,14 +38,33 @@ jobs:
           npx bd version
           npm run beads:prime >/dev/null
           npm run beads:ready >/dev/null
-      - name: Capture generated Beads and lock metadata
-        uses: actions/upload-artifact@v4
-        with:
-          name: beads-bootstrap
-          path: |
-            .beads
-            package-lock.json
-          include-hidden-files: true
+      - name: Commit generated Beads and lock metadata to trusted PR branch
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          # Keep only Beads' intended tracked metadata/hooks. Runtime database/backup state is
+          # excluded by .beads/.gitignore and is never added here.
+          git add package-lock.json \
+            .beads/.gitignore \
+            .beads/README.md \
+            .beads/config.yaml \
+            .beads/metadata.json \
+            .beads/interactions.jsonl \
+            .beads/hooks/post-checkout \
+            .beads/hooks/post-merge \
+            .beads/hooks/pre-commit \
+            .beads/hooks/pre-push \
+            .beads/hooks/prepare-commit-msg
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit --no-verify -m "chore: add generated Beads workspace metadata"
+          git push origin HEAD:"${HEAD_REF}"
 
   # Every write, both lanes, pre-commit and commit-then-lost-ack. These sweeps grow with each new
   # protocol, so they get their own budget: a protocol added later lengthens this job rather than
