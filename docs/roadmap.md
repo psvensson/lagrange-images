@@ -1,6 +1,6 @@
 # Roadmap
 
-This roadmap is now deliberately limited to **image substrate, language/execution and generic graph primitives**. Project/workspace UX, collaboration UX and the graphical environment moved to [Lagrange Object Environment](https://github.com/psvensson/lagrange-object-environment); see [object-environment-boundary.md](object-environment-boundary.md) and ADR 0058.
+This roadmap is deliberately limited to **image/project semantics, language/execution and generic graph primitives**. Graphical presentation and human-facing collaboration UX moved to [Lagrange Object Environment](https://github.com/psvensson/lagrange-object-environment); see [object-environment-boundary.md](object-environment-boundary.md) and ADR 0058.
 
 The ordering is by architectural pressure, not language popularity.
 
@@ -32,7 +32,7 @@ Next pressures:
 - [ ] cascades and remaining surface syntax gaps
 - [ ] finish the basic collection hierarchy and `species` conventions
 - [ ] primitive-backed methods beyond the current kernel minimum where real library code demands them
-- [ ] nested namespace semantics; Project-to-namespace policy belongs above this repository
+- [ ] nested namespace semantics, including how language namespaces relate to Projects
 - [ ] decide general object residency/promotion: execution-local mutable graphs vs immediately durable allocation
 - [ ] broaden the standard image only from real library/tool pressure
 - [ ] debugger-grade activation/resumption metadata without putting debugger UI here
@@ -54,10 +54,11 @@ Structured export/migration:
 
 - [ ] export package/class/superclass/method/selector/source relationships as structured image artifacts
 - [ ] export useful CompiledMethod/bytecode/literal information where stable
+- [ ] relate exported structures into image-level mixed-language Projects
 - [ ] selective native lowering/recompilation where useful
 - [ ] measure which code benefits from migration and leave the rest on the compatibility runtime
 
-Relating those exported structures into a mixed-language **Project**, and inspecting them in browsers, belongs to Lagrange Object Environment.
+Inspecting and navigating those structures belongs to Lagrange Object Environment.
 
 ## 3. Package/toolchain ecosystem
 
@@ -69,7 +70,7 @@ Relating those exported structures into a mixed-language **Project**, and inspec
 - [ ] Java source/class/JAR artifact conventions and JVM/AOT/WASM spike
 - [ ] Common Lisp compiler/runtime personality spike over the common artifact/closure substrate
 
-A package/project UI is not part of this layer; portable artifact and dependency semantics are.
+A package/Project UI is not part of this layer; portable artifact and Project relationship semantics are.
 
 ## 4. Execution, authority and distribution
 
@@ -85,7 +86,7 @@ A package/project UI is not part of this layer; portable artifact and dependency
 - [ ] durable deployment/reconciliation contract above runtime definitions
 - [ ] measured compute-near-object wins
 
-Authority remains transient execution context. Identity/contact pickers, invitations and "share this Project" UX live above this repository.
+Authority remains transient execution context. Identity/contact pickers and invitation UX live above this repository. The semantics needed for a Project-wide grant remain a lower authority question because Project structure must not imply transitive authority accidentally.
 
 ## 5. Durable graph and backend
 
@@ -99,41 +100,48 @@ Authority remains transient execution context. Identity/contact pickers, invitat
 - [ ] object migration between immutable Shapes
 - [ ] measure partitioning/index choices on large images
 
-## 6. Generic versioning primitives — only under real pressure
+## 6. Projects and collaborative history semantics
 
-The old roadmap mixed Project collaboration with generic image history. The split is now explicit.
+Project remains an image-level concept because it is useful without a graphical environment.
 
-Potential Lagrange Images work:
+- [ ] Project objects and relationships over ordinary image objects/refs
+- [ ] code + notes + tests + data + work items
+- [ ] first-class package/binary/component/runtime relationships
+- [ ] manifest/lock/runtime-image artifacts as Project members
+- [ ] Projects mixing image-native and OpenSmalltalkVM-backed code through explicit interfaces
+- [ ] nested/related Project and namespace conventions
+- [ ] branch/working-frontier semantics
+- [ ] object/Project diff representation
+- [ ] merge semantics and conflict data model
+- [ ] Git/file import/export as projection rather than canonical storage
+- [ ] multi-author conflict API/data, without prescribing UI
 
-- [ ] object/graph diff representation independent of one UI
-- [ ] branch/working-frontier semantics if useful to headless clients
-- [ ] merge primitive/conflict data model if it can stay language/UI neutral
+Lagrange Object Environment owns Project browsers, working-view/history/diff presentation, merge/conflict-resolution interaction, Git projection UX and multi-author activity/presence.
 
-Lagrange Object Environment owns:
+## 7. Generic versioning pressure
 
-- Project objects/relationships and work-item organization
-- working-view/history/diff presentation
-- merge/conflict interaction
-- Git import/export projection
-- multi-author collaboration UX
+Project collaboration may expose generic primitives that should be reusable outside Projects too. Prefer such primitives when the semantics genuinely generalize:
 
-Do not add a Project record kind merely to make the environment convenient. Add only generic primitives whose usefulness survives removing the environment entirely.
+- [ ] graph/frontier diffs independent of one Project UI
+- [ ] branch/working-frontier primitives useful to headless clients
+- [ ] merge/conflict primitives that stay language/UI neutral
+
+Do not move semantic state into the UI merely because the first pressure came from a UI. Conversely, do not add a storage-level Project record kind merely because Project is image-level; ordinary objects/refs should carry it unless real pressure proves otherwise.
 
 ## Moved out of this roadmap
 
-The former sections **Projects and collaborative history** and **Graphical environment** now live in the Lagrange Object Environment roadmap.
+The former **Graphical environment** section now lives entirely in the Lagrange Object Environment roadmap.
 
 Moved upward:
 
-- project objects/relationships, code + notes + tests + data + work items
-- Project relationships to package/binary/component/runtime artifacts
-- mixed native/OpenSmalltalk Project organization
-- working views and multi-author conflict UX
-- Git projection
 - drawing/input/rendering substrate
 - retained presentation/view composition
 - surfaces/windows/world policy
+- Perspectives and Session behavior
 - inspectors, browsers, editors and debugger UI
-- inspection of exported OpenSmalltalkVM structures through environment adapters
+- visual inspection of exported OpenSmalltalkVM structures
+- Project/history/diff/merge/conflict interaction
+- Git/file projection UX
+- invitations, multi-author activity and presence UX
 
-That move is a responsibility change, not a claim that these objects cannot be durable. They may live in an image as ordinary objects while their meaning stays above the generic image substrate.
+The Project data model, Project history semantics and headless projection services stay here.

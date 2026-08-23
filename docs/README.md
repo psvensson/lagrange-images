@@ -4,11 +4,11 @@ The top-level README is the quick overview. These docs describe the current mode
 
 ## Start here
 
-1. [Architecture](architecture.md) — the image/language/execution layers and boundaries
-2. [Image model](image-model.md) — durable graph records and identity
-3. [Object-environment boundary](object-environment-boundary.md) — what moved to the higher-level Project/UI environment
+1. [Architecture](architecture.md) — the image/project/language/execution layers and boundaries
+2. [Image model](image-model.md) — durable graph records, identity and image-level Project convention
+3. [Object-environment boundary](object-environment-boundary.md) — what the higher-level human environment owns
 4. [Language platform](language-platform.md) — how Smalltalk, Rust, Java, Lisp and foreign code fit
-5. [Roadmap](roadmap.md) — remaining substrate work
+5. [Roadmap](roadmap.md) — remaining image/project/language substrate work
 
 If you are here to change something rather than to understand it, start instead with
 [the runbook](runbook.md) (how to run and debug) and [the seam map](seams.md) (what the
@@ -19,15 +19,15 @@ representations, installers and executors are called).
 - [Value/reference/object model](value-model.md) — tagged Values, refs, shapes and generic objects
 - [Security boundary](security.md) — identity vs authority and capability direction
 - [Lagrange integration](lagrange-integration.md) — backend/distributed integration boundary
-- [Object-environment boundary](object-environment-boundary.md) — Project, Perspective, collaboration and graphical UI ownership
+- [Object-environment boundary](object-environment-boundary.md) — Project semantic model vs Project/UI interaction; Perspective and graphical UI ownership
 - [Runbook](runbook.md) — running the suite, integration assets, debugging silent foreign-runtime failures
 - [Seam map](seams.md) — representations, installers, executors and where code lives
 
 ## Boundary in one sentence
 
-`lagrange-images` owns the generic durable object/language/execution substrate; [lagrange-object-environment](https://github.com/psvensson/lagrange-object-environment) owns how humans organize and inhabit it.
+`lagrange-images` owns the durable image, Project, language and execution semantics; [lagrange-object-environment](https://github.com/psvensson/lagrange-object-environment) owns how humans see and inhabit them.
 
-A Project or Perspective may be an ordinary durable image object without becoming a built-in image record kind.
+Project is the intentional middle case: it is image-level but represented using ordinary objects/refs rather than a special backend record type. Perspective is environment-level even when persisted in the image.
 
 ## Execution and toolchains at a glance
 
@@ -54,12 +54,12 @@ Smalltalk has two complementary paths:
 ```text
 native Symmetric Smalltalk
           |
-          | shared image/artifact/interface substrate
+          | shared image/Project/artifact/interface substrate
           |
 OpenSmalltalkVM-backed compatible Smalltalk
 ```
 
-Symmetric Smalltalk is the image-native language. The compatibility path reuses the real runtime/compiler/package ecosystem. Higher-level mixed-language Project organization and tooling belongs to Lagrange Object Environment.
+Symmetric Smalltalk is the image-native language. The compatibility path reuses the real runtime/compiler/package ecosystem. Their artifacts may participate in the same image-level Projects; the Object Environment supplies the human tooling over them.
 
 ## ADRs
 

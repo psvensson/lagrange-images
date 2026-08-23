@@ -33,7 +33,7 @@ move in. Never move it the other way to make a claim easier to write.
 - [0031 — one runtime composition path](0031-one-runtime-composition-path.md): keep one runtime, graph ImageService and HTTP projection instead of parallel object models.
 - [0032 — atomic backend transactions](0032-atomic-backend-transactions.md): commit current state and its history event through one backend transaction and shared conformance contract.
 - [0033 — durable Lagrange backend](0033-durable-lagrange-backend.md): map the backend contract to the public embedded SQL session and five image-owned tables.
-- [0058 — Object Environment boundary](0058-object-environment-boundary.md): keep Project/collaboration/UI semantics above the generic image substrate while retaining generic history and authority primitives here.
+- [0058 — Project/Object Environment boundary](0058-object-environment-boundary.md): keep Project semantics image-level while moving Project interaction and the graphical environment above the substrate.
 
 ## First language and semantic compilation
 

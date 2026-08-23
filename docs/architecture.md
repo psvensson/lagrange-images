@@ -12,22 +12,22 @@ Image
   Shapes / objects
   CodeArtifacts
   LexicalEnvironments / Blocks
+  Projects over ordinary objects/refs/artifacts
   roots / history / snapshots
-  arbitrary higher-level objects through ordinary shapes/refs
 ```
 
 It is not a VM heap dump. Physical execution layout may change without changing durable identity. Distribution is placement policy rather than part of object identity.
 
-Project, Perspective and UI semantics are intentionally not image record kinds. They live in [Lagrange Object Environment](https://github.com/psvensson/lagrange-object-environment) and can still be persisted as ordinary image objects. See [object-environment-boundary.md](object-environment-boundary.md).
+Project is an image-level semantic convention because headless clients and tooling need it. It does not require a special graph record kind. Perspective and graphical presentation semantics live in [Lagrange Object Environment](https://github.com/psvensson/lagrange-object-environment). See [object-environment-boundary.md](object-environment-boundary.md).
 
 ## 2. Layers
 
 ```text
 higher-level clients
-Object Environment | headless services | alternate tools
+Object Environment | headless agents | alternate tools
                     |
-language personalities / client adapters
-Smalltalk | Lisp | Java | Rust | ...
+image-level organization / language personalities
+Projects | Smalltalk | Lisp | Java | Rust | ...
                     |
 compiler/tooling
 artifact graph | toolchain providers | derivation reuse
@@ -45,7 +45,7 @@ Lagrange
 storage / placement / distributed WASM compute
 ```
 
-The dependency direction matters. The image graph does not learn Smalltalk classes, Cargo packages, Java JAR semantics, Project/Perspective semantics, GUI constructs or container lifecycles.
+The dependency direction matters. The generic image graph does not learn Smalltalk classes, Cargo packages, Java JAR semantics, GUI constructs or container lifecycles. Image-level libraries may define richer ordinary-object conventions such as Project without changing storage identity.
 
 ## 3. Boundaries to protect
 
@@ -81,6 +81,7 @@ saved Value handle != durable Value identity
 resumption != retry
 compiled host module != durable code identity
 pooled instance != activation state
+Project membership != authority inheritance
 ```
 
 A ref identifies an object/artifact; capability/principal context controls authority. `CodeArtifact.dependencies` says what an artifact uses, while `derivedFrom` records immutable provenance.
@@ -320,6 +321,6 @@ The substrate has now been pressured by:
 - the public Lagrange application-session seam with atomic image state/history,
   real-package compatibility and file-backed mapping restart coverage.
 
-Higher-level Project, collaboration and graphical-environment pressure now belongs in Lagrange Object Environment. Missing generic primitives discovered there should feed back here through the public boundary.
+Project semantic/model pressure remains here; Project browsing/collaboration and graphical-environment pressure belongs in Lagrange Object Environment. Missing generic primitives discovered there should feed back here through the public boundary.
 
 See [docs/README.md](README.md), [object-environment-boundary.md](object-environment-boundary.md) and [decisions/README.md](decisions/README.md).
