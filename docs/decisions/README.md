@@ -34,6 +34,7 @@ move in. Never move it the other way to make a claim easier to write.
 - [0032 — atomic backend transactions](0032-atomic-backend-transactions.md): commit current state and its history event through one backend transaction and shared conformance contract.
 - [0033 — durable Lagrange backend](0033-durable-lagrange-backend.md): map the backend contract to the public embedded SQL session and five image-owned tables.
 - [0058 — Project/Object Environment boundary](0058-object-environment-boundary.md): keep Project semantics image-level while moving Project interaction and the graphical environment above the substrate.
+- [0059 — provider-independent agent governance](0059-provider-independent-agent-governance.md): keep task/discovery memory in Beads, preserve domain rules, and require one owner for every major subsystem and interaction.
 
 ## First language and semantic compilation
 
@@ -101,4 +102,4 @@ move in. Never move it the other way to make a claim easier to write.
 
 ## Reading rule
 
-The current model is summarized in [../architecture.md](../architecture.md), [../language-platform.md](../language-platform.md) and [../object-environment-boundary.md](../object-environment-boundary.md). ADRs explain why the model reached that shape and may describe limitations that later ADRs have since extended.
+The current model is summarized in [../architecture.md](../architecture.md), [../language-platform.md](../language-platform.md), [../object-environment-boundary.md](../object-environment-boundary.md), [../ownership.md](../ownership.md) and [../agent-workflow.md](../agent-workflow.md). ADRs explain why the model reached that shape and may describe limitations that later ADRs have since extended.
