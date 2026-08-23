@@ -5,7 +5,9 @@ import {
   publishSmalltalkClassGlobals,
   booleanValue,
   createRuntime,
+  defineClass,
   defineMethods,
+  ensureSmalltalkShape,
   findSmalltalkKernel,
   installSmalltalkAllocationProtocol,
   installSmalltalkBlockProtocol,
@@ -67,6 +69,11 @@ async function seed(runtime, imageId, {lane = 'neutral'} = {}) {
     images: runtime.images, imageId, names: ['Array', 'IndexOutOfRange', 'EmptyCollection'],
   });
   const library = await installSmalltalkLibrary(options);
+  // The library's own classes, so library tests may name them in source — Collection for
+  // hierarchy work, OrderedCollection for species overrides that derive to it.
+  await publishSmalltalkClassGlobals({
+    images: runtime.images, imageId, names: ['Collection', 'OrderedCollection'],
+  });
   return {kernel, library};
 }
 
@@ -263,10 +270,12 @@ test('every library method is an ordinary Smalltalk method with a semantic artif
 
     for (const [classRef, selectors] of [
       [library.association, ['key', 'value', 'key:value:', 'value:', '=', 'hash']],
+      [library.collection, [
+        // The shared protocol: species plus the enumeration written against `do:` and it.
+        'species', 'collect:', 'select:', 'detect:ifNone:', 'inject:into:',
+      ]],
       [library.orderedCollection, [
         'initialize', 'size', 'isEmpty', 'add:', 'do:', 'includes:', 'asArray',
-        // The enumeration slice: ordinary methods like the rest, with no primitive of their own.
-        'collect:', 'select:', 'detect:ifNone:', 'inject:into:',
       ]],
     ]) {
       const behavior = await runtime.images.getObject('app', classRef.objectId);
@@ -895,3 +904,112 @@ test('enumeration composes with mutable lexical capture', async () => {
     );
   });
 });
+
+// --- species and the hierarchy ----------------------------------------------------------------
+
+// The point of the slice: enumeration lives on Collection once, written against `do:` and
+// `species`, and a derived collection's class is the receiver's `species` — not a hard-coded
+// `self class` and not a new primitive. A subclass that wants a different answer overrides
+// `species`, not the enumeration methods.
+for (const lane of ['neutral', 'wasm']) {
+  test(`a derived collection is the receiver's own class by default, through the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      const {library} = await seed(runtime, 'app', {lane});
+      const source = await collectionOf(runtime, 'app', `sp-src-${lane}`, library, [1, 2]);
+
+      // `species` is the receiver's class, and both derived collections are that class — read
+      // back through `class`, which ADR 0046 made an ordinary message.
+      for (const [id, expression] of [
+        [`sp-species-${lane}`, '[ :x | x species ]'],
+        [`sp-collect-${lane}`, '[ :x | (x collect: [ :e | e ]) class ]'],
+        [`sp-select-${lane}`, '[ :x | (x select: [ :e | 1 = 1 ]) class ]'],
+      ]) {
+        assert.deepEqual(
+          await evaluate(runtime, 'app', id, expression, [source]),
+          library.orderedCollection,
+          `${expression} must answer OrderedCollection`,
+        );
+      }
+    });
+  });
+
+  test(`a subclass overriding species redirects its derived collections, through the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      const {library, kernel} = await seed(runtime, 'app', {lane});
+      const options = {images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane};
+      // A subclass of OrderedCollection whose derived collections are OrderedCollections, by
+      // overriding species — the Smalltalk pattern this slice exists to make expressible.
+      const shapeRef = await ensureSmalltalkShape(runtime.images, 'app', {
+        id: 'species-test/sub-shape',
+        slots: [
+          {id: 'ordered-collection-contents', name: 'contents'},
+          {id: 'ordered-collection-tally', name: 'tally'},
+        ],
+      });
+      const {classRef: subRef} = await defineClass({
+        images: runtime.images, imageId: 'app', name: 'SpeciesOverrideCollection',
+        superclassRef: library.orderedCollection, instanceShapeRef: shapeRef,
+      });
+      const {defineMethodsFromSource} = await import('../src/language/smalltalk-instance-variables.js');
+      await defineMethodsFromSource({
+        ...options,
+        classRef: subRef,
+        methods: [{selector: 'species', source: '[ OrderedCollection ]'}],
+      });
+
+      const source = await evaluate(runtime, 'app', `sub-src-${lane}`,
+        '[ :c | | x | x := c new. x add: 1. x add: 2. x ]', [subRef]);
+
+      // The receiver is the subclass...
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `sub-class-${lane}`, '[ :x | x class ]', [source]),
+        subRef,
+      );
+      // ...but both derived collections are its species, not its class.
+      for (const [id, expression] of [
+        [`sub-collect-${lane}`, '[ :x | (x collect: [ :e | e + 10 ]) class ]'],
+        [`sub-select-${lane}`, '[ :x | (x select: [ :e | e > 1 ]) class ]'],
+      ]) {
+        assert.deepEqual(
+          await evaluate(runtime, 'app', id, expression, [source]),
+          library.orderedCollection,
+          `${expression} must be the species, OrderedCollection — not the receiver's class`,
+        );
+      }
+      // And the derived collection holds what the enumeration put there, so this is a real
+      // OrderedCollection, not a relabelled subclass.
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `sub-first-${lane}`, '[ :x | (x collect: [ :e | e + 10 ]) at: 1 ]', [source]),
+        integerValue(11),
+      );
+    });
+  });
+
+  test(`enumeration is inherited from Collection, not defined on OrderedCollection, through the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      const {library} = await seed(runtime, 'app', {lane});
+      // collect: lives on Collection's dictionary; OrderedCollection's dictionary does not carry
+      // it, so the send resolves by the superclass walk — which is what makes it shared protocol.
+      const methodId = (classRef, selector) =>
+        `${classRef.objectId}/method/${Buffer.from(selector, 'utf8').toString('base64url')}`;
+      for (const selector of ['species', 'collect:', 'select:']) {
+        assert.ok(
+          await runtime.images.getCodeArtifact('app', `${methodId(library.collection, selector)}:semantic`),
+          `${selector} must be defined on Collection`,
+        );
+        assert.equal(
+          await runtime.images.getCodeArtifact('app', `${methodId(library.orderedCollection, selector)}:semantic`),
+          null,
+          `${selector} must not be re-defined on OrderedCollection`,
+        );
+      }
+      // And the subclass relationship is the one declared: OrderedCollection's superclass is
+      // Collection, whose own superclass is Object.
+      const oc = await runtime.images.getObject('app', library.orderedCollection.objectId);
+      assert.deepEqual(oc.slots['behavior-superclass'], library.collection);
+      const collection = await runtime.images.getObject('app', library.collection.objectId);
+      const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+      assert.deepEqual(collection.slots['behavior-superclass'], kernel.objectClass);
+    });
+  });
+}
