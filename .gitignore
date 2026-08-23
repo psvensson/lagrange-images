@@ -151,3 +151,9 @@ UserChanges/
 fixtures/normalize-component/target/
 fixtures/host-values-component/target/
 fixtures/image-resource-component/target/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
