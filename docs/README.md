@@ -10,9 +10,13 @@ The top-level README is the quick overview. These docs describe the current mode
 4. [Language platform](language-platform.md) — how Smalltalk, Rust, Java, Lisp and foreign code fit
 5. [Roadmap](roadmap.md) — remaining image/project/language substrate work
 
-If you are here to change something rather than to understand it, start instead with
-[the runbook](runbook.md) (how to run and debug) and [the seam map](seams.md) (what the
-representations, installers and executors are called).
+If you are here to change something rather than to understand it, start with:
+
+- [Agent workflow](agent-workflow.md) — provider-independent planning, falsification, verification and handoff
+- [Ownership registry](ownership.md) — single owners for major subsystems and every cross-subsystem interaction
+- [Runbook](runbook.md) — how to run and debug the repository
+- [Seam map](seams.md) — exact representations, installers and executors
+- [Domain agent rules](domain-agent-rules.md) — accumulated low-level implementation invariants preserved from the original `AGENTS.md`
 
 ## Focused concepts
 
@@ -20,6 +24,8 @@ representations, installers and executors are called).
 - [Security boundary](security.md) — identity vs authority and capability direction
 - [Lagrange integration](lagrange-integration.md) — backend/distributed integration boundary
 - [Object-environment boundary](object-environment-boundary.md) — Project semantic model vs Project/UI interaction; Perspective and graphical UI ownership
+- [Agent workflow](agent-workflow.md) — durable task/memory discipline across LLM providers
+- [Ownership registry](ownership.md) — authoritative owner of each major responsibility and interaction
 - [Runbook](runbook.md) — running the suite, integration assets, debugging silent foreign-runtime failures
 - [Seam map](seams.md) — representations, installers, executors and where code lives
 
