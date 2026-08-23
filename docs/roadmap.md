@@ -31,7 +31,10 @@ Next pressures:
       answers the first message's value. The parser keeps receiver and messages apart; the compiler
       lowers the cascade to hidden temporaries, a sequence and ordinary sends, so `lagrange-code`
       gains no op and no selector is recognized
-- [ ] finish the basic collection hierarchy and `species` conventions
+- [x] finish the basic collection hierarchy and `species` conventions: `Collection` holds the shared
+      enumeration written against `do:` and `species`, with `species` answering the receiver's class
+      by default, so `collect:`/`select:` make their answer from `self species new`. A subclass
+      redirects its derived collections by overriding `species`, not the enumeration methods. `OrderedCollection` is its first concrete subclass
 - [ ] primitive-backed methods beyond the current kernel minimum where real library code demands them
 - [ ] nested namespace semantics, including how language namespaces relate to Projects
 - [x] decide general object residency/promotion (**ADR 0060**): an allocated object begins transient

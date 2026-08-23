@@ -40,7 +40,7 @@ const PRE_LIBRARY_PUBLIC_CLASSES = Object.freeze([
   ...CONDITION_CLASSES.map(({name}) => name),
   'Dictionary',
 ]);
-const LIBRARY_PUBLIC_CLASSES = Object.freeze(['Association', 'OrderedCollection']);
+const LIBRARY_PUBLIC_CLASSES = Object.freeze(['Association', 'Collection', 'OrderedCollection']);
 
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be non-empty text`);
@@ -141,6 +141,7 @@ async function installSymmetricSmalltalkStandardImage({
       Array: indexed.arrayClass,
       Dictionary: dictionary.classRef,
       Association: library.association,
+      Collection: library.collection,
       OrderedCollection: library.orderedCollection,
       ...Object.fromEntries(CONDITION_CLASSES.map(({name}) => [name, conditions[name]])),
     }),

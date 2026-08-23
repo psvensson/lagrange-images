@@ -30,6 +30,49 @@ import {objectRef} from '../value/index.js';
 const ASSOCIATION_SHAPE_ID = 'smalltalk/association-instance-shape/v1';
 const ORDERED_COLLECTION_SHAPE_ID = 'smalltalk/ordered-collection-instance-shape/v1';
 
+// The hierarchy's root. `Collection` holds no state of its own — the enumeration protocol is
+// written against `do:`, which a subclass supplies — so it carries no instance Shape and nothing
+// here binds an instance variable. That is what lets the shared protocol live above every concrete
+// collection without either duplicating it or pushing the subclass's layout up into the parent.
+//
+// `species` answers the class a derived collection should be made of. The default is the receiver's
+// own class, which is what Smalltalk specifies and what `collect:`/`select:` need; a class whose
+// derived collections should be something else (a SortedCollection answering an OrderedCollection,
+// a Set answering a list for `collect:`) overrides `species`, not the enumeration methods.
+const COLLECTION_METHODS = [
+  {selector: 'species', source: '[ self class ]'},
+  // Enumeration composes `do:` rather than touching any subclass state. `detect:ifNone:` returns
+  // from inside its loop (ADR 0055), and `inject:into:` threads an accumulator — both ordinary
+  // Smalltalk over `do:`, with no primitive and no compiler involvement.
+  {
+    selector: 'collect:',
+    source: `[ :aBlock | | result |
+      result := self species new.
+      self do: [ :each | result add: (aBlock value: each) ].
+      ^ result ]`,
+  },
+  {
+    selector: 'select:',
+    source: `[ :aBlock | | result |
+      result := self species new.
+      self do: [ :each | (aBlock value: each) ifTrue: [ result add: each ] ].
+      ^ result ]`,
+  },
+  {
+    selector: 'detect:ifNone:',
+    source: `[ :aBlock :noneBlock |
+      self do: [ :each | (aBlock value: each) ifTrue: [ ^ each ] ].
+      ^ noneBlock value ]`,
+  },
+  {
+    selector: 'inject:into:',
+    source: `[ :initial :binaryBlock | | accumulator |
+      accumulator := initial.
+      self do: [ :each | accumulator := binaryBlock value: accumulator value: each ].
+      ^ accumulator ]`,
+  },
+];
+
 const ASSOCIATION_METHODS = [
   {selector: 'key', source: '[ key ]'},
   {selector: 'value', source: '[ value ]'},
@@ -144,43 +187,9 @@ const ORDERED_COLLECTION_METHODS = [
           tally := tally - 1.
           item ] ]`,
   },
-  // Higher-order enumeration, built on `do:` rather than on four more indexed loops. That is the
-  // point of the slice: there is now enough language for library protocol to compose library
-  // protocol, so these say what they mean and none of them touches `contents` or `tally`.
-  //
-  // `self class new` is deliberately as far as this goes. Generalising the answer's class properly
-  // is `species`, and inventing it here would be recreating the collection hierarchy ahead of
-  // needing it.
-  {
-    selector: 'collect:',
-    source: `[ :aBlock | | result |
-      result := self class new.
-      self do: [ :each | result add: (aBlock value: each) ].
-      ^ result ]`,
-  },
-  {
-    selector: 'select:',
-    source: `[ :aBlock | | result |
-      result := self class new.
-      self do: [ :each | (aBlock value: each) ifTrue: [ result add: each ] ].
-      ^ result ]`,
-  },
-  // The `^` originates in a Block that `do:` invokes, and returns from *this* activation through
-  // `do:` and its loop — ADR 0055's owner rule doing ordinary library work rather than a contrived
-  // test. It is also what makes the search stop: without it the predicate would run to the end.
-  {
-    selector: 'detect:ifNone:',
-    source: `[ :aBlock :noneBlock |
-      self do: [ :each | (aBlock value: each) ifTrue: [ ^ each ] ].
-      ^ noneBlock value ]`,
-  },
-  {
-    selector: 'inject:into:',
-    source: `[ :initial :binaryBlock | | accumulator |
-      accumulator := initial.
-      self do: [ :each | accumulator := binaryBlock value: accumulator value: each ].
-      ^ accumulator ]`,
-  },
+  // Higher-order enumeration no longer lives here: it moved to Collection with the rest of the
+  // shared protocol, written against `do:` and `species` rather than `contents`/`tally`. What
+  // remains is OrderedCollection's own layout and growth — the parts Collection cannot know.
   {
     selector: 'asArray',
     source: `[ | result |
@@ -199,9 +208,14 @@ function requiredText(value, label) {
 // deterministic id would adopt an unrelated object as this class or its layout — the rule the
 // repository applies to every derived id, and the reason `defineClass` alone is not enough for
 // rediscovery once methods exist.
-async function ensureLibraryClass({images, imageId, name, shapeId, slots}) {
-  const instanceShapeRef = await ensureSmalltalkShape(images, imageId, {id: shapeId, slots});
-  return (await ensureNamedClass({images, imageId, name, instanceShapeRef})).classRef;
+async function ensureLibraryClass({images, imageId, name, shapeId, slots, superclassRef = null}) {
+  // A stateless class carries no instance Shape. `ensureNamedClass` answers nil for it, and
+  // `defineClass`'s complete-layout rule is satisfied because a nil-shape ancestor declares nothing
+  // a subclass could drop.
+  const instanceShapeRef = shapeId
+    ? await ensureSmalltalkShape(images, imageId, {id: shapeId, slots})
+    : null;
+  return (await ensureNamedClass({images, imageId, name, superclassRef, instanceShapeRef})).classRef;
 }
 
 // Installed after the kernel protocols this library is written against: allocation (ADR 0046),
@@ -223,10 +237,18 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
     images, compilation, imageId, lane, classRef: associationRef, methods: ASSOCIATION_METHODS,
   });
 
+  // Collection before its subclass: OrderedCollection names it as superclass, and Collection's
+  // shared enumeration is defined once here rather than repeated per concrete collection.
+  const collectionRef = await ensureLibraryClass({images, imageId, name: 'Collection'});
+  await defineMethodsFromSource({
+    images, compilation, imageId, lane, classRef: collectionRef, methods: COLLECTION_METHODS,
+  });
+
   const orderedCollectionRef = await ensureLibraryClass({
     images,
     imageId,
     name: 'OrderedCollection',
+    superclassRef: collectionRef,
     shapeId: ORDERED_COLLECTION_SHAPE_ID,
     slots: [
       {id: 'ordered-collection-contents', name: 'contents'},
@@ -284,12 +306,17 @@ async function installSmalltalkLibrary({images, compilation, imageId, lane = 'ne
     methods: ORDERED_COLLECTION_METHODS,
   });
 
-  return Object.freeze({association: associationRef, orderedCollection: orderedCollectionRef});
+  return Object.freeze({
+    association: associationRef,
+    collection: collectionRef,
+    orderedCollection: orderedCollectionRef,
+  });
 }
 
 export {
   ASSOCIATION_METHODS,
   ASSOCIATION_SHAPE_ID,
+  COLLECTION_METHODS,
   ORDERED_COLLECTION_METHODS,
   ORDERED_COLLECTION_SHAPE_ID,
   installSmalltalkLibrary,
