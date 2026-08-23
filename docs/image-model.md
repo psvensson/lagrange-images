@@ -16,6 +16,8 @@ The substrate currently has these durable graph record kinds:
 
 They share one image object-ID namespace. Generic objects do not contain Smalltalk-specific `classId` or generic `source` fields.
 
+There is deliberately no built-in `Project`, `Perspective`, `Workspace`, window or UI record kind. Higher-level systems may represent those concepts with ordinary objects and refs without teaching the substrate what they mean.
+
 ## CodeArtifact dependencies and provenance
 
 `CodeArtifact` is currently the bootstrap generic artifact carrier. It has two different explicit relationship kinds:
@@ -83,12 +85,14 @@ Ordinary refs name evolving object identities. `pinned-ref` adds an opaque histo
 
 The mock and Lagrange backends materialize current state and append a history spine. Snapshots still copy the materialized records; a later schema should represent them as logical root/revision frontiers where possible.
 
-## Projects
+Generic revision-aware reads, graph diffs or branch/merge primitives may belong here when real clients prove they are broadly useful. Project working views, history browsers, merge interaction and Git projection belong to the Object Environment.
 
-Projects should be ordinary graph structures containing or relating code, notes, tests, data, work items and other projects. They should also be able to refer to source, manifests, lock data, imported binary libraries/components and other artifact dependencies without pretending that every dependency is editable source.
+## Higher-level object conventions
 
-Git/files remain useful interoperability views rather than the canonical model.
+Projects, notes, work items, Perspectives and other environment concepts can be ordinary graph structures. Their durability does not make their semantics part of the generic image model.
+
+See [object-environment-boundary.md](object-environment-boundary.md) and the [Lagrange Object Environment](https://github.com/psvensson/lagrange-object-environment) project for those conventions.
 
 ## Language boundary
 
-The image layer knows values, refs, shapes, identity, artifact relationships and history. It does not define classes, Lisp packages, `nil`, method syntax, closure calling convention, package-manager semantics or message lookup. Language personalities, interface adapters and toolchain providers own those semantics.
+The image layer knows values, refs, shapes, identity, artifact relationships and history. It does not define classes, Lisp packages, `nil`, method syntax, closure calling convention, package-manager semantics, Project semantics or message lookup. Language personalities, interface adapters, toolchain providers and higher-level clients own those meanings.

@@ -33,6 +33,7 @@ move in. Never move it the other way to make a claim easier to write.
 - [0031 — one runtime composition path](0031-one-runtime-composition-path.md): keep one runtime, graph ImageService and HTTP projection instead of parallel object models.
 - [0032 — atomic backend transactions](0032-atomic-backend-transactions.md): commit current state and its history event through one backend transaction and shared conformance contract.
 - [0033 — durable Lagrange backend](0033-durable-lagrange-backend.md): map the backend contract to the public embedded SQL session and five image-owned tables.
+- [0058 — Object Environment boundary](0058-object-environment-boundary.md): keep Project/collaboration/UI semantics above the generic image substrate while retaining generic history and authority primitives here.
 
 ## First language and semantic compilation
 
@@ -75,21 +76,13 @@ move in. Never move it the other way to make a claim easier to write.
 - [0029 — mixed implementation Block composition](0029-mixed-implementation-block-composition.md): compose foreign WASM and live foreign-runtime Blocks from Symmetric Smalltalk without implementation-specific calls.
 - [0034 — rich callable component interface](0034-rich-callable-component-interface.md): WIT-backed structured callable boundary with Component/WIT WASM lane and Cuis bridge v1, while canonical Value and wasm-scalar-call/v0 remain unchanged.
 - [0035 — interface composite values](0035-interface-composite-values.md): WIT composites become transient ref-free InterfaceValues carried as one schema-directed `interface-composite/v0` bytes Value; `callable-interface/v2` adds a structural type grammar while v1 stays frozen, so no collection Value kind appears and personalities own projection.
-
 - [0036 — foreign Component instance lifetime](0036-foreign-component-instance-lifetime.md): cache transpilation/compilation by artifact identity but instantiate a Component fresh per activation, so guest state and later host authority cannot cross activations.
-
 - [0037 — transient execution authority](0037-transient-execution-authority.md): authority travels beside an activation as execution context rather than inside it, executors get a check-only `require` rather than a grant, guest authority is the intersection of declared imports and caller grants, and authority belongs to the individual call rather than to a long-lived runtime instance.
-
 - [0038 — capability-aware Component host imports](0038-capability-aware-component-host-imports.md): `wasm-component-binding/v2` declares which host interfaces may be wired, while every concrete host operation is authorized at use time, so nothing is precomputed and revocation stays live.
-
 - [0039 — authorized object projection](0039-authorized-object-projection.md): make the image a third implementation lane so a projected object crosses as an ordinary composite argument, authorized per object at use time, with the ref never crossing.
-
 - [0040 — activation-scoped image resource handles](0040-activation-scoped-resource-handles.md): a WIT resource over an image object carries identity only, re-authorizes every method, lives for exactly one activation, and `own`/`drop` govern the handle rather than the object.
-
 - [0041 — inter-activation state survival](0041-inter-activation-state-survival.md): state may outlive an activation only under an explicit host-owned contract, and authority never survives with it; a constraint on future Component reuse, persistent resources and async callbacks rather than a framework for them.
-
 - [0042 — authorized object mutation](0042-authorized-object-mutation.md): `object/write` as a fourth implementation lane, authorizing the whole object, requiring a caller-supplied expected version, and surfacing conflicts explicitly rather than resolving them.
-
 - [0043 — mutable lexical state and assignment](0043-mutable-lexical-state.md): assignment mutates an activation-scoped binding cell rather than the durable lexical-environment graph, and a closure captures the cell rather than a snapshot.
 - [0044 — Object, Behavior, Class and Metaclass bootstrap](0044-object-behavior-class-metaclass.md): a Behavior with a fixed shape and a superclass chain, the metaclass knot as a real graph cycle, immediate Values taking their class from their kind, and `+` as an ordinary method over the existing `integer-add` op.
 - [0045 — the Boolean bridge and message-send control flow](0045-boolean-bridge-and-control-flow.md): a boolean Value nominates the `true`/`false` singleton as the effective receiver of one send, so `ifTrue:`/`ifFalse:` are ordinary methods on True and False rather than a compiler or IR primitive.
@@ -108,4 +101,4 @@ move in. Never move it the other way to make a claim easier to write.
 
 ## Reading rule
 
-The current model is summarized in [../architecture.md](../architecture.md) and [../language-platform.md](../language-platform.md). ADRs explain why the model reached that shape and may describe limitations that later ADRs have since extended.
+The current model is summarized in [../architecture.md](../architecture.md), [../language-platform.md](../language-platform.md) and [../object-environment-boundary.md](../object-environment-boundary.md). ADRs explain why the model reached that shape and may describe limitations that later ADRs have since extended.

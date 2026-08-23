@@ -13,17 +13,20 @@ Image
   CodeArtifacts
   LexicalEnvironments / Blocks
   roots / history / snapshots
-  later: projects / work / UI objects
+  arbitrary higher-level objects through ordinary shapes/refs
 ```
 
 It is not a VM heap dump. Physical execution layout may change without changing durable identity. Distribution is placement policy rather than part of object identity.
 
+Project, Perspective and UI semantics are intentionally not image record kinds. They live in [Lagrange Object Environment](https://github.com/psvensson/lagrange-object-environment) and can still be persisted as ordinary image objects. See [object-environment-boundary.md](object-environment-boundary.md).
+
 ## 2. Layers
 
 ```text
-tools / REPL / browser / graphical shell
+higher-level clients
+Object Environment | headless services | alternate tools
                     |
-language personalities
+language personalities / client adapters
 Smalltalk | Lisp | Java | Rust | ...
                     |
 compiler/tooling
@@ -42,7 +45,7 @@ Lagrange
 storage / placement / distributed WASM compute
 ```
 
-The dependency direction matters. The image graph does not learn Smalltalk classes, Cargo packages, Java JAR semantics or container lifecycles.
+The dependency direction matters. The image graph does not learn Smalltalk classes, Cargo packages, Java JAR semantics, Project/Perspective semantics, GUI constructs or container lifecycles.
 
 ## 3. Boundaries to protect
 
@@ -290,7 +293,7 @@ A dedicated PR-only CI job downloads pinned OpenSmalltalkVM/Cuis/package inputs 
 
 ## 13. Language personalities
 
-A language personality owns syntax, lookup, conditions/exceptions, package conventions and compiler/runtime adapters—not image storage mechanics.
+A language personality owns syntax, lookup, conditions/exceptions, package conventions and compiler/runtime adapters—not image storage mechanics or Object Environment presentation semantics.
 
 Symmetric Smalltalk owns its compiler because the language is designed here. Rust reuses Cargo/rustc. Java should reuse JVM/AOT/WASM tooling. Mature Smalltalk compatibility reuses OpenSmalltalkVM and Cuis tooling.
 
@@ -317,15 +320,6 @@ The substrate has now been pressured by:
 - the public Lagrange application-session seam with atomic image state/history,
   real-package compatibility and file-backed mapping restart coverage.
 
-The next high-value pressures are now outside this semantic gap:
+Higher-level Project, collaboration and graphical-environment pressure now belongs in Lagrange Object Environment. Missing generic primitives discovered there should feed back here through the public boundary.
 
-- richer Component/WIT-style foreign values/interfaces;
-- multi-package Cuis dependency graphs and structured class/method/package export;
-- a real pinned-OCI Cargo integration proof and standard package import;
-- capability-aware calls;
-- Java/JVM and Common Lisp ecosystem proofs;
-- OCI/distributed runtime placement and failure semantics;
-- real Lagrange process-restart and multi-node failure/recovery proofs for the
-  durable backend.
-
-See [docs/README.md](README.md) for navigation and [decisions/README.md](decisions/README.md) for topic-grouped ADRs.
+See [docs/README.md](README.md), [object-environment-boundary.md](object-environment-boundary.md) and [decisions/README.md](decisions/README.md).
