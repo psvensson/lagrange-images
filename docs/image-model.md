@@ -16,6 +16,8 @@ The substrate currently has these durable graph record kinds:
 
 They share one image object-ID namespace. Generic objects do not contain Smalltalk-specific `classId` or generic `source` fields.
 
+A Project does not need a special backend record kind. The image-level Project model can be implemented as a convention/library over ordinary objects, refs and artifacts. Perspective/window/UI concepts are higher-level Object Environment semantics and likewise do not require new graph record kinds.
+
 ## CodeArtifact dependencies and provenance
 
 `CodeArtifact` is currently the bootstrap generic artifact carrier. It has two different explicit relationship kinds:
@@ -83,12 +85,22 @@ Ordinary refs name evolving object identities. `pinned-ref` adds an opaque histo
 
 The mock and Lagrange backends materialize current state and append a history spine. Snapshots still copy the materialized records; a later schema should represent them as logical root/revision frontiers where possible.
 
+Revision-aware reads, Project working-frontier semantics and generic diff/merge/conflict data belong here when implemented because they are useful without any particular UI. History browsers and merge/conflict interaction belong to the Object Environment.
+
 ## Projects
 
-Projects should be ordinary graph structures containing or relating code, notes, tests, data, work items and other projects. They should also be able to refer to source, manifests, lock data, imported binary libraries/components and other artifact dependencies without pretending that every dependency is editable source.
+Projects are language-neutral image-level structures containing or relating code, notes, tests, data, work items, artifacts and other Projects. They should be usable by headless agents and tooling as well as graphical environments.
 
-Git/files remain useful interoperability views rather than the canonical model.
+A Project should be able to refer to source, manifests, lock data, imported binary libraries/components, runtime definitions and other artifact dependencies without pretending that every dependency is editable source.
+
+Projects should not recreate filesystem assumptions. An object may participate in several Projects or relationships; Project composition need not imply exclusive ownership.
+
+Git/files remain useful interoperability projections rather than canonical identity. A headless projection service may belong at the image/tooling layer; its interactive UI belongs in Lagrange Object Environment.
+
+Project membership is not authority inheritance. Current authority semantics remain exact-match and refs are not traversed as capabilities.
+
+See [object-environment-boundary.md](object-environment-boundary.md) for the Project/UI split.
 
 ## Language boundary
 
-The image layer knows values, refs, shapes, identity, artifact relationships and history. It does not define classes, Lisp packages, `nil`, method syntax, closure calling convention, package-manager semantics or message lookup. Language personalities, interface adapters and toolchain providers own those semantics.
+The image layer knows values, refs, shapes, identity, artifact relationships, history and the language-neutral Project convention. It does not define Smalltalk classes in the generic graph, Lisp packages, `nil`, method syntax, closure calling convention, package-manager semantics, Perspectives, windows or presentation behavior. Language personalities, interface adapters, toolchain providers and higher-level clients own those meanings.

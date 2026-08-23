@@ -4,10 +4,11 @@ The top-level README is the quick overview. These docs describe the current mode
 
 ## Start here
 
-1. [Architecture](architecture.md) — the layers, boundaries and execution paths
-2. [Image model](image-model.md) — durable graph records and identity
-3. [Language platform](language-platform.md) — how Smalltalk, Rust, Java, Lisp and foreign code fit
-4. [Roadmap](roadmap.md) — what exists and what is next
+1. [Architecture](architecture.md) — the image/project/language/execution layers and boundaries
+2. [Image model](image-model.md) — durable graph records, identity and image-level Project convention
+3. [Object-environment boundary](object-environment-boundary.md) — what the higher-level human environment owns
+4. [Language platform](language-platform.md) — how Smalltalk, Rust, Java, Lisp and foreign code fit
+5. [Roadmap](roadmap.md) — remaining image/project/language substrate work
 
 If you are here to change something rather than to understand it, start instead with
 [the runbook](runbook.md) (how to run and debug) and [the seam map](seams.md) (what the
@@ -18,8 +19,15 @@ representations, installers and executors are called).
 - [Value/reference/object model](value-model.md) — tagged Values, refs, shapes and generic objects
 - [Security boundary](security.md) — identity vs authority and capability direction
 - [Lagrange integration](lagrange-integration.md) — backend/distributed integration boundary
+- [Object-environment boundary](object-environment-boundary.md) — Project semantic model vs Project/UI interaction; Perspective and graphical UI ownership
 - [Runbook](runbook.md) — running the suite, integration assets, debugging silent foreign-runtime failures
 - [Seam map](seams.md) — representations, installers, executors and where code lives
+
+## Boundary in one sentence
+
+`lagrange-images` owns the durable image, Project, language and execution semantics; [lagrange-object-environment](https://github.com/psvensson/lagrange-object-environment) owns how humans see and inhabit them.
+
+Project is the intentional middle case: it is image-level but represented using ordinary objects/refs rather than a special backend record type. Perspective is environment-level even when persisted in the image.
 
 ## Execution and toolchains at a glance
 
@@ -37,7 +45,7 @@ long-lived external runtime
   -> provider-private VM/process
 ```
 
-Two mature toolchains now exercise `ToolchainService`: Cargo/rustc produces raw WASM from an explicit Rust graph, while OpenSmalltalkVM/Cuis produces a fresh runnable Cuis image from explicit base-image/support/package artifacts. The first foreign WASM interface is `wasm-scalar-call/v0`.
+Two mature toolchains exercise `ToolchainService`: Cargo/rustc produces raw WASM from an explicit Rust graph, while OpenSmalltalkVM/Cuis produces a fresh runnable Cuis image from explicit base-image/support/package artifacts.
 
 ## Smalltalk direction
 
@@ -46,52 +54,13 @@ Smalltalk has two complementary paths:
 ```text
 native Symmetric Smalltalk
           |
-          | shared projects/artifacts/interfaces/tools
+          | shared image/Project/artifact/interface substrate
           |
 OpenSmalltalkVM-backed compatible Smalltalk
 ```
 
-Symmetric Smalltalk is the image-native language experiment.
-
-The compatibility path now has both runtime and compiler/toolchain proofs:
-
-```text
-runtime
-  ForeignRuntimeService
-    -> headless OpenSmalltalkVM
-    -> Cuis image + explicit packages
-    -> canonical Value calls
-
-toolchain
-  explicit Cuis artifact graph
-    -> ToolchainService
-    -> OpenSmalltalkVM + real Cuis package/compiler machinery
-    -> derived .image + .changes
-    -> fresh runtime proof of the derived image
-```
-
-The runtime bridge is intentionally whitelisted rather than generic `perform:`/eval, and the Spur heap remains foreign runtime state. PR-only integration downloads and verifies the pinned upstream VM/image/package fixture, executes package code, builds a new Cuis image, then starts that derived image without reinstalling the package.
-
-Still ahead are a larger multi-package Cuis project, structured class/method/package export, mixed native/compatible Smalltalk services, OCI/distributed placement and optional later interpreter/Spur-to-WASM hosting.
-
-See [ADR 0022](decisions/0022-opensmalltalkvm-compatibility-direction.md), [ADR 0023](decisions/0023-foreign-runtime-lifecycle-substrate.md), [ADR 0024](decisions/0024-opensmalltalkvm-cuis-runtime-proof.md), [ADR 0025](decisions/0025-existing-cuis-package-proof.md) and [ADR 0026](decisions/0026-opensmalltalkvm-cuis-toolchain-provider.md).
+Symmetric Smalltalk is the image-native language. The compatibility path reuses the real runtime/compiler/package ecosystem. Their artifacts may participate in the same image-level Projects; the Object Environment supplies the human tooling over them.
 
 ## ADRs
 
 Use [decisions/README.md](decisions/README.md) instead of reading the ADR directory in numeric order. ADRs are append-only design history; the current README/architecture/language docs describe the resulting model.
-
-## Current frontier
-
-The substrate now demonstrates both directions of ecosystem reuse:
-
-```text
-explicit artifact graph
-   -> real existing compiler/tooling
-   -> runnable/executable artifact
-
-explicit runtime interface
-   -> real persistent existing VM/image
-   -> canonical Value calls
-```
-
-The next pressure points are multi-package Smalltalk dependencies and structured export, richer Component/WIT interfaces, Java/JAR and Common Lisp proofs, capabilities and distributed placement on the durable Lagrange backend.
