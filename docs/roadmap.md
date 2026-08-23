@@ -1,8 +1,8 @@
 # Roadmap
 
-This roadmap is deliberately limited to **image/project semantics, language/execution and generic graph primitives**. Graphical presentation and human-facing collaboration UX moved to [Lagrange Object Environment](https://github.com/psvensson/lagrange-object-environment); see [object-environment-boundary.md](object-environment-boundary.md) and ADR 0058.
+This roadmap is deliberately limited to **image/Project semantics, language/execution and generic graph primitives**. Graphical presentation and human-facing collaboration UX live in [Lagrange Object Environment](https://github.com/psvensson/lagrange-object-environment); see [object-environment-boundary.md](object-environment-boundary.md) and ADR 0058.
 
-The ordering is by architectural pressure, not language popularity.
+The ordering is by architectural pressure, not language popularity. Completed implementation detail belongs in the ADRs and tests; this file should preserve the remaining frontier without becoming a second history log.
 
 ## Current foundation
 
@@ -21,8 +21,6 @@ The substrate already proves:
 - long-lived foreign-runtime lifecycle with real OpenSmalltalkVM/Cuis runtime/toolchain/package proofs
 - mixed image-native/foreign-WASM/live-Cuis composition
 
-The ADR index is the source of truth for why these pieces have their current shape.
-
 ## 1. Symmetric Smalltalk substrate
 
 Keep language work here when it is language semantics or execution substrate rather than editor/REPL UX.
@@ -33,19 +31,45 @@ Next pressures:
 - [ ] finish the basic collection hierarchy and `species` conventions
 - [ ] primitive-backed methods beyond the current kernel minimum where real library code demands them
 - [ ] nested namespace semantics, including how language namespaces relate to Projects
-- [ ] decide general object residency/promotion: execution-local mutable graphs vs immediately durable allocation
+- [ ] decide general object residency/promotion: execution-local mutable graphs vs immediately durable allocation; answer aliasing, cycles, promotion atomicity, stable identity and reachable-graph persistence first
 - [ ] broaden the standard image only from real library/tool pressure
 - [ ] debugger-grade activation/resumption metadata without putting debugger UI here
 
 The REPL, source browser, inspector and debugger presentation belong in Lagrange Object Environment; this repository must expose the semantic/compiler/execution APIs they need.
 
-## 2. OpenSmalltalkVM / Cuis compatibility depth
+## 2. Callable Component and authority refinements
+
+The structured foreign/component boundary is functionally closed for current needs. Keep only refinements with concrete pressure:
+
+- [ ] per-call resource reads once async-capable host imports work; ADR 0040's preloaded record is tooling limitation, not intended persistence semantics
+- [ ] async foreign callbacks/effects only through explicit contracts, including delegated/attenuated authority semantics
+- [ ] reusable foreign Component instance/reset contracts only if measurements justify them; fresh-per-activation remains the safe default
+- [ ] per-call authority transport for long-lived foreign runtimes; ADR 0037 already fixes authority as call-scoped rather than runtime-scoped
+
+Do not put principals, grants or cached authorization decisions into durable artifacts, refs or resource handles.
+
+## 3. Image-native Lagrange WASM
+
+The hybrid tail/resumable execution model is established. Remaining optimization and runtime pressure:
+
+- [ ] tighter live-Value-handle analysis at suspension points
+- [ ] module-size/budget splitting of logical compilation groups
+- [ ] direct optimized calls between entries in one shared module
+- [ ] condition/exception unwinding across suspension points
+- [ ] debugger activation/resumption metadata
+- [ ] optimized/non-materialized closure representations
+- [ ] explicit cancellation semantics for suspended activations
+
+Do not conflate compiler-generated resumption with durable continuation state, retry or distributed recovery.
+
+## 4. OpenSmalltalkVM / Cuis compatibility depth
 
 Runtime/toolchain:
 
 - [ ] explicit dependency graph/order for several Cuis packages
 - [ ] prove a larger third-party package with real dependencies
 - [ ] snapshot byte reproducibility/normalization investigation
+- [ ] opt into toolchain result reuse only if snapshot determinism is demonstrated
 - [ ] richer explicit Cuis service interfaces without ambient eval
 - [ ] OCI foreign-runtime launcher/placement
 - [ ] restart/reconciliation and snapshot persistence behavior
@@ -60,35 +84,56 @@ Structured export/migration:
 
 Inspecting and navigating those structures belongs to Lagrange Object Environment.
 
-## 3. Package/toolchain ecosystem
+## 5. Package and compiler ecosystems
+
+### Generic import/toolchain work
 
 - [ ] real pinned-OCI Cargo integration proof in CI
 - [ ] crates.io `.crate` importer -> explicit package/vendor artifacts
 - [ ] git/private-registry dependency import conventions
 - [ ] indexed durable lookup for derivation keys
 - [ ] cross-install content-addressed reuse with truthful installation provenance
-- [ ] Java source/class/JAR artifact conventions and JVM/AOT/WASM spike
-- [ ] Common Lisp compiler/runtime personality spike over the common artifact/closure substrate
+
+### Rust
+
+- [ ] standard package importer built on explicit artifact/dependency semantics
+- [ ] Lagrange Rust SDK/crate for explicit host calls
+- [ ] portable precompiled WASM/Component dependency reuse
+
+### Java
+
+- [ ] Java source/class/JAR artifact conventions
+- [ ] JAR/class importer and dependency reuse
+- [ ] javac/JVM/AOT/Java-to-WASM toolchain spike
+- [ ] JVM/OCI foreign-runtime compatibility spike over the generic lifecycle
+- [ ] compare JVM compatibility with deeper WASM/image integration on one realistic application
+
+### Common Lisp
+
+- [ ] personality spike using the common artifact/closure/toolchain substrate
+- [ ] reader/macroexpansion representation
+- [ ] dynamic bindings
+- [ ] multiple values
+- [ ] conditions/restarts
+- [ ] reuse an existing Lisp compiler/runtime where useful rather than growing a replacement compiler by default
 
 A package/Project UI is not part of this layer; portable artifact and Project relationship semantics are.
 
-## 4. Execution, authority and distribution
+## 6. Execution, authority and distribution
 
-- [ ] per-call host-call transport for authority-aware long-lived foreign runtimes; ADR 0037 already fixes the semantics
-- [ ] delegated/attenuated authority semantics for future async callbacks/effects
-- [ ] reusable foreign Component instance/reset contracts only if measurements justify them
 - [ ] object locator and placement policy
 - [ ] local vs remote call semantics
 - [ ] Lagrange WASM placement
-- [ ] OCI/JVM foreign-runtime lifecycle and placement
-- [ ] distributed routing across image-native, Component/WASM and live foreign runtimes
+- [ ] OCI foreign-runtime lifecycle/placement
+- [ ] JVM foreign-runtime implementation
+- [ ] distributed routing across image-native, Component/foreign WASM and live runtimes
 - [ ] explicit failure/retry/idempotency semantics
 - [ ] durable deployment/reconciliation contract above runtime definitions
-- [ ] measured compute-near-object wins
+- [ ] measured `ctx.call()` / compute-near-object wins
 
 Authority remains transient execution context. Identity/contact pickers and invitation UX live above this repository. The semantics needed for a Project-wide grant remain a lower authority question because Project structure must not imply transitive authority accidentally.
 
-## 5. Durable graph and backend
+## 7. Durable graph and backend
 
 - [ ] real Lagrange process-restart durability proof
 - [ ] multi-node failure/recovery durability tests
@@ -100,7 +145,7 @@ Authority remains transient execution context. Identity/contact pickers and invi
 - [ ] object migration between immutable Shapes
 - [ ] measure partitioning/index choices on large images
 
-## 6. Projects and collaborative history semantics
+## 8. Projects and collaborative history semantics
 
 Project remains an image-level concept because it is useful without a graphical environment.
 
@@ -118,7 +163,7 @@ Project remains an image-level concept because it is useful without a graphical 
 
 Lagrange Object Environment owns Project browsers, working-view/history/diff presentation, merge/conflict-resolution interaction, Git projection UX and multi-author activity/presence.
 
-## 7. Generic versioning pressure
+## 9. Generic versioning pressure
 
 Project collaboration may expose generic primitives that should be reusable outside Projects too. Prefer such primitives when the semantics genuinely generalize:
 
@@ -128,20 +173,20 @@ Project collaboration may expose generic primitives that should be reusable outs
 
 Do not move semantic state into the UI merely because the first pressure came from a UI. Conversely, do not add a storage-level Project record kind merely because Project is image-level; ordinary objects/refs should carry it unless real pressure proves otherwise.
 
-## Moved out of this roadmap
+## Moved to Lagrange Object Environment
 
-The former **Graphical environment** section now lives entirely in the Lagrange Object Environment roadmap.
+The former **Graphical environment** section now lives entirely in the Lagrange Object Environment roadmap. The human-facing half of Project/collaboration work moved with it.
 
 Moved upward:
 
 - drawing/input/rendering substrate
 - retained presentation/view composition
-- surfaces/windows/world policy
+- surfaces/windows/world/compositor policy
 - Perspectives and Session behavior
-- inspectors, browsers, editors and debugger UI
+- inspectors, browsers, editors, REPL and debugger UI
 - visual inspection of exported OpenSmalltalkVM structures
 - Project/history/diff/merge/conflict interaction
 - Git/file projection UX
 - invitations, multi-author activity and presence UX
 
-The Project data model, Project history semantics and headless projection services stay here.
+The Project data model, Project history semantics, generic debugging/runtime metadata and headless projection services stay here.
