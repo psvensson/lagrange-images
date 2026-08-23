@@ -20,8 +20,29 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts
+      - name: Install Beads native binary
+        run: CI= node node_modules/@beads/bd/scripts/postinstall.js
       - run: npm run test:fast
       - run: npm run demo
+      - name: Verify provider-independent Beads bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(sha256sum AGENTS.md)"
+          npm run beads:init
+          after="$(sha256sum AGENTS.md)"
+          test "$before" = "$after"
+          npx bd version
+          npm run beads:prime >/dev/null
+          npm run beads:ready >/dev/null
+      - name: Capture generated Beads and lock metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: beads-bootstrap
+          path: |
+            .beads
+            package-lock.json
+          include-hidden-files: true
 
   # Every write, both lanes, pre-commit and commit-then-lost-ack. These sweeps grow with each new
   # protocol, so they get their own budget: a protocol added later lengthens this job rather than
