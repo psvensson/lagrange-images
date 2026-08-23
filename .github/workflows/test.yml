@@ -4,11 +4,8 @@ on:
   pull_request:
     branches: [main]
 
-# Temporary write permission is used only by the guarded bootstrap step below on this trusted,
-# same-repository feature branch. It will be removed once the generated Beads metadata/lockfile
-# have been committed and the final exact head is ready for normal read-only validation.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # The ordinary gate: everything except the exhaustive publication-recovery sweeps, which run
@@ -38,62 +35,6 @@ jobs:
           npx bd version
           npm run beads:prime >/dev/null
           npm run beads:ready >/dev/null
-      - name: Commit generated Beads and lock metadata to trusted PR branch
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        shell: bash
-        env:
-          HEAD_REF: ${{ github.head_ref }}
-        run: |
-          set -euo pipefail
-          generated="$(mktemp -d)"
-          mkdir -p "$generated/.beads/hooks"
-          cp package-lock.json "$generated/package-lock.json"
-          cp .beads/.gitignore "$generated/.beads/.gitignore"
-          cp .beads/README.md "$generated/.beads/README.md"
-          cp .beads/config.yaml "$generated/.beads/config.yaml"
-          cp .beads/metadata.json "$generated/.beads/metadata.json"
-          cp .beads/interactions.jsonl "$generated/.beads/interactions.jsonl"
-          cp -p .beads/hooks/post-checkout "$generated/.beads/hooks/post-checkout"
-          cp -p .beads/hooks/post-merge "$generated/.beads/hooks/post-merge"
-          cp -p .beads/hooks/pre-commit "$generated/.beads/hooks/pre-commit"
-          cp -p .beads/hooks/pre-push "$generated/.beads/hooks/pre-push"
-          cp -p .beads/hooks/prepare-commit-msg "$generated/.beads/hooks/prepare-commit-msg"
-
-          # Pull-request workflows check out a synthetic merge ref. Commit generated state on the
-          # real feature-branch head so the push is an ordinary fast-forward.
-          git fetch origin "${HEAD_REF}"
-          git checkout -B "${HEAD_REF}" FETCH_HEAD
-          mkdir -p .beads/hooks
-          cp "$generated/package-lock.json" package-lock.json
-          cp "$generated/.beads/.gitignore" .beads/.gitignore
-          cp "$generated/.beads/README.md" .beads/README.md
-          cp "$generated/.beads/config.yaml" .beads/config.yaml
-          cp "$generated/.beads/metadata.json" .beads/metadata.json
-          cp "$generated/.beads/interactions.jsonl" .beads/interactions.jsonl
-          cp -p "$generated/.beads/hooks/post-checkout" .beads/hooks/post-checkout
-          cp -p "$generated/.beads/hooks/post-merge" .beads/hooks/post-merge
-          cp -p "$generated/.beads/hooks/pre-commit" .beads/hooks/pre-commit
-          cp -p "$generated/.beads/hooks/pre-push" .beads/hooks/pre-push
-          cp -p "$generated/.beads/hooks/prepare-commit-msg" .beads/hooks/prepare-commit-msg
-
-          git add package-lock.json \
-            .beads/.gitignore \
-            .beads/README.md \
-            .beads/config.yaml \
-            .beads/metadata.json \
-            .beads/interactions.jsonl \
-            .beads/hooks/post-checkout \
-            .beads/hooks/post-merge \
-            .beads/hooks/pre-commit \
-            .beads/hooks/pre-push \
-            .beads/hooks/prepare-commit-msg
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit --no-verify -m "chore: add generated Beads workspace metadata"
-          git push origin HEAD:"${HEAD_REF}"
 
   # Every write, both lanes, pre-commit and commit-then-lost-ack. These sweeps grow with each new
   # protocol, so they get their own budget: a protocol added later lengthens this job rather than
