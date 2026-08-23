@@ -1,0 +1,95 @@
+# Ownership registry
+
+This is the authoritative map of architectural ownership for Lagrange Images.
+
+The rule is strict:
+
+> Every major subsystem has one owner. Every interaction between subsystems has one owner.
+
+An owner is one architectural code locus — a service, module, registry, adapter, composition root, or lower/external layer. It is not a claim about a human maintainer.
+
+The owner owns the concern's semantic decisions, state-transition/public contract and primary proof surface. Other components may call, observe or adapt it; they may not independently decide the same rule.
+
+A planned owner reserves responsibility but does not claim implementation exists yet.
+
+## Subsystem owners
+
+| Responsibility | Single owner | Location/status | Notes |
+| --- | --- | --- | --- |
+| Runtime composition and package-wide assembly | `createRuntime()` composition root | `src/runtime.js` | Wires owners together; must not absorb their semantic policy. |
+| Durable image graph operations and history publication | `GraphImageService` | `src/image/graph-image-service.js` | Owns image-record operations above the backend seam. |
+| Canonical Value semantics | Value model | `src/value/` | Smallest common value layer; language semantics do not leak into it. |
+| Generic Shape/Object representation | Object model | `src/object/` | Owns language-neutral object layout/validation. |
+| CodeArtifact representation and graph semantics | Code artifact model | `src/code/` | Owns durable code/artifact identity, dependencies and provenance fields. |
+| Storage transaction contract | Backend contract | `src/backend/` | Mock and durable adapters implement one transaction/storage seam. |
+| Durable Lagrange storage mapping | Lagrange backend adapter | `src/backend/create-backend.js` plus Lagrange backend implementation | Owns translation from the backend contract to public Lagrange application sessions. |
+| Invocation construction and language dispatch entry | `InvocationService` | `src/dispatch/invocation-service.js` | Turns a language-level application/send into an activation through the selected dispatcher. |
+| Activation lifetime, recursive execution and execution context | `ActivationExecutor` | `src/execution/executor.js` | Owns activation lifetime, recursive sends, lexical execution context and executor invocation. |
+| Executable representation selection | Code executor registry | `src/execution/` | Selects exactly one executor by CodeArtifact representation. |
+| Transient authority algebra and contexts | `AuthorityService` | `src/authority/authority-service.js` | Owns issue/attenuate/revoke/require semantics; authority never becomes program data. |
+| Image-native compilation orchestration | `CompilationService` | `src/compilation/` | Owns compiler/group-compiler invocation and derived executable publication. |
+| External toolchain orchestration and derivation reuse | `ToolchainService` | `src/toolchain/` | Owns explicit input resolution, provider invocation, result provenance and reuse policy. |
+| Foreign runtime lifecycle | `ForeignRuntimeService` | `src/foreign-runtime/` | Owns transient start/call/stop lifecycle and provider-private runtime handles. |
+| Durable foreign-runtime definition resolution | `ForeignRuntimeDefinitionService` | `src/foreign-runtime/` | Owns durable definition -> runtime-local provider/startable-definition resolution. |
+| Callable/interface and implementation-binding contracts | Callable layer | `src/callable/` | Owns language-neutral callable/interface/binding representations and authorized image bindings. |
+| Internal and foreign WASM execution machinery | WASM layer | `src/wasm/` | Owns Value-handle ABIs, module/component adapters, caches and WASM-specific execution contracts. |
+| Symmetric Smalltalk language semantics | Symmetric Smalltalk personality | `src/language/` | Owns syntax, lookup, class/kernel/library semantics and language-specific compilation policy. |
+| Image-level Project semantics | Project image library/service | planned | Ordinary image objects/refs; no special backend record type. Human Project interaction belongs above this repository. |
+| Agent work/dependency graph | Beads | `.beads`/Dolt after `bd init` | Authoritative operational task tracker; no parallel Markdown TODO tracker. |
+| Short durable agent discoveries | Beads memory | `bd remember` | Promote architectural/behavioral truth into tests/docs/ADRs as well. |
+| Architecture decision history | ADR set | `docs/decisions/` | Owns why durable architectural decisions were made. |
+| Current ownership map | Ownership registry | this file | Must change whenever a major owner or boundary changes. |
+
+## Interaction owners
+
+Endpoint owners do not jointly own an interaction. Each boundary has one owner responsible for the protocol/translation, sequencing, error semantics, lifecycle and integration proof appropriate to that boundary.
+
+| Interaction | Single interaction owner | Status | Responsibility |
+| --- | --- | --- | --- |
+| Public caller -> assembled Images runtime | `createRuntime()` / public runtime surface | current: `src/runtime.js` | Owns package composition and public assembly without duplicating subsystem policy. |
+| Graph/image semantics -> backend transaction seam | `GraphImageService` | current | Owns semantic record/history sequencing over backend transactions. |
+| Backend contract -> Lagrange application session | Lagrange backend adapter | current | Sole translation between image backend operations and public Lagrange storage/session APIs. |
+| Invocation request -> language dispatch resolution | `InvocationService` | current | Owns dispatcher invocation and construction of the activation envelope. |
+| Activation -> executable representation | `ActivationExecutor` | current | Reads the code representation and delegates through the executor registry; executors do not self-select. |
+| Activation -> transient authority checks | `ActivationExecutor` | current | Owns authority lifetime/propagation/attenuation plumbing; `AuthorityService` remains owner of the grant algebra. |
+| WASM host effect -> ordinary message/closure execution | `ActivationExecutor` | current | Host effects re-enter the ordinary execution/send/closure path; WASM does not create a second language runtime. |
+| Symmetric Smalltalk language policy -> generic execution | `createRuntime()` composition root | current | Registers language-owned primitives/temporary initialization without making `src/execution` depend on `src/language`. |
+| CompilationService -> compiler registries | `CompilationService` | current | Owns compiler selection request, compilation-group orchestration and publication of derived artifacts. |
+| ToolchainService -> artifact graph/provider | `ToolchainService` | current | Owns explicit input closure, provider boundary, diagnostics/result installation and provenance/reuse. |
+| Durable runtime definition -> live foreign runtime | `ForeignRuntimeDefinitionService` | current | Resolves durable definitions/provider bindings and starts/reuses transient runtimes through `ForeignRuntimeService`. |
+| Foreign runtime provider -> external VM/process | Concrete foreign-runtime provider | current per provider | Provider owns its transport/process protocol; generic service owns lifecycle semantics above it. |
+| Callable binding -> concrete implementation lane | Representation-specific callable executor | current: `src/callable/` + execution registry | Owns decoding one binding and invoking its declared implementation lane. |
+| Component binding -> host imports/authority check | Component binding executor | current | Wires only declared imports and performs use-time checks through the activation's `require`. |
+| Authorized image projection/mutation -> GraphImageService | Image projection/mutation binding executor | current: `src/callable/` | Owns boundary typing/version-token/error translation; GraphImageService owns the image mutation itself. |
+| Cargo toolchain provider -> OCI process | Cargo/rustc OCI provider | current: `src/toolchain/` | Owns Cargo-specific materialization, closed-input OCI invocation and output extraction. |
+| OpenSmalltalk/Cuis definitions/toolchain -> VM bridge | OpenSmalltalk/Cuis provider(s) | current: `src/foreign-runtime/`, `src/toolchain/` | Own provider-specific Cuis transport/toolchain protocol; generic lifecycle/toolchain services remain authoritative above it. |
+| Lagrange Object Environment -> Lagrange Images | `ImageClientAdapter` in `lagrange-object-environment` | external/planned | One cross-repository interaction owner; this repository supplies public image semantics and must not create a competing UI adapter. |
+| Beads task/memory -> agent work session | `bd prime` workflow | current/tool-owned | Operational context injection/work discovery; project-specific governance remains in `AGENTS.md`. |
+
+## Ownership change protocol
+
+Before implementing a new major subsystem or interaction:
+
+1. identify the responsibility in the plan/Bead
+2. name exactly one owner here
+3. identify which existing owner loses or delegates responsibility, if any
+4. state the boundary contract/invariants
+5. identify the primary proof/tests
+6. only then implement
+
+A proposal that says responsibility is `shared`, `co-owned`, `handled on both sides`, or leaves the interaction owner implicit is incomplete.
+
+## Detecting ownership drift
+
+Treat these as defects:
+
+- two services persist competing versions of the same semantic state
+- two endpoints independently retry/reconcile the same interaction
+- language policy is duplicated in generic execution or storage
+- backend adapters start deciding image semantics
+- lane-specific executors invent a second invocation/closure/authority model
+- two registries select implementations for the same extension point
+- a toolchain/provider bypasses the explicit artifact graph and reads ambient image state
+- an integration test cannot say which component is responsible for a boundary failure
+
+When drift is found, do not synchronize duplicate implementations. Restore one owner and make the other side consume it.

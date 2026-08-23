@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "lagrange_images",
+  "project_id": "3874351b-29f1-4999-a2d9-4d4bdb4b6777"
+}
