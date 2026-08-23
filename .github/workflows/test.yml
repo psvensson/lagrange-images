@@ -45,8 +45,37 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          # Keep only Beads' intended tracked metadata/hooks. Runtime database/backup state is
-          # excluded by .beads/.gitignore and is never added here.
+          generated="$(mktemp -d)"
+          mkdir -p "$generated/.beads/hooks"
+          cp package-lock.json "$generated/package-lock.json"
+          cp .beads/.gitignore "$generated/.beads/.gitignore"
+          cp .beads/README.md "$generated/.beads/README.md"
+          cp .beads/config.yaml "$generated/.beads/config.yaml"
+          cp .beads/metadata.json "$generated/.beads/metadata.json"
+          cp .beads/interactions.jsonl "$generated/.beads/interactions.jsonl"
+          cp -p .beads/hooks/post-checkout "$generated/.beads/hooks/post-checkout"
+          cp -p .beads/hooks/post-merge "$generated/.beads/hooks/post-merge"
+          cp -p .beads/hooks/pre-commit "$generated/.beads/hooks/pre-commit"
+          cp -p .beads/hooks/pre-push "$generated/.beads/hooks/pre-push"
+          cp -p .beads/hooks/prepare-commit-msg "$generated/.beads/hooks/prepare-commit-msg"
+
+          # Pull-request workflows check out a synthetic merge ref. Commit generated state on the
+          # real feature-branch head so the push is an ordinary fast-forward.
+          git fetch origin "${HEAD_REF}"
+          git checkout -B "${HEAD_REF}" FETCH_HEAD
+          mkdir -p .beads/hooks
+          cp "$generated/package-lock.json" package-lock.json
+          cp "$generated/.beads/.gitignore" .beads/.gitignore
+          cp "$generated/.beads/README.md" .beads/README.md
+          cp "$generated/.beads/config.yaml" .beads/config.yaml
+          cp "$generated/.beads/metadata.json" .beads/metadata.json
+          cp "$generated/.beads/interactions.jsonl" .beads/interactions.jsonl
+          cp -p "$generated/.beads/hooks/post-checkout" .beads/hooks/post-checkout
+          cp -p "$generated/.beads/hooks/post-merge" .beads/hooks/post-merge
+          cp -p "$generated/.beads/hooks/pre-commit" .beads/hooks/pre-commit
+          cp -p "$generated/.beads/hooks/pre-push" .beads/hooks/pre-push
+          cp -p "$generated/.beads/hooks/prepare-commit-msg" .beads/hooks/prepare-commit-msg
+
           git add package-lock.json \
             .beads/.gitignore \
             .beads/README.md \
