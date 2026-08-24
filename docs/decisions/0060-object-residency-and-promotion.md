@@ -1,10 +1,12 @@
 # ADR 0060: Object residency and promotion
 
-Status: implemented — an object allocated inside an execution begins as a transient value in that
+Status: implemented
+Proven by: test/object-residency.test.js
+
+An object allocated inside an execution begins as a transient value in that
 execution's arena, in the same reserved REF namespace ADR 0052 established for closures, and is
 materialized as a durable object record only when a reference to it crosses a durability boundary —
 one object kind, one ObjectRef, with residency as a lifetime state rather than a type distinction.
-Proof lives in `test/object-residency.test.js`.
 
 ## Problem
 
