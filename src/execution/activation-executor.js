@@ -276,6 +276,12 @@ class ActivationExecutor {
     // ADR 0052 decision 5a: one resolution rule for this execution, shared by the executors, the
     // dispatcher and this class's own reads. Identical to `this.images` when there is no arena.
     const view = arenaImagesView(this.images, arena);
+    // ADR 0060: a write to an already-promoted object may introduce a *new* transient value (a
+    // backing store allocated after its owner escaped). The view's write-through promotes such a
+    // value through the same central operation the boundary uses, so the durable copy never holds
+    // an unpromoted ref. The memo is the arena's, so a value promoted here and at the boundary is
+    // one object.
+    if (arena) arena.postPromotionPromoter = async (value) => await promoteClosure(this.images, arena, value);
 
     const block = await view.getBlock(activation.block.imageId, activation.block.objectId);
     if (!block) throw new TypeError(`activation block not found: ${activation.block.imageId}/${activation.block.objectId}`);
@@ -400,6 +406,14 @@ class ActivationExecutor {
         // its write; the graph guard stays a tripwire proving a boundary was not forgotten, rather
         // than becoming the mechanism. A value with nothing transient in it comes straight back.
         promote: whileActive('promote', async (value) => await promoteClosure(this.images, arena, value)),
+        // ADR 0060 decision 3. An object allocated inside this execution begins in the arena, not
+        // the durable store — `basicNew` and condition allocation mint here, and the object becomes
+        // durable only if a reference crosses a durability boundary via `promote`. The arena owns
+        // the identity (a transient ref in the reserved namespace); the caller supplies only the
+        // layout, so there is no identity collision to retry.
+        mintObject: whileActive('mintObject', ({imageId, shape, behavior, slots = {}, indexed = null, metadata = {}}) => (
+          arena.mintObject(imageId, {shape, behavior, slots, indexed, metadata})
+        )),
         // Check-only, and the only authority operation that crosses this seam. There is no
         // grant to return, no context to read, and no principal to branch on. Absent
         // authority fails closed rather than permitting.

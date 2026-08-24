@@ -38,6 +38,7 @@ import {
   objectRef,
   textValue,
 } from '../value/index.js';
+import {isTransientRef} from '../value/transient-ref.js';
 import {TupleSet} from '../support/tuple-map.js';
 import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
@@ -309,6 +310,7 @@ async function allocate({
   indexedSize = null,
   newObjectId,
   maxIdentityAttempts,
+  context = null,
 }) {
   const {kernel, shapeRef, shape} = await loadAllocationClass({
     images, primitiveImage, classValue, primitive,
@@ -324,6 +326,21 @@ async function allocate({
   const indexed = indexedKind === SHAPE_INDEXED.VALUES
     ? Array.from({length: indexedSize ?? 0}, () => kernel.nil)
     : null;
+
+  // ADR 0060 decision 3. Inside an execution the object begins in the arena: the executor's
+  // `mintObject` supplies a transient identity and holds the record, so allocation costs no durable
+  // write unless the object escapes. The layout is identical to the durable form below, so
+  // promotion is a copy, not a translation.
+  if (typeof context?.mintObject === 'function') {
+    return context.mintObject({
+      imageId: primitiveImage,
+      shape: shapeRef,
+      behavior: classValue,
+      slots,
+      indexed,
+      metadata: {},
+    });
+  }
 
   // ADR 0046 identity rule: a known collision chooses another candidate; every other failure
   // surfaces, and a new Smalltalk send always begins with a fresh candidate.
@@ -352,7 +369,7 @@ async function allocate({
   );
 }
 
-async function basicNew({images, primitiveImage, classValue, newObjectId, maxIdentityAttempts}) {
+async function basicNew({images, primitiveImage, classValue, newObjectId, maxIdentityAttempts, context = null}) {
   return await allocate({
     images,
     primitiveImage,
@@ -360,10 +377,11 @@ async function basicNew({images, primitiveImage, classValue, newObjectId, maxIde
     primitive: SMALLTALK_PRIMITIVE.BASIC_NEW,
     newObjectId,
     maxIdentityAttempts,
+    context,
   });
 }
 
-async function basicNewSized({images, primitiveImage, classValue, sizeValue, newObjectId, maxIdentityAttempts}) {
+async function basicNewSized({images, primitiveImage, classValue, sizeValue, newObjectId, maxIdentityAttempts, context = null}) {
   const size = nonNegativeSize(sizeValue, SMALLTALK_PRIMITIVE.BASIC_NEW_SIZED);
   return await allocate({
     images,
@@ -373,6 +391,7 @@ async function basicNewSized({images, primitiveImage, classValue, sizeValue, new
     indexedSize: size,
     newObjectId,
     maxIdentityAttempts,
+    context,
   });
 }
 
@@ -453,7 +472,8 @@ async function indexedAtPut({
   });
   if (Object.hasOwn(bounded, 'resumed')) return bounded.resumed;
   const index = bounded.index;
-  const storedValue = canonicalizeValue(await promoted(context, newValue));
+  // `value` is the receiver: writing into a transient indexed object keeps the value in the arena.
+  const storedValue = canonicalizeValue(await promoted(context, newValue, value));
   const indexed = [...record.indexed];
   indexed[index] = storedValue;
   await images.putObject(primitiveImage, {
@@ -481,8 +501,16 @@ async function indexedAtPut({
 // A context without `promote` is an execution that predates this seam rather than an error: the
 // value passes through, and the graph guard still refuses a transient ref, so a missed boundary
 // fails loudly instead of silently persisting a dangling reference.
-async function promoted(context, value) {
-  return typeof context?.promote === 'function' ? await context.promote(value) : value;
+//
+// ADR 0060: a slot or indexed write is a durability boundary *only when the receiver is durable*.
+// Writing a transient value into a transient receiver keeps both inside the arena — nothing has
+// escaped yet — so the value must NOT be promoted, or every `OrderedCollection`'s backing store
+// would become durable the instant it is assigned. `receiver` is the object being written into;
+// when it is a transient ref the write stays in the arena and the value passes through unpromoted.
+async function promoted(context, value, receiver = null) {
+  if (typeof context?.promote !== 'function') return value;
+  if (receiver !== null && isTransientRef(receiver)) return value;
+  return await context.promote(value);
 }
 
 function requireSendMessage(context, primitive) {
@@ -870,7 +898,8 @@ async function instanceSlotWrite({images, primitiveImage, target, slotIdValue, n
   const {record, slotId} = await resolveSlotAccess({
     images, primitiveImage, primitive: SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE, target, slotIdValue, context,
   });
-  const stored = canonicalizeValue(await promoted(context, newValue));
+  // `target` is the receiver: writing into a transient object keeps the value in the arena.
+  const stored = canonicalizeValue(await promoted(context, newValue, target));
   await images.putObject(primitiveImage, {
     id: record.id,
     shape: record.shape,
@@ -1013,6 +1042,28 @@ async function signalHostCondition({
   if (!facade || typeof sendMessage !== 'function') throw hostError;
   const classRecord = await images.getObject(primitiveImage, classId);
   if (!classRecord) throw hostError;
+
+  // ADR 0060 decision 2: a condition created, signalled, handled and discarded inside one execution
+  // never leaves the arena, so a handled condition costs no durable object. An unhandled one
+  // crosses the root boundary and is promoted there — exactly when its information must outlive
+  // the execution. Minted into the arena like `basicNew`; the record form below is unchanged, so
+  // promotion is a copy.
+  if (typeof context?.mintObject === 'function') {
+    const instanceRef = context.mintObject({
+      imageId: primitiveImage,
+      shape: objectRef(primitiveImage, EXCEPTION_SHAPE_ID),
+      behavior: objectRef(primitiveImage, classId),
+      slots: {'exception-message-text': textValue(hostError.message)},
+      metadata: {},
+    });
+    // An ordinary send, exactly as below — the receiver is the arena ref, resolved arena-first.
+    return await sendMessage({
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: instanceRef,
+      message: textValue('signal'),
+      arguments: [],
+    });
+  }
 
   // ADR 0054 decision 1a: a condition is an ordinary object, so it is allocated by ordinary rules —
   // including ADR 0046's identity retry. Writing once at `expectedVersion: 0` would turn an id
@@ -1372,7 +1423,9 @@ function createSmalltalkKernelPrimitiveV1Executor({
         case SMALLTALK_PRIMITIVE.CLASS_OF:
           return await classOf({images, primitiveImage, value});
         case SMALLTALK_PRIMITIVE.BASIC_NEW:
-          return await basicNew({images, primitiveImage, classValue: value, newObjectId, maxIdentityAttempts});
+          return await basicNew({
+            images, primitiveImage, classValue: value, newObjectId, maxIdentityAttempts, context,
+          });
         case SMALLTALK_PRIMITIVE.BASIC_NEW_SIZED:
           return await basicNewSized({
             images,
@@ -1381,6 +1434,7 @@ function createSmalltalkKernelPrimitiveV1Executor({
             sizeValue: second,
             newObjectId,
             maxIdentityAttempts,
+            context,
           });
         case SMALLTALK_PRIMITIVE.INDEXED_SIZE:
           return await indexedSize({images, primitiveImage, value});

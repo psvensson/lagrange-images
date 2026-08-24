@@ -227,8 +227,11 @@ test('initialize may be overridden, and new answers what it returns', async () =
 });
 
 // Decision 8: allocation and initialization are not one transaction. Hiding a rollback inside `new`
-// would require a transaction across arbitrary user code.
-test('a failing initialize does not roll the allocated object back', async () => {
+// would require a transaction across arbitrary user code. ADR 0060 sharpens what "not rolled back"
+// means: a failed execution's objects die with its arena rather than becoming durable garbage — so
+// the absence of a durable record is now the correct outcome, not a leaked one. The object lived
+// and was mutated inside the execution; it simply never escaped, because the execution failed.
+test('a failing initialize leaves no durable object behind', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');
     const shape = await emptyShape(runtime, 'app');
@@ -238,7 +241,7 @@ test('a failing initialize does not roll the allocated object back', async () =>
       classRef: point.classRef,
       methods: [{
         selector: 'initialize',
-        // A send of a selector nothing implements, so initialize fails after basicNew committed.
+        // A send of a selector nothing implements, so initialize fails after basicNew allocated.
         program: {
           parameters: [],
           captures: [],
@@ -259,8 +262,10 @@ test('a failing initialize does not roll the allocated object back', async () =>
       (error) => error.name === 'SmalltalkMessageNotUnderstoodError',
     );
     const after = (await runtime.images.listObjects('app')).filter(({id}) => !before.has(id));
-    assert.equal(after.length, 1, 'the allocated object survives a failed initialize');
-    assert.deepEqual(after[0].behavior, point.classRef);
+    assert.equal(
+      after.length, 0,
+      'an object allocated in a failed execution dies with the arena; it must not leak a durable record',
+    );
   });
 });
 
@@ -421,14 +426,19 @@ test('the primitives reject a pinned ref', async () => {
 
 // Decision 6. A known collision means another candidate, never adopting the existing object as an
 // idempotent retry — an instance is not a named declaration.
-test('a colliding candidate identity is retried with a fresh one, never adopted', async () => {
+// ADR 0060 decision 4: inside an execution, `basicNew` identity is minted fresh in the arena's
+// reserved namespace — it never collides with a durable id, and the host-supplied candidate list is
+// not consulted. The durable-path identity retry (ADR 0046) still governs an allocation made
+// outside any execution, but a normal `basicNew` no longer reaches it. So the observable contract
+// is: the arena id is fresh and transient, and the pre-existing durable object is untouched.
+test('an in-execution basicNew mints a fresh transient identity and never collides', async () => {
   const identities = ['collides', 'collides', 'fresh-instance'];
   let index = 0;
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');
     const shape = await emptyShape(runtime, 'app');
     const point = await defineClass({images: runtime.images, imageId: 'app', name: 'Point', instanceShapeRef: shape});
-    // Somebody else already owns that id.
+    // Somebody else already owns that id, durably.
     await runtime.images.putObject('app', {
       id: 'collides',
       shape,
@@ -437,7 +447,15 @@ test('a colliding candidate identity is retried with a fresh one, never adopted'
     });
 
     const instance = await evaluate(runtime, 'app', 'collision', '[ :c | c basicNew ]', [point.classRef]);
-    assert.equal(instance.objectId, 'fresh-instance');
+    // The object escaped (it is the answer), so it promoted to a derived durable id under
+    // `object/`. The point ADR 0060 makes: the arena minted it fresh, so it is neither the squatted
+    // durable id nor one of the host-supplied candidates — the collision-and-retry path never ran.
+    assert.ok(
+      instance.objectId.startsWith('object/'),
+      `an escaped basicNew answer promotes to a derived durable id, got ${instance.objectId}`,
+    );
+    assert.notEqual(instance.objectId, 'collides', 'the fresh identity is never the squatted one');
+    assert.ok(!identities.includes(instance.objectId), 'the host-supplied candidates were not adopted');
     const squatter = await runtime.images.getObject('app', 'collides');
     assert.deepEqual(squatter.metadata, {owner: 'somebody else'}, 'the existing object must be untouched');
   }, {smalltalkObjectIds: () => identities[Math.min(index++, identities.length - 1)]});

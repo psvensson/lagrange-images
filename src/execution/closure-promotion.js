@@ -1,4 +1,4 @@
-import {ensureBlock, ensureLexicalEnvironment} from '../graph/ensure-records.js';
+import {ensureBlock, ensureLexicalEnvironment, ensureObject} from '../graph/ensure-records.js';
 import {objectRef} from '../value/index.js';
 import {TRANSIENT_ID_PREFIX, isTransientRef} from '../value/transient-ref.js';
 import {ExpiredClosureInstanceError} from './lexical-cells.js';
@@ -40,8 +40,14 @@ import {ExpiredClosureInstanceError} from './lexical-cells.js';
 // Deterministic, and derived from the transient id — which already carries a per-arena nonce, so two
 // executions cannot collide and a retry within one execution recomputes the same id. That is what
 // makes a lost acknowledgement converge instead of promoting one closure under two identities.
+//
+// The transient id embeds the arena's mint kind as its first segment (`block`, `environment`,
+// `object`). Closures keep the historical `closure/` prefix so a pre-ADR-0060 promoted closure's
+// derived id is unchanged; objects derive under `object/`. The kind segment is consumed, not
+// carried into the durable id.
 function durableIdFor(transientObjectId) {
   const suffix = transientObjectId.slice(TRANSIENT_ID_PREFIX.length);
+  if (suffix.startsWith('object/')) return `object/${suffix.slice('object/'.length)}`;
   return `closure/${suffix}`;
 }
 
@@ -83,21 +89,24 @@ class ClosurePromoter {
 
     const record = this.#arena.transientRecord(ref.imageId, ref.objectId);
     if (!record) throw new ExpiredClosureInstanceError(ref.imageId, ref.objectId);
-    if (record.kind !== 'block') {
-      throw new TypeError(`only a closure instance can be promoted: ${ref.imageId}/${ref.objectId}`);
-    }
 
     const durable = objectRef(ref.imageId, durableIdFor(ref.objectId));
     // Reserved before any recursion. Everything below may reach this same instance again.
     this.#memo.set(key, {ref: durable, status: 'in-progress'});
     try {
-      const environment = await this.#promoteEnvironment(ref.imageId, record.environment);
-      await ensureBlock(this.#images, ref.imageId, {
-        id: durable.objectId,
-        code: record.code,
-        environment,
-        metadata: {...record.metadata},
-      });
+      if (record.kind === 'block') {
+        const environment = await this.#promoteEnvironment(ref.imageId, record.environment);
+        await ensureBlock(this.#images, ref.imageId, {
+          id: durable.objectId,
+          code: record.code,
+          environment,
+          metadata: {...record.metadata},
+        });
+      } else if (record.kind === 'object') {
+        await this.#promoteObjectRecord(ref, durable.objectId);
+      } else {
+        throw new TypeError(`only a closure instance or an object can be promoted: ${ref.imageId}/${ref.objectId}`);
+      }
       this.#memo.set(key, {ref: durable, status: 'complete'});
       return durable;
     } catch (error) {
@@ -107,6 +116,39 @@ class ClosurePromoter {
       this.#memo.delete(key);
       throw error;
     }
+  }
+
+  // ADR 0060 decision 5. The durable projection is the object's slots and indexed part, recursively
+  // through transient refs only: what is traversed is what is written. A durable ref reachable from
+  // the object is an edge to an existing durable record and is written as an edge, not re-published.
+  // The preassigned durable ref (reserved in `promote` before this runs) is what lets a cycle name
+  // this object before its record exists, so the traversal terminates on shared structure and on
+  // cycles through the memo.
+  //
+  // The record is re-read from the arena *at write time*, not carried from the caller. Promotion of
+  // a cyclic graph suspends inside a nested `promoteValue`, and Smalltalk code runs while a cycle is
+  // still in-progress (`initialize`, slot writes) — so the object can be mutated between reservation
+  // and publication. Writing the stale snapshot would silently drop the mutation that closed the
+  // cycle (a link written *after* its target was reserved). The arena holds the live state; the
+  // write publishes it as it stands when the holder's own promotion completes.
+  async #promoteObjectRecord(ref, durableObjectId) {
+    const record = this.#arena.transientRecord(ref.imageId, ref.objectId);
+    if (!record) throw new ExpiredClosureInstanceError(ref.imageId, ref.objectId);
+    const slots = {};
+    for (const [slotId, value] of Object.entries(record.slots)) {
+      slots[slotId] = await this.promoteValue(value);
+    }
+    const desired = {
+      id: durableObjectId,
+      shape: record.shape,
+      behavior: record.behavior,
+      slots,
+      ...(Object.hasOwn(record, 'indexed')
+        ? {indexed: await Promise.all(record.indexed.map((value) => this.promoteValue(value)))}
+        : {}),
+      metadata: {...record.metadata},
+    };
+    await ensureObject(this.#images, ref.imageId, desired);
   }
 
   async #promoteEnvironment(imageId, environmentRef) {

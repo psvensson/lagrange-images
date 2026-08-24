@@ -223,8 +223,46 @@ class LexicalCellArena {
     }));
   }
 
+  // ADR 0060 decision 3. An object allocated inside this execution begins here rather than in the
+  // durable store: `basicNew` and condition allocation mint into the arena, and the object becomes
+  // durable only if a reference crosses a durability boundary. The record mirrors the durable
+  // object record field for field — shape, behavior, slots, indexed, metadata — so promotion is a
+  // copy rather than a translation, exactly as ADR 0052 made it for closures.
+  mintObject(imageId, {shape, behavior, slots = {}, indexed = null, metadata = {}}) {
+    return this.#mint(imageId, 'object', Object.freeze({
+      kind: 'object',
+      shape,
+      behavior,
+      slots: Object.freeze({...slots}),
+      // A non-indexed Shape omits the property entirely, preserving the durable record form.
+      ...(indexed === null ? {} : {indexed: Object.freeze([...indexed])}),
+      metadata: Object.freeze({...metadata}),
+    }));
+  }
+
   transientRecord(imageId, objectId) {
     return this.#instances.get([imageId, objectId]) ?? null;
+  }
+
+  // ADR 0060: a slot or indexed write to an object that has not escaped stays in the arena. The
+  // record is replaced whole (slots and indexed are immutable snapshots), mirroring the durable
+  // whole-record rewrite, so a later read in the same execution sees the new state and a promotion
+  // that follows publishes the latest. There is no version to CAS on — the record is
+  // execution-local, so the only writer is this execution itself.
+  mutateTransientObject(imageId, objectId, {slots = null, indexed = null} = {}) {
+    const key = [imageId, objectId];
+    const record = this.#instances.get(key);
+    if (!record) throw new ExpiredClosureInstanceError(imageId, objectId);
+    if (record.kind !== 'object') {
+      throw new TypeError(`only a transient object can be mutated: ${imageId}/${objectId}`);
+    }
+    this.#instances.set(key, Object.freeze({
+      ...record,
+      slots: slots === null ? record.slots : Object.freeze({...slots}),
+      ...(indexed === null
+        ? (Object.hasOwn(record, 'indexed') ? {indexed: record.indexed} : {})
+        : {indexed: Object.freeze([...indexed])}),
+    }));
   }
 
   transientEntries() {
@@ -303,9 +341,16 @@ function arenaImagesView(images, arena) {
   // record from taking one. A reserved id absent from this arena is therefore an *expired*
   // instance, which is a lifetime error rather than a missing record — and saying so is the
   // difference between "your closure outlived its execution" and "your image is corrupt".
+  //
+  // One nuance ADR 0060 forces: the dispatcher asks *every* object receiver "are you a Block?"
+  // first (ADR 0044's Block-personality check), so a transient *object* is looked up as a Block on
+  // every send to it. That is a negative answer, not an expiry — the id is live in the arena as a
+  // different kind, and only a reserved id present *nowhere* in the arena has outlived its
+  // execution. So "not this kind" answers null and lets the durable-negative fall through, while
+  // "not in the arena at all" is the lifetime error.
   const resolve = async (imageId, objectId, kind, durable) => {
-    const found = transient(imageId, objectId, kind);
-    if (found) return found;
+    const record = arena.transientRecord(imageId, objectId);
+    if (record) return record.kind === kind ? record : null;
     if (isTransientObjectId(objectId)) {
       throw new ExpiredClosureInstanceError(imageId, objectId);
     }
@@ -314,6 +359,74 @@ function arenaImagesView(images, arena) {
   view.getBlock = (imageId, objectId) => resolve(imageId, objectId, 'block', images.getBlock);
   view.getLexicalEnvironment = (imageId, objectId) =>
     resolve(imageId, objectId, 'lexical-environment', images.getLexicalEnvironment);
+  // ADR 0060: object reads resolve arena-first, exactly as Block reads already do — so a primitive
+  // holding a transient receiver (a `basicNew` result, an unhandled condition still in its
+  // execution) sees its state without the object ever becoming durable. The durable fallback is
+  // never reached for a reserved id, for the same reason as above.
+  // A transient record's id is its arena key rather than a stored field, but every reader and
+  // writer below the view addresses a record by `record.id` — the whole-record rewrites in the
+  // slot, indexed and Dictionary primitives all rebuild from it. Surface the id on the record the
+  // view answers so those paths work unchanged against a transient object; the durable record
+  // already carries its own id.
+  view.getObject = async (imageId, objectId) => {
+    const record = arena.transientRecord(imageId, objectId);
+    if (record) {
+      if (record.kind !== 'object') return null;
+      return Object.freeze({...record, id: objectId});
+    }
+    if (isTransientObjectId(objectId)) throw new ExpiredClosureInstanceError(imageId, objectId);
+    return await images.getObject(imageId, objectId);
+  };
+  // A write naming a reserved id is a write to an object in this arena. `basicNew`'s whole point is
+  // that the id is minted transient and the record lives here — so the write updates the arena.
+  // But ADR 0060 decision 4 makes the object *one object across promotion*: if this transient id is
+  // already registered as promoted (the arena's memo, keyed exactly as the promoter keys it), the
+  // mutation must also reach the durable record, or the durable copy goes stale the moment Smalltalk
+  // code mutates an escaped object — which a cyclic structure does while its own promotion is still
+  // resolving. The durable id is derived, so the write converges on the same identity; the arena is
+  // updated too, so the rest of this execution keeps reading the new state. A durable id that is
+  // not transient falls through to the durable store unchanged.
+  view.putObject = async (imageId, record, options = {}) => {
+    if (isTransientObjectId(record?.id)) {
+      const existing = arena.transientRecord(imageId, record.id);
+      if (!existing) throw new ExpiredClosureInstanceError(imageId, record.id);
+      arena.mutateTransientObject(imageId, record.id, {
+        slots: record.slots,
+        indexed: Object.hasOwn(record, 'indexed') ? record.indexed : null,
+      });
+      const promoted = arena.promotionMemo().get([imageId, record.id]);
+      if (promoted) {
+        // The durable id is derived from the transient one by the promoter's rule. The durable
+        // record already exists (promotion wrote it), so this is a mutation of it. A value written
+        // now may itself be transient — a backing Array allocated *after* its OrderedCollection
+        // escaped — and writing that ref unpromoted would dangle, so the new state is promoted
+        // through the same central operation first. Within one execution the only writer is this
+        // execution, so the read-then-write CAS cannot race here.
+        const durableId = promoted.ref.objectId;
+        const current = await images.getObject(imageId, durableId);
+        if (current) {
+          const promoteValue = arena.postPromotionPromoter
+            ?? ((v) => v);
+          const slots = {};
+          for (const [slotId, value] of Object.entries(record.slots)) {
+            slots[slotId] = await promoteValue(value);
+          }
+          await images.putObject(imageId, {
+            id: durableId,
+            shape: record.shape,
+            behavior: record.behavior,
+            slots,
+            ...(Object.hasOwn(record, 'indexed')
+              ? {indexed: await Promise.all(record.indexed.map(promoteValue))}
+              : {}),
+            metadata: record.metadata,
+          }, {expectedVersion: current._version});
+        }
+      }
+      return record;
+    }
+    return await images.putObject(imageId, record, options);
+  };
   return view;
 }
 
