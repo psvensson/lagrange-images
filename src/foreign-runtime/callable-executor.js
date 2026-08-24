@@ -94,7 +94,7 @@ function createForeignRuntimeCallableInterfaceV1Executor({
 
   return Object.freeze({
     instanceCache: cache,
-    async execute({activation, code}, {images}) {
+    async execute({activation, code}, {images, promote = null}) {
       if (!code || code.representation !== FOREIGN_RUNTIME_CALLABLE_INTERFACE_V1) {
         throw new TypeError(`foreign runtime callable executor requires ${FOREIGN_RUNTIME_CALLABLE_INTERFACE_V1}`);
       }
@@ -120,10 +120,17 @@ function createForeignRuntimeCallableInterfaceV1Executor({
       }
 
       const instance = await cache.get({definition: runtimeDefinition, artifact: definitionArtifact});
+      // ADR 0060 decision 2. Arguments cross a foreign-runtime/host boundary here, so a transient
+      // object passed out becomes durable before the runtime sees it — otherwise a ref the foreign
+      // side holds would dangle the moment this execution ends. `promote` is the execution's central
+      // operation; a context without it predates the seam and passes arguments through unchanged.
+      const args = typeof promote === 'function'
+        ? await Promise.all(activation.arguments.map((value) => promote(value)))
+        : activation.arguments;
       return await runtimeService.call({
         runtimeId: instance.runtimeId,
         interface: descriptor.interface,
-        arguments: activation.arguments,
+        arguments: args,
       });
     },
   });

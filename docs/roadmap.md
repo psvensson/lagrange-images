@@ -37,13 +37,15 @@ Next pressures:
       redirects its derived collections by overriding `species`, not the enumeration methods. `OrderedCollection` is its first concrete subclass
 - [ ] primitive-backed methods beyond the current kernel minimum where real library code demands them
 - [ ] nested namespace semantics, including how language namespaces relate to Projects
-- [x] decide general object residency/promotion (**ADR 0060**): an allocated object begins transient
-      in the arena and promotes to a durable record only when a reference crosses a durability
-      boundary. The questions the roadmap listed are answered there — aliasing (one durable object,
-      memoized), cycles (preassigned ids, staged before edges resolve), promotion atomicity (one
-      central operation riding the ADR 0032 transaction), stable identity (fresh at allocation,
-      derived durable id), reachable-graph persistence (traverse transient refs only; durable refs
-      are edges). What remains is the implementation, which is its own task with its own proof list
+- [x] decide and implement general object residency/promotion (**ADR 0060**): an allocated object
+      begins transient in the arena and promotes to a durable record only when a reference crosses a
+      durability boundary. Decided and implemented — aliasing (one durable object, memoized), cycles
+      (preassigned ids, staged before edges resolve, with write-through so a mutation during
+      promotion is not lost), promotion atomicity (one central operation riding the ADR 0032
+      transaction), stable identity (fresh at allocation, derived durable id), reachable-graph
+      persistence (traverse transient refs only; durable refs are edges), and a slot/indexed write
+      that promotes only when the receiver is durable. A handled condition and a built-and-discarded
+      collection now write no durable record; proof lives in `test/object-residency.test.js`
 - [ ] broaden the standard image only from real library/tool pressure
 - [ ] debugger-grade activation/resumption metadata without putting debugger UI here
 
