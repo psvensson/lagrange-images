@@ -21,6 +21,7 @@ import {KERNEL_CLASSES, ensureObject, ensureShape, findSmalltalkKernel, isLocalR
 const SMALLTALK_GLOBAL_NAMESPACE_V1 = 'smalltalk-global-namespace/v1';
 const NAMESPACE_OBJECT_ID = 'smalltalk-global-namespace/v1';
 const NAMESPACE_SHAPE_ID = 'smalltalk/global-namespace-shape/v1';
+const NAMESPACE_PARENT_SLOT = 'namespace-parent';
 const GLOBAL_BINDING_SHAPE_ID = 'smalltalk/global-binding-shape/v1';
 const GLOBAL_BINDING_VALUE_SLOT = 'global-binding-value';
 const GLOBAL_BINDING_CLASS_ID = 'smalltalk/class/GlobalBinding';
@@ -127,9 +128,13 @@ async function installSmalltalkGlobalNamespace({images, compilation, imageId, la
     images, compilation, imageId, lane, classRef, methods: [{selector: 'value', source: '[ value ]'}],
   });
 
+  // ADR 0061: one slot, the optional parent edge. Shape identity is the id string, not the layout,
+  // so growing this Shape in place is coherent and migrates nothing. The slot is always present in
+  // a stored namespace object — `putObject` enforces exact slot-set match — so "no parent" is a nil
+  // Value here, never an omitted slot. The root is the parentless namespace.
   const namespaceShape = await ensureShape(images, imageId, {
     id: NAMESPACE_SHAPE_ID,
-    slots: [],
+    slots: [{id: NAMESPACE_PARENT_SLOT, name: 'parent'}],
     indexed: SHAPE_INDEXED.VALUES,
   });
   // Created empty, but *not* ensured against an empty mapping: the mapping has its own lifecycle
@@ -142,7 +147,7 @@ async function installSmalltalkGlobalNamespace({images, compilation, imageId, la
       id: NAMESPACE_OBJECT_ID,
       shape: objectRef(imageId, namespaceShape.id),
       behavior: null,
-      slots: {},
+      slots: {[NAMESPACE_PARENT_SLOT]: kernel.nil},
       indexed: [],
       metadata: {protocol: SMALLTALK_GLOBAL_NAMESPACE_V1},
     }, {expectedVersion: 0});
@@ -188,37 +193,80 @@ async function publishSmalltalkClassGlobals({images, imageId, names} = {}) {
   return Object.freeze(published);
 }
 
-// Absent stays distinct from corrupt, as with every other discoverable protocol here: an image
-// without a namespace simply has no globals, while a damaged one is an explicit failure.
-async function findSmalltalkGlobalNamespace({images, imageId} = {}) {
+// ADR 0061: the parent edge. A namespace object stores it in the `namespace-parent` slot: the
+// kernel nil for the root, a ref to another namespace otherwise. Reading it is tolerant of the
+// pre-0061 root, which was written with `slots: {}` before the Shape grew the slot — absence reads
+// as no parent, and the first rewrite carries the slot forward. `nilRef` is the kernel nil, the
+// only value besides a namespace ref the slot may hold.
+function namespaceParentRef(imageId, record, nilRef) {
+  const parent = record.slots?.[NAMESPACE_PARENT_SLOT];
+  if (parent === undefined || parent === null) return null;
+  if (!isLocalRef(parent, imageId)) {
+    throw new SmalltalkNamespaceError(imageId, `the parent slot holds a non-local value, not a namespace ref or nil`);
+  }
+  // The kernel nil means "no parent"; any other local ref names the parent namespace.
+  if (nilRef && parent.objectId === nilRef.objectId) return null;
+  return parent;
+}
+
+// Generalized finder (ADR 0061). `findSmalltalkGlobalNamespace` is the root special case; this one
+// reads any namespace by id. Absent stays distinct from corrupt, as with every other discoverable
+// protocol here: an image without the object simply has no such namespace, while a damaged one is
+// an explicit failure.
+async function findNamespace({images, imageId, namespaceId = NAMESPACE_OBJECT_ID} = {}) {
   requiredText(imageId, 'namespace image id');
-  const record = await images.getObject(imageId, NAMESPACE_OBJECT_ID);
+  requiredText(namespaceId, 'namespace id');
+  const record = await images.getObject(imageId, namespaceId);
   if (!record) return null;
   if (record.metadata?.protocol !== SMALLTALK_GLOBAL_NAMESPACE_V1) {
-    throw new SmalltalkNamespaceError(imageId, `object does not declare ${SMALLTALK_GLOBAL_NAMESPACE_V1}`);
+    throw new SmalltalkNamespaceError(imageId, `${namespaceId} does not declare ${SMALLTALK_GLOBAL_NAMESPACE_V1}`);
   }
   if (!isLocalRef(record.shape, imageId, NAMESPACE_SHAPE_ID)) {
-    throw new SmalltalkNamespaceError(imageId, `object does not have shape ${NAMESPACE_SHAPE_ID}`);
+    throw new SmalltalkNamespaceError(imageId, `${namespaceId} does not have shape ${NAMESPACE_SHAPE_ID}`);
   }
   const entries = decodePairs(imageId, record.indexed);
   for (const [name, binding] of entries) {
     await assertIsBinding({images, imageId, name, binding});
   }
-  return Object.freeze({protocol: SMALLTALK_GLOBAL_NAMESPACE_V1, record, entries});
+  // The kernel nil is the only non-namespace value the parent slot may hold; look it up to read the
+  // edge. An image with a namespace always has a kernel (the installer needs one), so this is safe.
+  const kernel = await findSmalltalkKernel({images, imageId});
+  return Object.freeze({
+    protocol: SMALLTALK_GLOBAL_NAMESPACE_V1,
+    record,
+    entries,
+    parent: namespaceParentRef(imageId, record, kernel?.nil ?? null),
+  });
 }
 
-async function requireNamespace({images, imageId}) {
-  const namespace = await findSmalltalkGlobalNamespace({images, imageId});
-  if (!namespace) throw new TypeError(`image ${imageId} has no global namespace; install it first`);
+// Absent stays distinct from corrupt, as with every other discoverable protocol here: an image
+// without a namespace simply has no globals, while a damaged one is an explicit failure.
+async function findSmalltalkGlobalNamespace({images, imageId} = {}) {
+  return await findNamespace({images, imageId, namespaceId: NAMESPACE_OBJECT_ID});
+}
+
+async function requireNamespace({images, imageId, namespaceId = NAMESPACE_OBJECT_ID}) {
+  const namespace = await findNamespace({images, imageId, namespaceId});
+  if (!namespace) {
+    throw new TypeError(`image ${imageId} has no global namespace ${namespaceId}; install it first`);
+  }
   return namespace;
 }
 
 async function writeMapping({images, imageId, namespace, entries}) {
+  // Writes this namespace's own id and preserves its slots — critically the parent edge. Writing
+  // `slots: {}` would both be rejected by the Shape (which declares the parent slot) and would
+  // erase the parent on every publish/rename/remove in a nested namespace. A pre-0061 root that
+  // has not yet been rewritten carries the slot forward as nil (its finder's parent is null).
+  const kernel = await findSmalltalkKernel({images, imageId});
+  const slots = namespace.record.slots && Object.hasOwn(namespace.record.slots, NAMESPACE_PARENT_SLOT)
+    ? namespace.record.slots
+    : {[NAMESPACE_PARENT_SLOT]: kernel.nil};
   await images.putObject(imageId, {
-    id: NAMESPACE_OBJECT_ID,
+    id: namespace.record.id,
     shape: namespace.record.shape,
     behavior: namespace.record.behavior,
-    slots: {},
+    slots,
     indexed: encodePairs(entries),
     metadata: namespace.record.metadata,
   }, {expectedVersion: namespace.record._version});
@@ -229,10 +277,10 @@ async function writeMapping({images, imageId, namespace, entries}) {
 // `publish` is retry-safe in the way an installer needs: a binding that already exists keeps the
 // value it has. Re-running an installer must not undo a legitimate rebind — the current value has
 // its own lifecycle now, and only `rebind` is allowed to change it.
-async function publishGlobal({images, imageId, name, bindingId, value}) {
+async function publishGlobal({images, imageId, name, bindingId, value, namespaceId = NAMESPACE_OBJECT_ID}) {
   requiredText(name, 'global name');
   requiredText(bindingId, 'global binding id');
-  const namespace = await requireNamespace({images, imageId});
+  const namespace = await requireNamespace({images, imageId, namespaceId});
 
   // Preflight, before anything is created. Checking the mapping only after minting the candidate
   // would leave an orphan GlobalBinding behind on every rejected publication.
@@ -265,8 +313,8 @@ async function publishGlobal({images, imageId, name, bindingId, value}) {
   return objectRef(imageId, bindingId);
 }
 
-async function resolveGlobal({images, imageId, name}) {
-  const namespace = await findSmalltalkGlobalNamespace({images, imageId});
+async function resolveGlobal({images, imageId, name, namespaceId = NAMESPACE_OBJECT_ID}) {
+  const namespace = await findNamespace({images, imageId, namespaceId});
   return namespace?.entries.get(name) ?? null;
 }
 
@@ -293,11 +341,11 @@ async function rebindGlobal({images, imageId, bindingId, value}) {
 // must name the identity it believes it is moving. That makes retry convergence part of the one API
 // contract rather than an optional stronger mode: after a lost acknowledgement, the retry succeeds
 // only when that same identity is already at the destination.
-async function renameGlobal({images, imageId, from, to, bindingId}) {
+async function renameGlobal({images, imageId, from, to, bindingId, namespaceId = NAMESPACE_OBJECT_ID}) {
   requiredText(from, 'global name');
   requiredText(to, 'global name');
   requiredText(bindingId, 'global binding id');
-  const namespace = await requireNamespace({images, imageId});
+  const namespace = await requireNamespace({images, imageId, namespaceId});
   const binding = namespace.entries.get(from);
   const target = namespace.entries.get(to);
 
@@ -327,10 +375,10 @@ async function renameGlobal({images, imageId, from, to, bindingId}) {
 // already holding it keeps working. Identity is required for the same ABA reason as rename: if a
 // removal commits, its acknowledgement is lost, and another actor republishes the same spelling to a
 // different binding, the original retry must conflict rather than delete the new binding.
-async function removeGlobal({images, imageId, name, bindingId}) {
+async function removeGlobal({images, imageId, name, bindingId, namespaceId = NAMESPACE_OBJECT_ID}) {
   requiredText(name, 'global name');
   requiredText(bindingId, 'global binding id');
-  const namespace = await requireNamespace({images, imageId});
+  const namespace = await requireNamespace({images, imageId, namespaceId});
   const mapped = namespace.entries.get(name);
   if (!mapped) return false;
   if (mapped.objectId !== bindingId) {
@@ -342,11 +390,124 @@ async function removeGlobal({images, imageId, name, bindingId}) {
   return true;
 }
 
+// ADR 0061: create a nested namespace. Same Shape and protocol as the root, at a caller-chosen id,
+// with a parent edge (defaulting to the root). Exact-or-create: re-creating the same namespace with
+// the same parent is a no-op; a conflict on id or parent is loud. The parent must exist and be a
+// namespace. A fresh node cannot already be on a cycle, so the only self-cycle to refuse is
+// parent === self.
+async function createNamespace({images, imageId, namespaceId, parent = NAMESPACE_OBJECT_ID}) {
+  requiredText(imageId, 'image id');
+  requiredText(namespaceId, 'namespace id');
+  requiredText(parent, 'parent namespace id');
+  if (namespaceId === parent) {
+    throw new SmalltalkNamespaceError(imageId, `a namespace cannot be its own parent: ${namespaceId}`);
+  }
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  const existing = await images.getObject(imageId, namespaceId);
+  if (existing) {
+    // Converge on a retry: it must be the same namespace with the same parent.
+    const found = await findNamespace({images, imageId, namespaceId});
+    const foundParent = found.parent?.objectId ?? null;
+    if (foundParent !== parent) {
+      throw new SmalltalkGlobalConflictError(
+        namespaceId,
+        `already exists with parent ${foundParent ?? 'none'}, not ${parent}`,
+      );
+    }
+    return objectRef(imageId, namespaceId);
+  }
+  // The parent must be a real namespace; this also validates the root exists for a default parent.
+  await requireNamespace({images, imageId, namespaceId: parent});
+  await images.putObject(imageId, {
+    id: namespaceId,
+    shape: objectRef(imageId, NAMESPACE_SHAPE_ID),
+    behavior: null,
+    slots: {[NAMESPACE_PARENT_SLOT]: objectRef(imageId, parent)},
+    indexed: [],
+    metadata: {protocol: SMALLTALK_GLOBAL_NAMESPACE_V1},
+  }, {expectedVersion: 0});
+  return objectRef(imageId, namespaceId);
+}
+
+// ADR 0061: (re)set a namespace's parent. Refuses to close a cycle: walking the proposed parent's
+// chain to the root must not pass through this namespace. Identity-scoped by CAS on the record
+// version, like the mapping writes.
+async function setNamespaceParent({images, imageId, namespaceId, parent}) {
+  requiredText(imageId, 'image id');
+  requiredText(namespaceId, 'namespace id');
+  requiredText(parent, 'parent namespace id');
+  if (namespaceId === parent) {
+    throw new SmalltalkNamespaceError(imageId, `a namespace cannot be its own parent: ${namespaceId}`);
+  }
+  const namespace = await requireNamespace({images, imageId, namespaceId});
+  // The proposed parent must be a namespace, and reaching the root from it must not pass through
+  // this namespace — that is the cycle.
+  const visited = new Set();
+  let cursor = parent;
+  for (;;) {
+    if (cursor === namespaceId) {
+      throw new SmalltalkNamespaceError(
+        imageId,
+        `setting the parent of ${namespaceId} to ${parent} would close a cycle`,
+      );
+    }
+    if (visited.has(cursor)) {
+      throw new SmalltalkNamespaceError(imageId, `the proposed parent chain already has a cycle at ${cursor}`);
+    }
+    visited.add(cursor);
+    const ancestor = await findNamespace({images, imageId, namespaceId: cursor});
+    if (!ancestor) throw new SmalltalkNamespaceError(imageId, `the proposed parent ${cursor} is not a namespace`);
+    if (!ancestor.parent) break;
+    cursor = ancestor.parent.objectId;
+  }
+  const kernel = await findSmalltalkKernel({images, imageId});
+  const slots = {
+    ...(namespace.record.slots ?? {}),
+    [NAMESPACE_PARENT_SLOT]: objectRef(imageId, parent),
+  };
+  await images.putObject(imageId, {
+    id: namespace.record.id,
+    shape: namespace.record.shape,
+    behavior: namespace.record.behavior,
+    slots,
+    indexed: namespace.record.indexed,
+    metadata: namespace.record.metadata,
+  }, {expectedVersion: namespace.record._version});
+  return objectRef(imageId, namespaceId);
+}
+
 // Name -> binding id, for the compiler. Transient: it is read per compilation and never stored.
-async function globalDeclarations({images, imageId}) {
-  const namespace = await findSmalltalkGlobalNamespace({images, imageId});
-  if (!namespace) return {};
-  return Object.fromEntries([...namespace.entries].map(([name, binding]) => [name, binding.objectId]));
+//
+// ADR 0061: resolution walks the parent chain from `namespaceId` outward to the root, and a nearer
+// namespace's name shadows a farther one's (inner-wins). The walk is the compile-time lookup the
+// ADR describes; the artifact the compiler produces still carries only binding ids, never a path.
+// The chain is acyclic by construction (the management seam refuses a cycle-closing parent), but
+// the walk defends itself anyway: a corrupted cycle is a namespace error, never a silent loop.
+async function globalDeclarations({images, imageId, namespaceId = NAMESPACE_OBJECT_ID}) {
+  const merged = new Map();
+  const visited = new Set();
+  let currentId = namespaceId;
+  // Walk outward, recording which names are already claimed by a nearer namespace. First writer
+  // wins, so a child name is never overwritten by its parent's.
+  for (;;) {
+    if (visited.has(currentId)) {
+      throw new SmalltalkNamespaceError(imageId, `the namespace parent chain has a cycle at ${currentId}`);
+    }
+    visited.add(currentId);
+    const namespace = await findNamespace({images, imageId, namespaceId: currentId});
+    if (!namespace) {
+      // A missing namespace is only legal as the caller's own starting point being absent — an
+      // image with no globals at all. A parent that points nowhere is a dangling edge = corrupt.
+      if (currentId === namespaceId && currentId === NAMESPACE_OBJECT_ID) return {};
+      throw new SmalltalkNamespaceError(imageId, `the namespace ${currentId} named in a parent chain does not exist`);
+    }
+    for (const [name, binding] of namespace.entries) {
+      if (!merged.has(name)) merged.set(name, binding.objectId);
+    }
+    if (!namespace.parent) return Object.fromEntries(merged);
+    currentId = namespace.parent.objectId;
+  }
 }
 
 export {
@@ -354,10 +515,13 @@ export {
   GLOBAL_BINDING_SHAPE_ID,
   GLOBAL_BINDING_VALUE_SLOT,
   NAMESPACE_OBJECT_ID,
+  NAMESPACE_PARENT_SLOT,
   NAMESPACE_SHAPE_ID,
   SMALLTALK_GLOBAL_NAMESPACE_V1,
   SmalltalkGlobalConflictError,
   SmalltalkNamespaceError,
+  createNamespace,
+  findNamespace,
   findSmalltalkGlobalNamespace,
   globalBindingId,
   globalDeclarations,
@@ -368,4 +532,5 @@ export {
   removeGlobal,
   renameGlobal,
   resolveGlobal,
+  setNamespaceParent,
 };

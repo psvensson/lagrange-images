@@ -160,6 +160,9 @@ async function compileSymmetricSmalltalkMethod({
   // ADR 0057: the caller's namespace snapshot, where it has one. Reading it again here would let a
   // rename or removal between the two reads change what a batch of methods meant.
   globals: suppliedGlobals = null,
+  // ADR 0061: which namespace this method compiles in, when no snapshot is supplied. Defaults to
+  // the root, preserving ADR 0057 for existing callers.
+  namespaceId,
 } = {}) {
   requiredText(selector, 'selector');
   const declared = normalizeCaptureDeclarations(captures);
@@ -169,7 +172,7 @@ async function compileSymmetricSmalltalkMethod({
   // when the source actually names an instance variable, so a method that uses none carries none.
   // One namespace snapshot per batch, supplied by the caller where there is one: reading it twice
   // would let a rename or removal between the reads change what compilation meant.
-  const globals = suppliedGlobals ?? await globalDeclarations({images, imageId});
+  const globals = suppliedGlobals ?? await globalDeclarations({images, imageId, namespaceId});
   const compiled = compileSymmetricSmalltalkSemanticBlock(source, {
     globals,
     captures: {
@@ -209,7 +212,7 @@ async function compileSymmetricSmalltalkMethod({
 // Compile methods from source against their defining class and install them. This is where a
 // capture declaration acquires its value: the slot primitives resolve to their well-known Blocks in
 // this image, and anything else must have been supplied by the caller.
-async function defineMethodsFromSource({images, compilation, imageId, classRef, methods, lane = 'neutral'} = {}) {
+async function defineMethodsFromSource({images, compilation, imageId, classRef, methods, lane = 'neutral', namespaceId} = {}) {
   if (!Array.isArray(methods) || methods.length === 0) throw new TypeError('methods must be a non-empty array');
   const primitiveIds = new Set(Object.values(PRIMITIVE_BLOCK_ID));
   // Resolved once: `nil` means this image's kernel nil, and a method that never writes it carries
@@ -218,8 +221,9 @@ async function defineMethodsFromSource({images, compilation, imageId, classRef, 
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const kernelNil = kernel.nil;
   // One snapshot for the whole batch, used for compilation and nothing else. Global captures are
-  // identified by *provenance* below, never by testing an id against this map.
-  const globals = await globalDeclarations({images, imageId});
+  // identified by *provenance* below, never by testing an id against this map. ADR 0061: the
+  // namespace the batch compiles in, defaulting to the root.
+  const globals = await globalDeclarations({images, imageId, namespaceId});
   const compiled = [];
   for (const {selector, source, captures} of methods) {
     const declared = normalizeCaptureDeclarations(captures ?? {});

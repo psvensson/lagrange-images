@@ -99,14 +99,18 @@ async function installSymmetricSmalltalkBlock({
   captures = {},
   environment = null,
   metadata = {},
+  // ADR 0061: which namespace this Block compiles in. Defaulting to the root reproduces ADR 0057's
+  // behavior for every existing caller; a nested namespace's chain is walked to resolve globals.
+  namespaceId,
 } = {}) {
   if (!images || typeof images.putCodeArtifact !== 'function' || typeof images.putBlock !== 'function') {
     throw new TypeError('images service with code-artifact and block persistence is required');
   }
   const compiler = resolveCompilation(images, compilation);
   // The image-scoped seam: the namespace is read here, asynchronously, and passed into the
-  // synchronous compiler as a transient name -> binding-id map.
-  const globals = await globalDeclarations({images, imageId});
+  // synchronous compiler as a transient name -> binding-id map. The chain walk happens inside
+  // globalDeclarations; the compiler itself still only sees a flat map.
+  const globals = await globalDeclarations({images, imageId, namespaceId});
   const {syntax, semanticProgram, representation, globalBindingIdsUsed} =
     compileSymmetricSmalltalkBlock(source, {captures, globals});
 
