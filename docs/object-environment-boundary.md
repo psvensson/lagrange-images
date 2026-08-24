@@ -13,6 +13,7 @@ The split is intentionally based on semantics, not on whether an object happens 
 - generic Project/history/working-frontier/diff/merge/conflict semantics useful to headless clients
 - CodeArtifacts, Blocks, lexical environments and language/execution substrate
 - artifact dependencies, toolchains and foreign-runtime interfaces
+- explicit versioned Component host-import declarations and transient use-time authority checks, including the generic machinery a future graphics Component can use
 - generic graph traversal/export/import primitives
 - file/Git projection services when they are useful independently of one UI
 - transient per-call authority semantics and authorization enforcement
@@ -26,6 +27,8 @@ These remain useful to headless agents, compilers/tooling, automation clients an
 - Perspective and Session
 - presentations and semantic commands
 - drawing/input/rendering adapters and composition/world policies
+- concrete browser/native GPU, device, queue, surface and frame resources
+- runtime-local WIT graphics/surface providers for Component-backed presentations
 - inspectors, browsers, editors, history views and debugger UI
 - Project navigation/editing interaction
 - working-view/diff/merge/conflict presentation and resolution UX
@@ -34,6 +37,33 @@ These remain useful to headless agents, compilers/tooling, automation clients an
 - multi-author activity/presence UX
 
 A Perspective may be persisted *inside an image* without becoming a built-in Lagrange Images semantic type. Conversely, Project is intentionally image-level even though its representation can remain ordinary objects and refs.
+
+## Portable Component graphics follow the same boundary
+
+ADR 0062 does not move a graphics subsystem into Lagrange Images. It applies the existing Component/capability rules to rendering code.
+
+The preferred low-level direction is explicit versioned ecosystem interfaces—currently `wasi:webgpu` for GPU access and `wasi-gfx`-style interfaces for presentation surfaces—rather than a Lagrange-specific GPU ABI.
+
+```text
+Lagrange Images
+  renderer/asset artifacts
+  explicit Component imports
+  generic Component execution
+  transient use-time authority
+        |
+        v
+Lagrange Object Environment
+  Presentation + Compositor
+  RendererAdapter
+  concrete surface/GPU/WIT host provider
+        |
+        v
+renderer Component
+```
+
+GPU/device/surface resources are transient host/session resources, not image refs or durable Values. 2D and 3D are not different substrate categories: both can be ordinary Presentations backed by Components. Higher-level scene graphs, plotting/CAD/game-engine APIs and similar facilities stay optional libraries above the low-level capability boundary unless concrete pressure proves a reusable abstraction.
+
+Graphics capability is also independent of image authority. Permission to draw to a surface does not grant permission to read or mutate the semantic subject. Semantic changes still cross the ordinary authorized image-operation path.
 
 ## Project is the important middle case
 
@@ -90,4 +120,4 @@ Before adding a concept here, ask:
 
 If yes, it may belong in Lagrange Images.
 
-If it is Perspective, presentation, command, pane/window/compositor, inspector/browser UI, invitation workflow or another way for humans to see and inhabit the image, it belongs above this repository.
+If it is Perspective, presentation, command, pane/window/compositor, inspector/browser UI, invitation workflow, concrete graphics/surface hosting or another way for humans to see and inhabit the image, it belongs above this repository.
