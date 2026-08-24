@@ -36,7 +36,11 @@ Next pressures:
       by default, so `collect:`/`select:` make their answer from `self species new`. A subclass
       redirects its derived collections by overriding `species`, not the enumeration methods. `OrderedCollection` is its first concrete subclass
 - [ ] primitive-backed methods beyond the current kernel minimum where real library code demands them
-- [ ] nested namespace semantics, including how language namespaces relate to Projects
+- [x] decide nested namespace semantics (**ADR 0061**): a namespace is a mapping onto flat, shared
+      bindings; nesting is parent-linked *visibility* (inner shadows outer, walked at compile time,
+      acyclic to the root), never containment. A Project designates a namespace as organization —
+      the parent chain is not the §8 Project graph and confers no authority. No path syntax, no
+      private names, no runtime cost. Implementation is its own task with its own proof list
 - [x] decide and implement general object residency/promotion (**ADR 0060**): an allocated object
       begins transient in the arena and promotes to a durable record only when a reference crosses a
       durability boundary. Decided and implemented — aliasing (one durable object, memoized), cycles
