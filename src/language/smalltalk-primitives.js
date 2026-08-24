@@ -38,6 +38,7 @@ import {
   objectRef,
   textValue,
 } from '../value/index.js';
+import {isTransientRef} from '../value/transient-ref.js';
 import {TupleSet} from '../support/tuple-map.js';
 import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
@@ -471,7 +472,8 @@ async function indexedAtPut({
   });
   if (Object.hasOwn(bounded, 'resumed')) return bounded.resumed;
   const index = bounded.index;
-  const storedValue = canonicalizeValue(await promoted(context, newValue));
+  // `value` is the receiver: writing into a transient indexed object keeps the value in the arena.
+  const storedValue = canonicalizeValue(await promoted(context, newValue, value));
   const indexed = [...record.indexed];
   indexed[index] = storedValue;
   await images.putObject(primitiveImage, {
@@ -499,8 +501,16 @@ async function indexedAtPut({
 // A context without `promote` is an execution that predates this seam rather than an error: the
 // value passes through, and the graph guard still refuses a transient ref, so a missed boundary
 // fails loudly instead of silently persisting a dangling reference.
-async function promoted(context, value) {
-  return typeof context?.promote === 'function' ? await context.promote(value) : value;
+//
+// ADR 0060: a slot or indexed write is a durability boundary *only when the receiver is durable*.
+// Writing a transient value into a transient receiver keeps both inside the arena — nothing has
+// escaped yet — so the value must NOT be promoted, or every `OrderedCollection`'s backing store
+// would become durable the instant it is assigned. `receiver` is the object being written into;
+// when it is a transient ref the write stays in the arena and the value passes through unpromoted.
+async function promoted(context, value, receiver = null) {
+  if (typeof context?.promote !== 'function') return value;
+  if (receiver !== null && isTransientRef(receiver)) return value;
+  return await context.promote(value);
 }
 
 function requireSendMessage(context, primitive) {
@@ -888,7 +898,8 @@ async function instanceSlotWrite({images, primitiveImage, target, slotIdValue, n
   const {record, slotId} = await resolveSlotAccess({
     images, primitiveImage, primitive: SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE, target, slotIdValue, context,
   });
-  const stored = canonicalizeValue(await promoted(context, newValue));
+  // `target` is the receiver: writing into a transient object keeps the value in the arena.
+  const stored = canonicalizeValue(await promoted(context, newValue, target));
   await images.putObject(primitiveImage, {
     id: record.id,
     shape: record.shape,

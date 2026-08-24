@@ -377,10 +377,15 @@ function arenaImagesView(images, arena) {
     if (isTransientObjectId(objectId)) throw new ExpiredClosureInstanceError(imageId, objectId);
     return await images.getObject(imageId, objectId);
   };
-  // A write naming a reserved id is a write to an object still in this arena — `basicNew`'s whole
-  // point is that the id is minted transient and the record lives here until escape. A durable id
-  // falls through to the durable store unchanged. The arena path deliberately ignores the durable
-  // CAS contract: a transient record has no version, and this execution is its only writer.
+  // A write naming a reserved id is a write to an object in this arena. `basicNew`'s whole point is
+  // that the id is minted transient and the record lives here — so the write updates the arena.
+  // But ADR 0060 decision 4 makes the object *one object across promotion*: if this transient id is
+  // already registered as promoted (the arena's memo, keyed exactly as the promoter keys it), the
+  // mutation must also reach the durable record, or the durable copy goes stale the moment Smalltalk
+  // code mutates an escaped object — which a cyclic structure does while its own promotion is still
+  // resolving. The durable id is derived, so the write converges on the same identity; the arena is
+  // updated too, so the rest of this execution keeps reading the new state. A durable id that is
+  // not transient falls through to the durable store unchanged.
   view.putObject = async (imageId, record, options = {}) => {
     if (isTransientObjectId(record?.id)) {
       const existing = arena.transientRecord(imageId, record.id);
@@ -389,6 +394,35 @@ function arenaImagesView(images, arena) {
         slots: record.slots,
         indexed: Object.hasOwn(record, 'indexed') ? record.indexed : null,
       });
+      const promoted = arena.promotionMemo().get([imageId, record.id]);
+      if (promoted) {
+        // The durable id is derived from the transient one by the promoter's rule. The durable
+        // record already exists (promotion wrote it), so this is a mutation of it. A value written
+        // now may itself be transient — a backing Array allocated *after* its OrderedCollection
+        // escaped — and writing that ref unpromoted would dangle, so the new state is promoted
+        // through the same central operation first. Within one execution the only writer is this
+        // execution, so the read-then-write CAS cannot race here.
+        const durableId = promoted.ref.objectId;
+        const current = await images.getObject(imageId, durableId);
+        if (current) {
+          const promoteValue = arena.postPromotionPromoter
+            ?? ((v) => v);
+          const slots = {};
+          for (const [slotId, value] of Object.entries(record.slots)) {
+            slots[slotId] = await promoteValue(value);
+          }
+          await images.putObject(imageId, {
+            id: durableId,
+            shape: record.shape,
+            behavior: record.behavior,
+            slots,
+            ...(Object.hasOwn(record, 'indexed')
+              ? {indexed: await Promise.all(record.indexed.map(promoteValue))}
+              : {}),
+            metadata: record.metadata,
+          }, {expectedVersion: current._version});
+        }
+      }
       return record;
     }
     return await images.putObject(imageId, record, options);

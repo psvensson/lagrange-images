@@ -276,6 +276,12 @@ class ActivationExecutor {
     // ADR 0052 decision 5a: one resolution rule for this execution, shared by the executors, the
     // dispatcher and this class's own reads. Identical to `this.images` when there is no arena.
     const view = arenaImagesView(this.images, arena);
+    // ADR 0060: a write to an already-promoted object may introduce a *new* transient value (a
+    // backing store allocated after its owner escaped). The view's write-through promotes such a
+    // value through the same central operation the boundary uses, so the durable copy never holds
+    // an unpromoted ref. The memo is the arena's, so a value promoted here and at the boundary is
+    // one object.
+    if (arena) arena.postPromotionPromoter = async (value) => await promoteClosure(this.images, arena, value);
 
     const block = await view.getBlock(activation.block.imageId, activation.block.objectId);
     if (!block) throw new TypeError(`activation block not found: ${activation.block.imageId}/${activation.block.objectId}`);

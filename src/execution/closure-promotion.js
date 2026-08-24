@@ -103,7 +103,7 @@ class ClosurePromoter {
           metadata: {...record.metadata},
         });
       } else if (record.kind === 'object') {
-        await this.#promoteObjectRecord(ref.imageId, durable.objectId, record);
+        await this.#promoteObjectRecord(ref, durable.objectId);
       } else {
         throw new TypeError(`only a closure instance or an object can be promoted: ${ref.imageId}/${ref.objectId}`);
       }
@@ -124,7 +124,16 @@ class ClosurePromoter {
   // The preassigned durable ref (reserved in `promote` before this runs) is what lets a cycle name
   // this object before its record exists, so the traversal terminates on shared structure and on
   // cycles through the memo.
-  async #promoteObjectRecord(imageId, durableObjectId, record) {
+  //
+  // The record is re-read from the arena *at write time*, not carried from the caller. Promotion of
+  // a cyclic graph suspends inside a nested `promoteValue`, and Smalltalk code runs while a cycle is
+  // still in-progress (`initialize`, slot writes) — so the object can be mutated between reservation
+  // and publication. Writing the stale snapshot would silently drop the mutation that closed the
+  // cycle (a link written *after* its target was reserved). The arena holds the live state; the
+  // write publishes it as it stands when the holder's own promotion completes.
+  async #promoteObjectRecord(ref, durableObjectId) {
+    const record = this.#arena.transientRecord(ref.imageId, ref.objectId);
+    if (!record) throw new ExpiredClosureInstanceError(ref.imageId, ref.objectId);
     const slots = {};
     for (const [slotId, value] of Object.entries(record.slots)) {
       slots[slotId] = await this.promoteValue(value);
@@ -139,7 +148,7 @@ class ClosurePromoter {
         : {}),
       metadata: {...record.metadata},
     };
-    await ensureObject(this.#images, imageId, desired);
+    await ensureObject(this.#images, ref.imageId, desired);
   }
 
   async #promoteEnvironment(imageId, environmentRef) {
