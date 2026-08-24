@@ -20,7 +20,12 @@ import {KERNEL_CLASSES, ensureObject, ensureShape, findSmalltalkKernel, isLocalR
 // operations here.
 const SMALLTALK_GLOBAL_NAMESPACE_V1 = 'smalltalk-global-namespace/v1';
 const NAMESPACE_OBJECT_ID = 'smalltalk-global-namespace/v1';
-const NAMESPACE_SHAPE_ID = 'smalltalk/global-namespace-shape/v1';
+// ADR 0002: Shapes are immutable, and a structural change creates a new shape identity. ADR 0061
+// adds the parent slot, so the namespace Shape is v2 — never a mutation of v1. v1 is kept as a
+// constant so a namespace record written before 0061 still validates (dual-read) and is migrated
+// to v2 the first time its mapping is rewritten.
+const NAMESPACE_SHAPE_ID_V1 = 'smalltalk/global-namespace-shape/v1';
+const NAMESPACE_SHAPE_ID = 'smalltalk/global-namespace-shape/v2';
 const NAMESPACE_PARENT_SLOT = 'namespace-parent';
 const GLOBAL_BINDING_SHAPE_ID = 'smalltalk/global-binding-shape/v1';
 const GLOBAL_BINDING_VALUE_SLOT = 'global-binding-value';
@@ -128,10 +133,9 @@ async function installSmalltalkGlobalNamespace({images, compilation, imageId, la
     images, compilation, imageId, lane, classRef, methods: [{selector: 'value', source: '[ value ]'}],
   });
 
-  // ADR 0061: one slot, the optional parent edge. Shape identity is the id string, not the layout,
-  // so growing this Shape in place is coherent and migrates nothing. The slot is always present in
-  // a stored namespace object — `putObject` enforces exact slot-set match — so "no parent" is a nil
-  // Value here, never an omitted slot. The root is the parentless namespace.
+  // ADR 0061: one slot, the optional parent edge. This is the v2 Shape — v1 had no slots. The slot
+  // is always present in a v2 namespace object — `putObject` enforces exact slot-set match — so
+  // "no parent" is a nil Value here, never an omitted slot. The root is the parentless namespace.
   const namespaceShape = await ensureShape(images, imageId, {
     id: NAMESPACE_SHAPE_ID,
     slots: [{id: NAMESPACE_PARENT_SLOT, name: 'parent'}],
@@ -221,8 +225,12 @@ async function findNamespace({images, imageId, namespaceId = NAMESPACE_OBJECT_ID
   if (record.metadata?.protocol !== SMALLTALK_GLOBAL_NAMESPACE_V1) {
     throw new SmalltalkNamespaceError(imageId, `${namespaceId} does not declare ${SMALLTALK_GLOBAL_NAMESPACE_V1}`);
   }
-  if (!isLocalRef(record.shape, imageId, NAMESPACE_SHAPE_ID)) {
-    throw new SmalltalkNamespaceError(imageId, `${namespaceId} does not have shape ${NAMESPACE_SHAPE_ID}`);
+  // Dual-read: a namespace written before ADR 0061 has the v1 (slotless) Shape; a nested one or a
+  // migrated root has v2. Both are namespaces; only v2 can carry a parent edge.
+  const isNamespaceShape = isLocalRef(record.shape, imageId, NAMESPACE_SHAPE_ID)
+    || isLocalRef(record.shape, imageId, NAMESPACE_SHAPE_ID_V1);
+  if (!isNamespaceShape) {
+    throw new SmalltalkNamespaceError(imageId, `${namespaceId} does not have a namespace Shape`);
   }
   const entries = decodePairs(imageId, record.indexed);
   for (const [name, binding] of entries) {
@@ -255,16 +263,20 @@ async function requireNamespace({images, imageId, namespaceId = NAMESPACE_OBJECT
 
 async function writeMapping({images, imageId, namespace, entries}) {
   // Writes this namespace's own id and preserves its slots — critically the parent edge. Writing
-  // `slots: {}` would both be rejected by the Shape (which declares the parent slot) and would
-  // erase the parent on every publish/rename/remove in a nested namespace. A pre-0061 root that
-  // has not yet been rewritten carries the slot forward as nil (its finder's parent is null).
+  // `slots: {}` would erase the parent on every publish/rename/remove in a nested namespace. A
+  // record still on the v1 (slotless) Shape is MIGRATED to v2 here: it gains the parent slot (nil,
+  // since a v1 record is the root and the root is parentless) and the v2 Shape ref, so ADR 0002's
+  // immutability is honored — v1 is never mutated, the object just moves to the new Shape.
   const kernel = await findSmalltalkKernel({images, imageId});
-  const slots = namespace.record.slots && Object.hasOwn(namespace.record.slots, NAMESPACE_PARENT_SLOT)
-    ? namespace.record.slots
-    : {[NAMESPACE_PARENT_SLOT]: kernel.nil};
+  const onV1 = isLocalRef(namespace.record.shape, imageId, NAMESPACE_SHAPE_ID_V1);
+  const slots = onV1
+    ? {[NAMESPACE_PARENT_SLOT]: kernel.nil}
+    : (namespace.record.slots && Object.hasOwn(namespace.record.slots, NAMESPACE_PARENT_SLOT)
+      ? namespace.record.slots
+      : {[NAMESPACE_PARENT_SLOT]: kernel.nil});
   await images.putObject(imageId, {
     id: namespace.record.id,
-    shape: namespace.record.shape,
+    shape: onV1 ? objectRef(imageId, NAMESPACE_SHAPE_ID) : namespace.record.shape,
     behavior: namespace.record.behavior,
     slots,
     indexed: encodePairs(entries),
@@ -461,14 +473,16 @@ async function setNamespaceParent({images, imageId, namespaceId, parent}) {
     if (!ancestor.parent) break;
     cursor = ancestor.parent.objectId;
   }
-  const kernel = await findSmalltalkKernel({images, imageId});
+  // Gaining or changing a parent edge requires the v2 Shape (v1 has no parent slot): migrate a v1
+  // record as part of the same write, honoring ADR 0002 immutability.
+  const onV1 = isLocalRef(namespace.record.shape, imageId, NAMESPACE_SHAPE_ID_V1);
   const slots = {
-    ...(namespace.record.slots ?? {}),
+    ...(onV1 ? {} : (namespace.record.slots ?? {})),
     [NAMESPACE_PARENT_SLOT]: objectRef(imageId, parent),
   };
   await images.putObject(imageId, {
     id: namespace.record.id,
-    shape: namespace.record.shape,
+    shape: onV1 ? objectRef(imageId, NAMESPACE_SHAPE_ID) : namespace.record.shape,
     behavior: namespace.record.behavior,
     slots,
     indexed: namespace.record.indexed,
@@ -517,6 +531,7 @@ export {
   NAMESPACE_OBJECT_ID,
   NAMESPACE_PARENT_SLOT,
   NAMESPACE_SHAPE_ID,
+  NAMESPACE_SHAPE_ID_V1,
   SMALLTALK_GLOBAL_NAMESPACE_V1,
   SmalltalkGlobalConflictError,
   SmalltalkNamespaceError,

@@ -29,9 +29,12 @@ import {
   textValue,
 } from '../src/runtime.js';
 import {compileSymmetricSmalltalkMethod} from '../src/language/smalltalk-instance-variables.js';
+import {installWasmBlockTree} from '../src/wasm/tree-installer.js';
 import {
   NAMESPACE_OBJECT_ID,
   NAMESPACE_PARENT_SLOT,
+  NAMESPACE_SHAPE_ID,
+  NAMESPACE_SHAPE_ID_V1,
   SmalltalkNamespaceError,
 } from '../src/language/smalltalk-globals.js';
 
@@ -81,12 +84,21 @@ async function defineAndPublish(runtime, imageId, {name, className = name, names
   return classRef;
 }
 
-// Compile + run a Block that just answers the global `name`, in the given namespace and lane.
+// Compile + run a Block that just answers the global `name`, in the given namespace and lane. In
+// the WASM lane the Block is compiled to a WASM tree (over the same compiler-supplied environment),
+// so "both lanes" means the global read really executes under each representation.
 async function readGlobal(runtime, imageId, {name, namespaceId, lane = 'neutral', id}) {
   const installed = await installSymmetricSmalltalkBlock({
     images: runtime.images, imageId, id: id ?? `read-${name}`, source: `[ ${name} ]`, namespaceId,
   });
-  const activation = await runtime.invocations.invokeBlock(objectRef(imageId, installed.block.id), []);
+  const blockRef = lane === 'wasm'
+    ? objectRef(imageId, (await installWasmBlockTree({
+      images: runtime.images, compilation: runtime.compilation,
+      semanticRef: objectRef(imageId, installed.semanticArtifact.id), id: `${id ?? `read-${name}`}-tree`,
+      environment: installed.block.environment,
+    })).block.id)
+    : objectRef(imageId, installed.block.id);
+  const activation = await runtime.invocations.invokeBlock(blockRef, []);
   return await runtime.executor.execute(activation);
 }
 
@@ -256,7 +268,7 @@ test('a corrupted cycle in the chain makes resolution fail, not loop', async () 
     for (const [id, parent] of [['ns/x', 'ns/y'], ['ns/y', 'ns/x']]) {
       await runtime.images.putObject('app', {
         id,
-        shape: objectRef('app', 'smalltalk/global-namespace-shape/v1'),
+        shape: objectRef('app', 'smalltalk/global-namespace-shape/v2'),
         behavior: null,
         slots: {[NAMESPACE_PARENT_SLOT]: objectRef('app', parent)},
         indexed: [],
@@ -335,6 +347,50 @@ test('a caller-supplied child snapshot governs over later mapping changes', asyn
       (method.globalBindingIdsUsed ?? []).some((id) => id === globalBindingId('Object')),
       'the snapshot resolved Object to its binding id',
     );
+  });
+});
+
+// --- pre-0061 durable images: dual-read and migrate-on-write (ADR 0002 immutability) ----------------
+
+// ADR 0002: Shapes are immutable, so 0061 adds a v2 Shape rather than mutating v1. A namespace
+// record written before 0061 (v1 Shape, slots: {}) must still validate, and must migrate to v2 on
+// its first mapping rewrite — never conflict and never lose data. This builds that record by hand,
+// at the v1 Shape, exactly as a pre-0061 installer left it.
+test('a pre-0061 (v1 Shape) namespace validates and migrates to v2 on first write', async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'app'});
+    await installSmalltalkKernel({images: runtime.images, imageId: 'app'});
+    const options = {images: runtime.images, compilation: runtime.compilation, imageId: 'app'};
+    await installSmalltalkAllocationProtocol(options);
+    await installSmalltalkEqualityProtocol(options);
+    await installSmalltalkControlFlow(options);
+    await installSmalltalkBlockProtocol({images: runtime.images, imageId: 'app'});
+    await installSmalltalkInstanceVariableProtocol({images: runtime.images, imageId: 'app'});
+
+    // Simulate the pre-0061 state: v1 (slotless) Shape + a root namespace record with slots: {}.
+    await runtime.images.putShape('app', {id: NAMESPACE_SHAPE_ID_V1, slots: [], indexed: 'values'});
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+    await runtime.images.putObject('app', {
+      id: NAMESPACE_OBJECT_ID,
+      shape: objectRef('app', NAMESPACE_SHAPE_ID_V1),
+      behavior: null,
+      slots: {},
+      indexed: [],
+      metadata: {protocol: 'smalltalk-global-namespace/v1'},
+    }, {expectedVersion: 0});
+
+    // Re-running the (0061) installer must NOT conflict: it dual-reads the v1 record.
+    await installSmalltalkGlobalNamespace(options);
+
+    // The first mapping rewrite (here, the installer's kernel-class publication) migrates the
+    // record to v2 with a nil parent — v1 itself is never mutated.
+    const root = await findSmalltalkGlobalNamespace({images: runtime.images, imageId: 'app'});
+    assert.equal(root.parent, null, 'the migrated root is parentless');
+    const record = await runtime.images.getObject('app', NAMESPACE_OBJECT_ID);
+    assert.equal(record.shape.objectId, NAMESPACE_SHAPE_ID, 'the record migrated to the v2 Shape');
+    assert.ok(Object.hasOwn(record.slots, NAMESPACE_PARENT_SLOT), 'the parent slot is present after migration');
+    // And it resolves its globals exactly as before.
+    assert.equal((await readGlobal(runtime, 'app', {name: 'Object', id: 'pre0061-read'})).objectId, 'smalltalk/class/Object');
   });
 });
 

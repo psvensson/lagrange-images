@@ -1,6 +1,7 @@
 # ADR 0061: Nested namespace semantics
 
-Status: accepted — decision-only; implementation is its own task with its own proof list.
+Status: implemented
+Proven by: test/nested-namespaces.test.js, test/global-names.test.js
 
 ## Problem
 
@@ -129,8 +130,11 @@ primitive, and that authority does not follow Project structure. Nesting is cons
   "a child Project sees its parent's names" is expressed — but the convention is a management
   choice, not a structural rule, and it confers no authority (ADR 0058 decision 6, unchanged).
 - **No new storage kind.** A nested namespace is the same namespace object ADR 0057 already stores,
-  with the same Shape and a parent edge; bindings are the same GlobalBinding objects. Nothing in
-  this ADR requires a backend change.
+  with a parent edge; bindings are the same GlobalBinding objects. Nothing in this ADR requires a
+  backend change. (Implementation note: because ADR 0002 makes a Shape immutable and a structural
+  change a new shape identity, the parent edge lives on a **v2 namespace Shape**
+  (`smalltalk/global-namespace-shape/v2`) rather than mutating v1. Pre-0061 v1 records dual-read and
+  migrate to v2 on their first mapping rewrite — v1 is never mutated.)
 
 ### 6. Management operations gain a namespace dimension, keep their identity-scoped rules
 
