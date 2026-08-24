@@ -287,8 +287,11 @@ function createImageCreationBindingV1Executor({newObjectId = randomUUID, maxIden
         }
         if (edge) {
           // A separate per-target grant: create-on-class must not become broad reach (ADR 0042 §7).
-          require({operation: OBJECT_EDGE_WRITE_OPERATION, resource: objectResource(imageId, value[field.name])});
-          slots[slot] = parseEdgeTarget(imageId, value[field.name], `edge field ${field.name}`);
+          // Parse first, then authorize the canonical TARGET id — for a pinned spelling the raw
+          // string is `pin:<id>@<revision>`, and the grant is scoped to the target, not the pin text.
+          const parsed = parseEdgeTarget(imageId, value[field.name], `edge field ${field.name}`);
+          require({operation: OBJECT_EDGE_WRITE_OPERATION, resource: objectResource(imageId, parsed.objectId)});
+          slots[slot] = parsed;
         } else {
           slots[slot] = hostLeafToCanonical(value[field.name], field.type, `field ${field.name}`);
         }
