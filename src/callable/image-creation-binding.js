@@ -42,6 +42,9 @@ const KERNEL_NIL_ID = 'smalltalk/nil';
 const PIN_PREFIX = 'pin:';
 
 class ObjectCreationConflictError extends Error {
+  // The mutation lane translates VersionConflictError so the backend's actualVersion stays
+  // unreachable. Here embedding the class/image id is safe: the caller already supplied the class id,
+  // so nothing new leaks. The terminal id-exhaustion path reports only the attempt count.
   constructor(imageId, detail) {
     super(`object creation conflict in ${imageId}: ${detail}`);
     this.name = 'ObjectCreationConflictError';
@@ -216,8 +219,10 @@ function parseEdgeTarget(imageId, text, label) {
 }
 
 // A Behavior is a record in THIS image whose Shape is THIS image's fixed behavior Shape, and whose
-// instanceShape slot is a local unpinned ref (or nil). Mirrors the kernel's `isBehaviorObject` /
-// `readBehavior` locality rules, which the callable layer cannot import.
+// instanceShape slot is a local unpinned ref (or nil). This is `isBehaviorObject` plus the
+// instanceShape half of `readBehavior` — deliberately narrower than `readBehavior`, which also
+// checks name/superclass/methods. Creation never reads those, so a Behavior with a foreign methods
+// edge is usable here even though `readBehavior` would refuse it; that is intentional, not a gap.
 function assertBehaviorRecord(record, imageId, classId) {
   const shapeRef = record.shape;
   const isLocalBehaviorShape = shapeRef

@@ -222,17 +222,49 @@ test('a pinned-ref edge is authorized by the same per-target grant', async () =>
   }
 });
 
-test('a transient edge target is refused before any write', async () => {
+test('a transient edge target is refused before any write, with a creation-conflict error', async () => {
   const {runtime, create, classRef, historyLength} = await edgeSeed({
     grants: (classId) => [createGrant('demo', classId), edgeGrant('demo', transientObjectId('ghost'))],
   });
   try {
     const before = await historyLength();
+    // The LANE's clean require-time refusal (ObjectCreationConflictError), not the write-seam
+    // backstop — the two layers are pinned independently so removing the require-time check goes red.
     await assert.rejects(
       create(classRef.objectId, {name: 'x', note: 'n', subject: transientObjectId('ghost')}),
-      /transient/,
+      (error) => error.name === 'ObjectCreationConflictError' && /transient/.test(error.message),
     );
     assert.equal(await historyLength(), before, 'a transient edge commits nothing');
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('a transient target is refused BEFORE the edge require, so no grant can satisfy it', async () => {
+  // Grant only object/create — no edge grant at all. If the lane required first, this would be an
+  // AuthorityError; the ADR §4 rule is that the transient refusal happens first, so it must surface.
+  const {runtime, create, classRef} = await edgeSeed({grants: (classId) => [createGrant('demo', classId)]});
+  try {
+    await assert.rejects(
+      create(classRef.objectId, {name: 'x', note: 'n', subject: transientObjectId('ghost')}),
+      (error) => error.name === 'ObjectCreationConflictError' && /transient/.test(error.message),
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
+// ADR §4's leak check: creation must not read or follow the target. A create may therefore name a
+// target that does not (yet) exist; the lane authorizes the id without confirming it. This is the
+// intended "confirms at most that T exists, by construction" reading — pinned so it cannot drift.
+test('creation authorizes an edge target without reading it, so a dangling edge is permitted', async () => {
+  const {runtime, create, classRef} = await edgeSeed({
+    grants: (classId) => [createGrant('demo', classId), edgeGrant('demo', 'ghost')],
+  });
+  try {
+    const token = await create(classRef.objectId, {name: 'x', note: 'n', subject: 'ghost'});
+    const object = await createdObject(runtime, token.value);
+    assert.deepEqual(object.slots['slot-subject'], objectRef('demo', 'ghost'), 'the edge is written without resolving the target');
   } finally {
     await runtime.close();
   }
@@ -314,6 +346,27 @@ test('a colliding candidate id is retried with a fresh one', async () => {
     assert.equal(object.id, 'fresh-id', 'a collision chose another candidate');
     // The squatter is untouched.
     assert.deepEqual((await runtime.images.getObject('demo', 'collision')).slots['slot-name'], textValue('squat'));
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('a generator that never finds a free id fails with ObjectCreationConflictError', async () => {
+  // Always answers the squatted id: after maxIdentityAttempts the lane must report exhaustion, not
+  // loop forever or overwrite. This pins the terminal error type the ADR names for this path.
+  const {runtime, create, classRef, shape} = await seed({
+    grants: (classId) => [createGrant('demo', classId)],
+    runtimeOptions: {smalltalkObjectIds: () => 'collision'},
+  });
+  try {
+    await runtime.images.putObject('demo', {
+      id: 'collision', shape: objectRef('demo', shape.id),
+      slots: {'slot-name': textValue('squat'), 'slot-note': textValue('s'), 'slot-subject': objectRef('demo', 'smalltalk/nil')},
+    });
+    await assert.rejects(
+      create(classRef.objectId, {name: 'x', note: 'n'}),
+      (error) => error.name === 'ObjectCreationConflictError' && /free object identity/.test(error.message),
+    );
   } finally {
     await runtime.close();
   }
