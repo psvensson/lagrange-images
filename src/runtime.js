@@ -107,6 +107,9 @@ async function createRuntime(options = {}) {
     foreignRuntimeInstanceCache,
     componentRuntime: options.componentRuntime,
     componentHostImports,
+    // ADR 0062: the creation lane mints object identity, injectable through the same option the
+    // Smalltalk allocation lane uses (a test has to be able to force a collision).
+    creationObjectIds: options.smalltalkObjectIds,
   });
   // ADR 0046 decision 2a. A language-owned executor is registered here, by the composition root, and
   // never inside `createDefaultCodeExecutorRegistry` — `src/language` already imports

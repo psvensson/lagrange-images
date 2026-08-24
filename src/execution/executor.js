@@ -22,6 +22,10 @@ import {
   createImageMutationBindingV1Executor,
 } from '../callable/image-mutation-binding.js';
 import {
+  IMAGE_CREATION_BINDING_V1,
+  createImageCreationBindingV1Executor,
+} from '../callable/image-creation-binding.js';
+import {
   IMAGE_VERSIONED_PROJECTION_BINDING_V1,
   createImageVersionedProjectionBindingV1Executor,
 } from '../callable/image-versioned-projection-binding.js';
@@ -46,6 +50,7 @@ function createDefaultCodeExecutorRegistry({
   foreignRuntimeInstanceCache,
   componentRuntime,
   componentHostImports,
+  creationObjectIds,
 } = {}) {
   const registry = new CodeExecutorRegistry();
   registry.register(NEUTRAL_EXPRESSION_V0, neutralExpressionV0Executor);
@@ -66,6 +71,14 @@ function createDefaultCodeExecutorRegistry({
   // The image is a third implementation lane; it needs no external runtime at all.
   registry.register(IMAGE_PROJECTION_BINDING_V1, createImageProjectionBindingV1Executor());
   registry.register(IMAGE_MUTATION_BINDING_V1, createImageMutationBindingV1Executor());
+  // ADR 0062. The creation lane mints object identity itself, so the generator is injectable here —
+  // the same injection point the Smalltalk allocation lane uses, so one option governs both.
+  registry.register(
+    IMAGE_CREATION_BINDING_V1,
+    createImageCreationBindingV1Executor(
+      creationObjectIds === undefined ? {} : {newObjectId: creationObjectIds},
+    ),
+  );
   registry.register(
     IMAGE_VERSIONED_PROJECTION_BINDING_V1,
     createImageVersionedProjectionBindingV1Executor(),
