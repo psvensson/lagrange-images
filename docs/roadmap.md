@@ -66,6 +66,19 @@ The structured foreign/component boundary is functionally closed for current nee
 - [ ] reusable foreign Component instance/reset contracts only if measurements justify them; fresh-per-activation remains the safe default
 - [ ] per-call authority transport for long-lived foreign runtimes; ADR 0037 already fixes authority as call-scoped rather than runtime-scoped
 
+### Portable graphics capability boundary
+
+ADR 0062 accepts a graphics direction without moving presentation into Images. When concrete pressure reaches it:
+
+- [ ] prove one exact-version `wasi:webgpu` import through ADR 0038's Component-binding path
+- [ ] prove runtime-local provider wiring without adding graphics Value/object/storage semantics
+- [ ] keep protected graphics operations use-time-authorized and independently scoped from image-object authority
+- [ ] prove GPU/device/surface WIT resources remain transient and non-durable
+- [ ] prove Lagrange Object Environment can supply a surface/provider for the Component while Images remains renderer-agnostic
+- [ ] reuse upstream examples/libraries before proposing any Lagrange scene/GPU ABI
+
+The desired result is a portable renderer Component boundary, not a graphics subsystem in this repository. Do not start by designing a scene graph.
+
 Do not put principals, grants or cached authorization decisions into durable artifacts, refs or resource handles.
 
 ## 3. Image-native Lagrange WASM
@@ -199,7 +212,7 @@ The former **Graphical environment** section now lives entirely in the Lagrange 
 
 Moved upward:
 
-- drawing/input/rendering substrate
+- drawing/input/rendering substrate, including concrete GPU/surface WIT providers and Component-backed presentation hosting
 - retained presentation/view composition
 - surfaces/windows/world/compositor policy
 - Perspectives and Session behavior
