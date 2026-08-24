@@ -58,6 +58,18 @@ function lexicalEnvironmentProjection(record) {
   });
 }
 
+// ADR 0060. The durable object record carries `indexed` only for an indexed Shape, so the
+// projection includes it only when present — matching how putObject stores it.
+function objectProjection(record) {
+  return canonicalRecordJson({
+    shape: record.shape ?? null,
+    behavior: record.behavior ?? null,
+    slots: record.slots ?? {},
+    ...(Object.hasOwn(record, 'indexed') ? {indexed: record.indexed} : {}),
+    metadata: record.metadata ?? {},
+  });
+}
+
 const defaultConflict = (kind, imageId, id) => new RecordConflictError(kind, imageId, id);
 
 async function ensureCodeArtifact(images, imageId, desired, {conflict = defaultConflict} = {}) {
@@ -89,6 +101,17 @@ async function ensureLexicalEnvironment(images, imageId, desired, {conflict = de
   return existing;
 }
 
+// ADR 0060. Object promotion writes at a derived id, so a retry after a lost acknowledgement
+// converges on the same durable object rather than minting a second identity for one transient one.
+async function ensureObject(images, imageId, desired, {conflict = defaultConflict} = {}) {
+  const existing = await images.getObject(imageId, desired.id);
+  if (!existing) return await images.putObject(imageId, desired);
+  if (objectProjection(desired) !== objectProjection(existing)) {
+    throw conflict('object', imageId, desired.id);
+  }
+  return existing;
+}
+
 export {
   RecordConflictError,
   blockProjection,
@@ -97,5 +120,7 @@ export {
   ensureBlock,
   ensureCodeArtifact,
   ensureLexicalEnvironment,
+  ensureObject,
   lexicalEnvironmentProjection,
+  objectProjection,
 };
