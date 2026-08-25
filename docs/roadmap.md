@@ -68,7 +68,7 @@ The structured foreign/component boundary is functionally closed for current nee
 
 ### Portable graphics capability boundary
 
-ADR 0062 accepts a graphics direction without moving presentation into Images. When concrete pressure reaches it:
+ADR 0063 accepts a graphics direction without moving presentation into Images. When concrete pressure reaches it:
 
 - [ ] prove one exact-version `wasi:webgpu` import through ADR 0038's Component-binding path
 - [ ] prove runtime-local provider wiring without adding graphics Value/object/storage semantics
