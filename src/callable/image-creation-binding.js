@@ -416,11 +416,20 @@ function createImageCreationBindingV1Executor({newObjectId = randomUUID, maxIden
 }
 
 export {
+  BEHAVIOR_SHAPE_ID,
   IMAGE_CREATION_BINDING_V1,
+  KERNEL_NIL_ID,
   OBJECT_CREATE_OPERATION,
   OBJECT_EDGE_WRITE_OPERATION,
   ObjectCreationConflictError,
+  assertBehaviorRecord,
+  assertCreationInterface,
+  assertFieldMappingCovers,
+  assertIndexedFieldType,
+  buildIndexedPart,
   createImageCreationBindingV1Executor,
   installImageCreationBinding,
+  normalizeCreationFields,
+  parseEdgeTarget,
   parseImageCreationBindingArtifact,
 };

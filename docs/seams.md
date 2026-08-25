@@ -26,6 +26,7 @@ artifact's `representation`.
 | `image-projection-binding/v1` | `installImageProjectionBinding()` | `createImageProjectionBindingV1Executor()` |
 | `image-mutation-binding/v1` | `installImageMutationBinding()` | `createImageMutationBindingV1Executor()` |
 | `image-creation-binding/v1` | `installImageCreationBinding()` | `createImageCreationBindingV1Executor()` |
+| `image-creation-batch-binding/v1` | `installImageCreationBatchBinding()` | `createImageCreationBatchBindingV1Executor()` |
 | `image-versioned-projection-binding/v1` | `installImageVersionedProjectionBinding()` | `createImageVersionedProjectionBindingV1Executor()` |
 | `smalltalk-kernel-primitive/v1` | `installSmalltalkAllocationProtocol()`, `installSmalltalkIndexedProtocol()` | `createSmalltalkKernelPrimitiveV1Executor()`, registered by `createRuntime()` |
 

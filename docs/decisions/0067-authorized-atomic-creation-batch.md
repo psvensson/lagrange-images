@@ -1,10 +1,15 @@
 # ADR 0067: authorized atomic image-local creation batch — a design investigation
 
-Status: accepted — investigation outcome. **Adopted as a lane to implement.** The investigation
-concludes that transaction-local *fresh-object provenance* — not "transaction authority" — cleanly
-justifies intra-batch edges to freshly created objects, with no grant-algebra change, no capability,
-and no executor widening. The narrow contract is an **authorized atomic creation batch**, not a
-general multi-object transaction system.
+Status: implemented
+Proven by: test/atomic-creation-batch.test.js
+
+**Adopted and implemented.** The investigation concluded that transaction-local *fresh-object
+provenance* — not "transaction authority" — cleanly justifies intra-batch edges to freshly created
+objects, with no grant-algebra change, no capability, and no executor widening. The narrow contract
+is an **authorized atomic creation batch**, not a general multi-object transaction system. The lane
+is `image-creation-batch-binding/v1` (multi-class: each member carries its own `class`, with a
+per-class `object/create` require), committed atomically via `images.putObjects` (one
+`backend.transaction`, insert-only `expectedVersion: 0`, CAS retry).
 
 ## Problem
 
