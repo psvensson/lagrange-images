@@ -56,9 +56,12 @@ list:
   grant ADR 0062 §4 and ADR 0064 §2 use, no new operation. `object/write` authorizes the object;
   `object/edge-write` authorizes each new edge. Narrow authority cannot become broad reach: a caller
   holding `object/write` but not `object/edge-write` on a target cannot add an edge to it.
-- **Reorder** (`new` is a permutation of `old` — same elements, same multiset, different order):
-  topology is unchanged (no edge created, none removed), only sequence. This is authorized by
-  **`object/write`** alone. Reorder is what "move a presentation up/down" needs.
+- **Reorder** (`new` is a permutation of `old` — same elements, same multiset, different order, per
+  the identity rule in §3): topology is unchanged (no edge created, none removed), only sequence.
+  This is authorized by **`object/write`** alone. Reorder is what "move a presentation up/down"
+  needs. Note this holds *only* under the multiset-with-identity rule: a "reorder" that re-pins an
+  element (`ref T` → `pin:T@rev`) is not a permutation — it drops one edge occurrence and adds a
+  different one — and is governed by the append-ref and shrink rules, not this one.
 
 Added ref elements travel as ref-free strings (plain id or `pin:<id>@<rev>`), canonicalized
 host-side with the per-target grant firing at that point — the ADR 0062 §4 / ADR 0064 §3 string
@@ -70,10 +73,19 @@ backstop.
 `new` must contain every element of `old` (as a multiset): the lane may append and reorder but
 **never drop an element**. Removing an indexed ref is **edge removal**, which ADR 0062 §8 deferred
 and which is a genuinely different authority question — it interacts with garbage collection (an
-edge's removal can make a subgraph unreachable), pinned refs (a pinned edge is a residency claim),
-and the change feed (removal must be observable). Those considerations deserve their own ADR rather
-than being smuggled into a mutation lane as "just another list value." A binding whose `new` list is
-missing an element of `old` is refused.
+edge's removal can make a subgraph unreachable), with pinned refs (dropping a pinned edge discards
+its revision frontier, a history-semantics question per ADR 0002), and with the change feed (a
+removal must be observable). Those considerations deserve their own ADR rather than being smuggled
+into a mutation lane as "just another list value." A binding whose `new` list is missing an element
+of `old` is refused.
+
+**Element identity, stated precisely so the rule is falsifiable.** Whether a `new` element "is" an
+`old` element is decided by **canonical-Value identity**: two `ref`s are the same element iff they
+share `(imageId, objectId)`; two `pinned-ref`s iff they share `(imageId, objectId, revision)`; a
+`ref` and a `pinned-ref` are never the same element (a `ref T` → `pin:T@rev` change drops the plain
+edge and adds a pinned one — refused as a shrink of the plain edge, not treated as a no-op
+re-pinning); two leaf Values are the same element iff canonically equal. This is the only reading
+under which the multiset rule and the reorder rule are sound, and it is what the proof list pins.
 
 This is the scope the environment's current model supports: it is command-based and additive
 ("add presentations" is a named operation; no "remove presentation" lifecycle operation exists in
@@ -116,8 +128,12 @@ named-slot-only). The projection lane's indexed refusal is unchanged (ADR 0064 �
 - Edge *removal* remains a deferred, separate authority decision with its GC/pinned-ref/change-feed
   considerations intact. The concurrency guarantee for indexed mutation is the existing version-token
   CAS.
-- The grant algebra stays v0 exact-match: `object/write` for the object, one `object/edge-write` per
-  added ref target. No wildcards, no new operations.
+- The grant algebra stays v0 exact-match: `object/write` for the object, one `object/edge-write`
+  grant per **distinct added ref target**. No wildcards, no new operations. Note for grantors:
+  because grants are exact-match and not consumed, `object/edge-write` on `T` authorizes *any number
+  of* parallel edges to `T` on that object (appending `[T, pin:T@1]` to `[T]` rides on the single
+  `T` grant) — the same semantics ADR 0062 §4 already gives creation. The narrowness lives in the
+  target, not in an edge count.
 
 ## Guardrails
 
@@ -125,7 +141,8 @@ named-slot-only). The projection lane's indexed refusal is unchanged (ADR 0064 �
 indexed mutation rewrites the indexed part under the same version-token CAS (conflict stays explicit)
 one indexed field per binding, mutually exclusive with naming a slot (as ADR 0064)
 append leaf elements       -> object/write alone         (no edge created)
-append ref elements        -> + per-target object/edge-write on each added ref (ADR 0042 §7 honored)
+append ref elements        -> + object/edge-write per distinct added target (ADR 0042 §7 honored)
+element identity is canonical-Value identity            (pinned-ref identity includes its revision)
 reorder existing elements  -> object/write alone         (topology unchanged, no edge added/removed)
 added refs travel as ref-free strings, canonicalized with the per-target grant (ADR 0062 §4 seam)
 a transient added element cannot commit                (require-time refusal + write-seam backstop)
