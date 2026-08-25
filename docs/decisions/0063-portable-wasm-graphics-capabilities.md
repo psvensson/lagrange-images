@@ -1,4 +1,4 @@
-# ADR 0062: portable WASM graphics use explicit host capabilities
+# ADR 0063: portable WASM graphics use explicit host capabilities
 
 Status: accepted — architectural direction; no graphics runtime behavior is implemented here.
 

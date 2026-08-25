@@ -40,7 +40,7 @@ A Perspective may be persisted *inside an image* without becoming a built-in Lag
 
 ## Portable Component graphics follow the same boundary
 
-ADR 0062 does not move a graphics subsystem into Lagrange Images. It applies the existing Component/capability rules to rendering code.
+ADR 0063 does not move a graphics subsystem into Lagrange Images. It applies the existing Component/capability rules to rendering code.
 
 The preferred low-level direction is explicit versioned ecosystem interfaces—currently `wasi:webgpu` for GPU access and `wasi-gfx`-style interfaces for presentation surfaces—rather than a Lagrange-specific GPU ABI.
 
