@@ -104,6 +104,7 @@ move in. Never move it the other way to make a claim easier to write.
  - [0062 — authorized object-creation lane](0062-authorized-object-creation-lane.md): an `object/create` operation scoped per (image, class), with initial ref slots authorized per-target by a separate `object/edge-write` grant, the lane minting the id and committing insert-only in one transaction — the external creation boundary ADR 0046 §10 deferred to.
  - [0063 — portable WASM graphics capabilities](0063-portable-wasm-graphics-capabilities.md): treat 2D/3D as ordinary Components with explicit versioned graphics imports, preferring `wasi:webgpu` plus `wasi-gfx`-style surfaces while keeping GPU/surface resources transient and presentation policy above the image layer.
  - [0064 — indexed-part lanes for ordered collections](0064-indexed-part-lanes-for-ordered-collections.md): un-defer ADR 0047's indexed part at the creation lane — initial indexed elements, each ref element authorized by the existing per-target `object/edge-write` grant, with indexed-aware projection and mutation left deferred.
+ - [0065 — indexed-aware mutation](0065-indexed-aware-mutation.md): the mutation lane rewrites an existing object's indexed part under the same version-token CAS — append leaf or ref elements (each added ref authorized per-target by `object/edge-write`) and reorder, while element removal stays deferred as edge removal.
 
 ## Reading rule
 
