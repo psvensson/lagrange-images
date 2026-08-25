@@ -64,8 +64,9 @@ function requiredText(value, label) {
 //
 // ADR 0064: a field marked `indexed: true` is the indexed-part field. It names no slot; its value
 // is a `list<leaf-or-ref-string>` whose elements populate the ordered indexed part. At most one
-// field may be the indexed field, it cannot also be a slot field, and it is mutually exclusive with
-// `edge` on the same field (edge-ness is per-element, decided when each string is parsed).
+// field may be the indexed field, and it is mutually exclusive with naming a `slot`. `edge` on the
+// indexed field marks a ref-list: every (string) element is a ref target authorized per-element;
+// without `edge` it is a leaf-list.
 function normalizeCreationFields(values, label) {
   if (!Array.isArray(values) || values.length === 0) {
     throw new TypeError(`${label} fields must be a non-empty array`);
