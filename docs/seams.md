@@ -103,7 +103,10 @@ The indexed part is language-neutral and 0-based. It is not `interface-composite
 ref-free transient boundary data, while indexed object state exists specifically to hold durable
 Values including refs. The v1 projection/mutation field maps remain named-slot-only. Projection
 refuses an indexed object rather than returning a partial view; mutation preserves the indexed part
-when it rewrites the containing record.
+when it rewrites the containing record. ADR 0064 opens the indexed part at the *creation* lane only:
+a binding may declare one indexed field, a ref-free `list` whose elements become the initial indexed
+part, each ref element authorized by the existing per-target `object/edge-write` grant. Indexed-aware
+projection and mutation remain deferred.
 
 ## Symmetric Smalltalk kernel
 
