@@ -196,6 +196,55 @@ class ImageService {
     return stored;
   }
 
+  // ADR 0067. N create specs, one transaction, all-or-none. Each element goes through the same
+  // field/record/shape checks as putObject, but every put+append pair is committed inside a single
+  // backend.transaction. The caller is expected to have already authorized every member (this is a
+  // graph write, not an authority surface); the atomicity envelope is what this method adds.
+  async putObjects(imageId, inputs, {expectedVersion = 0} = {}) {
+    if (!Array.isArray(inputs) || inputs.length === 0) {
+      throw new TypeError('putObjects inputs must be a non-empty array');
+    }
+    await this.getImage(imageId);
+    const at = this.now();
+    const prepared = [];
+    for (const [index, input] of inputs.entries()) {
+      assertAllowedFields(input, new Set(['id', 'shape', 'behavior', 'slots', 'indexed', 'metadata']), `generic object ${index}`);
+      const id = input.id ?? randomUUID();
+      const object = createObjectRecord({
+        id,
+        imageId,
+        shape: input.shape,
+        behavior: input.behavior ?? null,
+        slots: input.slots ?? {},
+        metadata: input.metadata ?? {},
+        updatedAt: at,
+        ...(Object.hasOwn(input, 'indexed') ? {indexed: input.indexed} : {}),
+      });
+      const shape = await this.getShape(object.shape.imageId, object.shape.objectId);
+      if (!shape) throw new TypeError(`shape not found: ${object.shape.imageId}/${object.shape.objectId}`);
+      assertObjectMatchesShape(object, shape);
+      prepared.push({id, object});
+    }
+    const storedList = await this.backend.transaction(async (candidate) => {
+      const transaction = assertBackendTransaction(candidate);
+      const results = [];
+      for (const {id, object} of prepared) {
+        assertNoTransientIdentity(records(imageId), id, object, {keyIsObjectId: true});
+        const stored = await transaction.put(records(imageId), id, object, {expectedVersion});
+        await transaction.append(history(imageId), {
+          type: 'object.put',
+          at,
+          objectId: id,
+          objectVersion: stored._version,
+          object: structuredClone(stored),
+        });
+        results.push(stored);
+      }
+      return results;
+    });
+    return storedList;
+  }
+
   async getObject(imageId, objectId) {
     const record = await this.getRecord(imageId, objectId);
     return record?.kind === 'object' ? record : null;

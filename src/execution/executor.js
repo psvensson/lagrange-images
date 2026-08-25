@@ -26,6 +26,10 @@ import {
   createImageCreationBindingV1Executor,
 } from '../callable/image-creation-binding.js';
 import {
+  IMAGE_CREATION_BATCH_BINDING_V1,
+  createImageCreationBatchBindingV1Executor,
+} from '../callable/image-creation-batch-binding.js';
+import {
   IMAGE_VERSIONED_PROJECTION_BINDING_V1,
   createImageVersionedProjectionBindingV1Executor,
 } from '../callable/image-versioned-projection-binding.js';
@@ -76,6 +80,12 @@ function createDefaultCodeExecutorRegistry({
   registry.register(
     IMAGE_CREATION_BINDING_V1,
     createImageCreationBindingV1Executor(
+      creationObjectIds === undefined ? {} : {newObjectId: creationObjectIds},
+    ),
+  );
+  registry.register(
+    IMAGE_CREATION_BATCH_BINDING_V1,
+    createImageCreationBatchBindingV1Executor(
       creationObjectIds === undefined ? {} : {newObjectId: creationObjectIds},
     ),
   );
