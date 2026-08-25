@@ -17,11 +17,7 @@ import {ImageService} from '../src/image/graph-image-service.js';
 import {LagrangeBackend} from '../src/backend/index.js';
 import {LexicalCellArena, arenaImagesView} from '../src/execution/lexical-cells.js';
 import {ClosurePromoter} from '../src/execution/closure-promotion.js';
-import {
-  findTransientRefs,
-  isTransientObjectId,
-  transientObjectId,
-} from '../src/value/transient-ref.js';
+import {findTransientRefs, transientObjectId} from '../src/value/transient-ref.js';
 import {objectVersionToken} from '../src/object/version-token.js';
 import {createSqliteApplicationRuntime} from './support/sqlite-application-runtime.js';
 
@@ -187,8 +183,10 @@ const CREATE_FIELDS = [
   {name: 'subject', slot: 'slot-subject', edge: true},
 ];
 
-// Build a raw ImageService (no full runtime) so the executor context is exactly {images, require} —
-// that is the whole point: the lane cannot see an arena that is not in its context.
+// Build a raw ImageService (no full runtime) and drive the binding executor directly with the
+// minimal context the lane destructures — {images, require}. Production hands the executor a
+// superset (an arena view, promote, mintObject, ...), but image-creation-binding.js destructures
+// only {images, require}, so the lane's own code cannot reach an arena through its context.
 async function creationFixture() {
   const {createBackend} = await import('../src/backend/index.js');
   const backend = await createBackend({mode: 'mock'});
@@ -234,18 +232,13 @@ async function creationFixture() {
   return {backend, images, classRef, create, objectResource, OBJECT_CREATE_OPERATION, OBJECT_EDGE_WRITE_OPERATION};
 }
 
-test('a live arena transient ref never reaches the creation lane: only strings can, and are refused', async () => {
+test('a transient-looking edge-target spelling is refused by the creation lane before any write', async () => {
   const {backend, images, classRef, create} = await creationFixture();
   try {
-    // A real arena holds a live transient object. The lane's context is {images, require} only —
-    // there is no channel for this live ref; the boundary is structural, not a check.
-    const arena = new LexicalCellArena();
-    const live = arena.mintObject('demo', {shape: objectRef('demo', 'item-shape'), slots: {}});
-    assert.ok(isTransientObjectId(live.objectId), 'the arena mints a transient id');
-
-    // The ONLY way to name an edge target to the lane is a string. A transient-looking string is
-    // refused before the write — for a plain and a pinned spelling alike. The lane's spellings are
-    // bare ids (the kind segment belongs to the arena, not the edge string), so use transientObjectId.
+    // The ONLY way to name an edge target to the lane is a string (the callable type language has no
+    // ref type, ADR 0042 §7). A transient-looking string is refused before the write — for a plain
+    // and a pinned spelling alike. The lane's spellings are bare ids (the kind segment belongs to
+    // the arena, not the edge string), so use transientObjectId.
     // A refused create must write no new instance. Count durable records of the Item shape (the
     // only thing a successful create would produce) around the refusals.
     const itemInstances = async () =>
@@ -325,6 +318,47 @@ test('a slot write of a post-escape transient value promotes it rather than dang
     const linkRef = durableHolder.slots['durability/node-link'];
     assert.ok(linkRef.objectId.startsWith('object/'), 'the late value was promoted, not written transient');
     assert.deepEqual(await runtime.images.getObject('app', linkRef.objectId).then((r) => r?.slots['durability/node-val']), integerValue(7));
+  });
+});
+
+// The `if (current)` interleaving (lexical-cells.js:407): while an object's own promotion is still
+// in-progress — a cyclic graph suspends mid-publish — its durable record does not exist yet. A slot
+// write then must NOT write durable (there is nothing to CAS against), but MUST update the arena, so
+// the eventual #promoteObjectRecord re-read publishes the latest. Driving that interleaving: hand-
+// mark the memo in-progress, write through the view, then complete the promotion.
+test('a write during an in-progress promotion updates the arena and is published by the eventual promotion', async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'app'});
+    const shapeRef = await nodeShape(runtime.images, 'app');
+    const arena = new LexicalCellArena();
+    const nil = objectRef('app', 'smalltalk/nil');
+    const node = arena.mintObject('app', {shape: shapeRef, slots: {'durability/node-link': nil, 'durability/node-val': integerValue(1)}});
+
+    // Mark the object in-progress in the memo, as its own promotion would have — its durable record
+    // does not exist yet. The derived durable id is what promotion will use.
+    const {durableIdFor} = await import('../src/execution/closure-promotion.js');
+    const durableId = durableIdFor(node.objectId);
+    arena.promotionMemo().set(['app', node.objectId], {ref: objectRef('app', durableId), status: 'in-progress'});
+
+    arena.postPromotionPromoter = (v) => new ClosurePromoter(runtime.images, arena).promoteValue(v);
+    const view = arenaImagesView(runtime.images, arena);
+
+    // Write through the view: the durable record is absent (current === null), so the durable write
+    // is skipped — but the arena must be updated.
+    await view.putObject('app', {
+      id: node.objectId, shape: shapeRef, behavior: null,
+      slots: {'durability/node-link': nil, 'durability/node-val': integerValue(99)},
+      metadata: {},
+    });
+    assert.ok(!(await runtime.images.getObject('app', durableId)), 'no durable record may appear before promotion completes');
+    assert.deepEqual(arena.transientRecord('app', node.objectId).slots['durability/node-val'], integerValue(99), 'the arena was updated even though the durable write was skipped');
+
+    // The eventual promotion re-reads the arena and must publish the LATEST value, not the stale
+    // snapshot from reservation time.
+    arena.promotionMemo().delete(['app', node.objectId]); // release the reservation, as a completed step would
+    const promoted = await new ClosurePromoter(runtime.images, arena).promoteValue(node);
+    const record = await runtime.images.getObject('app', promoted.objectId);
+    assert.deepEqual(record.slots['durability/node-val'], integerValue(99), 'the promotion published the post-reservation mutation, not the stale snapshot');
   });
 });
 
