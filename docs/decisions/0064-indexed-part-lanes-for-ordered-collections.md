@@ -96,9 +96,13 @@ interface-shape* decision (how is an ordered, possibly-large, ref-bearing collec
 the projection record?) that this ADR does not need to make, because the first consumer does not
 need projection:
 
-- The environment reads back through **`object/read`-level access** — the existing, already-
-  authorized `getObject`/`listRecords` host path, which returns the whole record including
-  `indexed`. That is sufficient to reconstruct a Perspective and is what the proposal assumes.
+- The environment reads back through **`object/read`-level access**. To be precise about what that
+  means: `ImageService.getObject`/`listRecords` perform no `require` — they are the unguarded host
+  path, and the environment, as host code holding whole-image authority, reads records (including
+  `indexed`) directly through them. Where an *authorized* read is wanted, the projection lane is
+  what wraps the read in `require({operation: 'object/read', ...})` — so a future whole-record
+  `object/read` lane would be trivially sufficient. Either way, no indexed-aware *projection* is
+  needed to reconstruct a Perspective, which is what the proposal assumes.
 - A future indexed-aware *projection* is a separate, separable decision (its own interface shape and
   its own ADR if pressure arrives). This ADR un-defers the **write/create** half of ADR 0047's
   deferred item and **leaves the projection half deferred**.
@@ -129,8 +133,13 @@ multi-record transactions are the deferred work that would remove it.
 Extends `src/callable/image-creation-binding.js` (no new lane, no new operation): the binding's
 field mapping gains an optional indexed-field marker, and the executor grows an indexed-construction
 step beside the slot loop — same require-first, per-target-edge-grant, mint-explicit-id, atomic
-pattern. The `callable-interface/v2` artifact declares the indexed field as `{kind:'list',
-element:...}`. Proof list in the implementation task covers: indexed-field-on-non-indexed-class
+pattern. Three seams are amended, and named so the install-time contract change is explicit: (a)
+`assertCreationInterface` currently hard-rejects any non-leaf field ("v1 does not write nested
+values"); it must carve out the indexed field (`{kind:'list', element:...}`) from that leaf-type
+rule, since a `list<string>` of ref targets is ref-free, not a nested slot value. (b) the binding's
+field mapping routes the indexed field to the indexed part rather than a slot. (c) the executor
+builds the indexed part. The `callable-interface/v2` artifact declares the indexed field as
+`{kind:'list', element:...}`. Proof list in the implementation task covers: indexed-field-on-non-indexed-class
 refusal; per-target edge grant for each ref element (plain + pinned); transient element refusal
 before any write; zero-length parity when no indexed field is supplied; the created indexed part is
 walk-visible (`referencesOfRecord`); no projection change; and a restart/recovery proof alongside
