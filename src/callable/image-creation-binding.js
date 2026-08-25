@@ -57,36 +57,57 @@ function requiredText(value, label) {
   return value;
 }
 
-// Field mapping, mirroring the mutation lane's, plus an optional `edge` flag. `edge: true` marks a
+// Field mapping, mirroring the mutation lane's, plus two optional flags. `edge: true` marks a slot
 // field whose string value is a ref *target id*: the lane canonicalizes it to a ref/pinned-ref and
 // requires a separate per-target `object/edge-write` grant. A non-edge field stores its string as
 // text and can never mint a graph edge — the composite codec already refuses embedded refs.
+//
+// ADR 0064: a field marked `indexed: true` is the indexed-part field. It names no slot; its value
+// is a `list<leaf-or-ref-string>` whose elements populate the ordered indexed part. At most one
+// field may be the indexed field, and it is mutually exclusive with naming a `slot`. `edge` on the
+// indexed field marks a ref-list: every (string) element is a ref target authorized per-element;
+// without `edge` it is a leaf-list.
 function normalizeCreationFields(values, label) {
   if (!Array.isArray(values) || values.length === 0) {
     throw new TypeError(`${label} fields must be a non-empty array`);
   }
   const names = new Set();
   const slots = new Set();
-  return Object.freeze(values.map((entry, index) => {
+  let indexedField = null;
+  const normalized = values.map((entry, index) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
       throw new TypeError(`${label} field ${index} must be an object`);
     }
     const keys = Object.keys(entry).sort();
-    const allowed = ['edge', 'name', 'slot'];
-    if (!keys.includes('name') || !keys.includes('slot') || keys.some((key) => !allowed.includes(key))) {
-      throw new TypeError(`${label} field ${index} must contain name, slot, and optionally edge`);
+    const allowed = ['edge', 'indexed', 'name', 'slot'];
+    if (!keys.includes('name') || keys.some((key) => !allowed.includes(key))) {
+      throw new TypeError(`${label} field ${index} must contain name, optionally slot, and optionally edge/indexed`);
     }
     const name = requiredText(entry.name, `${label} field ${index} name`);
-    // Stable slot IDs, not slot names: a rename must not change what a creation writes.
-    const slot = requiredText(entry.slot, `${label} field ${index} slot`);
     const edge = entry.edge === undefined ? false : entry.edge === true;
+    const indexed = entry.indexed === undefined ? false : entry.indexed === true;
     if (typeof edge !== 'boolean') throw new TypeError(`${label} field ${index} edge must be a boolean when present`);
+    if (typeof indexed !== 'boolean') throw new TypeError(`${label} field ${index} indexed must be a boolean when present`);
     if (names.has(name)) throw new TypeError(`${label} maps field ${name} twice`);
-    if (slots.has(slot)) throw new TypeError(`${label} maps slot ${slot} twice`);
     names.add(name);
+
+    if (indexed) {
+      // The indexed field names no slot. `edge` on it marks a ref-list: every (string) element is a
+      // ref target authorized per-element. Without `edge` it is a leaf-list. There is exactly one.
+      if (Object.hasOwn(entry, 'slot')) throw new TypeError(`${label} indexed field ${name} must not name a slot`);
+      if (indexedField) throw new TypeError(`${label} declares a second indexed field ${name}; at most one is allowed`);
+      indexedField = name;
+      return Object.freeze({name, indexed: true, edge});
+    }
+
+    // A slot field: stable slot IDs, not slot names — a rename must not change what a creation writes.
+    if (!keys.includes('slot')) throw new TypeError(`${label} field ${index} (${name}) must name a slot unless it is the indexed field`);
+    const slot = requiredText(entry.slot, `${label} field ${index} slot`);
+    if (slots.has(slot)) throw new TypeError(`${label} maps slot ${slot} twice`);
     slots.add(slot);
     return Object.freeze({name, slot, edge});
-  }));
+  });
+  return Object.freeze(normalized);
 }
 
 function parseImageCreationBindingArtifact(artifact) {
@@ -113,7 +134,9 @@ function parseImageCreationBindingArtifact(artifact) {
 }
 
 // create-item(class-id: string, value: <record>) -> string (the initial object-scoped version token)
-function assertCreationInterface(descriptor) {
+// `fields` is the binding's field mapping, so the indexed field's list type can be carved out of the
+// leaf-type rule precisely: only the field the binding marks `indexed` may be a non-leaf list.
+function assertCreationInterface(descriptor, fields = []) {
   const {parameters, result, types = {}} = descriptor;
   if (parameters.length !== 2 || parameters[0] !== 'string') {
     throw new TypeError(
@@ -127,7 +150,12 @@ function assertCreationInterface(descriptor) {
   if (!record || record.kind !== 'record') {
     throw new TypeError(`${IMAGE_CREATION_BINDING_V1} value parameter must be a declared record type`);
   }
+  const indexedFields = new Map(fields.filter((f) => f.indexed).map((f) => [f.name, f.edge]));
   for (const field of record.fields) {
+    if (indexedFields.has(field.name)) {
+      assertIndexedFieldType(field, types, `${IMAGE_CREATION_BINDING_V1} indexed field ${field.name}`, indexedFields.get(field.name));
+      continue;
+    }
     // Ref targets travel as strings; every other field must be a leaf type (no nested writes in v1).
     if (!CALLABLE_TYPES.includes(field.type)) {
       throw new TypeError(
@@ -138,8 +166,26 @@ function assertCreationInterface(descriptor) {
   return record;
 }
 
+// ADR 0064 §1: the indexed field is a `list` whose elements are leaf scalars or ref-target strings —
+// never a nested record/list (that would violate ADR 0035's Value model). `list<u8>` is bytes, not
+// an element list, so it is refused here for the same reason it is not a slot. An `edge` indexed
+// field is a ref-list: its elements are ref-target strings, so its element type must be `string`.
+function assertIndexedFieldType(field, types, label, edge) {
+  const resolved = resolveDeclaredType(field.type, types);
+  if (!resolved || resolved.kind !== 'list') {
+    throw new TypeError(`${label} must be a {kind:'list', element:<leaf>} type`);
+  }
+  const element = resolveDeclaredType(resolved.element, types);
+  if (typeof element !== 'string' || !CALLABLE_TYPES.includes(element) || element === 'list<u8>') {
+    throw new TypeError(`${label} element must be a leaf scalar (bool/s32/s64/f32/f64/string); nested composites are not writable`);
+  }
+  if (edge && element !== 'string') {
+    throw new TypeError(`${label} is an edge (ref) list, so its element type must be string, got ${element}`);
+  }
+}
+
 function assertFieldMappingCovers(record, fields, label) {
-  const mapped = new Map(fields.map(({name, slot, edge}) => [name, {slot, edge}]));
+  const mapped = new Map(fields.map((f) => [f.name, f.indexed ? {indexed: true, edge: f.edge} : {slot: f.slot, edge: f.edge}]));
   for (const field of record.fields) {
     if (!mapped.has(field.name)) throw new TypeError(`${label} does not map record field ${field.name}`);
   }
@@ -175,14 +221,14 @@ async function installImageCreationBinding({
     {dependencies: [{role: CALLABLE_INTERFACE_DEPENDENCY_ROLE, artifact: interfaceRef}]},
     IMAGE_CREATION_BINDING_V1,
   );
-  assertFieldMappingCovers(assertCreationInterface(descriptor), normalizedFields, IMAGE_CREATION_BINDING_V1);
+  assertFieldMappingCovers(assertCreationInterface(descriptor, normalizedFields), normalizedFields, IMAGE_CREATION_BINDING_V1);
 
   const bindingArtifact = await imageService.putCodeArtifact(targetImageId, {
     id: bindingId,
     representation: IMAGE_CREATION_BINDING_V1,
     content: textValue(JSON.stringify({
       abi: IMAGE_CREATION_BINDING_V1,
-      fields: normalizedFields.map(({name, slot, edge}) => ({name, slot, edge})),
+      fields: normalizedFields.map((f) => (f.indexed ? {name: f.name, indexed: true, edge: f.edge} : {name: f.name, slot: f.slot, edge: f.edge})),
     })),
     dependencies: [{role: CALLABLE_INTERFACE_DEPENDENCY_ROLE, artifact: interfaceRef}],
     metadata: bindingMetadata,
@@ -218,6 +264,27 @@ function parseEdgeTarget(imageId, text, label) {
   return objectRef(imageId, text);
 }
 
+// ADR 0064 §2–3. Build the ordered indexed part from the field's list value. Each element is either
+// a leaf scalar (canonicalized host-side, no edge) or — when the binding marks the field `edge` — a
+// ref-target string canonicalized with a separate per-target `object/edge-write` grant. The grant
+// fires at exactly the canonicalize step, so no edge is created without it, and a transient-looking
+// element is refused before any write (parseEdgeTarget), with the write-seam guard as backstop.
+function buildIndexedPart(imageId, listValue, field, edge, types, require) {
+  if (!Array.isArray(listValue)) {
+    throw new TypeError(`indexed field ${field.name} must be a list, got ${typeof listValue}`);
+  }
+  const elementType = resolveDeclaredType(field.type, types).element;
+  return listValue.map((element, index) => {
+    const label = `indexed field ${field.name}[${index}]`;
+    if (edge) {
+      const parsed = parseEdgeTarget(imageId, element, label);
+      require({operation: OBJECT_EDGE_WRITE_OPERATION, resource: objectResource(imageId, parsed.objectId)});
+      return parsed;
+    }
+    return hostLeafToCanonical(element, elementType, label);
+  });
+}
+
 // A Behavior is a record in THIS image whose Shape is THIS image's fixed behavior Shape, and whose
 // instanceShape slot is a local unpinned ref (or nil). This is `isBehaviorObject` plus the
 // instanceShape half of `readBehavior` — deliberately narrower than `readBehavior`, which also
@@ -251,7 +318,7 @@ function createImageCreationBindingV1Executor({newObjectId = randomUUID, maxIden
       }
       const binding = parseImageCreationBindingArtifact(code);
       const {descriptor} = await resolveCallableInterface(images, code, IMAGE_CREATION_BINDING_V1);
-      const record = assertCreationInterface(descriptor);
+      const record = assertCreationInterface(descriptor, binding.fields);
       const mapped = assertFieldMappingCovers(record, binding.fields, IMAGE_CREATION_BINDING_V1);
 
       const args = assertCallableInterfaceArguments(descriptor, activation.arguments, descriptor.function);
@@ -284,9 +351,24 @@ function createImageCreationBindingV1Executor({newObjectId = randomUUID, maxIden
       const nil = objectRef(imageId, KERNEL_NIL_ID);
       const slots = Object.fromEntries((shape.slots ?? []).map(({id}) => [id, nil]));
       const shapeSlotIds = new Set((shape.slots ?? []).map(({id}) => id));
+      // ADR 0064: the indexed part is built from the indexed field's list, not nil-filled. An indexed
+      // class with no indexed field supplied begins at the zero-length form (basicNew parity).
+      const isIndexed = shape.indexed === SHAPE_INDEXED.VALUES;
+      let indexed = isIndexed ? [] : null;
       for (const field of record.fields) {
         if (!Object.hasOwn(value, field.name)) continue;
-        const {slot, edge} = mapped.get(field.name);
+        const mapping = mapped.get(field.name);
+        if (mapping.indexed) {
+          // The indexed field routes to the indexed part. Refusing a non-indexed class here — before
+          // any element is authorized or written — keeps the failure clean rather than a shape-match
+          // surprise at commit (ADR 0064 §1).
+          if (!isIndexed) {
+            throw new TypeError(`${IMAGE_CREATION_BINDING_V1} supplies indexed field ${field.name}, but class ${imageId}/${classId} is not indexed`);
+          }
+          indexed = buildIndexedPart(imageId, value[field.name], field, mapping.edge, descriptor.types ?? {}, require);
+          continue;
+        }
+        const {slot, edge} = mapping;
         if (!shapeSlotIds.has(slot)) {
           throw new TypeError(`${IMAGE_CREATION_BINDING_V1} maps field ${field.name} to slot ${slot}, which the instance Shape does not declare`);
         }
@@ -306,8 +388,6 @@ function createImageCreationBindingV1Executor({newObjectId = randomUUID, maxIden
       // retry after a lost acknowledgement preserves the identity (ADR 0046 §6). Insert-only, and
       // state + history commit in one backend transaction (or neither) via putWithHistory.
       const behavior = objectRef(imageId, classId);
-      // An indexed class's instance begins with the zero-length form, exactly as `basicNew` does.
-      const indexed = shape.indexed === SHAPE_INDEXED.VALUES ? [] : null;
       for (let attempt = 0; attempt < maxIdentityAttempts; attempt += 1) {
         const candidate = newObjectId();
         if (typeof candidate !== 'string' || candidate.length === 0) {

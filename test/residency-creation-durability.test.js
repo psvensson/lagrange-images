@@ -18,6 +18,7 @@ import {LagrangeBackend} from '../src/backend/index.js';
 import {LexicalCellArena, arenaImagesView} from '../src/execution/lexical-cells.js';
 import {ClosurePromoter} from '../src/execution/closure-promotion.js';
 import {findTransientRefs, transientObjectId} from '../src/value/transient-ref.js';
+import {referencesOfRecord} from '../src/graph/references.js';
 import {objectVersionToken} from '../src/object/version-token.js';
 import {createSqliteApplicationRuntime} from './support/sqlite-application-runtime.js';
 
@@ -412,6 +413,85 @@ test('a promoted graph and a created object survive a real backend restart', asy
         const history = await images.history('app');
         assert.ok(history.some((e) => e.type === 'object.put' && e.objectId === ids.a), 'the promotion write is in history');
         assert.ok(history.some((e) => e.type === 'object.put' && e.objectId === 'created-item'), 'the creation write is in history');
+      } finally {
+        await backend.stop();
+      }
+    }
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+// ADR 0064 §7: the indexed-part creation write is insert-only `putWithHistory`, so it is durable and
+// restart-safe like any creation. Prove it end-to-end: create an object with an ordered indexed part
+// of refs through the lane against a real backend, restart, and the indexed refs resolve in order,
+// walk-visible, with no transient residue.
+test('an object created with an indexed ref-list survives a real backend restart, walk-visible', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lagrange-images-indexed-'));
+  const filename = join(directory, 'image.sqlite');
+  const INDEXED_TYPES = normalizeTypeDeclarations({
+    perspective: {kind: 'record', fields: [
+      {name: 'subject', type: 'string'},
+      {name: 'presentations', type: {kind: 'list', element: 'string'}},
+    ]},
+  });
+  try {
+    let createdId;
+    {
+      const backend = new LagrangeBackend({runtime: createSqliteApplicationRuntime(filename)});
+      await backend.start();
+      const images = new ImageService({backend});
+      await images.createImage({id: 'app'});
+      const shapeRef = await images.putShape('app', {
+        id: 'perspective-shape', slots: [{id: 'slot-subject', name: 'subject'}], indexed: 'values',
+      });
+      // Durable targets for the subject slot and the indexed elements.
+      const targetShape = await images.putShape('app', {id: 'target-shape', slots: []});
+      for (const id of ['subject-1', 'pres-1', 'pres-2']) {
+        await images.putObject('app', {id, shape: objectRef('app', targetShape.id), slots: {}, metadata: {}}, {expectedVersion: 0});
+      }
+      // Drive the lane directly with the {images, require} context, mirroring group B.
+      const {installImageCreationBinding, createImageCreationBindingV1Executor} = await import('../src/callable/image-creation-binding.js');
+      const {installCallableInterfaceV2, defineClass, installSmalltalkKernel} = await import('../src/runtime.js');
+      await installSmalltalkKernel({images, imageId: 'app'});
+      const {classRef} = await defineClass({images, imageId: 'app', name: 'Perspective', instanceShapeRef: objectRef('app', shapeRef.id)});
+      const ci = await installCallableInterfaceV2({
+        images, imageId: 'app', interfaceId: 'create-perspective',
+        functionName: 'create-perspective', parameters: ['string', 'perspective'], result: 'string', types: INDEXED_TYPES,
+      });
+      await installImageCreationBinding({
+        images, callableInterface: objectRef('app', ci.id),
+        fields: [{name: 'subject', slot: 'slot-subject', edge: true}, {name: 'presentations', indexed: true, edge: true}],
+        bindingId: 'creation', blockId: 'creation-block',
+      });
+      const block = await images.getBlock('app', 'creation-block');
+      const code = await images.getCodeArtifact('app', block.code.objectId);
+      const executor = createImageCreationBindingV1Executor();
+      const token = await executor.execute(
+        {
+          activation: {block: objectRef('app', 'creation-block'), receiver: null, environment: null, arguments: [textValue(classRef.objectId), packCompositeValue({subject: 'subject-1', presentations: ['pres-1', 'pres-2']}, 'perspective', INDEXED_TYPES)]},
+          code,
+        },
+        {images, require: () => {}},
+      );
+      createdId = (await images.history('app')).filter((e) => e.type === 'object.put' && e.object?.shape?.objectId === shapeRef.id).pop().objectId;
+      assert.ok(token.kind === 'text' && createdId, 'the lane created the indexed object');
+      await backend.stop();
+    }
+    {
+      const backend = new LagrangeBackend({runtime: createSqliteApplicationRuntime(filename)});
+      await backend.start();
+      try {
+        const images = new ImageService({backend});
+        const object = await images.getObject('app', createdId);
+        assert.ok(object, 'the indexed object did not survive the restart');
+        // The ordered indexed refs resolved, in order, with no transient residue.
+        assert.deepEqual(object.indexed, [objectRef('app', 'pres-1'), objectRef('app', 'pres-2')]);
+        assert.deepEqual(findTransientRefs(object), []);
+        assert.deepEqual(object.slots['slot-subject'], objectRef('app', 'subject-1'));
+        // And they are walk-visible as graph edges after the restart.
+        const refs = referencesOfRecord(object).map((r) => r.objectId);
+        for (const id of ['subject-1', 'pres-1', 'pres-2']) assert.ok(refs.includes(id), `referencesOfRecord must reach ${id} after restart`);
       } finally {
         await backend.stop();
       }
