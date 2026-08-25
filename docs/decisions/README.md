@@ -103,6 +103,7 @@ move in. Never move it the other way to make a claim easier to write.
 - [0061 — nested namespace semantics](0061-nested-namespace-semantics.md): a namespace is a mapping onto flat, shared bindings; nesting is parent-linked visibility (inner shadows outer, walked at compile time, acyclic to the root), never containment — and a Project designates a namespace as organization, with no path syntax and no runtime cost.
  - [0062 — authorized object-creation lane](0062-authorized-object-creation-lane.md): an `object/create` operation scoped per (image, class), with initial ref slots authorized per-target by a separate `object/edge-write` grant, the lane minting the id and committing insert-only in one transaction — the external creation boundary ADR 0046 §10 deferred to.
  - [0063 — portable WASM graphics capabilities](0063-portable-wasm-graphics-capabilities.md): treat 2D/3D as ordinary Components with explicit versioned graphics imports, preferring `wasi:webgpu` plus `wasi-gfx`-style surfaces while keeping GPU/surface resources transient and presentation policy above the image layer.
+ - [0064 — indexed-part lanes for ordered collections](0064-indexed-part-lanes-for-ordered-collections.md): un-defer ADR 0047's indexed part at the creation lane — initial indexed elements, each ref element authorized by the existing per-target `object/edge-write` grant, with indexed-aware projection and mutation left deferred.
 
 ## Reading rule
 
