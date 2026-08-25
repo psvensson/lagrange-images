@@ -1,8 +1,13 @@
 # ADR 0068: authorized whole-record object/read lane — seam decision
 
-Status: accepted — investigation outcome. **Adopted as a lane to implement**: an installed callable
-binding, `image-object-read-binding/v1`, symmetric with the existing projection/mutation/creation
-lanes. This closes a privileged-read seam; it is not "the read counterpart to the batch lane."
+Status: implemented
+Proven by: test/image-object-read-binding.test.js
+
+**Adopted and implemented**: an installed callable binding, `image-object-read-binding/v1`, symmetric
+with the existing projection/mutation/creation lanes. This closes a privileged-read seam; it is not
+"the read counterpart to the batch lane." Because the composite codec is ref-free and schema-directed,
+the whole record is carried as a record of lists — each slot/indexed Value in its existing canonical
+JSON form — so refs and pinned refs cross the boundary as identity data, never followed.
 
 ## Problem
 

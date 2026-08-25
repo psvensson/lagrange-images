@@ -33,6 +33,10 @@ import {
   IMAGE_VERSIONED_PROJECTION_BINDING_V1,
   createImageVersionedProjectionBindingV1Executor,
 } from '../callable/image-versioned-projection-binding.js';
+import {
+  IMAGE_OBJECT_READ_BINDING_V1,
+  createImageObjectReadBindingV1Executor,
+} from '../callable/image-object-read-binding.js';
 import {ActivationExecutor, ExpiredExecutionContextError} from './activation-executor.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 import {
@@ -92,6 +96,10 @@ function createDefaultCodeExecutorRegistry({
   registry.register(
     IMAGE_VERSIONED_PROJECTION_BINDING_V1,
     createImageVersionedProjectionBindingV1Executor(),
+  );
+  registry.register(
+    IMAGE_OBJECT_READ_BINDING_V1,
+    createImageObjectReadBindingV1Executor(),
   );
 
   const foreignRuntimeConfigured = [
