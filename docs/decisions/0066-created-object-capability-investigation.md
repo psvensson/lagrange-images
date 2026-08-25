@@ -55,7 +55,10 @@ are known. This is what the environment ships.
 
 - **Cost**: the composition is not a single authority context; it needs a control-plane
   `authorityProvider` that can re-issue, and the workflow is multi-step. This is an ergonomic cost,
-  not a correctness one — each stage is independently authorized and atomic.
+  not a correctness one — each stage is independently authorized and atomic. (The *separate* cost of
+  the 1+N composition being non-atomic — orphan children on the change feed, mitigated by
+  Perspective-as-commit-point — is a different matter, recorded in ADR 0064 §6 and addressed by
+  multi-record transactions, not by a capability; see revisit condition 2.)
 - **Benefit**: ADR 0037's model is untouched. The authority root stays exactly where the substrate
   can reason about it; no executor ever widens; grants stay exact-match and auditable; revocation
   keeps its simple upward-walk semantics.
@@ -65,12 +68,14 @@ are known. This is what the environment ships.
 Let the version token returned by creation double as proof authorizing follow-on ops on the object.
 
 - **Rejected outright.** ADR 0062 §6 and 3zm both name it: a version token is *concurrency*, not
-  authority. It is caller-comparable and round-trippable by design (ADR 0042 §7), so treating it as
+  authority. It is caller-comparable and round-trippable by design (ADR 0042 §5), so treating it as
   a grant would make a publicly-inspectable concurrency value into an authority bearer token — the
   exact confusion ADR 0037 §3 (`principal != capability`) and §7 (absence of authority means no
   capabilities) forbid. This also grants nothing for *referencing the object as an edge target*,
   which is the actual need; `object/edge-write` on the new id is a different operation from
-  `object/write` on it.
+  `object/write` on it. (For precision: the lane's signature returns the version-token *string*
+  alone; the caller already knows the id it minted under, and `parseObjectVersionToken` re-scopes
+  to that caller-supplied id — so "returns id + token" is shorthand, not a separate id field.)
 
 ### Option 2 — the lane adds a derived grant to the caller's existing context
 
@@ -86,16 +91,21 @@ Creation, on success, mutates the caller's context to add `object/edge-write` on
 Creation returns an opaque capability Value; a later `require` for `object/edge-write` on that id
 accepts the capability in lieu of an exact-match grant.
 
-- This is the only variant that is a *real* capability, and it is a **change to the grant algebra**,
-  not a lane tweak. It introduces a bearer-token grant form beside exact-match pairs, which is
-  exactly one of the "places where 'narrower' becomes arguable" ADR 0037 §6 deferred. It raises
-  questions that have no cheap answers within the current model: Is the capability forgeable or
-  copyable (a Value is data — it can be duplicated and passed to other contexts, so it is no longer
-  per-principal)? Does it survive revocation of the creating context (ADR 0037's upward-walk assumes
-  grants live only in contexts)? Does `attenuate` understand it? Can it be attenuated, or does it
-  escape the narrowing algebra entirely? Each answer is a new authority-semantics decision. That is
-  a larger surface than the ergonomic problem warrants **today**, with one consumer and a working
-  composition.
+- This is the only variant that is a *real* capability, and it is foreclosed on **two independent
+  grounds**, both worth recording so a future revisitor does not re-litigate from a weaker premise.
+  First, a capability carried as a **canonical Value** is exactly what ADR 0037 §1 ("authority is
+  execution context, not program data") and §11 ("no authority context or principal is ever a
+  canonical Value … nor packed into an `interface-composite/v0` envelope") forbid — and ADR 0035
+  forbids new nested Value kinds entirely. Second, even reshaped to avoid the Value form, it is a
+  **change to the grant algebra**, not a lane tweak: it introduces a bearer-token grant form beside
+  exact-match pairs, which is one of the "places where 'narrower' becomes arguable" ADR 0037 §6
+  deferred. It raises questions that have no cheap answers within the current model: Is the
+  capability forgeable or copyable (a Value is data — it can be duplicated and passed to other
+  contexts, so it is no longer per-principal)? Does it survive revocation of the creating context
+  (ADR 0037's upward-walk assumes grants live only in contexts)? Does `attenuate` understand it? Can
+  it be attenuated, or does it escape the narrowing algebra entirely? Each answer is a new
+  authority-semantics decision. That is a larger surface than the ergonomic problem warrants
+  **today**, with one consumer and a working composition.
 
 ### Option 4 — a new control-plane operation `issueDerived` for "creator's follow-on grant"
 
@@ -108,6 +118,15 @@ narrow context authorizing bounded follow-on ops on the new id.
   `authorityProvider` helper), but it is environment-side / control-plane-side sugar and requires
   **no substrate change** — so it does not need this ADR to permit it, and it does not remove the
   re-issuance step, only standardizes it.
+
+**The design space is closed.** The obvious further candidates collapse into already-rejected options
+or an existing invariant: pre-minted/deterministic caller-supplied ids would let the caller hold
+exact-match grants up front, but server-side minting is load-bearing for ADR 0046 §6 lost-ack/retry
+identity preservation (and the environment's adapter uses no deterministic ids); a wildcard grant
+("edge-write on anything I created") is precisely what ADR 0037 §6 forbids; issuing a broader
+up-front context covering the eventual ids reduces to Option 0; and a multi-record transaction is a
+*different* deferred item, not a capability. Every in-model path to "compose create-then-reference in
+one continuous context" reduces to staged authority.
 
 ## Decision
 
@@ -127,9 +146,14 @@ narrow context authorizing bounded follow-on ops on the new id.
 
 1. A **second, independent consumer** needs create-then-reference composition, so the ergonomic cost
    is demonstrably recurring rather than one-off; or
-2. The environment finds staged authority **cannot** express a real workflow (e.g. an atomic
-   create-and-reference that staging fundamentally cannot sequence — which would actually point at
-   *multi-record transactions*, a different deferred item, not at a capability); or
+2. The environment finds staged authority **cannot** express a real workflow. Here the *kind* of
+   inexpressibility matters and routes the answer: inexpressible **for want of authority** (a
+   follow-on grant the control plane cannot legitimately issue) could point back at a capability;
+   inexpressible **for want of atomicity** (an atomic create-and-reference that staging fundamentally
+   cannot sequence) points at *multi-record transactions* (ADR 0062 §8), not a capability — a
+   capability authorizes follow-on operations but does not make the 1+N writes atomic. The honest
+   cost of the current 1+N composition (non-atomic, orphan-on-change-feed, mitigated by
+   Perspective-as-commit-point) is recorded in ADR 0064 §6, and it is the atomicity case; or
 3. A **multi-record transaction** lane lands (ADR 0062 §8), at which point "create children + the
    referencing parent in one transaction" subsumes the composition and a separate edge-capability is
    moot.
