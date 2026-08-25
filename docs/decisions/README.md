@@ -105,6 +105,7 @@ move in. Never move it the other way to make a claim easier to write.
  - [0063 — portable WASM graphics capabilities](0063-portable-wasm-graphics-capabilities.md): treat 2D/3D as ordinary Components with explicit versioned graphics imports, preferring `wasi:webgpu` plus `wasi-gfx`-style surfaces while keeping GPU/surface resources transient and presentation policy above the image layer.
  - [0064 — indexed-part lanes for ordered collections](0064-indexed-part-lanes-for-ordered-collections.md): un-defer ADR 0047's indexed part at the creation lane — initial indexed elements, each ref element authorized by the existing per-target `object/edge-write` grant, with indexed-aware projection and mutation left deferred.
  - [0065 — indexed-aware mutation](0065-indexed-aware-mutation.md): the mutation lane rewrites an existing object's indexed part under the same version-token CAS — append leaf or ref elements (each added ref authorized per-target by `object/edge-write`) and reorder, while element removal stays deferred as edge removal.
+ - [0066 — created-object capability: a design investigation](0066-created-object-capability-investigation.md): whether creation should return a capability authorizing follow-on operations on the new id — concluded **not adopted** (keep staged authority), because a real created-object capability is a grant-algebra change that ADR 0037's root model defers for lack of demonstrated pressure.
 
 ## Reading rule
 
