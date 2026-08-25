@@ -101,12 +101,15 @@ refs in either place are graph edges and must be visited by `referencesOfRecord(
 
 The indexed part is language-neutral and 0-based. It is not `interface-composite/v0`: composites are
 ref-free transient boundary data, while indexed object state exists specifically to hold durable
-Values including refs. The v1 projection/mutation field maps remain named-slot-only. Projection
-refuses an indexed object rather than returning a partial view; mutation preserves the indexed part
-when it rewrites the containing record. ADR 0064 opens the indexed part at the *creation* lane only:
-a binding may declare one indexed field, a ref-free `list` whose elements become the initial indexed
-part, each ref element authorized by the existing per-target `object/edge-write` grant. Indexed-aware
-projection and mutation remain deferred.
+Values including refs. The v1 projection field map remains named-slot-only. Projection
+refuses an indexed object rather than returning a partial view. ADR 0064 opens the indexed part at
+the *creation* lane: a binding may declare one indexed field, a ref-free `list` whose elements become
+the initial indexed part, each ref element authorized by the existing per-target `object/edge-write`
+grant. ADR 0065 opens it at the *mutation* lane: a binding may declare one indexed field, replacing
+the indexed part under the same version-token CAS — appending leaf elements (`object/write` alone)
+or ref elements (`+ per-target object/edge-write` on each added ref) and reordering, while element
+removal stays deferred as edge removal and a shrunk list is refused. Indexed-aware *projection*
+remains deferred.
 
 ## Symmetric Smalltalk kernel
 
