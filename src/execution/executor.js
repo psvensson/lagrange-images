@@ -37,6 +37,10 @@ import {
   IMAGE_OBJECT_READ_BINDING_V1,
   createImageObjectReadBindingV1Executor,
 } from '../callable/image-object-read-binding.js';
+import {
+  IMAGE_OBSERVATION_BINDING_V1,
+  createImageObservationBindingV1Executor,
+} from '../callable/image-observation-binding.js';
 import {ActivationExecutor, ExpiredExecutionContextError} from './activation-executor.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 import {
@@ -100,6 +104,12 @@ function createDefaultCodeExecutorRegistry({
   registry.register(
     IMAGE_OBJECT_READ_BINDING_V1,
     createImageObjectReadBindingV1Executor(),
+  );
+  // ADR 0070. The observation cursor HMAC secret defaults to a random per-registry value, so
+  // cursors are unforgeable by the consumer; inject one only to share cursors across installs.
+  registry.register(
+    IMAGE_OBSERVATION_BINDING_V1,
+    createImageObservationBindingV1Executor(),
   );
 
   const foreignRuntimeConfigured = [

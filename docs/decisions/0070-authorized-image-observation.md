@@ -1,10 +1,13 @@
 # ADR 0070: authorized image observation / history disclosure — a design investigation
 
-Status: accepted — investigation outcome. **Adopt a metadata-only invalidation feed (contract 3),
-realized through object-scoped filtering inside the substrate (contract 2's mechanism), with an
-opaque object-local cursor.** Do NOT add a broad `image/history-read` grant for normal observation.
-The first-class full-history read (for admin/history-browser use) stays a separate, narrower
-decision gated on §7 retention semantics.
+Status: implemented
+Proven by: test/image-observation-binding.test.js
+
+**Adopted and implemented**: a metadata-only invalidation feed (contract 3), realized through
+object-scoped filtering inside the substrate (contract 2's mechanism), with an opaque object-local
+cursor. The lane is `image-observation-binding/v1`. Do NOT add a broad `image/history-read` grant
+for normal observation. The first-class full-history read (for admin/history-browser use) stays a
+separate, narrower decision gated on §7 retention semantics.
 
 ## Problem
 

@@ -12,4 +12,5 @@ export * from './image-creation-binding.js';
 export * from './image-creation-batch-binding.js';
 export * from './image-versioned-projection-binding.js';
 export * from './image-object-read-binding.js';
+export * from './image-observation-binding.js';
 export * from './image-resource-provider.js';
