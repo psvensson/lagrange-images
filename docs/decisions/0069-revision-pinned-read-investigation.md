@@ -1,10 +1,13 @@
 # ADR 0069: revision-pinned read — a design investigation
 
-Status: accepted — investigation outcome. **Do not implement as-of historical reads yet.** The
-investigation pins down what `pin:<id>@<revision>` denotes and answers the authority question, and
-concludes that a correct revision-pinned read depends on history-retention / revision-frontier
-semantics that are still unbuilt roadmap items (§7). A narrow, honest interim is available and noted;
-the full feature is deferred with falsifiable triggers.
+Status: accepted — investigation outcome; **amended** (the "safe history-stream interim" claim was
+wrong and is removed). **Do not implement as-of historical reads yet.** The investigation pins down
+what `pin:<id>@<revision>` denotes and answers the authority question, and concludes that a correct
+revision-pinned read depends on history-retention / revision-frontier semantics that are still
+unbuilt roadmap items (§7). The raw history stream is a **privileged/internal seam** (full records, no
+`require`), so pinned navigation is **explicitly unsupported for ordinary restricted sessions** until
+an authorized observation/history contract exists; the full feature is deferred with falsifiable
+triggers.
 
 ## Problem
 
@@ -94,26 +97,31 @@ wrong "current-read implies history-read") and a retention assumption (likely "h
 that the deferred §7 work would then have to retro-fit. That is exactly the retrofit-trap this
 repository's "decide against actual requirements" rule (ADR 0037 §6) exists to avoid.
 
-## The honest interim (what the environment can do today)
+## The raw history is a privileged seam — there is NO safe environment-facing interim
 
-Because each `object.put` history event embeds the full record at its `_version`, a caller with
-**history-stream access** can *already* reconstruct "object `X` at version `R`" by scanning
-`history(imageId)` for the `object.put` event with `objectId = X` and `objectVersion = R`. Two honest
-frictions: the stream is **unindexed and whole-log** (no per-object or per-version index, so the scan
-is O(history length) and reads events for every object), and it serves **object records only** — a
-pinned-ref to a version that was never written, or to a non-object record (a `shape.put`/`block.put`
-at a colliding id), produces no matching event. This is:
+This section originally claimed the environment could serve a pinned read "today" by scanning the
+history stream "under history-stream authority." **That claim was wrong, and is corrected here.** The
+raw history contains enough to reconstruct version `R` (each `object.put` embeds the full record at
+its `_version`), but the history stream is today a **privileged/internal seam with no environment-facing
+authorization contract**: `ImageService.history()` is a bare pass-through to `backend.readStream` with
+**no `require`** (`graph-image-service.js:388-390`), and the environment's `observe()` calls it
+directly. Because every event carries the **complete record** (not merely "object `X` changed"), the
+feed discloses the full state of **every** object that changes in the image — so a caller authorized
+to `object/read(A)` but not `B` could receive `B`'s complete state through the change feed. ADR 0009's
+"receiving a Change confers no authority" is true but answers the wrong question: authority is
+required to *disclose* the data in the first place.
 
-- **not a new substrate capability** — it uses the existing append-only history read;
-- **subject to the history stream's own authority** (a separate question from `object/read`), which
-  is the correct place for the "who may see history" decision to live;
-- **bounded by retention** — only as far back as the history stream is kept.
+**Therefore: pinned navigation remains explicitly UNSUPPORTED for ordinary restricted sessions** until
+authorized history / as-of semantics exist. The history scan is a legitimate *host-internal / trusted*
+mechanism only — never an environment-facing read for a restricted principal. The authorized
+observation/history-disclosure contract is a separate, required investigation (it must be solved
+**before** first-class historical reads, because the change feed is the remaining privileged data-read
+seam); it is tracked as its own Bead.
 
-So the environment's *immediate* need (show a pinned Perspective as-of a revision it carries) is
-serviceable **without a new substrate lane**, by reading the history stream — provided the caller is
-authorized for that stream. The substrate work that `gyr` would add (a first-class as-of read) is a
-*convenience and a contract*, not a missing capability, and it should be designed together with the
-retention/frontier semantics it depends on.
+Two facts that stand regardless: the stream is **unindexed and whole-log** (no per-object/per-version
+index; a scan is O(history length) and reads events for every object), and it serves **object records
+only** (a pinned-ref to a never-written version, or a non-object record at a colliding id, yields no
+event).
 
 ## Decision
 
@@ -125,8 +133,10 @@ when it is built:
 - Historical reads are **separately authorized**, not inherited from `object/read(current)`. The
   grant shape is decided with the retention/frontier semantics.
 
-**Do not** implement a `readObject`-as-of lane yet. The environment uses the **history-stream** read
-for its current pinned-read need, under history-stream authority.
+**Do not** implement a `readObject`-as-of lane yet, and **do not** serve pinned reads to restricted
+sessions via the history stream — that stream is a privileged/internal seam with no environment-facing
+authorization contract (see the corrected section above). Pinned navigation for ordinary restricted
+sessions stays **explicitly unsupported** until an authorized observation/history contract exists.
 
 **Build it when** (falsifiable triggers): the §7 retention/frontier/GC semantics are decided (so "how
 far back is `R` readable" is defined), **and** a real consumer needs a first-class as-of read rather
@@ -139,9 +149,12 @@ the constraints it must satisfy.
 
 - The semantic promise of `pin` is now **pinned down** (per-record `_version`), even though the read
   is not built — so the environment stops "presenting a promise it cannot uphold" ambiguously: it
-  knows `pin` means record-version, and it serves it via the history stream.
+  knows `pin` means record-version, and that it cannot yet *serve* that to a restricted session.
 - The authority default (**current-read does not imply history-read**) is recorded now, before any
   implementation can accidentally bake in the wrong inheritance.
+- The **change feed is now the known remaining privileged data-read seam**: `history()` carries full
+  records with no `require`. Closing or fencing it is the authorized-observation investigation, which
+  precedes first-class historical reads.
 - `gyr` is **resolved as an investigation**; implementation is a **separate, future** Bead gated on
   the §7 retention/frontier decision. This ADR links `gyr` to that dependency rather than resolving it.
 - The roadmap §7 items (snapshot/revision frontiers, GC respecting pinned refs) are the **blocker**
@@ -158,9 +171,13 @@ a pinned-ref revision is currently UNINTERPRETED by the substrate; this ADR fixe
 object/read(current) does NOT authorize object/read(history R): historical reads are separately
   authorized (currency is not history; identity is not authority). Grant shape decided WITH the
   retention/frontier semantics, not guessed now.
-no first-class as-of read lane yet: the environment serves pinned reads via the existing history
-  stream (each object.put event embeds the record at its _version), under history-stream authority.
+no first-class as-of read lane yet. The raw history stream is a PRIVILEGED/INTERNAL seam: history()
+  carries FULL records with NO require, so the change feed discloses every changed object's complete
+  state. It is NOT a safe environment-facing interim. Pinned navigation is explicitly UNSUPPORTED for
+  ordinary restricted sessions until an authorized observation/history contract exists.
+the authorized observation/history-disclosure contract is a SEPARATE investigation that must be solved
+  BEFORE first-class historical reads (the change feed is the remaining privileged data-read seam).
 build the first-class read only when §7 retention/frontier/GC is decided AND a consumer needs more
-  than the history-stream scan; design the lane + authority + retention bounds together.
+  than a host-internal history scan; design the lane + authority + retention bounds together.
 gyr: resolved as an investigation; implementation is a separate future Bead gated on §7.
 ```
