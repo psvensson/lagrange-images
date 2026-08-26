@@ -29,6 +29,7 @@ artifact's `representation`.
 | `image-creation-batch-binding/v1` | `installImageCreationBatchBinding()` | `createImageCreationBatchBindingV1Executor()` |
 | `image-versioned-projection-binding/v1` | `installImageVersionedProjectionBinding()` | `createImageVersionedProjectionBindingV1Executor()` |
 | `image-object-read-binding/v1` | `installImageObjectReadBinding()` | `createImageObjectReadBindingV1Executor()` |
+| `image-observation-binding/v1` | `installImageObservationBinding()` | `createImageObservationBindingV1Executor()` |
 | `smalltalk-kernel-primitive/v1` | `installSmalltalkAllocationProtocol()`, `installSmalltalkIndexedProtocol()` | `createSmalltalkKernelPrimitiveV1Executor()`, registered by `createRuntime()` |
 
 The foreign-runtime executors are registered only when `createRuntime()` receives foreign
