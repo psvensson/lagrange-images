@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   IMAGE_OBJECT_READ_BINDING_V1,
+  OBJECT_NOT_FOUND_CODE,
   OBJECT_READ_OPERATION,
   createAuthorityService,
   createRuntime,
@@ -199,14 +200,19 @@ test('denied authority is AuthorityError naming object/read, identical for exist
   }
 });
 
-// Case 5 — authorized but nonexistent: a distinct not-found error, never conflated with denied.
+// Case 5 — authorized but nonexistent: a distinct not-found error, never conflated with denied, and
+// machine-readable via a stable lane-owned code (ADR 0068: denied != not-found != operational).
 test('authorized but nonexistent is a distinct not-found error, not AuthorityError and not null', async () => {
   const {runtime, readObject} = await seed({grants: [readGrant('no-such-object')]});
   try {
     await assert.rejects(readObject('no-such-object'), (error) => {
-      assert.equal(error.name, 'TypeError');
-      assert.match(error.message, /not found/);
+      // A lane-owned discriminator: machine-readable by code, not by matching message text.
+      assert.equal(error.name, 'ObjectReadNotFoundError');
+      assert.equal(error.code, OBJECT_NOT_FOUND_CODE);
       assert.notEqual(error.name, 'AuthorityError');
+      // Still a TypeError with the human-readable message for continuity.
+      assert.equal(error instanceof TypeError, true);
+      assert.match(error.message, /object not found: demo\/no-such-object/);
       return true;
     });
   } finally {

@@ -41,6 +41,22 @@ const INDEXED_FIELD = 'indexed';
 const SLOT_NAME_FIELD = 'name';
 const SLOT_VALUE_FIELD = 'value';
 
+// A lane-owned, machine-readable discriminator for "authorized but the object does not exist" —
+// distinct from an AuthorityError (denied) and from an operational failure. ADR 0068 promises
+// denied != not-found != operational; a stable `code` makes that promise machine-readable instead of
+// message-readable, so a consumer need not match the message text at an API boundary. The message
+// keeps the human-readable `object not found: <imageId>/<objectId>` form for continuity.
+const OBJECT_NOT_FOUND_CODE = 'OBJECT_NOT_FOUND';
+class ObjectReadNotFoundError extends TypeError {
+  constructor(imageId, objectId) {
+    super(`object not found: ${imageId}/${objectId}`);
+    this.name = 'ObjectReadNotFoundError';
+    this.code = OBJECT_NOT_FOUND_CODE;
+    this.imageId = imageId;
+    this.objectId = objectId;
+  }
+}
+
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be a non-empty string`);
   return value;
@@ -175,7 +191,7 @@ function createImageObjectReadBindingV1Executor() {
       // One read: the token and the value both come from this record, so the token always
       // describes the state the value was taken from.
       const object = await images.getObject(imageId, objectId);
-      if (!object) throw new TypeError(`object not found: ${imageId}/${objectId}`);
+      if (!object) throw new ObjectReadNotFoundError(imageId, objectId);
 
       const slots = Object.entries(object.slots ?? {}).map(([name, value]) => ({
         [SLOT_NAME_FIELD]: name,
@@ -202,6 +218,8 @@ function createImageObjectReadBindingV1Executor() {
 
 export {
   IMAGE_OBJECT_READ_BINDING_V1,
+  OBJECT_NOT_FOUND_CODE,
+  ObjectReadNotFoundError,
   assertObjectReadInterface,
   createImageObjectReadBindingV1Executor,
   installImageObjectReadBinding,
