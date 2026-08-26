@@ -89,7 +89,10 @@ deliberately narrow:
   "authorizes the object itself"), and identity-without-read-authority is not a capability;
 - **denied authority** ⇒ `AuthorityError` (distinguishable from not-found);
 - **authorized but nonexistent** ⇒ a distinct not-found outcome (a thrown not-found error, **not**
-  conflated with `AuthorityError` and not a silent `null`);
+  conflated with `AuthorityError` and not a silent `null`). This is **machine-readable**: the lane
+  throws `ObjectReadNotFoundError` (a `TypeError`) with a stable `code = 'OBJECT_NOT_FOUND'`
+  (`OBJECT_NOT_FOUND_CODE`), so a consumer distinguishes it from both `AuthorityError` and an
+  operational `TypeError` by `code`, not by matching message text;
 - **backend failure** remains a failure (propagates), never reported as "unavailable";
 - an **opaque version token** from the same read (never raw `_version`);
 - **no** new grant type (reuses `object/read`); **no** indexed-projection work; **no**
