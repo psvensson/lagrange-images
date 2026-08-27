@@ -68,16 +68,16 @@ The structured foreign/component boundary is functionally closed for current nee
 
 ### Portable graphics capability boundary
 
-ADR 0063 accepts a graphics direction without moving presentation into Images. When concrete pressure reaches it:
+ADR 0063 accepts a graphics direction without moving presentation into Images. The substrate-side proofs this section once anticipated have now been demonstrated **in the Lagrange Object Environment** (they are environment achievements, not a graphics capability in this repository):
 
-- [ ] prove one exact-version `wasi:webgpu` import through ADR 0038's Component-binding path
-- [ ] prove runtime-local provider wiring without adding graphics Value/object/storage semantics
-- [ ] keep protected graphics operations use-time-authorized and independently scoped from image-object authority
-- [ ] prove GPU/device/surface WIT resources remain transient and non-durable
-- [ ] prove Lagrange Object Environment can supply a surface/provider for the Component while Images remains renderer-agnostic
-- [ ] reuse upstream examples/libraries before proposing any Lagrange scene/GPU ABI
+- [x] one exact-version `wasi:webgpu` import exercised end-to-end through a Component — proven environment-side (`lagrange-object-environment` browser renderer, `wasi:webgpu@0.3.0-rc.2` host provider), not in Images
+- [x] runtime-local provider wiring without adding graphics Value/object/storage semantics — proven environment-side (Lagrange-owned host providers under `src/browser-renderer/`); Images' Value/object/storage model gained no graphics semantics
+- [x] GPU/device/surface WIT resources remain transient and non-durable — proven environment-side (transient render targets/surfaces, never persisted)
+- [x] Lagrange Object Environment supplies a surface/provider for a Component while Images remains renderer-agnostic — proven environment-side (Component-backed GLB rendering against the env's authorized lanes)
+- [ ] keep protected graphics operations use-time-authorized and independently scoped from image-object authority — an **environment** concern (asset-bytes authority), owned there
+- [ ] reuse upstream examples/libraries before proposing any Lagrange scene/GPU ABI — only under concrete pressure, environment-side
 
-The desired result is a portable renderer Component boundary, not a graphics subsystem in this repository. Do not start by designing a scene graph.
+These are checked off here only to record that the Object Environment already demonstrated them, so a future agent does not re-derive or reimplement them in Images. The desired result remains a portable renderer Component boundary, **not** a graphics subsystem in this repository; Images stays renderer-agnostic. Do not start by designing a scene graph.
 
 Do not put principals, grants or cached authorization decisions into durable artifacts, refs or resource handles.
 
