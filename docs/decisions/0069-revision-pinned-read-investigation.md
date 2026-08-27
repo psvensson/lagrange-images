@@ -139,7 +139,10 @@ authorization contract (see the corrected section above). Pinned navigation for 
 sessions stays **explicitly unsupported** until an authorized observation/history contract exists.
 
 **Build it when** (falsifiable triggers): the §7 retention/frontier/GC semantics are decided (so "how
-far back is `R` readable" is defined), **and** a real consumer needs a first-class as-of read rather
+far back is `R` readable" is defined — **now decided at the semantic level in ADR 0071**: frontier =
+per-image history revision, retention = pins protect their record-version + retained frontiers protect
+their segment, readability ≠ retention; the deletion/snapshot/cross-image unknowns still gate a GC
+algorithm or as-of read), **and** a real consumer needs a first-class as-of read rather
 than the history-stream scan (e.g. it must read a specific revision without streaming the whole log,
 or history-read authority must be finer-grained than whole-stream). At that point the lane, its
 authority shape, and its retention bounds are designed **together** — and the two answers above are
