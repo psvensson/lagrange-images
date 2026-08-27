@@ -22,7 +22,14 @@ class FakeCuisToolchainRunner {
   async run(request) {
     this.runs.push(request);
     const script = await readFile(request.args[4], 'utf8');
-    assert.match(script, /CodePackageFile installPackage: DirectoryEntry currentDirectory \/\/ 'JSON\.pck\.st'/);
+    // The build drives FeatureRequirement satisfyRequirementsAndInstall directly (NOT
+    // CodePackageFile installPackage:, which swallows FeatureRequirementUnsatisfied into a
+    // popup and would falsely succeed on a missing dependency). The package is resolved by
+    // path and the error handler quits non-zero so a missing dependency is a real failure.
+    assert.match(script, /CodePackageFile packageNameFrom: fullName/);
+    assert.match(script, /\(FeatureRequirement name: pkName\) pathName: fullName; satisfyRequirementsAndInstall/);
+    assert.match(script, /on: FeatureRequirementUnsatisfied/);
+    assert.match(script, /quitPrimitive: 1/);
     assert.match(script, /Smalltalk saveAndQuitAs: 'Derived' clearAllClassState: false/);
     assert.equal(script.includes('Smalltalk saveAs:'), false);
     assert.equal(await readFile(`${request.cwd}/Cuis7.9-8090.image`, 'utf8'), 'base-image');

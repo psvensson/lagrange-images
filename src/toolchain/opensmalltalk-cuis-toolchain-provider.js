@@ -175,13 +175,36 @@ function normalizeOptions(options) {
 }
 
 function buildScript(packages, targetFileName) {
+  // Install each package through FeatureRequirement satisfyRequirementsAndInstall
+  // DIRECTLY (not CodePackageFile installPackage:). Cuis resolves the transitive
+  // !requires: closure and installs requirements in dependency order itself, so
+  // the substrate does NOT order packages and does NOT parse !requires: headers.
+  // Crucially, CodePackageFile installPackage: CATCHES FeatureRequirementUnsatisfied
+  // and merely shows a popup (PopUpMenu inform:), returning normally — so a missing
+  // dependency would otherwise produce a FALSELY-successful build (saveAndQuitAs:
+  // always exits 0) with a broken image. Driving satisfyRequirementsAndInstall and
+  // catching the error here makes a missing/unsatisfiable dependency FATAL: it logs
+  // BUILD\tPACKAGE\t<file>\tFAILED\t<reason> and quits with a non-zero exit code so
+  // the runner surfaces OpenSmalltalkToolchainRunError (real failure diagnostics).
+  // satisfyRequirementsAndInstall is idempotent (already-satisfied requirements are
+  // skipped), so emitting one install per declared package is safe and preserves the
+  // per-package BUILD markers + derived-image package metadata/provenance.
+  // Emit BUILD markers as real TAB-delimited fields (Smalltalk does not interpret \t in a
+  // single-quoted string literal, so we build each line with Character tab, matching the
+  // bridge's own TAB convention). This keeps the FAILED diagnostic machine-parseable.
+  const tab = `nextPut: Character tab; `;
   const installs = packages.map(({fileName}) => [
-    `output nextPutAll: 'BUILD\\tPACKAGE\\t${fileName}\\tSTART'; newLine; flush.`,
-    `CodePackageFile installPackage: DirectoryEntry currentDirectory // '${fileName}'.`,
-    `output nextPutAll: 'BUILD\\tPACKAGE\\t${fileName}\\tDONE'; newLine; flush.`,
+    `output nextPutAll: 'BUILD'; ${tab}nextPutAll: 'PACKAGE'; ${tab}nextPutAll: '${fileName}'; ${tab}nextPutAll: 'START'; newLine; flush.`,
+    `[ | fullName pkName |`,
+    `  fullName := (DirectoryEntry currentDirectory // '${fileName}') pathName.`,
+    `  pkName := CodePackageFile packageNameFrom: fullName.`,
+    `  (FeatureRequirement name: pkName) pathName: fullName; satisfyRequirementsAndInstall ]`,
+    `    on: FeatureRequirementUnsatisfied`,
+    `    do: [ :ex | output nextPutAll: 'BUILD'; ${tab}nextPutAll: 'PACKAGE'; ${tab}nextPutAll: '${fileName}'; ${tab}nextPutAll: 'FAILED'; ${tab}nextPutAll: ex messageText; newLine; flush. Smalltalk quitPrimitive: 1 ].`,
+    `output nextPutAll: 'BUILD'; ${tab}nextPutAll: 'PACKAGE'; ${tab}nextPutAll: '${fileName}'; ${tab}nextPutAll: 'DONE'; newLine; flush.`,
   ].join('\n')).join('\n');
   const stem = imageStem(targetFileName);
-  return `| output |\noutput := StdIOWriteStream stdout.\noutput nextPutAll: 'BUILD\\tSTART'; newLine; flush.\n${installs}\noutput nextPutAll: 'BUILD\\tSAVE-AND-QUIT\\tSTART'; newLine; flush.\nSmalltalk saveAndQuitAs: '${stem}' clearAllClassState: false.\n`;
+  return `| output |\noutput := StdIOWriteStream stdout.\noutput nextPutAll: 'BUILD'; ${tab}nextPutAll: 'START'; newLine; flush.\n${installs}\noutput nextPutAll: 'BUILD'; ${tab}nextPutAll: 'SAVE-AND-QUIT'; ${tab}nextPutAll: 'START'; newLine; flush.\nSmalltalk saveAndQuitAs: '${stem}' clearAllClassState: false.\n`;
 }
 
 async function materializeBuild(graph, workspace, target) {

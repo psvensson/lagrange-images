@@ -83,6 +83,7 @@ function normalizeInterface(value) {
   if (!SAFE_NAME.test(operation)) throw new TypeError('OpenSmalltalk Cuis interface operation contains unsafe characters');
   const exported = (service === 'proof' && ['add', 'echo', 'factorial'].includes(operation))
     || (service === 'json' && operation === 'package-proof')
+    || (service === 'cluster' && operation === 'package-proof')
     || (service === 'text' && operation === 'normalize')
     || (service === 'bytes' && operation === 'reverse')
     || (service === 'float' && operation === 'scale')
@@ -157,6 +158,7 @@ function expectedArity(service, operation) {
   if (service === 'proof' && operation === 'echo') return 1;
   if (service === 'proof' && operation === 'factorial') return 1;
   if (service === 'json' && operation === 'package-proof') return 0;
+  if (service === 'cluster' && operation === 'package-proof') return 0;
   if (service === 'text' && operation === 'normalize') return 1;
   if (service === 'bytes' && operation === 'reverse') return 1;
   if (service === 'float' && operation === 'scale') return 2;
@@ -192,6 +194,31 @@ const BRIDGE_METHODS = Object.freeze([
     ^ (((numbers at: 1) + (numbers at: 2) + (numbers at: 3)) = 16)
         and: [ (reparsed at: 'ok') = true
         and: [ (nested at: 'name') = 'cuis' ]]`,
+// cluster/package-proof (Bead lagrange-images-d57): exercise REAL behavior from the
+// multi-package cluster, not merely class presence. Compression is pure-Smalltalk and
+// headless-safe: round-trip a ByteArray through gzip. The compress idiom is the package's
+// own (GZipWriteStream on: aStream, nextPutAll:, close — cf. compressFile); decompress is
+// ByteArray>>unzipped (GZipReadStream on: upToEnd). We require the decompress to equal the
+// original AND the compressed form to differ (a vacuous pass-through fails the second
+// clause). WeakDictionaries (the diamond of the dependency DAG) is exercised via
+// WeakValueDictionary (key held strong, value weak) with the value also held in a local so
+// it cannot be GC'd mid-method. If the cluster were not genuinely installed, Smalltalk at:
+// would raise and the call would fail — so a passing result proves presence AND function.
+`clusterPackageProof
+    | source sink compressor compressed decompressed weakDict heldValue |
+    source := 'lagrange-cuis-cluster-proof' asByteArray.
+    sink := ByteArray writeStream.
+    compressor := (Smalltalk at: #GZipWriteStream) on: sink.
+    compressor nextPutAll: source.
+    compressor close.
+    compressed := sink contents.
+    decompressed := compressed unzipped.
+    heldValue := 'cluster-present' asByteArray.
+    weakDict := (Smalltalk at: #WeakValueDictionary) new.
+    weakDict at: 'marker' put: heldValue.
+    ^ (decompressed asString = 'lagrange-cuis-cluster-proof')
+        and: [ compressed ~= source
+        and: [ (weakDict at: 'marker') == heldValue ]]`,
 // normalize/v1: lowercase, collapse each whitespace run to one space, trim both ends.
 // This is the shared specification the Component lane implements too.
 `normalizeText: aString
@@ -432,6 +459,9 @@ const BRIDGE_METHODS = Object.freeze([
     (serviceName = 'json' and: [ operation = 'package-proof' ]) ifTrue: [
         fields size = 4 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self jsonPackageProof ].
+    (serviceName = 'cluster' and: [ operation = 'package-proof' ]) ifTrue: [
+        fields size = 4 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self clusterPackageProof ].
     (serviceName = 'text' and: [ operation = 'normalize' ]) ifTrue: [
         fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self normalizeText: (self lagrangeDecode: (fields at: 5)) ].
