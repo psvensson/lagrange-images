@@ -206,6 +206,7 @@ test('Cuis bridge v1 exports exactly the operations the generated Smalltalk disp
     ['proof', 'echo'],
     ['proof', 'factorial'],
     ['json', 'package-proof'],
+    ['cluster', 'package-proof'],
     ['text', 'normalize'],
     ['text', 'normalize-all'],
     ['bytes', 'reverse'],
@@ -229,7 +230,7 @@ test('Cuis bridge v1 exports exactly the operations the generated Smalltalk disp
   );
   // Every dispatched selector must also be in the compile list the bridge verifies at boot.
   for (const selector of [
-    'add:to:', 'echo:', 'factorial:', 'jsonPackageProof', 'normalizeText:',
+    'add:to:', 'echo:', 'factorial:', 'jsonPackageProof', 'clusterPackageProof', 'normalizeText:',
     'reverseBytes:', 'scaleFloat:by:', 'normalizeAllTexts:',
     'lagrangeDecodeStringList:', 'lagrangeEncodeStringList:',
     'lagrangeDecodeItem:', 'lagrangeEncodeItem:', 'relabelItem:', 'makeItem:quantity:',

@@ -28,7 +28,7 @@
     "test:fast": "node --test --test-skip-pattern=\"exhaustive-recovery:\"",
     "test:recovery": "node --test --test-name-pattern=\"exhaustive-recovery:\"",
     "integration:setup": "scripts/integration-setup.sh",
-    "test:integration": "bash -c 'source scripts/integration-env.sh && node --test test/opensmalltalk-cuis-real.test.js test/opensmalltalk-cuis-toolchain-real.test.js test/two-lane-callable-real.test.js'",
+    "test:integration": "bash -c 'source scripts/integration-env.sh && node --test test/opensmalltalk-cuis-real.test.js test/opensmalltalk-cuis-toolchain-real.test.js test/opensmalltalk-cuis-multipackage-real.test.js test/two-lane-callable-real.test.js'",
     "beads:init": "bd init --quiet --skip-agents",
     "beads:prime": "bd prime",
     "beads:ready": "bd ready --json"
