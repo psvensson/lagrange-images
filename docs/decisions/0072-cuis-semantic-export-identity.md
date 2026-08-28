@@ -119,6 +119,16 @@ superclass + package refs), Method (with class + package refs, side, selector, s
 relationships. No new lane, no new authority. `Cuis-Base` superclass/class refs are recorded as the
 reserved identity **string**, not materialized into objects.
 
+These "Package/Class/Method objects" are ordinary image objects **representing** the Cuis semantic
+entities, instantiated through language-owned representation Behaviors (`CuisExportPackage` /
+`CuisExportClass` / `CuisExportMethod`). An exported Cuis class does **not** itself become a
+Symmetric-Smalltalk Behavior/Class; a `CuisExportClass` instance carries the class's semantic identity
+as data and is behaviorally boring. In v1, Package `requires` is materialized as a sorted list of
+`cuis-package/<name>` semantic **identities** (strings), **not** ObjectRef edges: a requirement may
+name a package outside the materialized export set, so an ObjectRef-only representation would make
+dependency meaning depend on whether the target happened to be materialized. Traversable dependency
+edges may be added later if a real consumer requires them.
+
 ## Ownership
 
 - The **OpenSmalltalk/Cuis toolchain provider** owns the extraction seam (the export script and the

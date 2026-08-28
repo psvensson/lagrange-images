@@ -109,7 +109,7 @@ Runtime/toolchain:
 
 Structured export/migration:
 
-- [ ] export package/class/superclass/method/selector/source relationships as structured image artifacts
+- [x] export package/class/superclass/method/selector/source relationships as structured image artifacts (Stage 1 extraction: `smalltalk/cuis-semantic-export-v1` canonical manifest, PR #136, ADR 0072; Stage 2 materialization into ordinary `CuisExportPackage`/`CuisExportClass`/`CuisExportMethod` objects via the ADR 0067 atomic creation batch — semantic identity as string data, ObjectRef server-minted, Cuis-Base refs reserved identity strings, one atomic all-or-none batch with the four ADR 0067 failure proofs. Follow-up pressure recorded, not solved: repeat-import/reconciliation of the same semantic manifest; authorized creation of behaviorless generic Shape-backed objects for non-Smalltalk consumers.)
 - [ ] export useful CompiledMethod/bytecode/literal information where stable
 - [ ] relate exported structures into image-level mixed-language Projects
 - [ ] selective native lowering/recompilation where useful

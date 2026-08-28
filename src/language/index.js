@@ -34,3 +34,4 @@ export * from './smalltalk-indexed.js';
 export * from './smalltalk-primitives.js';
 export * from './smalltalk-lookup.js';
 export * from './smalltalk-standard-image.js';
+export * from './cuis-export-materialization.js';
