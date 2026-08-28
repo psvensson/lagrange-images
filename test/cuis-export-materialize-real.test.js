@@ -178,9 +178,12 @@ test('the real multi-package manifest materializes into ordinary objects through
     const manifestText = await buildRealManifest(runtime, 'MatCluster');
     const manifest = JSON.parse(manifestText);
     // Measure the single-batch request size against the codec/backend limits (no silent chunking).
+    // The packed composite is a bytes Value ({kind:'bytes', base64}); its decoded byte length is the
+    // payload size (base64 is ~4/3 the decoded length, so decoded < base64 length).
     const {members} = manifestToBatchMembers(manifest);
     const packed = packCompositeValue(members, {kind: 'list', element: 'member'}, MEMBER_TYPES);
-    assert.ok(packed.value.byteLength < 64 * 1024 * 1024, `batch payload ${packed.value.byteLength} within 64MB`);
+    const payloadBytes = Buffer.from(packed.base64, 'base64').byteLength;
+    assert.ok(payloadBytes < 64 * 1024 * 1024, `batch payload ${payloadBytes} within 64MB`);
     assert.ok(members.length < 1_000_000, 'member count within MAX_LIST_LENGTH');
 
     const {schema, materialize, historyLength} = await seedMaterializer(runtime, authority, createGrants);
