@@ -164,20 +164,30 @@ test('multi-package build with a missing dependency FAILS (failure diagnostics, 
   const runtime = await makeProviders();
   try {
     const {baseImage, baseChanges, baseSources} = await putBase(runtime);
-    // Omit WeakDictionaries — required by both FFI and Alien-Core. Cuis's
-    // FeatureRequirement cannot satisfy it, so the build MUST fail (the toolchain
-    // provider drives satisfyRequirementsAndInstall and quits non-zero on
-    // FeatureRequirementUnsatisfied; it must NOT produce a falsely-successful image).
-    const missing = CLUSTER.filter((spec) => spec.key !== 'WEAK');
-    const packages = [];
-    for (const spec of missing) packages.push(await putPackage(runtime, spec));
+    // Falsification (Bead lagrange-images-d57): a build whose dependency cannot be satisfied
+    // MUST fail with real diagnostics — never a falsely-successful image. The requirement is a
+    // SYNTHETIC package whose !requires: names a feature that is guaranteed ABSENT everywhere
+    // (the base image does not provide it and no declared package does). This is deterministic:
+    // an earlier version omitted the real WeakDictionaries package, but Cuis's FeatureRequirement
+    // can satisfy a named feature from the base image's own package cache / search path on a cold
+    // boot, so "omit WeakDictionaries" was not a reliable unsatisfiable (cold-runner flake). A
+    // provably-absent feature name removes that guest-side non-determinism at the source.
+    const ABSENT_FEATURE = 'Lagrange-Provably-Absent-Feature-9f3a7c';
+    const synthetic = await put(runtime, 'cuis-package-lagrange-unsatisfiable', CUIS_PACKAGE_V1, textValue(
+      `'From Cuis7.9 [latest update: #8062] on 28 August 2026 at 12:00:00 pm'!\n` +
+      `'Description Synthetic package whose requirement can never be satisfied (falsification fixture).'!\n` +
+      `!provides: 'Lagrange-Unsatisfiable' 1 0!\n` +
+      `!requires: '${ABSENT_FEATURE}' 1 0 nil!\n`,
+    ), {
+      metadata: {fileName: 'LagrangeUnsatisfiable.pck.st'},
+    });
 
     const build = await put(runtime, 'cuis-cluster-build-missing', CUIS_BUILD_V1, textValue(CUIS_BUILD_CONTRACT_V0), {
       dependencies: [
         {role: 'base-image', artifact: objectRef('build-image', baseImage.id)},
         {role: 'base-changes', artifact: objectRef('build-image', baseChanges.id)},
         {role: 'base-sources', artifact: objectRef('build-image', baseSources.id)},
-        ...packages.map((pkg) => ({role: 'package', artifact: objectRef('build-image', pkg.id)})),
+        {role: 'package', artifact: objectRef('build-image', synthetic.id)},
       ],
     });
 
@@ -192,9 +202,12 @@ test('multi-package build with a missing dependency FAILS (failure diagnostics, 
       }),
       (error) => {
         assert.equal(error.name, 'OpenSmalltalkToolchainRunError');
-        // The failure diagnostic names the unsatisfiable package as a real TAB-delimited
-        // BUILD...FAILED field (real failure diagnostics, not a silent broken image).
-        assert.match(`${error.stdout}\n${error.stderr}\n${error.message}`, /FAILED|WeakDictionaries|FeatureRequirementUnsatisfied|Could not find code package/i);
+        // The failure diagnostic must be the real TAB-delimited BUILD...FAILED field naming the
+        // unsatisfiable feature — a genuinely failed build, not a silent broken image or a
+        // wrong-reason error. Require BOTH the FAILED marker AND the absent feature name.
+        const diag = `${error.stdout}\n${error.stderr}\n${error.message}`;
+        assert.match(diag, /FAILED/i);
+        assert.match(diag, new RegExp(ABSENT_FEATURE.replace(/[-]/g, '\\$&'), 'i'));
         return true;
       },
     );

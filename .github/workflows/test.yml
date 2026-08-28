@@ -79,7 +79,10 @@ jobs:
 
   opensmalltalk-cuis-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20 min: the semantic-export tests add three full 6-package cluster builds (structural +
+    # two determinism builds) on top of the existing cluster build, and a cold runner must first
+    # download the pinned OpenSmalltalkVM + Cuis image. (The recovery-test lane already uses 20.)
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
