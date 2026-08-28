@@ -48,10 +48,22 @@ Packages routinely add methods to classes they do **not** define (e.g. `Compress
 `ByteArray>>unzipped`, `ReferenceStream class>>…`, `CodePackageFile class>>…`). The manifest therefore
 separates **"classes this package defines"** from **"methods this package owns"**: an extension method
 is owned by its package but targets a foreign/base class. Attribution uses Cuis's own
-`CodePackage >> packageOfMethod:ifNone:` (which resolves ownership by method-category prefix match,
-e.g. `*Compression-ObjectStorage` belongs to `Compression`), and class-side attribution uses
-`MethodReference`'s `classIsMeta` — never a hand-rolled string compare. Out of v1 scope: a method
-category claimed by *two* exported packages (would need explicit disambiguation later).
+method-category prefix-match semantics (`CodePackage >> category:matches:`, the same rule
+`packageOfMethod:ifNone:` applies): a category `*<pkg>` or `*<pkg>-<rest>` (case-insensitive) is owned
+by `<pkg>`, e.g. `*Compression-ObjectStorage` belongs to `Compression`. Class-side attribution uses
+`MethodReference`'s `classIsMeta`.
+
+**Implementation note (accepted deviation from the original `packageOfMethod:ifNone:` text).** The
+shipped extractor (`ownerOfSel` in `opensmalltalk-cuis-toolchain-provider.js`) *re-implements* that
+prefix match inline rather than calling `CodePackage >> packageOfMethod:ifNone:` per method. This is
+deliberate and safe: `packageOfMethod:ifNone:` scans every installed package per method (O(packages ×
+methods)), which is prohibitively slow in the headless interpreter across a multi-package cluster,
+whereas the inline check resolves ownership against the package being walked in O(1). The replicated
+rule is byte-for-byte the `category:matches:` semantics (lowercased prefix, exact match, or next char
+`-`), verified against the real cluster categories (`*Compression`, `*Compression-ObjectStorage`,
+`*FFI-Kernel-*`, `*Alien-Core`, `*extendedClipboard-Win32`, `*Graphics-Files-Additional`). It is **not**
+a new attribution rule — it is the same rule, evaluated without the per-method scan. Out of v1 scope: a
+method category claimed by *two* exported packages (would need explicit disambiguation later).
 
 ### 3. Canonical export schema (`smalltalk/cuis-semantic-export-v1`)
 
@@ -143,8 +155,9 @@ Spur oop != ObjectRef. The export carries semantic identities only:
   cuis-package/<pkg>
   cuis-class/<pkg>/<class>            (base classes: reserved cuis-class/Cuis-Base/<class>)
   cuis-method/<owningPkg>/<targetClass>/<side>/<selector>   side ∈ {instance, class}
-Extension methods are first-class: packageOfMethod:ifNone: attributes ownership by method-category
-  prefix match; a method carries BOTH its owning package AND its (possibly base) target class ref.
+Extension methods are first-class: ownership is attributed by Cuis's method-category prefix-match
+  rule (the category:matches: semantics; see the ownerOfSel deviation note in §2); a method carries
+  BOTH its owning package AND its (possibly base) target class ref.
 Extraction is toolchain-stage, before saveAndQuitAs:, a fixed provider-owned .st script emitting
   TEXT. NOT a live-bridge op; no perform:/generic-eval/oop crosses the boundary.
 Determinism is TESTED (build twice -> byte-identical), and holds only after canonical normalization

@@ -10,6 +10,7 @@ import {
   CUIS_SOURCES_V1,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
   bytesValue,
+  canonicalizeSemanticExport,
   createOpenSmalltalkCuisToolchainProvider,
   createRuntime,
   objectRef,
@@ -195,4 +196,39 @@ test('OpenSmalltalk Cuis toolchain validates roles, filenames and target before 
   } finally {
     await runtime.close();
   }
+});
+
+test('canonicalizeSemanticExport produces deterministic, semantic-identity output (ADR 0072)', () => {
+  const raw = {
+    format: 'smalltalk/cuis-semantic-export-v1',
+    packages: [
+      {name: 'FFI', requires: ['WeakDictionaries', 'Alien-Core']},
+      {name: 'Compression', requires: []},
+    ],
+    classes: [
+      {package: 'Compression', name: 'Archive', superclassName: 'Object', superclassPackage: 'Cuis-Base'},
+      {package: 'Compression', name: 'ProtoObject', superclassName: '', superclassPackage: 'Cuis-Base'},
+    ],
+    methods: [
+      {package: 'Compression', className: 'ByteArray', classPackage: 'Cuis-Base', side: 'instance', selector: 'unzipped', source: 'unzipped\r\n\t^ (GZipReadStream on: self) upToEnd  \r\n'},
+    ],
+  };
+  const out = canonicalizeSemanticExport(raw);
+  // requires sorted; packages sorted by name
+  assert.deepEqual(out.packages.map((p) => p.name), ['Compression', 'FFI']);
+  assert.deepEqual(out.packages.find((p) => p.name === 'FFI').requires, ['Alien-Core', 'WeakDictionaries']);
+  // class identity + superclass ref (base class -> cuis-class/Cuis-Base/...); no-superclass -> null
+  const archive = out.classes.find((c) => c.name === 'Archive');
+  assert.equal(archive.identity, 'cuis-class/Compression/Archive');
+  assert.equal(archive.superclass, 'cuis-class/Cuis-Base/Object');
+  assert.equal(out.classes.find((c) => c.name === 'ProtoObject').superclass, null);
+  // method identity + extension target class ref + normalized source (LF, trailing whitespace trimmed)
+  const m = out.methods[0];
+  assert.equal(m.identity, 'cuis-method/Compression/ByteArray/instance/unzipped');
+  assert.equal(m.class, 'cuis-class/Cuis-Base/ByteArray');
+  assert.equal(m.source, 'unzipped\n\t^ (GZipReadStream on: self) upToEnd');
+  // determinism: canonicalizing twice (and an order-shuffled input) yields identical output
+  const shuffled = {format: raw.format, packages: [...raw.packages].reverse(), classes: [...raw.classes].reverse(), methods: [...raw.methods]};
+  assert.deepEqual(canonicalizeSemanticExport(shuffled), out);
+  assert.deepEqual(canonicalizeSemanticExport(raw), out);
 });
