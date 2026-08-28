@@ -115,11 +115,17 @@ test('Cuis semantic export captures package/class/method structure with semantic
     assert.match(unzipped.source, /GZipReadStream/);
 
     // Method identity form: cuis-method/<owningPkg>/<targetClassName>/<side>/<selector>, with the
-    // target-class name matching the `class` ref's last segment; no oop/heap identity anywhere.
+    // target-class name matching the `class` ref's last segment. No HEAP identity leaks: an actual
+    // Spur oop is a memory address (`@`+hex, `0x`+hex, or a long bare decimal). Match THOSE — not
+    // the substring 'oop', which false-positives on legitimate Alien-Core selectors oopAt:/oopResult:.
+    const heapIdentity = /@[0-9a-f]{6,}|\b0x[0-9a-f]+\b|\/\d{7,}\b|\b\d{9,}\b/i;
     for (const m of manifest.methods) {
       assert.equal(m.identity, `cuis-method/${m.package}/${classNameOf(m)}/${m.side}/${m.selector}`);
-      assert.ok(!/@[0-9a-f]{6,}|oop|0x[0-9a-f]+/i.test(m.identity), 'no heap identity in method identity');
+      assert.ok(!heapIdentity.test(m.identity), `no heap identity in method identity: ${m.identity}`);
     }
+    // Sanity: the guard must actually be able to fire (falsification) — feed it a fake oop identity.
+    assert.ok(heapIdentity.test('cuis-method/P/C/instance/0x0000abcdef12'), 'guard matches a 0x-address identity');
+    assert.ok(heapIdentity.test('cuis-method/P/C/instance/foo@abcdef12'), 'guard matches an @-address identity');
   } finally {
     await runtime.close();
   }
