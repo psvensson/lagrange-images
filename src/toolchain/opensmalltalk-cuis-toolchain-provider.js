@@ -209,7 +209,8 @@ jsonEscape := [ :s | | r |
   r := r copyReplaceAll: (String with: (Character codePoint: 9)) with: '\\t'.
   r ].
 jsonString := [ :s | '"', (jsonEscape value: s), '"' ].
-pkgObjects := ((SortedCollection sortBlock: [ :a :b | a packageName < b packageName ]) withAll: (CodePackage installedPackages select: [ :cp | {${nameArray}} includes: cp packageName ])) asArray.
+"installedPackages select: answers a DICTIONARY; SortedCollection class>>withAll: (a Heap) HANGS on a Dictionary (it does setCollection:asArray copy tally: reSort). Use asArray sort: like Cuis's own CodePackageList>>packages — it returns a sorted Array, which is all pkgObjects needs (only do:/detect:/collect: are sent afterward)."
+pkgObjects := ((CodePackage installedPackages select: [ :cp | {${nameArray}} includes: cp packageName ]) asArray sort: [ :a :b | a packageName < b packageName ]).
 classEntry := [ :cls :pkg | | sup supPkg |
   sup := cls superclass.
   supPkg := sup isNil
@@ -245,7 +246,7 @@ methodEntry := [ :cls :side :selector :pkg |
 packagesJson := pkgObjects collect: [ :cp | | reqs |
   reqs := cp featureSpec requires collect: [ :r | r name ].
   '{"name":', (jsonString value: cp packageName),
-    ',"requires":[', (',' join: (((SortedCollection sortBlock: [ :a :b | a < b ]) withAll: reqs) asArray collect: [ :r | jsonString value: r ])), ']}' ].
+    ',"requires":[', (',' join: ((reqs asArray sort: [ :a :b | a < b ]) collect: [ :r | jsonString value: r ])), ']}' ].
 classesJson := OrderedCollection new.
 methodsJson := OrderedCollection new.
 pkgObjects do: [ :cp |
