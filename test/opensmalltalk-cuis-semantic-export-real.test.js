@@ -104,16 +104,20 @@ test('Cuis semantic export captures package/class/method structure with semantic
     assert.equal(archive.superclass, 'cuis-class/Cuis-Base/Object');
 
     // Extension method: ByteArray>>unzipped is OWNED by Compression but TARGETS base ByteArray.
-    const unzipped = manifest.methods.find((m) => m.selector === 'unzipped' && m.className === 'ByteArray');
+    // Per ADR 0072 §3 the method carries `class` (a cuis-class identity), not a raw className; the
+    // target class name is the identity's last segment.
+    const classNameOf = (m) => m.class.slice(m.class.lastIndexOf('/') + 1);
+    const unzipped = manifest.methods.find((m) => m.selector === 'unzipped' && classNameOf(m) === 'ByteArray');
     assert.ok(unzipped, 'manifest has ByteArray>>unzipped');
     assert.equal(unzipped.package, 'Compression');
     assert.equal(unzipped.class, 'cuis-class/Cuis-Base/ByteArray');
     assert.equal(unzipped.side, 'instance');
     assert.match(unzipped.source, /GZipReadStream/);
 
-    // Method identity form; no oop/heap identity anywhere (identities are name-based strings).
+    // Method identity form: cuis-method/<owningPkg>/<targetClassName>/<side>/<selector>, with the
+    // target-class name matching the `class` ref's last segment; no oop/heap identity anywhere.
     for (const m of manifest.methods) {
-      assert.equal(m.identity, `cuis-method/${m.package}/${m.className}/${m.side}/${m.selector}`);
+      assert.equal(m.identity, `cuis-method/${m.package}/${classNameOf(m)}/${m.side}/${m.selector}`);
       assert.ok(!/@[0-9a-f]{6,}|oop|0x[0-9a-f]+/i.test(m.identity), 'no heap identity in method identity');
     }
   } finally {
