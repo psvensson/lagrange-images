@@ -189,7 +189,11 @@ function normalizeOptions(options) {
 // provider-owned build script, same trust level as buildScript.
 function semanticExportScript(packages, exportFileName) {
   const packageNames = packages.map(({fileName}) => fileName.replace(/\.pck\.st$/, ''));
-  const nameArray = packageNames.map((n) => `'${n}'`).join(' ');
+  // AVOID the brace array literal { 'a' 'b' ... }: the Cuis compiler hangs on it
+  // (infinite loop or extreme slowdown during parsing). Use Array with:with:... instead.
+  const nameArray = packageNames.length === 0
+    ? 'Array new'
+    : `Array ${packageNames.map((n) => `with: '${n}'`).join(' ')}`;
   // PERFORMANCE: iterate PER PACKAGE (CodePackage classesDo: visits only the classes that
   // package defines) rather than Smalltalk allClassesDo: over the whole image with a linear
   // packageOfClass: detect: per class (O(N^2) over thousands of classes — too slow). Owning
@@ -210,7 +214,8 @@ jsonEscape := [ :s | | r |
   r ].
 jsonString := [ :s | '"', (jsonEscape value: s), '"' ].
 "installedPackages select: answers a DICTIONARY; SortedCollection class>>withAll: (a Heap) HANGS on a Dictionary (it does setCollection:asArray copy tally: reSort). Use asArray sort: like Cuis's own CodePackageList>>packages — it returns a sorted Array, which is all pkgObjects needs (only do:/detect:/collect: are sent afterward)."
-pkgObjects := ((CodePackage installedPackages select: [ :cp | {${nameArray}} includes: cp packageName ]) asArray sort: [ :a :b | a packageName < b packageName ]).
+nameArray := ${nameArray}.
+pkgObjects := ((CodePackage installedPackages select: [ :cp | nameArray includes: cp packageName ]) asArray sort: [ :a :b | a packageName < b packageName ]).
 classEntry := [ :cls :pkg | | sup supPkg |
   sup := cls superclass.
   supPkg := sup isNil
@@ -317,7 +322,7 @@ function buildScript(packages, targetFileName, {semanticExport = false} = {}) {
   const exportBlock = semanticExport ? `\n${semanticExportScript(packages, `${stem}.semantic-export.json`)}\n` : '';
   // A Smalltalk script allows exactly ONE top-level temp declaration, so the export temps
   // are declared here alongside `output` (semanticExportScript itself declares none).
-  const temps = semanticExport ? ' output jsonEscape jsonString nl pkgObjects classEntry methodEntry ownerOfSel packagesJson classesJson methodsJson ' : ' output ';
+  const temps = semanticExport ? ' output jsonEscape jsonString nl pkgObjects classEntry methodEntry ownerOfSel packagesJson classesJson methodsJson nameArray ' : ' output ';
   return `|${temps}|\noutput := StdIOWriteStream stdout.\noutput nextPutAll: 'BUILD'; ${tab}nextPutAll: 'START'; newLine; flush.\n${installs}\n${exportBlock}\noutput nextPutAll: 'BUILD'; ${tab}nextPutAll: 'SAVE-AND-QUIT'; ${tab}nextPutAll: 'START'; newLine; flush.\nSmalltalk saveAndQuitAs: '${stem}' clearAllClassState: false.\n`;
 }
 
