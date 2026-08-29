@@ -4,6 +4,7 @@ import {
   CompilationService,
   booleanValue,
   createDefaultCodeCompilerRegistry,
+  createDefaultCompilationGroupCompilerRegistry,
   createRuntime,
   defineClass,
   defineMethods,
@@ -621,7 +622,15 @@ function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
   return {images: wrapped, writeCount: () => writes};
 }
 
-const servicesFor = (images) => new CompilationService({images, compilers: createDefaultCodeCompilerRegistry()});
+// The group compiler registry is required once the protocol installs any method *from source*:
+// compiling that source to the wasm lane goes through installWasmBlockTree, which the bare
+// code-compiler registry cannot serve. The Integer protocol's recovery harness already registers
+// both for the same reason.
+const servicesFor = (images) => new CompilationService({
+  images,
+  compilers: createDefaultCodeCompilerRegistry(),
+  groupCompilers: createDefaultCompilationGroupCompilerRegistry(),
+});
 
 async function installProtocols(images, compilation, imageId, lane) {
   await installSmalltalkEqualityProtocol({images, compilation, imageId, lane});

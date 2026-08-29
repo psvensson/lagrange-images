@@ -1,7 +1,7 @@
 import {defineMethods} from './smalltalk-class-builder.js';
 import {installSmalltalkAllocationProtocol} from './smalltalk-allocation.js';
 import {installSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
-import {installSmalltalkConditionProtocol, CONDITION_CLASSES} from './smalltalk-conditions.js';
+import {installSmalltalkConditionProtocol, installSmalltalkExceptionAccessors, CONDITION_CLASSES} from './smalltalk-conditions.js';
 import {installSmalltalkControlFlow} from './smalltalk-control-flow.js';
 import {installSmalltalkDictionaryProtocol, installSmalltalkEqualityProtocol} from './smalltalk-dictionary.js';
 import {
@@ -107,6 +107,9 @@ async function installSymmetricSmalltalkStandardImage({
   const integers = await installSmalltalkIntegerProtocol(options);
   const integerAddition = await installIntegerAddition({...options, kernel});
   const conditions = await installSmalltalkConditionProtocol(options);
+  // After both instance variables (0050) and conditions: the Exception accessor is a separate pass
+  // so the condition installer never takes the slot-read dependency it deliberately avoids.
+  const exceptionAccessors = await installSmalltalkExceptionAccessors(options);
   const dictionary = await installSmalltalkDictionaryProtocol(options);
 
   // Namespace publication is deliberately separate from class creation. Installing the namespace
@@ -134,6 +137,7 @@ async function installSymmetricSmalltalkStandardImage({
       integers,
       integerAddition,
       conditions,
+      exceptionAccessors,
       dictionary,
       globals,
     }),

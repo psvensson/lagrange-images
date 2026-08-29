@@ -1,5 +1,6 @@
 import {objectRef, textValue} from '../value/index.js';
 import {defineMethods, ensureBlock, ensureCodeArtifact, ensureNamedClass} from './smalltalk-class-builder.js';
+import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {ensureObject, ensureShape, findSmalltalkKernel, isLocalRef} from './smalltalk-kernel.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
@@ -272,6 +273,32 @@ async function findSmalltalkBlockUnwindProtocol({images, imageId} = {}) {
   return Object.freeze({protocol: SMALLTALK_BLOCK_UNWIND_PROTOCOL_V1, ref: objectRef(imageId, record.id), ...refs});
 }
 
+// Workstream 3 (MessagePack pressure). `Exception>>messageText`, installed as a *separate* pass
+// rather than inside `installSmalltalkConditionProtocol`. The condition installer deliberately does
+// not take the ADR 0050 instance-variable dependency (see the note at its method list); this
+// installer runs after `installSmalltalkInstanceVariableProtocol`, so the class-scoped compiler can
+// lower the slot read to the ordinary slot primitive. The slot itself predates this accessor and is
+// populated with non-empty text on every host-generated condition, so nothing migrates — a host
+// `ZeroDivide` from `1 // 0` already carries its message.
+async function installSmalltalkExceptionAccessors({images, compilation, imageId, lane = 'neutral'} = {}) {
+  requiredText(imageId, 'image id');
+  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  const exceptionClass = objectRef(imageId, 'smalltalk/class/Exception');
+  await defineMethodsFromSource({
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef: exceptionClass,
+    methods: [
+      {selector: 'messageText', source: '[ ^messageText ]'},
+    ],
+  });
+  return Object.freeze({exceptionClass});
+}
+
 export {
   BLOCK_UNWIND_PROTOCOL_OBJECT_ID,
   BLOCK_UNWIND_PROTOCOL_SHAPE_ID,
@@ -281,4 +308,5 @@ export {
   UNWIND_SLOTS,
   findSmalltalkBlockUnwindProtocol,
   installSmalltalkConditionProtocol,
+  installSmalltalkExceptionAccessors,
 };

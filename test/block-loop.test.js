@@ -773,8 +773,10 @@ test('a loop inside a method reaches that method instance variables', async () =
   await withRuntime(async (runtime) => {
     const {options} = await seed(runtime, 'app');
     const counter = await counterClass(runtime, 'app', options);
-    const instance = await evaluate(runtime, 'app', 'make', '[ :c | c new init; yourself ]', [counter.classRef])
-      .catch(async () => await evaluate(runtime, 'app', 'make2', '[ :c | | o | o := c new. o init. o ]', [counter.classRef]));
+    // Built explicitly, not via `c new init; yourself`: `init` answers `0` (the value of `n := 0`),
+    // so the cascade's `;yourself` would target `0`, not the instance. That idiom only works when
+    // the method answers `self`; `Counter>>init` deliberately does not, so name the instance.
+    const instance = await evaluate(runtime, 'app', 'make', '[ :c | | o | o := c new. o init. o ]', [counter.classRef]);
     assert.deepEqual(
       await evaluate(runtime, 'app', 'count', '[ :o | o countTo: 6 ]', [instance]),
       integerValue(6),

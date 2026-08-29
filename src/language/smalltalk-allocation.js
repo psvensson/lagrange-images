@@ -1,5 +1,6 @@
 import {objectRef, textValue} from '../value/index.js';
 import {defineMethods, ensureBlock, ensureCodeArtifact} from './smalltalk-class-builder.js';
+import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
@@ -148,6 +149,36 @@ async function installSmalltalkAllocationProtocol({images, compilation, imageId,
   for (const {classRef, methods} of protocolFor(kernel)) {
     await defineMethods({images, compilation, imageId, classRef, methods, lane});
   }
+
+  // Workstream 3 (MessagePack pressure). Ordinary-source root-class protocol, installed here because
+  // this installer already owns the base `Object` protocol (`class`/`initialize` above). These are
+  // pure Smalltalk — no primitive, no compiler knowledge — reached for by real upstream source:
+  // `MpEncoder class>>on:` ends in `yourself`, and `MpEncoder>>writeStream` guards with `isNil`.
+  //
+  // `isNil` needs both halves: `nil` is the kernel `UndefinedObject` singleton, so `nil isNil` must
+  // find `^true` on `UndefinedObject` while every other receiver inherits `^false` from `Object`.
+  // Installing only the `Object` half would leave `nil isNil` answering `false` by inheritance.
+  await defineMethodsFromSource({
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef: kernel.objectClass,
+    methods: [
+      {selector: 'yourself', source: '[ ^self ]'},
+      {selector: 'isNil', source: '[ ^false ]'},
+    ],
+  });
+  await defineMethodsFromSource({
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef: objectRef(imageId, 'smalltalk/class/UndefinedObject'),
+    methods: [
+      {selector: 'isNil', source: '[ ^true ]'},
+    ],
+  });
 
   return Object.freeze({
     classOfPrimitive: primitives[SMALLTALK_PRIMITIVE.CLASS_OF],
