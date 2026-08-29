@@ -80,6 +80,36 @@ function tokenizeSymmetricSmalltalk(source) {
     if (/[0-9]/.test(char)) {
       const start = index;
       while (/[0-9]/.test(source[index] ?? '')) index += 1;
+      // ADR 0057 workstream 3. `<base>r<digits>` is a radix integer literal (`16rFF`, `2r1010`).
+      // Radix is source syntax, never runtime representation: the token carries the canonical
+      // decimal text an ordinary literal would, so the parser, the semantic layer and the durable
+      // Value model (which accepts only `/^-?\d+$/`) never learn a radix existed. A leading `-` is
+      // a binary selector send in source order (`0 - 16r80`), not part of the literal.
+      if (source[index] === 'r' || source[index] === 'R') {
+        const baseText = source.slice(start, index);
+        const base = Number.parseInt(baseText, 10);
+        index += 1; // consume the `r`
+        const digitsStart = index;
+        while (/[0-9A-Za-z]/.test(source[index] ?? '')) index += 1;
+        const digits = source.slice(digitsStart, index);
+        if (digits === '' || !/^\d+$/.test(baseText) || base < 2 || base > 36) {
+          throw new SymmetricSmalltalkSyntaxError(`malformed radix literal ${baseText}r${digits}`, start);
+        }
+        // Per-digit validation catches `2r102`, which a bulk parse would silently truncate.
+        let value = 0n;
+        const radix = BigInt(base);
+        for (const digitChar of digits) {
+          const digit = Number.parseInt(digitChar, 36);
+          if (digit >= base) {
+            throw new SymmetricSmalltalkSyntaxError(
+              `digit ${digitChar} is out of range for radix ${base} in ${baseText}r${digits}`, start,
+            );
+          }
+          value = value * radix + BigInt(digit);
+        }
+        push('integer', value.toString(10), start);
+        continue;
+      }
       push('integer', source.slice(start, index), start);
       continue;
     }
