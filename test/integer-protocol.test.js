@@ -19,6 +19,7 @@ import {
   objectRef,
   float64Value,
 } from '../src/runtime.js';
+import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 
 // ADR 0053. The load-bearing part is not that `3 < 5` — it is that ordering is protocol rather than
 // an instruction, and that division means floor rather than whatever the host does.
@@ -359,31 +360,6 @@ test('both lanes agree on ordering and arithmetic', async () => {
 // primitive CodeArtifact/Block pairs published before eight methods that capture them. The
 // interesting failures are in the composition — a method whose captured Block was never written, or
 // a retry that meets a half-finished protocol.
-const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
-
-function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
-  let writes = 0;
-  const wrapped = Object.create(Object.getPrototypeOf(images));
-  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
-    if (typeof images[key] !== 'function' || key === 'constructor') continue;
-    wrapped[key] = (...args) => images[key](...args);
-  }
-  for (const [key, value] of Object.entries(images)) {
-    wrapped[key] = typeof value === 'function' ? (...args) => images[key](...args) : value;
-  }
-  for (const method of WRITE_METHODS) {
-    wrapped[method] = async (imageId, input, options) => {
-      writes += 1;
-      const hit = writes === failAt;
-      if (hit && !commitThenThrow) throw new Error(`injected failure at write ${writes} (${input?.id})`);
-      const result = await images[method](imageId, input, options);
-      if (hit && commitThenThrow) throw new Error(`injected post-commit failure at write ${writes} (${input?.id})`);
-      return result;
-    };
-  }
-  return {images: wrapped, writeCount: () => writes};
-}
-
 // Group compilers included: the WASM lane plans a shared-module compilation group, so a service
 // without them cannot publish one.
 const servicesFor = (images) => new CompilationService({
@@ -417,43 +393,52 @@ const faultingServices = (images, options, fault) => {
 
 for (const lane of ['neutral', 'wasm']) {
   test(`exhaustive-recovery: every write publishing the ${lane} Integer protocol`, async () => {
-    // Enumerated after binding both services, so the count covers compiler-internal writes too.
-    const total = await withRuntime(async (runtime) => {
-      const options = await baseImage(runtime, 'count', lane);
-      const {services, writeCount} = faultingServices(runtime.images, options, {});
-      await installSmalltalkIntegerProtocol(services);
-      return writeCount();
+    // The base image is prepared once per lane and forked per iteration; only the install under test
+    // repeats. Each fork rebinds `options` to its own runtime's services.
+    const base = await forkableRuntime(async (runtime) => {
+      await baseImage(runtime, 'app', lane);
     });
-    // 43 in the neutral lane and 51 in WASM at the time of writing. Binding `compilation` to the
-    // faulting service is worth 8 of those in each lane — the per-method compiler artifacts — which
-    // is precisely how many write points a sweep over `images` alone would never inject into.
-    assert.ok(total > 30, `expected many writes across five primitives and eight methods, saw ${total}`);
+    try {
+      // Enumerated after binding both services, so the count covers compiler-internal writes too.
+      const total = await base.withFork(async (runtime) => {
+        const options = {images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane};
+        const {services, writeCount} = faultingServices(runtime.images, options, {});
+        await installSmalltalkIntegerProtocol(services);
+        return writeCount();
+      });
+      // 43 in the neutral lane and 51 in WASM at the time of writing. Binding `compilation` to the
+      // faulting service is worth 8 of those in each lane — the per-method compiler artifacts — which
+      // is precisely how many write points a sweep over `images` alone would never inject into.
+      assert.ok(total > 30, `expected many writes across five primitives and eight methods, saw ${total}`);
 
-    for (let failAt = 1; failAt <= total; failAt += 1) {
-      for (const commitThenThrow of [false, true]) {
-        await withRuntime(async (runtime) => {
-          const options = await baseImage(runtime, 'app', lane);
-          const {services} = faultingServices(runtime.images, options, {failAt, commitThenThrow});
+      for (let failAt = 1; failAt <= total; failAt += 1) {
+        for (const commitThenThrow of [false, true]) {
+          await base.withFork(async (runtime) => {
+            const options = {images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane};
+            const {services} = faultingServices(runtime.images, options, {failAt, commitThenThrow});
 
-          await assert.rejects(
-            installSmalltalkIntegerProtocol(services),
-            /injected/,
-            `${lane} write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
-          );
+            await assert.rejects(
+              installSmalltalkIntegerProtocol(services),
+              /injected/,
+              `${lane} write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
+            );
 
-          // Retried with clean services on the same lane, and then actually exercised: converging on
-          // records is not the claim — the protocol answering afterwards is.
-          await installSmalltalkIntegerProtocol(options);
-          assert.deepEqual(
-            await evaluate(runtime, 'app', `cmp-${lane}-${failAt}-${commitThenThrow}`, '[ 3 <= 4 ]'),
-            booleanValue(true),
-          );
-          assert.deepEqual(
-            await evaluate(runtime, 'app', `div-${lane}-${failAt}-${commitThenThrow}`, '[ (0 - 7) // 2 ]'),
-            integerValue(-4),
-          );
-        });
+            // Retried with clean services on the same lane, and then actually exercised: converging on
+            // records is not the claim — the protocol answering afterwards is.
+            await installSmalltalkIntegerProtocol(options);
+            assert.deepEqual(
+              await evaluate(runtime, 'app', `cmp-${lane}-${failAt}-${commitThenThrow}`, '[ 3 <= 4 ]'),
+              booleanValue(true),
+            );
+            assert.deepEqual(
+              await evaluate(runtime, 'app', `div-${lane}-${failAt}-${commitThenThrow}`, '[ (0 - 7) // 2 ]'),
+              integerValue(-4),
+            );
+          });
+        }
       }
+    } finally {
+      await base.close();
     }
   });
 }

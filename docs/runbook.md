@@ -26,6 +26,13 @@ A new sweep must carry the `exhaustive-recovery:` prefix in its test name, or it
 the general gate. `test/ci-split.test.js` enforces that in both directions — an unprefixed sweep
 fails it, and so does a cheap test wearing the prefix.
 
+Write a new sweep against `test/support/recovery-harness.js`: `faultingImages()` is the shared
+write-fault wrapper, and `forkableRuntime(prepare)` builds the sweep's base image once and hands
+each iteration a runtime over a `MockBackend.fork()` copy, so the fixed setup cost is paid once
+per lane instead of once per write × 2 failure modes. The fork copies versions and streams too, so
+optimistic concurrency behaves identically on either side. Coverage rules are unchanged — every
+write, both failure modes, nothing sampled; only the installs under test repeat per iteration.
+
 ### `npm test` skipping is not the same as passing
 
 `npm test` reports something like `# skipped 3`. Those skips are the tests that exercise a

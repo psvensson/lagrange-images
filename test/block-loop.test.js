@@ -20,6 +20,7 @@ import {
   pinnedRef,
   textValue,
 } from '../src/runtime.js';
+import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 import {defineMethodsFromSource} from '../src/language/smalltalk-instance-variables.js';
 import {installWasmBlockTree} from '../src/wasm/tree-installer.js';
 import {BLOCK_PROTOCOL_SLOTS} from '../src/language/smalltalk-block-protocol.js';
@@ -1137,68 +1138,49 @@ test('a loop result feeding another send resumes correctly in WASM', async () =>
 
 // --- publication recovery ------------------------------------------------------------------------
 
-const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject'];
-
-function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
-  let writes = 0;
-  const wrapped = Object.create(Object.getPrototypeOf(images));
-  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
-    if (typeof images[key] !== 'function' || key === 'constructor') continue;
-    wrapped[key] = (...args) => images[key](...args);
-  }
-  for (const [key, value] of Object.entries(images)) {
-    wrapped[key] = typeof value === 'function' ? (...args) => images[key](...args) : value;
-  }
-  for (const method of WRITE_METHODS) {
-    wrapped[method] = async (imageId, input, options) => {
-      writes += 1;
-      const hit = writes === failAt;
-      if (hit && !commitThenThrow) throw new Error(`injected failure at write ${writes} (${input?.id})`);
-      const result = await images[method](imageId, input, options);
-      if (hit && commitThenThrow) throw new Error(`injected post-commit failure at write ${writes} (${input?.id})`);
-      return result;
-    };
-  }
-  return {images: wrapped, writeCount: () => writes};
-}
-
 // Every write publishing the protocol is swept twice: interrupted before the commit, and committed
 // with the acknowledgement lost. Both must leave an image a retry can complete, because a
-// half-installed routing authority is the one thing discovery must never find.
+// half-installed routing authority is the one thing discovery must never find. The seeded base image
+// (everything except the Block protocol) is prepared once and forked per iteration.
 test('exhaustive-recovery: every write publishing the Block protocol', async () => {
-  const total = await withRuntime(async (runtime) => {
-    await seed(runtime, 'blank', {blockProtocol: false});
-    const {images, writeCount} = faultingImages(runtime.images);
-    await installSmalltalkBlockProtocol({images, imageId: 'blank'});
-    return writeCount();
+  const base = await forkableRuntime(async (runtime) => {
+    await seed(runtime, 'app', {blockProtocol: false});
   });
-  assert.ok(total >= 5, `expected several writes, saw ${total}`);
+  try {
+    const total = await base.withFork(async (runtime) => {
+      const {images, writeCount} = faultingImages(runtime.images);
+      await installSmalltalkBlockProtocol({images, imageId: 'app'});
+      return writeCount();
+    });
+    assert.ok(total >= 5, `expected several writes, saw ${total}`);
 
-  for (let failAt = 1; failAt <= total; failAt += 1) {
-    for (const commitThenThrow of [false, true]) {
-      await withRuntime(async (runtime) => {
-        await seed(runtime, 'app', {blockProtocol: false});
-        const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
-        await assert.rejects(
-          installSmalltalkBlockProtocol({images, imageId: 'app'}),
-          /injected/,
-          `write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
-        );
+    for (let failAt = 1; failAt <= total; failAt += 1) {
+      for (const commitThenThrow of [false, true]) {
+        await base.withFork(async (runtime) => {
+          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+          await assert.rejects(
+            installSmalltalkBlockProtocol({images, imageId: 'app'}),
+            /injected/,
+            `write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
+          );
 
-        // A partial install must never be discoverable as a usable protocol: either the object is
-        // not there yet, or it is complete and valid.
-        const found = await findSmalltalkBlockProtocol({images: runtime.images, imageId: 'app'});
-        assert.ok(found === null || found.whileTrue.objectId.endsWith('block-while-true'));
+          // A partial install must never be discoverable as a usable protocol: either the object is
+          // not there yet, or it is complete and valid.
+          const found = await findSmalltalkBlockProtocol({images: runtime.images, imageId: 'app'});
+          assert.ok(found === null || found.whileTrue.objectId.endsWith('block-while-true'));
 
-        // And the retry converges rather than conflicting.
-        await installSmalltalkBlockProtocol({images: runtime.images, imageId: 'app'});
-        assert.deepEqual(
-          await evaluate(runtime, 'app', `recovered-${failAt}-${commitThenThrow}`,
-            '[ | i | i := 0. [ i = 2 ] whileFalse: [ i := i + 1 ]. i ]'),
-          integerValue(2),
-        );
-      });
+          // And the retry converges rather than conflicting.
+          await installSmalltalkBlockProtocol({images: runtime.images, imageId: 'app'});
+          assert.deepEqual(
+            await evaluate(runtime, 'app', `recovered-${failAt}-${commitThenThrow}`,
+              '[ | i | i := 0. [ i = 2 ] whileFalse: [ i := i + 1 ]. i ]'),
+            integerValue(2),
+          );
+        });
+      }
     }
+  } finally {
+    await base.close();
   }
 });
 

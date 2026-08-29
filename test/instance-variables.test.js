@@ -17,6 +17,7 @@ import {
   objectRef,
   textValue,
 } from '../src/runtime.js';
+import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 import {compileSymmetricSmalltalkMethod} from '../src/language/smalltalk-instance-variables.js';
 import {SYMMETRIC_SMALLTALK_ID} from '../src/language/symmetric-smalltalk.js';
 
@@ -712,32 +713,6 @@ test('a slot write whose result feeds another send resumes correctly in WASM', a
 // ADR 0050 requires every write swept pre-commit and commit-then-lost-ack. #81 adds new publication
 // paths — the v1 neutral and v1 WASM method artifacts, and the primitive installer — none of which
 // the existing v0 builder sweep exercises.
-const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
-
-function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
-  let writes = 0;
-  const wrapped = Object.create(Object.getPrototypeOf(images));
-  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
-    if (typeof images[key] !== 'function' || key === 'constructor') continue;
-    wrapped[key] = (...args) => images[key](...args);
-  }
-  for (const [key, value] of Object.entries(images)) {
-    if (typeof value === 'function') wrapped[key] = (...args) => images[key](...args);
-    else wrapped[key] = value;
-  }
-  for (const method of WRITE_METHODS) {
-    wrapped[method] = async (imageId, input, options) => {
-      writes += 1;
-      const index = writes;
-      if (index === failAt && !commitThenThrow) throw new Error(`injected failure at write ${index}`);
-      const result = await images[method](imageId, input, options);
-      if (index === failAt && commitThenThrow) throw new Error(`injected post-commit failure at write ${index}`);
-      return result;
-    };
-  }
-  return {images: wrapped, writeCount: () => writes};
-}
-
 const servicesFor = (images) => new CompilationService({images, compilers: createDefaultCodeCompilerRegistry()});
 
 // A v1 method: it assigns, so it exercises the representation `defineMethods` could not publish
@@ -773,43 +748,49 @@ async function publishAll(images, compilation, imageId, classRef, lane) {
 
 for (const lane of ['neutral', 'wasm']) {
   test(`exhaustive-recovery: every write publishing a ${lane} instance-variable method`, async () => {
-    const total = await withRuntime(async (runtime) => {
-      const point = await baseForRecovery(runtime, 'count', lane);
-      const {images, writeCount} = faultingImages(runtime.images);
-      await publishAll(images, servicesFor(images), 'count', point.classRef, lane);
-      return writeCount();
-    });
-    assert.ok(total > 5, `expected several writes in the ${lane} lane, saw ${total}`);
+    // The base image — kernel, allocation protocol, the Point class — is prepared once per lane and
+    // forked per iteration; only the publication under test repeats. The classRef `prepare` answers
+    // is deterministic, so it stays valid in every fork.
+    const base = await forkableRuntime(async (runtime) => await baseForRecovery(runtime, 'app', lane));
+    try {
+      const total = await base.withFork(async (runtime, point) => {
+        const {images, writeCount} = faultingImages(runtime.images);
+        await publishAll(images, servicesFor(images), 'app', point.classRef, lane);
+        return writeCount();
+      });
+      assert.ok(total > 5, `expected several writes in the ${lane} lane, saw ${total}`);
 
-    for (let failAt = 1; failAt <= total; failAt += 1) {
-      for (const commitThenThrow of [false, true]) {
-        await withRuntime(async (runtime) => {
-          const point = await baseForRecovery(runtime, 'app', lane);
-          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+      for (let failAt = 1; failAt <= total; failAt += 1) {
+        for (const commitThenThrow of [false, true]) {
+          await base.withFork(async (runtime, point) => {
+            const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
 
-          await assert.rejects(
-            publishAll(images, servicesFor(images), 'app', point.classRef, lane),
-            /injected/,
-            `${lane}: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
-          );
+            await assert.rejects(
+              publishAll(images, servicesFor(images), 'app', point.classRef, lane),
+              /injected/,
+              `${lane}: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
+            );
 
-          await publishAll(runtime.images, runtime.compilation, 'app', point.classRef, lane);
-          const instance = await newInstance(runtime, 'app', `rec-${lane}-${failAt}-${commitThenThrow}`, point.classRef);
-          await evaluate(runtime, 'app', `rec-set-${lane}-${failAt}-${commitThenThrow}`, '[ :o | o setX: 2 ]', [instance]);
-          assert.deepEqual(
-            await evaluate(runtime, 'app', `rec-get-${lane}-${failAt}-${commitThenThrow}`, '[ :o | o x ]', [instance]),
-            integerValue(2),
-            `${lane}: not usable after retrying past write ${failAt}`,
-          );
-          // The non-local-return primitive is published by this installer too, so the recovered
-          // protocol has to answer a `^` and not merely a slot read.
-          assert.deepEqual(
-            await evaluate(runtime, 'app', `rec-early-${lane}-${failAt}-${commitThenThrow}`, '[ :o | o earlyX ]', [instance]),
-            integerValue(2),
-            `${lane}: non-local return not usable after retrying past write ${failAt}`,
-          );
-        });
+            await publishAll(runtime.images, runtime.compilation, 'app', point.classRef, lane);
+            const instance = await newInstance(runtime, 'app', `rec-${lane}-${failAt}-${commitThenThrow}`, point.classRef);
+            await evaluate(runtime, 'app', `rec-set-${lane}-${failAt}-${commitThenThrow}`, '[ :o | o setX: 2 ]', [instance]);
+            assert.deepEqual(
+              await evaluate(runtime, 'app', `rec-get-${lane}-${failAt}-${commitThenThrow}`, '[ :o | o x ]', [instance]),
+              integerValue(2),
+              `${lane}: not usable after retrying past write ${failAt}`,
+            );
+            // The non-local-return primitive is published by this installer too, so the recovered
+            // protocol has to answer a `^` and not merely a slot read.
+            assert.deepEqual(
+              await evaluate(runtime, 'app', `rec-early-${lane}-${failAt}-${commitThenThrow}`, '[ :o | o earlyX ]', [instance]),
+              integerValue(2),
+              `${lane}: non-local return not usable after retrying past write ${failAt}`,
+            );
+          });
+        }
       }
+    } finally {
+      await base.close();
     }
   });
 }

@@ -16,6 +16,7 @@ import {
   objectRef,
   textValue,
 } from '../src/runtime.js';
+import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 import {SYMMETRIC_SMALLTALK_ID} from '../src/language/symmetric-smalltalk.js';
 import {SmalltalkMethodRedefinitionError, methodBlockRef} from '../src/language/smalltalk-class-builder.js';
 
@@ -717,31 +718,6 @@ test('not, and: and or: compile to ordinary sends, and the compiler knows no sel
 
 // The control-flow installer now publishes seven selectors per singleton rather than four, so it
 // joins the exhaustive sweeps rather than being trusted to be idempotent.
-const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
-
-function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
-  let writes = 0;
-  const wrapped = Object.create(Object.getPrototypeOf(images));
-  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
-    if (typeof images[key] !== 'function' || key === 'constructor') continue;
-    wrapped[key] = (...args) => images[key](...args);
-  }
-  for (const [key, value] of Object.entries(images)) {
-    wrapped[key] = typeof value === 'function' ? (...args) => images[key](...args) : value;
-  }
-  for (const method of WRITE_METHODS) {
-    wrapped[method] = async (imageId, input, options) => {
-      writes += 1;
-      const hit = writes === failAt;
-      if (hit && !commitThenThrow) throw new Error(`injected failure at write ${writes} (${input?.id})`);
-      const result = await images[method](imageId, input, options);
-      if (hit && commitThenThrow) throw new Error(`injected post-commit failure at write ${writes} (${input?.id})`);
-      return result;
-    };
-  }
-  return {images: wrapped, writeCount: () => writes};
-}
-
 const servicesFor = (images) => new CompilationService({
   images,
   compilers: createDefaultCodeCompilerRegistry(),
@@ -750,41 +726,47 @@ const servicesFor = (images) => new CompilationService({
 
 for (const lane of ['neutral', 'wasm']) {
   test(`exhaustive-recovery: every write publishing the ${lane} Boolean protocol`, async () => {
-    const total = await withRuntime(async (runtime) => {
-      await runtime.images.createImage({id: 'count'});
-      await installSmalltalkKernel({images: runtime.images, imageId: 'count'});
-      const {images, writeCount} = faultingImages(runtime.images);
-      await installSmalltalkControlFlow({
-        images, compilation: servicesFor(images), imageId: 'count', lane,
-      });
-      return writeCount();
+    // The bare kernel image is prepared once per lane and forked per iteration; only the
+    // control-flow install under test repeats.
+    const base = await forkableRuntime(async (runtime) => {
+      await runtime.images.createImage({id: 'app'});
+      await installSmalltalkKernel({images: runtime.images, imageId: 'app'});
     });
-    assert.ok(total > 10, `expected many writes across seven selectors and two singletons, saw ${total}`);
-
-    for (let failAt = 1; failAt <= total; failAt += 1) {
-      for (const commitThenThrow of [false, true]) {
-        await withRuntime(async (runtime) => {
-          await runtime.images.createImage({id: 'app'});
-          await installSmalltalkKernel({images: runtime.images, imageId: 'app'});
-          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
-
-          await assert.rejects(
-            installSmalltalkControlFlow({images, compilation: servicesFor(images), imageId: 'app', lane}),
-            /injected/,
-            `${lane} write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
-          );
-
-          // Retried with clean services, then exercised: converging on records is not the claim.
-          await installSmalltalkControlFlow({
-            images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
-          });
-          assert.deepEqual(
-            await evaluate(runtime, 'app', `rec-${lane}-${failAt}-${commitThenThrow}`,
-              '[ (true and: [ false ]) not ]'),
-            booleanValue(true),
-          );
+    try {
+      const total = await base.withFork(async (runtime) => {
+        const {images, writeCount} = faultingImages(runtime.images);
+        await installSmalltalkControlFlow({
+          images, compilation: servicesFor(images), imageId: 'app', lane,
         });
+        return writeCount();
+      });
+      assert.ok(total > 10, `expected many writes across seven selectors and two singletons, saw ${total}`);
+
+      for (let failAt = 1; failAt <= total; failAt += 1) {
+        for (const commitThenThrow of [false, true]) {
+          await base.withFork(async (runtime) => {
+            const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+
+            await assert.rejects(
+              installSmalltalkControlFlow({images, compilation: servicesFor(images), imageId: 'app', lane}),
+              /injected/,
+              `${lane} write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
+            );
+
+            // Retried with clean services, then exercised: converging on records is not the claim.
+            await installSmalltalkControlFlow({
+              images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
+            });
+            assert.deepEqual(
+              await evaluate(runtime, 'app', `rec-${lane}-${failAt}-${commitThenThrow}`,
+                '[ (true and: [ false ]) not ]'),
+              booleanValue(true),
+            );
+          });
+        }
       }
+    } finally {
+      await base.close();
     }
   });
 }

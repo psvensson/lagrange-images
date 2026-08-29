@@ -152,6 +152,18 @@ class MockBackend {
     return readStreamFrom(this, stream, options);
   }
 
+  // An independent MockBackend holding a deep copy of this one's current state — versions,
+  // streams and all — through the same clone helpers a transaction draft uses. Writes to either
+  // side are invisible to the other. Mock-only on purpose: a durable backend cannot promise a
+  // cheap whole-state copy, so this is a testing seam (the exhaustive recovery sweeps fork one
+  // prepared base image per iteration instead of rebuilding it), not part of the backend contract.
+  fork() {
+    const forked = new MockBackend({integration: this.integration});
+    forked.collections = cloneCollections(this.collections);
+    forked.streams = cloneStreams(this.streams);
+    return forked;
+  }
+
   async transaction(work) {
     if (typeof work !== 'function') throw new TypeError('backend transaction work must be a function');
 

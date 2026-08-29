@@ -67,6 +67,14 @@ async function createLagrangeBackend({loaded, lagrangeFactory, options}) {
 }
 
 async function createBackend(options = {}) {
+  // A pre-built backend instance passes straight through: the caller owns its lifecycle up to
+  // here, and `createRuntime` starts and stops it exactly as one built from a mode. This is how a
+  // forked MockBackend gets a runtime wrapped around it.
+  if (options.instance) {
+    assertBackend(options.instance);
+    return options.instance;
+  }
+
   const mode = options.mode ?? process.env.LAGRANGE_BACKEND ?? 'auto';
 
   if (!['auto', 'mock', 'lagrange'].includes(mode)) {

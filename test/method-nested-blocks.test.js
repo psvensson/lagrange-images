@@ -20,6 +20,7 @@ import {
 } from '../src/runtime.js';
 import {nestedIds} from '../src/language/smalltalk-nested-blocks.js';
 import {SYMMETRIC_SMALLTALK_ID} from '../src/language/symmetric-smalltalk.js';
+import {WRITE_METHODS, faultingImages, forkableRuntime} from './support/recovery-harness.js';
 
 // Nested Blocks inside methods, and the frame semantics that make them mean what Smalltalk says.
 //
@@ -432,9 +433,10 @@ test('installing the same method twice is idempotent, nested tree included', asy
 
 // --- publication recovery ----------------------------------------------------------------------------
 
-const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
-
-function faultingImages(images, {failAt = null, commitThenThrow = false, failIdMatching = null} = {}) {
+// The ordinal sweeps use the shared harness. This local variant faults the first write whose
+// record id matches, which lets a test name the artifact whose lost acknowledgement it is
+// actually about — a surface the shared `faultingImages` deliberately does not carry.
+function idMatchingFaultingImages(images, {commitThenThrow = false, failIdMatching} = {}) {
   let writes = 0;
   let targeted = false;
   const wrapped = Object.create(Object.getPrototypeOf(images));
@@ -450,11 +452,7 @@ function faultingImages(images, {failAt = null, commitThenThrow = false, failIdM
     wrapped[method] = async (imageId, input, options) => {
       writes += 1;
       const index = writes;
-      // Either the Nth write, or the first write whose record id matches — the latter lets a test
-      // name the artifact whose lost acknowledgement it is actually about.
-      const hit = failIdMatching
-        ? !targeted && typeof input?.id === 'string' && failIdMatching.test(input.id)
-        : index === failAt;
+      const hit = !targeted && typeof input?.id === 'string' && failIdMatching.test(input.id);
       if (hit) targeted = true;
       if (hit && !commitThenThrow) throw new Error(`injected failure at write ${index} (${input?.id})`);
       const result = await images[method](imageId, input, options);
@@ -513,49 +511,54 @@ async function baseForRecovery(runtime, imageId, lane) {
 for (const lane of ['neutral', 'wasm']) {
   for (const shape of RECOVERY_SHAPES) {
     test(`exhaustive-recovery: every write publishing a ${lane} ${shape.label} nested-Block method`, async () => {
-      const total = await withRuntime(async (runtime) => {
-        const counter = await baseForRecovery(runtime, 'count', lane);
-        const {images, writeCount} = faultingImages(runtime.images);
-        await defineMethodsFromSource({
-          images, compilation: servicesFor(images), imageId: 'count', lane,
-          classRef: counter.classRef, methods: shape.methods,
-        });
-        return writeCount();
-      });
-      assert.ok(total > 3, `expected several writes in the ${lane} lane, saw ${total}`);
-
-      for (let failAt = 1; failAt <= total; failAt += 1) {
-        for (const commitThenThrow of [false, true]) {
-          await withRuntime(async (runtime) => {
-            const counter = await baseForRecovery(runtime, 'app', lane);
-            const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
-
-            await assert.rejects(
-              defineMethodsFromSource({
-                images, compilation: servicesFor(images), imageId: 'app', lane,
-                classRef: counter.classRef, methods: shape.methods,
-              }),
-              /injected/,
-              `${lane} ${shape.label}: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
-            );
-
-            // A failed install must never leave a published selector pointing at an incomplete tree:
-            // the identical retry converges and the method works.
-            await defineMethodsFromSource({
-              images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
-              classRef: counter.classRef, methods: shape.methods,
-            });
-
-            const suffix = `${lane}-${shape.label.replace(/\W/g, '')}-${failAt}-${commitThenThrow}`;
-            const instance = await evaluate(runtime, 'app', `rec-new-${suffix}`, '[ :c | c basicNew ]', [counter.classRef]);
-            await evaluate(runtime, 'app', `rec-init-${suffix}`, '[ :o | o init ]', [instance]);
-            assert.deepEqual(
-              await evaluate(runtime, 'app', `rec-run-${suffix}`, shape.exercise, [instance]),
-              integerValue(shape.expected),
-              `${lane} ${shape.label}: not usable after retrying past write ${failAt}`,
-            );
+      // The base image — kernel, protocols, the Counter class — is prepared once and forked per
+      // iteration; only the method publication under test repeats.
+      const base = await forkableRuntime(async (runtime) => await baseForRecovery(runtime, 'app', lane));
+      try {
+        const total = await base.withFork(async (runtime, counter) => {
+          const {images, writeCount} = faultingImages(runtime.images);
+          await defineMethodsFromSource({
+            images, compilation: servicesFor(images), imageId: 'app', lane,
+            classRef: counter.classRef, methods: shape.methods,
           });
+          return writeCount();
+        });
+        assert.ok(total > 3, `expected several writes in the ${lane} lane, saw ${total}`);
+
+        for (let failAt = 1; failAt <= total; failAt += 1) {
+          for (const commitThenThrow of [false, true]) {
+            await base.withFork(async (runtime, counter) => {
+              const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+
+              await assert.rejects(
+                defineMethodsFromSource({
+                  images, compilation: servicesFor(images), imageId: 'app', lane,
+                  classRef: counter.classRef, methods: shape.methods,
+                }),
+                /injected/,
+                `${lane} ${shape.label}: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
+              );
+
+              // A failed install must never leave a published selector pointing at an incomplete tree:
+              // the identical retry converges and the method works.
+              await defineMethodsFromSource({
+                images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
+                classRef: counter.classRef, methods: shape.methods,
+              });
+
+              const suffix = `${lane}-${shape.label.replace(/\W/g, '')}-${failAt}-${commitThenThrow}`;
+              const instance = await evaluate(runtime, 'app', `rec-new-${suffix}`, '[ :c | c basicNew ]', [counter.classRef]);
+              await evaluate(runtime, 'app', `rec-init-${suffix}`, '[ :o | o init ]', [instance]);
+              assert.deepEqual(
+                await evaluate(runtime, 'app', `rec-run-${suffix}`, shape.exercise, [instance]),
+                integerValue(shape.expected),
+                `${lane} ${shape.label}: not usable after retrying past write ${failAt}`,
+              );
+            });
+          }
         }
+      } finally {
+        await base.close();
       }
     });
   }
@@ -567,7 +570,7 @@ test('a lost acknowledgement on the v0 WASM function artifact converges on retry
   await withRuntime(async (runtime) => {
     const counter = await baseForRecovery(runtime, 'app', 'wasm');
     const methods = [{selector: 'constantBlock', source: '[ [ 42 ] ]'}];
-    const {images} = faultingImages(runtime.images, {
+    const {images} = idMatchingFaultingImages(runtime.images, {
       commitThenThrow: true,
       failIdMatching: /:function$|:wasm:function$/,
     });

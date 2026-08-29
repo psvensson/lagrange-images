@@ -99,16 +99,19 @@ test('exhaustive-recovery: every write publishing a promoted object graph is rec
         const {a, b} = cyclicPair(arena, 'app', shapeRef);
 
         // Fail the Nth object write: pre-commit (nothing written) or post-commit (lost ack).
-        let armed = true;
+        // The original injector fired on the FIRST write regardless of failAt — an always-armed
+        // flag with no counter — so the loop repeated one failure point instead of enumerating
+        // them. Counting writes makes the sweep do what its name and this comment always claimed.
+        let writes = 0;
         const faulting = Object.create(runtime.images);
         faulting.putObject = async (imageId, input, options) => {
-          if (armed && !commitThenThrow) {
-            armed = false;
+          writes += 1;
+          const hit = writes === failAt;
+          if (hit && !commitThenThrow) {
             throw new Error(`injected pre-commit failure (${input.id})`);
           }
           const stored = await runtime.images.putObject(imageId, input, options);
-          if (armed) {
-            armed = false;
+          if (hit && commitThenThrow) {
             throw new Error(`injected post-commit failure (${input.id})`);
           }
           return stored;

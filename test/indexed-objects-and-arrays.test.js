@@ -39,6 +39,7 @@ import {
 } from '../src/runtime.js';
 import {projectObjectSlots} from '../src/callable/image-projection-binding.js';
 import {referencesOfRecord} from '../src/graph/references.js';
+import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 
 // ADR 0047: the generic object model gets one language-neutral indexed Value part; Array is the
 // first Smalltalk class built over it. The important proofs are deliberately cross-layer because a
@@ -387,89 +388,56 @@ test('the source compiler leaves collection selectors as ordinary semantic sends
 // Same exhaustive publication proof style as ADR 0046: count the writes from a successful install,
 // then fail before and after every one of them. An identical retry has to finish and produce a usable
 // Array. Sampling a few checkpoints would leave exactly the create-once/rewrite seams unproven.
-const INSTALL_WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
-
-function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
-  let writes = 0;
-  const wrapped = Object.create(Object.getPrototypeOf(images));
-  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
-    if (typeof images[key] !== 'function' || key === 'constructor') continue;
-    wrapped[key] = (...args) => images[key](...args);
-  }
-  for (const [key, value] of Object.entries(images)) {
-    if (typeof value === 'function') wrapped[key] = (...args) => images[key](...args);
-    else wrapped[key] = value;
-  }
-  for (const method of INSTALL_WRITE_METHODS) {
-    wrapped[method] = async (imageId, input, options) => {
-      writes += 1;
-      const index = writes;
-      if (index === failAt && !commitThenThrow) {
-        throw new Error(`injected failure at write ${index} (${method} ${input?.id})`);
-      }
-      const result = await images[method](imageId, input, options);
-      if (index === failAt && commitThenThrow) {
-        throw new Error(`injected post-commit failure at write ${index} (${method} ${input?.id})`);
-      }
-      return result;
-    };
-  }
-  return {images: wrapped, writeCount: () => writes};
-}
-
 function servicesFor(images) {
   return new CompilationService({images, compilers: createDefaultCodeCompilerRegistry()});
 }
 
-async function indexedInstallWriteCount(lane) {
-  return await withRuntime(async (runtime) => {
-    await runtime.images.createImage({id: 'count'});
-    await installSmalltalkKernel({images: runtime.images, imageId: 'count'});
-    await installSmalltalkAllocationProtocol({
-      images: runtime.images, compilation: runtime.compilation, imageId: 'count', lane,
-    });
-    const {images, writeCount} = faultingImages(runtime.images);
-    await installSmalltalkIndexedProtocol({
-      images, compilation: servicesFor(images), imageId: 'count', lane,
-    });
-    return writeCount();
-  });
-}
-
 for (const lane of ['neutral', 'wasm']) {
   test(`exhaustive-recovery: every write installing the ${lane} indexed protocol`, async () => {
-    const total = await indexedInstallWriteCount(lane);
-    assert.ok(total > 10, `expected a multi-record publication in the ${lane} lane, saw ${total} writes`);
-
-    for (let failAt = 1; failAt <= total; failAt += 1) {
-      for (const commitThenThrow of [false, true]) {
-        await withRuntime(async (runtime) => {
-          await runtime.images.createImage({id: 'app'});
-          await installSmalltalkKernel({images: runtime.images, imageId: 'app'});
-          await installSmalltalkAllocationProtocol({
-            images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
-          });
-          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
-
-          await assert.rejects(
-            installSmalltalkIndexedProtocol({images, compilation: servicesFor(images), imageId: 'app', lane}),
-            /injected/,
-            `${lane}: write ${failAt} (commitThenThrow=${commitThenThrow}) should fail`,
-          );
-
-          const indexed = await installSmalltalkIndexedProtocol({
-            images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
-          });
-          const array = await evaluate(
-            runtime,
-            'app',
-            `retry-${lane}-${failAt}-${commitThenThrow}`,
-            '[ :c | c new: 2 ]',
-            [indexed.arrayClass],
-          );
-          assert.equal((await runtime.images.getObject('app', array.objectId)).indexed.length, 2);
+    const base = await forkableRuntime(async (runtime) => {
+      await runtime.images.createImage({id: 'app'});
+      await installSmalltalkKernel({images: runtime.images, imageId: 'app'});
+      await installSmalltalkAllocationProtocol({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
+      });
+    });
+    try {
+      const total = await base.withFork(async (runtime) => {
+        const {images, writeCount} = faultingImages(runtime.images);
+        await installSmalltalkIndexedProtocol({
+          images, compilation: servicesFor(images), imageId: 'app', lane,
         });
+        return writeCount();
+      });
+      assert.ok(total > 10, `expected a multi-record publication in the ${lane} lane, saw ${total} writes`);
+
+      for (let failAt = 1; failAt <= total; failAt += 1) {
+        for (const commitThenThrow of [false, true]) {
+          await base.withFork(async (runtime) => {
+            const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+
+            await assert.rejects(
+              installSmalltalkIndexedProtocol({images, compilation: servicesFor(images), imageId: 'app', lane}),
+              /injected/,
+              `${lane}: write ${failAt} (commitThenThrow=${commitThenThrow}) should fail`,
+            );
+
+            const indexed = await installSmalltalkIndexedProtocol({
+              images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
+            });
+            const array = await evaluate(
+              runtime,
+              'app',
+              `retry-${lane}-${failAt}-${commitThenThrow}`,
+              '[ :c | c new: 2 ]',
+              [indexed.arrayClass],
+            );
+            assert.equal((await runtime.images.getObject('app', array.objectId)).indexed.length, 2);
+          });
+        }
       }
+    } finally {
+      await base.close();
     }
   });
 }

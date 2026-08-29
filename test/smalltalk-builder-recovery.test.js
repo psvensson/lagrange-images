@@ -12,6 +12,7 @@ import {
   objectRef,
 } from '../src/runtime.js';
 import {SmalltalkMethodRedefinitionError} from '../src/language/smalltalk-class-builder.js';
+import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 
 // Three retry defects in this one publication sequence were each found only because some unrelated
 // test happened to cross a different boundary. Targeted probes cannot settle the question, so this
@@ -45,39 +46,6 @@ const capturing = (imageId) => ({
   captures: [{...NIL_CAPTURE, value: objectRef(imageId, 'smalltalk/nil')}],
 });
 
-const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
-
-// Wraps an ImageService so the Nth write throws, and records what each write was.
-function faultingImages(images, {failAt = null, commitThenThrow = false, log = []} = {}) {
-  let writes = 0;
-  const wrapped = Object.create(Object.getPrototypeOf(images));
-  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
-    if (typeof images[key] !== 'function' || key === 'constructor') continue;
-    wrapped[key] = (...args) => images[key](...args);
-  }
-  for (const [key, value] of Object.entries(images)) {
-    if (typeof value === 'function') wrapped[key] = (...args) => images[key](...args);
-    else wrapped[key] = value;
-  }
-  for (const method of WRITE_METHODS) {
-    wrapped[method] = async (imageId, input, options) => {
-      writes += 1;
-      const index = writes;
-      log.push(`${method}:${input?.id ?? '?'}`);
-      if (index === failAt && !commitThenThrow) {
-        throw new Error(`injected failure at write ${index} (${method} ${input?.id})`);
-      }
-      const result = await images[method](imageId, input, options);
-      // Models a lost acknowledgement: the write committed, the caller never learned it did.
-      if (index === failAt && commitThenThrow) {
-        throw new Error(`injected post-commit failure at write ${index} (${method} ${input?.id})`);
-      }
-      return result;
-    };
-  }
-  return {images: wrapped, writeCount: () => writes};
-}
-
 function servicesFor(images) {
   return new CompilationService({images, compilers: createDefaultCodeCompilerRegistry()});
 }
@@ -98,7 +66,7 @@ async function callPlus(runtime, imageId, id) {
   return await runtime.executor.execute(activation);
 }
 
-// How many writes one clean `defineMethods` performs, so the sweep knows where to stop.
+// How many writes one clean `defineMethods` performs, so a test can target the final write.
 async function writeCountFor(lane, methodsFor = () => [PLUS]) {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   try {
@@ -140,42 +108,52 @@ const RECOVERY_CASES = [
 for (const lane of ['neutral', 'wasm']) {
   for (const {label, methods, call, expected} of RECOVERY_CASES) {
     test(`every write in a ${label} ${lane} defineMethods is recoverable by an identical retry`, async () => {
-      const total = await writeCountFor(lane, methods);
-      assert.ok(total > 3, `expected several writes in the ${lane} lane, saw ${total}`);
+      // The bare kernel image is prepared once and forked per iteration; only the defineMethods
+      // under test repeats.
+      const base = await forkableRuntime(async (runtime) => await freshImage(runtime, 'app'));
+      try {
+        const total = await base.withFork(async (runtime, kernel) => {
+          const {images, writeCount} = faultingImages(runtime.images);
+          await defineMethods({
+            images, compilation: servicesFor(images), imageId: 'app',
+            classRef: kernel.integerClass, methods: methods('app'), lane,
+          });
+          return writeCount();
+        });
+        assert.ok(total > 3, `expected several writes in the ${lane} lane, saw ${total}`);
 
-      for (let failAt = 1; failAt <= total; failAt += 1) {
-        for (const commitThenThrow of [false, true]) {
-          const runtime = await createRuntime({backend: {mode: 'mock'}});
-          try {
-            const kernel = await freshImage(runtime, 'app');
-            const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+        for (let failAt = 1; failAt <= total; failAt += 1) {
+          for (const commitThenThrow of [false, true]) {
+            await base.withFork(async (runtime, kernel) => {
+              const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
 
-            await assert.rejects(
-              defineMethods({
-                images, compilation: servicesFor(images), imageId: 'app',
-                classRef: kernel.integerClass, methods: methods('app'), lane,
-              }),
-              /injected/,
-              `${lane} lane: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
-            );
-
-            // The identical operation, retried against a clean service, must complete.
-            await defineMethods({
-              images: runtime.images, compilation: runtime.compilation, imageId: 'app',
-              classRef: kernel.integerClass, methods: methods('app'), lane,
-            });
-            const result = await call(runtime, 'app', `retry-${label}-${lane}-${failAt}-${commitThenThrow}`);
-            if (expected !== null) {
-              assert.deepEqual(
-                result,
-                expected,
-                `${lane} lane: not callable after retrying past write ${failAt} (commitThenThrow=${commitThenThrow})`,
+              await assert.rejects(
+                defineMethods({
+                  images, compilation: servicesFor(images), imageId: 'app',
+                  classRef: kernel.integerClass, methods: methods('app'), lane,
+                }),
+                /injected/,
+                `${lane} lane: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
               );
-            }
-          } finally {
-            await runtime.close();
+
+              // The identical operation, retried against a clean service, must complete.
+              await defineMethods({
+                images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+                classRef: kernel.integerClass, methods: methods('app'), lane,
+              });
+              const result = await call(runtime, 'app', `retry-${label}-${lane}-${failAt}-${commitThenThrow}`);
+              if (expected !== null) {
+                assert.deepEqual(
+                  result,
+                  expected,
+                  `${lane} lane: not callable after retrying past write ${failAt} (commitThenThrow=${commitThenThrow})`,
+                );
+              }
+            });
           }
         }
+      } finally {
+        await base.close();
       }
     });
   }
