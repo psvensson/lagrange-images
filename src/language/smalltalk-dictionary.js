@@ -137,6 +137,29 @@ async function installSmalltalkEqualityProtocol({images, compilation, imageId, l
         args: [receiver(), argument(0)],
         imageId,
       }),
+      // Workstream 3 (MessagePack pressure: the type-mapper dispatch sends `self class == Dictionary`,
+      // and the slice also compares symbols, integers, booleans-across-the-bridge and ordinary refs
+      // with `==`). `==` is *identity*, and it must NOT route through `=` — `=` is overridable
+      // (Association overrides it for value equality), so `^self = anObject` would be wrong.
+      //
+      // It reuses the SAME built-in primitive as `=` rather than a new one, because ADR 0048 decision
+      // 2's relation is already exactly what identity means here: an ObjectRef has genuine
+      // (imageId, objectId) identity, while an immediate Value (Integer/Float/Text/Bytes/Boolean)
+      // carries no object identity apart from its value, so its identity collapses to value by
+      // construction. Two equal-but-distinct Associations are distinct refs -> `==` is false;
+      // `1000 == 1000` is value-true because that is the only identity 1000 has. The primitive also
+      // applies the ADR 0045 boolean-singleton normalization, which `aBoolean == true` across the
+      // bridge requires — a hand-rolled identity primitive would risk dropping it.
+      //
+      // Like `=`, `==` is an ordinary (overridable) method; Smalltalk convention is not to override
+      // it, and the language deliberately does not seal it.
+      capturedMethod({
+        selector: '==',
+        primitive: SMALLTALK_PRIMITIVE.BUILT_IN_EQUALS,
+        parameters: ['anObject'],
+        args: [receiver(), argument(0)],
+        imageId,
+      }),
       capturedMethod({
         selector: 'hash',
         primitive: SMALLTALK_PRIMITIVE.BUILT_IN_HASH,
