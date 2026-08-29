@@ -21,6 +21,10 @@ const PRIMITIVE_BLOCK_ID = Object.freeze({
   [SMALLTALK_PRIMITIVE.INTEGER_MULTIPLY]: 'smalltalk/primitive/integer-multiply',
   [SMALLTALK_PRIMITIVE.INTEGER_FLOOR_DIVIDE]: 'smalltalk/primitive/integer-floor-divide',
   [SMALLTALK_PRIMITIVE.INTEGER_MODULO]: 'smalltalk/primitive/integer-modulo',
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_AND]: 'smalltalk/primitive/integer-bit-and',
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_OR]: 'smalltalk/primitive/integer-bit-or',
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_XOR]: 'smalltalk/primitive/integer-bit-xor',
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_SHIFT]: 'smalltalk/primitive/integer-bit-shift',
 });
 
 const CAPTURE_NAME = Object.freeze({
@@ -29,6 +33,10 @@ const CAPTURE_NAME = Object.freeze({
   [SMALLTALK_PRIMITIVE.INTEGER_MULTIPLY]: 'primitiveIntegerMultiply',
   [SMALLTALK_PRIMITIVE.INTEGER_FLOOR_DIVIDE]: 'primitiveIntegerFloorDivide',
   [SMALLTALK_PRIMITIVE.INTEGER_MODULO]: 'primitiveIntegerModulo',
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_AND]: 'primitiveIntegerBitAnd',
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_OR]: 'primitiveIntegerBitOr',
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_XOR]: 'primitiveIntegerBitXor',
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_SHIFT]: 'primitiveIntegerBitShift',
 });
 
 const captureFor = (primitive) => Object.freeze({
@@ -92,6 +100,29 @@ const INTEGER_METHODS = [
     selector: '\\\\',
     primitive: SMALLTALK_PRIMITIVE.INTEGER_MODULO,
     body: applyPrimitive(SMALLTALK_PRIMITIVE.INTEGER_MODULO, RECEIVER, ARGUMENT),
+  },
+  // Workstream 3. Bitwise protocol, one method per primitive. These are the general Integer
+  // operations upstream MessagePack reaches for (`bitOr:` in size headers, `bitAnd:`/`bitShift:` in
+  // dialect byte extraction); nothing about them names MessagePack.
+  {
+    selector: 'bitAnd:',
+    primitive: SMALLTALK_PRIMITIVE.INTEGER_BIT_AND,
+    body: applyPrimitive(SMALLTALK_PRIMITIVE.INTEGER_BIT_AND, RECEIVER, ARGUMENT),
+  },
+  {
+    selector: 'bitOr:',
+    primitive: SMALLTALK_PRIMITIVE.INTEGER_BIT_OR,
+    body: applyPrimitive(SMALLTALK_PRIMITIVE.INTEGER_BIT_OR, RECEIVER, ARGUMENT),
+  },
+  {
+    selector: 'bitXor:',
+    primitive: SMALLTALK_PRIMITIVE.INTEGER_BIT_XOR,
+    body: applyPrimitive(SMALLTALK_PRIMITIVE.INTEGER_BIT_XOR, RECEIVER, ARGUMENT),
+  },
+  {
+    selector: 'bitShift:',
+    primitive: SMALLTALK_PRIMITIVE.INTEGER_BIT_SHIFT,
+    body: applyPrimitive(SMALLTALK_PRIMITIVE.INTEGER_BIT_SHIFT, RECEIVER, ARGUMENT),
   },
 ];
 

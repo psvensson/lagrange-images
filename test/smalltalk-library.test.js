@@ -316,6 +316,14 @@ test('the library adds no new kernel primitive', async () => {
     'indexed-size',
     'instance-slot-read',
     'instance-slot-write',
+    // The four workstream-3 bitwise primitives belong to the *Integer* protocol (ADR 0053 family),
+    // not to the library — they are registered by `installSmalltalkIntegerProtocol`, which this
+    // image also runs. Their presence here is the protocol's, and the assertion still proves the
+    // *library* itself adds nothing beyond the kernel's frozen set plus these named primitives.
+    'integer-bit-and',
+    'integer-bit-or',
+    'integer-bit-shift',
+    'integer-bit-xor',
     'integer-floor-divide',
     'integer-less-than',
     'integer-modulo',

@@ -239,6 +239,54 @@ test('mixed Integer and Float equality still holds', async () => {
   });
 });
 
+// --- bitwise protocol (workstream 3) --------------------------------------------------------------
+//
+// Upstream MessagePack reaches for `bitOr:` to build fixnum/str/array/map headers
+// (`2r10100000 bitOr: size`) and `bitAnd:`/`bitShift:` for dialect byte extraction. These are the
+// general Integer operations; the MessagePack header construction is the consumer proof.
+
+test('bitwise and, or, xor and shift behave as two-complement at arbitrary precision', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    // The header constants are written in decimal here: this PR proves the bit protocol on the
+    // resulting Integers, independent of how a literal is spelled. Upstream writes them as
+    // `2r10100000`/`16rFF`; that *source-syntax* pressure is the separate radix-literal PR, and the
+    // MessagePack census is where the two meet. Keeping this test decimal is what lets the two
+    // substrate PRs land independently.
+    const cases = [
+      ['160 bitOr: 5', '165'],              // 0b10100000: MessagePack fixstr header for a 5-byte string
+      ['144 bitOr: 3', '147'],              // 0b10010000: fixarray header for a 3-element array
+      ['128 bitOr: 2', '130'],              // 0b10000000: fixmap header for a 2-entry map
+      ['255 bitAnd: 4660', '52'],           // 0xFF & 0x1234 = 0x34: low byte extraction
+      ['4660 bitShift: (0 - 8)', '18'],     // 0x1234 >> 8 = 0x12: high byte of a uint16
+      ['1 bitShift: 8', '256'],
+      ['255 bitXor: 255', '0'],
+      // Two's complement at arbitrary precision: `-1` is the all-ones bit string.
+      ['255 bitAnd: (0 - 1)', '255'],
+      ['(0 - 256) bitShift: (0 - 8)', '-1'],  // arithmetic right shift of a negative
+      // Beyond 2^53, where a host number would round.
+      ['(1 bitShift: 64) bitOr: 1', '18446744073709551617'],
+      ['(1 bitShift: 64) bitAnd: (1 bitShift: 64)', '18446744073709551616'],
+    ];
+    for (const [expression, expected] of cases) {
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `bit-${expression}`, `[ ${expression} ]`),
+        integerValue(expected),
+        expression,
+      );
+    }
+  });
+});
+
+test('bitwise primitives reject a non-Integer operand rather than coercing it', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    await assert.rejects(
+      evaluate(runtime, 'app', 'bit-text', "[ 255 bitAnd: 'not an integer' ]"),
+    );
+  });
+});
+
 // --- what must not have changed -------------------------------------------------------------------
 
 test('the compiler learns no comparison or arithmetic selector', async () => {
@@ -429,19 +477,23 @@ test('a half-installed Integer protocol is not mistaken for a complete one', asy
     await publishSmalltalkClassGlobals({
       images: runtime.images, imageId: 'app', names: ['Array', 'IndexOutOfRange', 'EmptyCollection'],
     });
-    // Fail at the first *method* write, leaving all five primitive Blocks published.
+    // Fail at the first *method* write, leaving all primitive Blocks published. The count is read
+    // from the installer's own primitive set rather than hard-coded, so adding a primitive (the
+    // workstream-3 bit operations) does not silently turn this into a test that never faults.
+    const {SMALLTALK_INTEGER_PRIMITIVE_BLOCK_ID} = await import('../src/language/smalltalk-integer.js');
+    const primitiveCount = Object.keys(SMALLTALK_INTEGER_PRIMITIVE_BLOCK_ID).length;
     let seenPrimitiveBlocks = 0;
     const faulting = Object.create(runtime.images);
     faulting.putBlock = async (imageId, input) => {
       const stored = await runtime.images.putBlock(imageId, input);
       if (input.id?.startsWith('smalltalk/primitive/integer-')) seenPrimitiveBlocks += 1;
-      if (seenPrimitiveBlocks === 5 && !input.id?.startsWith('smalltalk/primitive/')) {
+      if (seenPrimitiveBlocks === primitiveCount && !input.id?.startsWith('smalltalk/primitive/')) {
         throw new Error('injected failure before the methods');
       }
       return stored;
     };
     faulting.putCodeArtifact = async (imageId, input) => {
-      if (seenPrimitiveBlocks === 5 && !input.id?.startsWith('smalltalk/primitive/')) {
+      if (seenPrimitiveBlocks === primitiveCount && !input.id?.startsWith('smalltalk/primitive/')) {
         throw new Error('injected failure before the methods');
       }
       return await runtime.images.putCodeArtifact(imageId, input);
