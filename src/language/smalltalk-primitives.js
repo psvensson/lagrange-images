@@ -84,6 +84,15 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   // content, and `integer-divide` would imply the host truncation ADR 0053 decision 4 rejects.
   INTEGER_FLOOR_DIVIDE: 'integer-floor-divide',
   INTEGER_MODULO: 'integer-modulo',
+  // ADR 0057 workstream 3. Bitwise operations, demanded by real upstream Smalltalk (MessagePack
+  // fixnum/str/array/map headers `2r10100000 bitOr: size`, and dialect byte extraction
+  // `(value >> 8) bitAnd: 16rFF`). Genuinely primitive: an Integer Value is arbitrary-precision
+  // (BigInt), and no finite Smalltalk composition of `//` and `\\` computes a two's-complement bit
+  // pattern for a negative receiver. One primitive per operation, exactly as ADR 0053.
+  INTEGER_BIT_AND: 'integer-bit-and',
+  INTEGER_BIT_OR: 'integer-bit-or',
+  INTEGER_BIT_XOR: 'integer-bit-xor',
+  INTEGER_BIT_SHIFT: 'integer-bit-shift',
   // ADR 0054. The first three are Block operations, dispatched with the protected Block as
   // receiver; the last three are ordinary captured-Block primitives behind Exception methods.
   BLOCK_ON_DO: 'block-on-do',
@@ -136,6 +145,10 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.INTEGER_MULTIPLY]: 2,
   [SMALLTALK_PRIMITIVE.INTEGER_FLOOR_DIVIDE]: 2,
   [SMALLTALK_PRIMITIVE.INTEGER_MODULO]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_AND]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_OR]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_XOR]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_SHIFT]: 2,
   [SMALLTALK_PRIMITIVE.BLOCK_ON_DO]: 2,
   [SMALLTALK_PRIMITIVE.BLOCK_ENSURE]: 1,
   [SMALLTALK_PRIMITIVE.BLOCK_IF_CURTAILED]: 1,
@@ -938,6 +951,10 @@ const SMALLTALK_INTEGER_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.INTEGER_MULTIPLY]: 2,
   [SMALLTALK_PRIMITIVE.INTEGER_FLOOR_DIVIDE]: 2,
   [SMALLTALK_PRIMITIVE.INTEGER_MODULO]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_AND]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_OR]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_XOR]: 2,
+  [SMALLTALK_PRIMITIVE.INTEGER_BIT_SHIFT]: 2,
 });
 
 function integerOperands(primitive, left, right) {
@@ -982,6 +999,18 @@ async function integerOperation(primitive, left, right, {
     case SMALLTALK_PRIMITIVE.INTEGER_FLOOR_DIVIDE:
       if (b === 0n) return await divideByZero();
       return integerValue(floorDivide(a, b));
+    // BigInt bitwise semantics match Smalltalk's two's-complement-at-arbitrary-precision exactly:
+    // a negative receiver behaves as the infinite two's-complement bit string, which is what
+    // `16rFF bitAnd: -1` must answer. `bitShift:` takes a signed count — negative shifts right —
+    // mirroring `Integer>>bitShift:` rather than adding a second selector.
+    case SMALLTALK_PRIMITIVE.INTEGER_BIT_AND:
+      return integerValue(a & b);
+    case SMALLTALK_PRIMITIVE.INTEGER_BIT_OR:
+      return integerValue(a | b);
+    case SMALLTALK_PRIMITIVE.INTEGER_BIT_XOR:
+      return integerValue(a ^ b);
+    case SMALLTALK_PRIMITIVE.INTEGER_BIT_SHIFT:
+      return integerValue(b < 0n ? a >> -b : a << b);
     default:
       // r = a - q*b, so the remainder takes the divisor's sign: 0 <= r < b for b > 0, and
       // b < r <= 0 for b < 0. That range — not the reconstruction identity, which a truncating
