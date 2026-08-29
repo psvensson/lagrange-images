@@ -310,6 +310,9 @@ test('the library adds no new kernel primitive', async () => {
     'dictionary-at-put',
     'dictionary-includes-key',
     'dictionary-initialize',
+    // Workstream 3: Dictionary-owned enumeration, installed by `installSmalltalkDictionaryProtocol`
+    // like the five ADR 0048 Dictionary primitives above and below it.
+    'dictionary-keys-and-values-do',
     'dictionary-size',
     'indexed-at',
     'indexed-at-put',

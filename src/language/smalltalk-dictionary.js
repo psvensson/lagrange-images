@@ -46,6 +46,7 @@ const PRIMITIVE_BLOCK_ID = Object.freeze({
   [SMALLTALK_PRIMITIVE.DICTIONARY_INCLUDES_KEY]: 'smalltalk/primitive/dictionary-includes-key',
   [SMALLTALK_PRIMITIVE.DICTIONARY_AT]: 'smalltalk/primitive/dictionary-at',
   [SMALLTALK_PRIMITIVE.DICTIONARY_AT_PUT]: 'smalltalk/primitive/dictionary-at-put',
+  [SMALLTALK_PRIMITIVE.DICTIONARY_KEYS_AND_VALUES_DO]: 'smalltalk/primitive/dictionary-keys-and-values-do',
 });
 
 const CAPTURE_NAME = Object.freeze({
@@ -56,6 +57,7 @@ const CAPTURE_NAME = Object.freeze({
   [SMALLTALK_PRIMITIVE.DICTIONARY_INCLUDES_KEY]: 'primitiveDictionaryIncludesKey',
   [SMALLTALK_PRIMITIVE.DICTIONARY_AT]: 'primitiveDictionaryAt',
   [SMALLTALK_PRIMITIVE.DICTIONARY_AT_PUT]: 'primitiveDictionaryAtPut',
+  [SMALLTALK_PRIMITIVE.DICTIONARY_KEYS_AND_VALUES_DO]: 'primitiveDictionaryKeysAndValuesDo',
 });
 
 function requiredText(value, label) {
@@ -193,6 +195,7 @@ async function installSmalltalkDictionaryProtocol({images, compilation, imageId,
     SMALLTALK_PRIMITIVE.DICTIONARY_INCLUDES_KEY,
     SMALLTALK_PRIMITIVE.DICTIONARY_AT,
     SMALLTALK_PRIMITIVE.DICTIONARY_AT_PUT,
+    SMALLTALK_PRIMITIVE.DICTIONARY_KEYS_AND_VALUES_DO,
   ]) {
     await installPrimitiveBlock({images, imageId, primitive});
   }
@@ -245,6 +248,17 @@ async function installSmalltalkDictionaryProtocol({images, compilation, imageId,
         primitive: SMALLTALK_PRIMITIVE.DICTIONARY_AT_PUT,
         parameters: ['aKey', 'aValue'],
         args: [receiver(), argument(0), argument(1)],
+        imageId,
+      }),
+      // Workstream 3 (MessagePack pressure: `writeMap:` walks every pair). The one enumeration
+      // primitive — the pairs live in the hidden table representation, so no composition of the
+      // protocol above can reach them. Snapshot semantics, no hash/= re-sends and no order promise
+      // are documented at the primitive itself.
+      capturedMethod({
+        selector: 'keysAndValuesDo:',
+        primitive: SMALLTALK_PRIMITIVE.DICTIONARY_KEYS_AND_VALUES_DO,
+        parameters: ['aBlock'],
+        args: [receiver(), argument(0)],
         imageId,
       }),
     ],

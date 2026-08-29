@@ -484,6 +484,222 @@ test('a Dictionary class id occupied by a differently-defined class is refused',
   });
 });
 
+// --- enumeration --------------------------------------------------------------------------------
+//
+// Workstream 3: `keysAndValuesDo:`, the one representation-aware enumeration primitive. What these
+// tests pin down: every pair is visited exactly once (in no promised order), the pairs are a
+// snapshot so mutation from inside the Block never invalidates the traversal, and enumeration
+// re-sends neither `hash` nor `=`.
+
+test('keysAndValuesDo: visits every pair exactly once and answers the receiver', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    const dictionary = await newDictionary(runtime, 'app', 'd');
+    await evaluate(runtime, 'app', 'p1', "[ :d | d at: 'a' put: 1 ]", [dictionary]);
+    await evaluate(runtime, 'app', 'p2', "[ :d | d at: 'b' put: 2 ]", [dictionary]);
+    await evaluate(runtime, 'app', 'p3', "[ :d | d at: 'c' put: 3 ]", [dictionary]);
+    const acc = await newDictionary(runtime, 'app', 'acc');
+    const seen = await newDictionary(runtime, 'app', 'seen');
+
+    // `seen at: k` records whether the key had been visited before — a second visit would store true.
+    const result = await evaluate(
+      runtime, 'app', 'enumerate',
+      '[ :d :acc :seen | d keysAndValuesDo: [ :k :v | seen at: k put: (seen includesKey: k). acc at: k put: v ] ]',
+      [dictionary, acc, seen],
+    );
+    assert.deepEqual(result, dictionary, 'keysAndValuesDo: answers the receiver');
+
+    assert.deepEqual(await evaluate(runtime, 'app', 'acc-size', '[ :d | d size ]', [acc]), integerValue(3));
+    for (const [key, value] of [['a', 1], ['b', 2], ['c', 3]]) {
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `acc-${key}`, `[ :d | d at: '${key}' ]`, [acc]),
+        integerValue(value),
+        `the pair ${key} must be visited with its stored value`,
+      );
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `seen-${key}`, `[ :d | d at: '${key}' ]`, [seen]),
+        booleanValue(false),
+        `the pair ${key} must be visited exactly once`,
+      );
+    }
+  });
+});
+
+test('an empty Dictionary enumerates nothing', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    const dictionary = await newDictionary(runtime, 'app', 'd');
+    const acc = await newDictionary(runtime, 'app', 'acc');
+    await evaluate(
+      runtime, 'app', 'enumerate',
+      "[ :d :acc | d keysAndValuesDo: [ :k :v | acc at: 'ran' put: 1 ] ]",
+      [dictionary, acc],
+    );
+    assert.deepEqual(await evaluate(runtime, 'app', 'acc-size', '[ :d | d size ]', [acc]), integerValue(0));
+  });
+});
+
+// The snapshot promise. The Block mutates the very Dictionary being enumerated — overwriting an
+// existing key and adding a new one — and the traversal still visits exactly the complete mapping
+// it started from, with the values it started from. The mutations land: they swap the `table` ref
+// to new snapshots while the enumeration keeps reading the one it loaded.
+test('mutation from inside the Block never invalidates the in-progress traversal', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    const dictionary = await newDictionary(runtime, 'app', 'd');
+    await evaluate(runtime, 'app', 'p1', "[ :d | d at: 'a' put: 1 ]", [dictionary]);
+    await evaluate(runtime, 'app', 'p2', "[ :d | d at: 'b' put: 2 ]", [dictionary]);
+    const acc = await newDictionary(runtime, 'app', 'acc');
+
+    await evaluate(
+      runtime, 'app', 'enumerate',
+      "[ :d :acc | d keysAndValuesDo: [ :k :v | d at: 'a' put: 100. d at: 'later' put: 9. acc at: k put: v ] ]",
+      [dictionary, acc],
+    );
+
+    // The traversal saw the snapshot: both original pairs, original values, and never 'later'.
+    assert.deepEqual(await evaluate(runtime, 'app', 'acc-size', '[ :d | d size ]', [acc]), integerValue(2));
+    assert.deepEqual(await evaluate(runtime, 'app', 'acc-a', "[ :d | d at: 'a' ]", [acc]), integerValue(1));
+    assert.deepEqual(await evaluate(runtime, 'app', 'acc-b', "[ :d | d at: 'b' ]", [acc]), integerValue(2));
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'acc-later', "[ :d | d includesKey: 'later' ]", [acc]),
+      booleanValue(false),
+    );
+
+    // The mutations the Block performed all landed in the Dictionary itself.
+    assert.deepEqual(await evaluate(runtime, 'app', 'd-size', '[ :d | d size ]', [dictionary]), integerValue(3));
+    assert.deepEqual(await evaluate(runtime, 'app', 'd-a', "[ :d | d at: 'a' ]", [dictionary]), integerValue(100));
+    assert.deepEqual(await evaluate(runtime, 'app', 'd-later', "[ :d | d at: 'later' ]", [dictionary]), integerValue(9));
+  });
+});
+
+// Enumeration visits stored pairs; it looks nothing up, so user equality code must run zero times.
+// The proof reuses the behavior-swap trick from the no-op test above: the key is stored under a
+// well-behaved built-in hash, then its class is swapped for one whose `hash` and `=` leave loud
+// markers — enumeration must leave the witness empty, while an actual lookup dirties it (which is
+// also the falsification that the markers work at all).
+test('keysAndValuesDo: re-sends neither hash nor =', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    const dictionary = await newDictionary(runtime, 'app', 'd');
+    const witness = await newDictionary(runtime, 'app', 'witness');
+    const shape = objectRef('app', (await runtime.images.putShape('app', {id: 'silent-shape', slots: []})).id);
+    const plain = await defineClass({images: runtime.images, imageId: 'app', name: 'PlainKey', instanceShapeRef: shape});
+    const key = await evaluate(runtime, 'app', 'key', '[ :c | c basicNew ]', [plain.classRef]);
+    await evaluate(runtime, 'app', 'store', '[ :d :k | d at: k put: 42 ]', [dictionary, key]);
+    const storedHash = builtInHash(key);
+
+    const loud = await defineClass({images: runtime.images, imageId: 'app', name: 'LoudKey', instanceShapeRef: shape});
+    await defineMethods({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+      classRef: loud.classRef,
+      methods: [
+        {
+          selector: 'hash',
+          program: {
+            parameters: [],
+            captures: [{id: 'loud/witness', name: 'witness'}],
+            // `at:put:` answers the stored value, so this both marks the witness and answers the
+            // hash the key was originally stored under — a lookup through it still finds the key.
+            body: {
+              op: 'send',
+              languageId: SYMMETRIC_SMALLTALK_ID,
+              receiver: {op: 'binding', id: 'loud/witness'},
+              message: textValue('at:put:'),
+              arguments: [{op: 'literal', value: textValue('hash-was-sent')}, {op: 'literal', value: storedHash}],
+            },
+          },
+          captures: [{id: 'loud/witness', name: 'witness', value: witness}],
+        },
+        {
+          selector: '=',
+          program: {
+            parameters: [{id: 'loud/equals/other', name: 'anObject'}],
+            captures: [{id: 'loud/witness', name: 'witness'}],
+            body: {
+              op: 'send',
+              languageId: SYMMETRIC_SMALLTALK_ID,
+              receiver: {op: 'binding', id: 'loud/witness'},
+              message: textValue('at:put:'),
+              arguments: [{op: 'literal', value: textValue('equals-was-sent')}, {op: 'literal', value: booleanValue(true)}],
+            },
+          },
+          captures: [{id: 'loud/witness', name: 'witness', value: witness}],
+        },
+      ],
+    });
+    const keyRecord = await runtime.images.getObject('app', key.objectId);
+    await runtime.images.putObject('app', {
+      id: keyRecord.id,
+      shape: keyRecord.shape,
+      behavior: loud.classRef,
+      slots: keyRecord.slots,
+      metadata: keyRecord.metadata,
+    }, {expectedVersion: keyRecord._version});
+
+    // Enumerate. The Block deliberately keys the accumulator by the *value*, so nothing in it can
+    // send `hash` to the loud key either.
+    const acc = await newDictionary(runtime, 'app', 'acc');
+    await evaluate(
+      runtime, 'app', 'enumerate',
+      '[ :d :acc | d keysAndValuesDo: [ :k :v | acc at: v put: v ] ]',
+      [dictionary, acc],
+    );
+    assert.deepEqual(await evaluate(runtime, 'app', 'visited', '[ :d | d at: 42 ]', [acc]), integerValue(42));
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'silent', '[ :d | d size ]', [witness]),
+      integerValue(0),
+      'enumeration must send neither hash nor =',
+    );
+
+    // Falsification: an actual lookup does send both, so the markers demonstrably work.
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'lookup', '[ :d :k | d includesKey: k ]', [dictionary, key]),
+      booleanValue(true),
+    );
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'dirty', '[ :d | d size ]', [witness]),
+      integerValue(2),
+      'a real lookup sends hash and =, proving the witness machinery detects them',
+    );
+  });
+});
+
+test('a kernel-primitive Block or a non-Block is refused as the pair block', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    const dictionary = await newDictionary(runtime, 'app', 'd');
+    await assert.rejects(
+      evaluate(runtime, 'app', 'prim-block', '[ :d :b | d keysAndValuesDo: b ]',
+        [dictionary, objectRef('app', 'smalltalk/primitive/dictionary-at-put')]),
+      (error) => error.name === 'SmalltalkPrimitiveReceiverError',
+      'a kernel-primitive Block would run a primitive with Dictionary-chosen arguments',
+    );
+    await assert.rejects(
+      evaluate(runtime, 'app', 'non-block', '[ :d :b | d keysAndValuesDo: b ]',
+        [dictionary, integerValue(7)]),
+      (error) => error.name === 'SmalltalkPrimitiveReceiverError',
+    );
+  });
+});
+
+test('a foreign primitive Block cannot enumerate a local Dictionary', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    await seed(runtime, 'other');
+    const dictionary = await newDictionary(runtime, 'app', 'd');
+    await assert.rejects(
+      runtime.executor.execute(await runtime.invocations.sendMessage({
+        languageId: SYMMETRIC_SMALLTALK_ID,
+        receiver: objectRef('other', 'smalltalk/primitive/dictionary-keys-and-values-do'),
+        message: textValue('value:value:'),
+        arguments: [dictionary, integerValue(0)],
+      })),
+      (error) => error.name === 'SmalltalkPrimitiveLocalityError',
+    );
+  });
+});
+
 // --- boundaries ---------------------------------------------------------------------------------
 
 test('Dictionary mutation needs no authority context', async () => {
@@ -557,9 +773,35 @@ for (const lane of ['neutral', 'wasm']) {
       await evaluate(runtime, 'app', `put-b-${lane}`, "[ :d | d at: 'b' put: 2 ]", [dictionary]);
       assert.deepEqual(await evaluate(runtime, 'app', `get-${lane}`, "[ :d | d at: 'b' ]", [dictionary]), integerValue(2));
       assert.deepEqual(await evaluate(runtime, 'app', `size-${lane}`, '[ :d | d size ]', [dictionary]), integerValue(2));
+
+      const acc = await newDictionary(runtime, 'app', `acc-${lane}`);
+      await evaluate(runtime, 'app', `enum-${lane}`,
+        '[ :d :acc | d keysAndValuesDo: [ :k :v | acc at: k put: v ] ]', [dictionary, acc]);
+      assert.deepEqual(await evaluate(runtime, 'app', `enum-size-${lane}`, '[ :d | d size ]', [acc]), integerValue(2));
+      assert.deepEqual(await evaluate(runtime, 'app', `enum-a-${lane}`, "[ :d | d at: 'a' ]", [acc]), integerValue(1));
     });
   });
 }
+
+// Each pair application suspends and resumes the enumerating WASM frame, and further sends follow.
+test('enumeration whose pair Block feeds another Dictionary resumes correctly in WASM', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app', {lane: 'wasm'});
+    const dictionary = await newDictionary(runtime, 'app', 'd');
+    await evaluate(runtime, 'app', 'p1', "[ :d | d at: 'a' put: 1 ]", [dictionary]);
+    await evaluate(runtime, 'app', 'p2', "[ :d | d at: 'b' put: 2 ]", [dictionary]);
+    const acc = await newDictionary(runtime, 'app', 'acc');
+
+    const result = await evaluateThroughWasm(
+      runtime, 'app', 'enum-tree',
+      '[ :d :acc | d keysAndValuesDo: [ :k :v | acc at: k put: v ] ]',
+      [dictionary, acc],
+    );
+    assert.deepEqual(result, dictionary);
+    assert.deepEqual(await evaluate(runtime, 'app', 'acc-size', '[ :d | d size ]', [acc]), integerValue(2));
+    assert.deepEqual(await evaluate(runtime, 'app', 'acc-b', "[ :d | d at: 'b' ]", [acc]), integerValue(2));
+  });
+});
 
 // The result of at:put: feeds a further send, so the WASM lane cannot compile it as a tail call.
 test('a Dictionary mutation whose result feeds another send resumes correctly in WASM', async () => {

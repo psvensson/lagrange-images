@@ -148,7 +148,7 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `installSmalltalkControlFlow()` | `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:` on True and False (ADR 0045) |
 | `installSmalltalkAllocationProtocol()` | the `class-of`/`basic-new` primitive Blocks, plus `Object >> class`, `Object >> initialize`, `Class >> basicNew` and `Class >> new` (ADR 0046) |
 | `installSmalltalkEqualityProtocol()` | the `built-in-equals`/`built-in-hash` primitive Blocks, plus `Object >> =` and `Object >> hash` (ADR 0048) |
-| `installSmalltalkDictionaryProtocol()` | the Dictionary/DictionaryTable Shapes, the five Dictionary primitive Blocks, the `Dictionary` class, and `initialize`, `size`, `includesKey:`, `at:`, `at:put:` (ADR 0048) |
+| `installSmalltalkDictionaryProtocol()` | the Dictionary/DictionaryTable Shapes, the six Dictionary primitive Blocks, the `Dictionary` class, and `initialize`, `size`, `includesKey:`, `at:`, `at:put:`, `keysAndValuesDo:` (ADR 0048; enumeration snapshots the pairs before the Block runs, re-sends neither `hash` nor `=`, and promises no iteration order) |
 | `installSmalltalkInstanceVariableProtocol()` | the `instance-slot-read`/`instance-slot-write` primitive Blocks (ADR 0050) and the `non-local-return` primitive Block (ADR 0055), which the class-scoped binder makes available to `^` through the same reserved-capture seam |
 | `installSmalltalkLibrary()` | `Association` and a minimal `OrderedCollection`, written in Smalltalk over the kernel protocols; adds no primitive |
 | `migrateMethodDictionary()` | rewrites one Behavior's shape-backed method dictionary into the ADR 0049 hashed form |

@@ -70,6 +70,9 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   DICTIONARY_INCLUDES_KEY: 'dictionary-includes-key',
   DICTIONARY_AT: 'dictionary-at',
   DICTIONARY_AT_PUT: 'dictionary-at-put',
+  // Workstream 3 (MessagePack pressure: map encoding walks every pair). Dictionary-owned
+  // enumeration; see `dictionaryKeysAndValuesDo` for why this is a primitive and what it promises.
+  DICTIONARY_KEYS_AND_VALUES_DO: 'dictionary-keys-and-values-do',
   INSTANCE_SLOT_READ: 'instance-slot-read',
   INSTANCE_SLOT_WRITE: 'instance-slot-write',
   // ADR 0051. These two are unlike every primitive above: they are not applied as
@@ -135,6 +138,7 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.DICTIONARY_INCLUDES_KEY]: 2,
   [SMALLTALK_PRIMITIVE.DICTIONARY_AT]: 2,
   [SMALLTALK_PRIMITIVE.DICTIONARY_AT_PUT]: 3,
+  [SMALLTALK_PRIMITIVE.DICTIONARY_KEYS_AND_VALUES_DO]: 2,
   [SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ]: 2,
   [SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE]: 3,
   // One argument, the body Block; the condition Block arrives as the receiver.
@@ -526,9 +530,9 @@ async function promoted(context, value, receiver = null) {
   return await context.promote(value);
 }
 
-function requireSendMessage(context, primitive) {
+function requireSendMessage(context, primitive, purpose = 'send hash and =') {
   if (typeof context?.sendMessage !== 'function') {
-    throw new TypeError(`Symmetric Smalltalk ${primitive} primitive requires a message runtime to send hash and =`);
+    throw new TypeError(`Symmetric Smalltalk ${primitive} primitive requires a message runtime to ${purpose}`);
   }
   return context.sendMessage;
 }
@@ -823,6 +827,50 @@ async function dictionaryAtPut({
     throw error;
   }
   return stored;
+}
+
+// Workstream 3 (MessagePack pressure: `writeMap:` walks every pair). The one enumeration
+// operation, Dictionary-owned: the bucket triples live below ordinary message sends, so no
+// Smalltalk composition of the existing protocol can visit the pairs — `at:` needs a key it does
+// not have yet. This is categorically different from `between:and:`, which is expressible over
+// `<` and stays source-only. It is deliberately NOT a generic "iterate object internals"
+// operation: it acts only on an initialized Dictionary, through the same `loadDictionary` that
+// validates the representation for every other Dictionary primitive.
+//
+// What it promises, and does not:
+//   snapshot     the pairs are fixed before the first Block runs. The loaded table record is an
+//                immutable published snapshot (ADR 0048 decision 5), so a Block that mutates this
+//                Dictionary swaps the `table` ref to a *new* snapshot while this traversal keeps
+//                visiting the complete mapping it started from — mutation during enumeration never
+//                invalidates the traversal, and never makes a pair appear twice or half-updated.
+//   no rehash    neither `hash` nor `=` is sent. Enumeration visits stored pairs; it looks nothing
+//                up, so user equality code runs zero times here.
+//   no order     bucket order is a representation accident (it moves on growth), so no iteration
+//                order is promised. Code that needs one must sort what it collects.
+async function dictionaryKeysAndValuesDo({images, primitiveImage, value, blockValue, sendMessage}) {
+  const primitive = SMALLTALK_PRIMITIVE.DICTIONARY_KEYS_AND_VALUES_DO;
+  const {table} = await loadDictionary({images, primitiveImage, value, primitive});
+  // The same structural Block guard the loop primitives use, for the same reason: the pair Block is
+  // about to be applied on this primitive's behalf, and a kernel-primitive Block handed in here
+  // would run a primitive with Dictionary-chosen arguments.
+  const block = await assertLoopBlock({images, value: blockValue, primitive, role: 'pair block'});
+  const pairs = table.buckets
+    .filter((bucket) => bucket.hash !== null)
+    .map((bucket) => ({key: bucket.key, value: bucket.value}));
+  for (const pair of pairs) {
+    // An ordinary `value:value:` send, exactly like a loop body (ADR 0051): lexical frame
+    // restoration, authority attenuation and the dispatch image are inherited, not reimplemented.
+    // Each `await` returns before the next send begins, so the sends are siblings and activation
+    // depth does not grow with the number of pairs.
+    await sendMessage({
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: block,
+      message: textValue('value:value:'),
+      arguments: [pair.key, pair.value],
+    });
+  }
+  // Answers the receiver, as Smalltalk enumeration protocol does.
+  return value;
 }
 
 // ADR 0050 decisions 5, 5a and 6. Two checks that answer different questions, kept apart because
@@ -1514,6 +1562,11 @@ function createSmalltalkKernelPrimitiveV1Executor({
             newObjectId,
             maxIdentityAttempts,
             context,
+          });
+        case SMALLTALK_PRIMITIVE.DICTIONARY_KEYS_AND_VALUES_DO:
+          return await dictionaryKeysAndValuesDo({
+            images, primitiveImage, value, blockValue: second,
+            sendMessage: requireSendMessage(context, primitive, 'apply the pair Block'),
           });
         default:
           throw new TypeError(`unknown ${SMALLTALK_KERNEL_PRIMITIVE_V1} primitive: ${primitive}`);
