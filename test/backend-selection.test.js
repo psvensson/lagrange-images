@@ -75,3 +75,19 @@ test('injected backends must implement the atomic transaction contract', async (
     BackendContractError,
   );
 });
+
+test('a pre-built backend instance passes through createBackend untouched', async () => {
+  const {MockBackend} = await import('../src/backend/index.js');
+  const instance = new MockBackend();
+  await instance.start();
+  await instance.put('things', 'k', {value: 1}, {expectedVersion: 0});
+
+  const backend = await createBackend({instance});
+  assert.equal(backend, instance, 'the very same object, not a copy');
+  assert.equal((await backend.get('things', 'k')).value, 1);
+  await backend.stop();
+});
+
+test('an instance that is not a backend is refused by the contract check', async () => {
+  await assert.rejects(createBackend({instance: {kind: 'nope'}}), BackendContractError);
+});

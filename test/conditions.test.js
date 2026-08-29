@@ -24,6 +24,7 @@ import {
 } from '../src/runtime.js';
 import {installWasmBlockTree} from '../src/wasm/tree-installer.js';
 import {findSmalltalkBlockUnwindProtocol} from '../src/language/smalltalk-conditions.js';
+import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 import {sharedFixture} from './support/shared-fixture.js';
 
 // ADR 0054. The architecture claim is that there is ONE condition runtime and one handler search,
@@ -457,31 +458,6 @@ test('an image without the condition protocol keeps the original host errors', a
 // methods. Both `images` and `compilation` are bound to the same faulting service, because wrapping
 // only `images` lets the compiler publish its artifacts through the unwrapped one — the sweep would
 // then look exhaustive while skipping exactly the artifacts each method depends on.
-const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
-
-function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
-  let writes = 0;
-  const wrapped = Object.create(Object.getPrototypeOf(images));
-  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
-    if (typeof images[key] !== 'function' || key === 'constructor') continue;
-    wrapped[key] = (...args) => images[key](...args);
-  }
-  for (const [key, value] of Object.entries(images)) {
-    wrapped[key] = typeof value === 'function' ? (...args) => images[key](...args) : value;
-  }
-  for (const method of WRITE_METHODS) {
-    wrapped[method] = async (imageId, input, options) => {
-      writes += 1;
-      const hit = writes === failAt;
-      if (hit && !commitThenThrow) throw new Error(`injected failure at write ${writes} (${input?.id})`);
-      const result = await images[method](imageId, input, options);
-      if (hit && commitThenThrow) throw new Error(`injected post-commit failure at write ${writes} (${input?.id})`);
-      return result;
-    };
-  }
-  return {images: wrapped, writeCount: () => writes};
-}
-
 const servicesFor = (images) => new CompilationService({
   images,
   compilers: createDefaultCodeCompilerRegistry(),
@@ -510,36 +486,41 @@ const faultingServices = (images, options, fault) => {
 
 for (const lane of ['neutral', 'wasm']) {
   test(`exhaustive-recovery: every write publishing the ${lane} condition protocol`, async () => {
-    const total = await withRuntime(async (runtime) => {
-      const options = await baseImage(runtime, 'count', lane);
-      const {services, writeCount} = faultingServices(runtime.images, options, {});
-      await installSmalltalkConditionProtocol(services);
-      return writeCount();
-    });
-    assert.ok(total > 20, `expected many writes across primitives, classes and methods, saw ${total}`);
+    const base = await forkableRuntime(async (runtime) => { await baseImage(runtime, 'app', lane); });
+    try {
+      const total = await base.withFork(async (runtime) => {
+        const options = {images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane};
+        const {services, writeCount} = faultingServices(runtime.images, options, {});
+        await installSmalltalkConditionProtocol(services);
+        return writeCount();
+      });
+      assert.ok(total > 20, `expected many writes across primitives, classes and methods, saw ${total}`);
 
-    for (let failAt = 1; failAt <= total; failAt += 1) {
-      for (const commitThenThrow of [false, true]) {
-        await withRuntime(async (runtime) => {
-          const options = await baseImage(runtime, 'app', lane);
-          const {services} = faultingServices(runtime.images, options, {failAt, commitThenThrow});
+      for (let failAt = 1; failAt <= total; failAt += 1) {
+        for (const commitThenThrow of [false, true]) {
+          await base.withFork(async (runtime) => {
+            const options = {images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane};
+            const {services} = faultingServices(runtime.images, options, {failAt, commitThenThrow});
 
-          await assert.rejects(
-            installSmalltalkConditionProtocol(services),
-            /injected/,
-            `${lane} write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
-          );
+            await assert.rejects(
+              installSmalltalkConditionProtocol(services),
+              /injected/,
+              `${lane} write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
+            );
 
-          // The retry converges, and the protocol is then exercised rather than inspected:
-          // converging on records is not the claim, signalling and handling working is.
-          const conditions = await installSmalltalkConditionProtocol(options);
-          assert.deepEqual(
-            await evaluate(runtime, 'app', `recovered-${lane}-${failAt}-${commitThenThrow}`,
-              '[ :E | [ (E new) signal ] on: E do: [ :e | 4 ] ]', [conditions.Error]),
-            integerValue(4),
-          );
-        });
+            // The retry converges, and the protocol is then exercised rather than inspected:
+            // converging on records is not the claim, signalling and handling working is.
+            const conditions = await installSmalltalkConditionProtocol(options);
+            assert.deepEqual(
+              await evaluate(runtime, 'app', `recovered-${lane}-${failAt}-${commitThenThrow}`,
+                '[ :E | [ (E new) signal ] on: E do: [ :e | 4 ] ]', [conditions.Error]),
+              integerValue(4),
+            );
+          });
+        }
       }
+    } finally {
+      await base.close();
     }
   });
 }

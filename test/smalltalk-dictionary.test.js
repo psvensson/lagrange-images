@@ -21,6 +21,7 @@ import {
   textValue,
 } from '../src/runtime.js';
 import {referencesOfRecord} from '../src/graph/references.js';
+import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 import {builtInHash} from '../src/language/smalltalk-equality.js';
 import {
   DICTIONARY_MINIMUM_CAPACITY,
@@ -834,36 +835,6 @@ test('installing the Dictionary protocol twice changes nothing', async () => {
 
 // --- installer recovery ----------------------------------------------------------------------------
 
-const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
-
-function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
-  let writes = 0;
-  const wrapped = Object.create(Object.getPrototypeOf(images));
-  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
-    if (typeof images[key] !== 'function' || key === 'constructor') continue;
-    wrapped[key] = (...args) => images[key](...args);
-  }
-  for (const [key, value] of Object.entries(images)) {
-    if (typeof value === 'function') wrapped[key] = (...args) => images[key](...args);
-    else wrapped[key] = value;
-  }
-  for (const method of WRITE_METHODS) {
-    wrapped[method] = async (imageId, input, options) => {
-      writes += 1;
-      const index = writes;
-      if (index === failAt && !commitThenThrow) {
-        throw new Error(`injected failure at write ${index} (${method} ${input?.id})`);
-      }
-      const result = await images[method](imageId, input, options);
-      if (index === failAt && commitThenThrow) {
-        throw new Error(`injected post-commit failure at write ${index} (${method} ${input?.id})`);
-      }
-      return result;
-    };
-  }
-  return {images: wrapped, writeCount: () => writes};
-}
-
 // The group compiler registry is required once the protocol installs any method *from source*:
 // compiling that source to the wasm lane goes through installWasmBlockTree, which the bare
 // code-compiler registry cannot serve. The Integer protocol's recovery harness already registers
@@ -887,46 +858,46 @@ async function baseImage(runtime, imageId, lane) {
   });
 }
 
-async function installWriteCount(lane) {
-  return await withRuntime(async (runtime) => {
-    await baseImage(runtime, 'count', lane);
-    const {images, writeCount} = faultingImages(runtime.images);
-    await installProtocols(images, servicesFor(images), 'count', lane);
-    return writeCount();
-  });
-}
-
 // Enumerated rather than sampled, in both lanes, with a commit-then-throw variant that models a lost
-// acknowledgement — after which the identical install must be an idempotent success.
+// acknowledgement — after which the identical install must be an idempotent success. The base image
+// is prepared once per lane and forked per iteration; only the installs under test repeat.
 for (const lane of ['neutral', 'wasm']) {
   test(`exhaustive-recovery: every write installing the ${lane} equality/Dictionary protocol`, async () => {
-    const total = await installWriteCount(lane);
-    assert.ok(total > 10, `expected many writes in the ${lane} lane, saw ${total}`);
+    const base = await forkableRuntime(async (runtime) => await baseImage(runtime, 'app', lane));
+    try {
+      const total = await base.withFork(async (runtime) => {
+        const {images, writeCount} = faultingImages(runtime.images);
+        await installProtocols(images, servicesFor(images), 'app', lane);
+        return writeCount();
+      });
+      assert.ok(total > 10, `expected many writes in the ${lane} lane, saw ${total}`);
 
-    for (let failAt = 1; failAt <= total; failAt += 1) {
-      for (const commitThenThrow of [false, true]) {
-        await withRuntime(async (runtime) => {
-          await baseImage(runtime, 'app', lane);
-          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+      for (let failAt = 1; failAt <= total; failAt += 1) {
+        for (const commitThenThrow of [false, true]) {
+          await base.withFork(async (runtime) => {
+            const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
 
-          await assert.rejects(
-            installProtocols(images, servicesFor(images), 'app', lane),
-            /injected/,
-            `${lane}: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
-          );
+            await assert.rejects(
+              installProtocols(images, servicesFor(images), 'app', lane),
+              /injected/,
+              `${lane}: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
+            );
 
-          await installProtocols(runtime.images, runtime.compilation, 'app', lane);
-          const dictionary = await newDictionary(runtime, 'app', `retry-${lane}-${failAt}-${commitThenThrow}`);
-          await evaluate(runtime, 'app', `use-${lane}-${failAt}-${commitThenThrow}`,
-            "[ :d | d at: 'k' put: 1 ]", [dictionary]);
-          assert.deepEqual(
-            await evaluate(runtime, 'app', `read-${lane}-${failAt}-${commitThenThrow}`,
-              "[ :d | d at: 'k' ]", [dictionary]),
-            integerValue(1),
-            `${lane}: not usable after retrying past write ${failAt}`,
-          );
-        });
+            await installProtocols(runtime.images, runtime.compilation, 'app', lane);
+            const dictionary = await newDictionary(runtime, 'app', `retry-${lane}-${failAt}-${commitThenThrow}`);
+            await evaluate(runtime, 'app', `use-${lane}-${failAt}-${commitThenThrow}`,
+              "[ :d | d at: 'k' put: 1 ]", [dictionary]);
+            assert.deepEqual(
+              await evaluate(runtime, 'app', `read-${lane}-${failAt}-${commitThenThrow}`,
+                "[ :d | d at: 'k' ]", [dictionary]),
+              integerValue(1),
+              `${lane}: not usable after retrying past write ${failAt}`,
+            );
+          });
+        }
       }
+    } finally {
+      await base.close();
     }
   });
 }

@@ -31,6 +31,7 @@ import {
 } from '../src/runtime.js';
 import {defineMethodsFromSource} from '../src/language/smalltalk-instance-variables.js';
 import {installWasmBlockTree} from '../src/wasm/tree-installer.js';
+import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 
 // ADR 0057. Three things are kept apart — name, binding identity, current value — and most of what
 // is worth testing is a way one of them could quietly collapse into another.
@@ -858,31 +859,6 @@ test('a global read lowers to an ordinary value send against the binding', async
 
 // --- publication recovery -------------------------------------------------------------------------------
 
-const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
-
-function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
-  let writes = 0;
-  const wrapped = Object.create(Object.getPrototypeOf(images));
-  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
-    if (typeof images[key] !== 'function' || key === 'constructor') continue;
-    wrapped[key] = (...args) => images[key](...args);
-  }
-  for (const [key, value] of Object.entries(images)) {
-    wrapped[key] = typeof value === 'function' ? (...args) => images[key](...args) : value;
-  }
-  for (const method of WRITE_METHODS) {
-    wrapped[method] = async (imageId, input, options) => {
-      writes += 1;
-      const hit = writes === failAt;
-      if (hit && !commitThenThrow) throw new Error(`injected failure at write ${writes} (${input?.id})`);
-      const result = await images[method](imageId, input, options);
-      if (hit && commitThenThrow) throw new Error(`injected post-commit failure at write ${writes} (${input?.id})`);
-      return result;
-    };
-  }
-  return {images: wrapped, writeCount: () => writes};
-}
-
 const servicesFor = (images) => new CompilationService({
   images,
   compilers: createDefaultCodeCompilerRegistry(),
@@ -943,35 +919,40 @@ test('rename, rebind and removal converge after a lost acknowledgement', async (
 
 for (const lane of ['neutral', 'wasm']) {
   test(`exhaustive-recovery: every write publishing the ${lane} global namespace`, async () => {
-    const total = await withRuntime(async (runtime) => {
-      const options = await namespaceBase(runtime, 'count');
-      const {images, writeCount} = faultingImages(runtime.images);
-      await installSmalltalkGlobalNamespace({...options, images, compilation: servicesFor(images), lane});
-      return writeCount();
-    });
-    assert.ok(total > 10, `expected many writes across the class, its method and the mapping, saw ${total}`);
+    const base = await forkableRuntime(async (runtime) => { await namespaceBase(runtime, 'app'); });
+    try {
+      const total = await base.withFork(async (runtime) => {
+        const options = {images: runtime.images, compilation: runtime.compilation, imageId: 'app'};
+        const {images, writeCount} = faultingImages(runtime.images);
+        await installSmalltalkGlobalNamespace({...options, images, compilation: servicesFor(images), lane});
+        return writeCount();
+      });
+      assert.ok(total > 10, `expected many writes across the class, its method and the mapping, saw ${total}`);
 
-    for (let failAt = 1; failAt <= total; failAt += 1) {
-      for (const commitThenThrow of [false, true]) {
-        await withRuntime(async (runtime) => {
-          const options = await namespaceBase(runtime, 'app');
-          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+      for (let failAt = 1; failAt <= total; failAt += 1) {
+        for (const commitThenThrow of [false, true]) {
+          await base.withFork(async (runtime) => {
+            const options = {images: runtime.images, compilation: runtime.compilation, imageId: 'app'};
+            const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
 
-          await assert.rejects(
-            installSmalltalkGlobalNamespace({...options, images, compilation: servicesFor(images), lane}),
-            /injected/,
-            `${lane} write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
-          );
+            await assert.rejects(
+              installSmalltalkGlobalNamespace({...options, images, compilation: servicesFor(images), lane}),
+              /injected/,
+              `${lane} write ${failAt} (${commitThenThrow ? 'lost ack' : 'pre-commit'}) should have failed`,
+            );
 
-          // The retry converges, and the namespace is then exercised rather than inspected.
-          await installSmalltalkGlobalNamespace({...options, lane});
-          const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
-          assert.deepEqual(
-            await evaluate(runtime, 'app', `rec-${lane}-${failAt}-${commitThenThrow}`, '[ Integer ]'),
-            kernel.integerClass,
-          );
-        });
+            // The retry converges, and the namespace is then exercised rather than inspected.
+            await installSmalltalkGlobalNamespace({...options, lane});
+            const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+            assert.deepEqual(
+              await evaluate(runtime, 'app', `rec-${lane}-${failAt}-${commitThenThrow}`, '[ Integer ]'),
+              kernel.integerClass,
+            );
+          });
+        }
       }
+    } finally {
+      await base.close();
     }
   });
 }

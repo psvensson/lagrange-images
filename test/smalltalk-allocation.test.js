@@ -23,6 +23,7 @@ import {
 import {SMALLTALK_KERNEL_PRIMITIVE_V1} from '../src/language/smalltalk-primitives.js';
 import {SYMMETRIC_SMALLTALK_ID} from '../src/language/symmetric-smalltalk.js';
 import {methodBlockRef} from '../src/language/smalltalk-class-builder.js';
+import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 
 // ADR 0046: `basicNew`, `new` and `class` as ordinary messages over two language-owned primitive
 // Blocks. What the tests below are really separating:
@@ -850,87 +851,59 @@ test('the primitive Blocks carry the kernel-primitive representation and no envi
 // A publication sequence is proven recoverable by enumerating its writes, not by probing a few. The
 // allocation protocol adds primitive code artifacts and Blocks ahead of the method installs, so the
 // sweep covers those too — including a commit-then-throw that models a lost acknowledgement, after
-// which an identical install must be idempotent rather than a redefinition error.
-const INSTALL_WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
-
-function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
-  let writes = 0;
-  const wrapped = Object.create(Object.getPrototypeOf(images));
-  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
-    if (typeof images[key] !== 'function' || key === 'constructor') continue;
-    wrapped[key] = (...args) => images[key](...args);
-  }
-  for (const [key, value] of Object.entries(images)) {
-    if (typeof value === 'function') wrapped[key] = (...args) => images[key](...args);
-    else wrapped[key] = value;
-  }
-  for (const method of INSTALL_WRITE_METHODS) {
-    wrapped[method] = async (imageId, input, options) => {
-      writes += 1;
-      const index = writes;
-      if (index === failAt && !commitThenThrow) {
-        throw new Error(`injected failure at write ${index} (${method} ${input?.id})`);
-      }
-      const result = await images[method](imageId, input, options);
-      if (index === failAt && commitThenThrow) {
-        throw new Error(`injected post-commit failure at write ${index} (${method} ${input?.id})`);
-      }
-      return result;
-    };
-  }
-  return {images: wrapped, writeCount: () => writes};
-}
+// which an identical install must be idempotent rather than a redefinition error. The bare kernel
+// image is prepared once and forked per iteration; only the install under test repeats.
 
 function servicesFor(images) {
   return new CompilationService({images, compilers: createDefaultCodeCompilerRegistry()});
 }
 
-async function installWriteCount(lane) {
-  return await withRuntime(async (runtime) => {
-    await runtime.images.createImage({id: 'count'});
-    await installSmalltalkKernel({images: runtime.images, imageId: 'count'});
-    const {images, writeCount} = faultingImages(runtime.images);
-    await installSmalltalkAllocationProtocol({
-      images, compilation: servicesFor(images), imageId: 'count', lane,
-    });
-    return writeCount();
-  });
-}
-
 for (const lane of ['neutral', 'wasm']) {
   test(`exhaustive-recovery: every write installing the ${lane} allocation protocol`, async () => {
-    const total = await installWriteCount(lane);
-    assert.ok(total > 5, `expected several writes in the ${lane} lane, saw ${total}`);
-
-    for (let failAt = 1; failAt <= total; failAt += 1) {
-      for (const commitThenThrow of [false, true]) {
-        await withRuntime(async (runtime) => {
-          await runtime.images.createImage({id: 'app'});
-          await installSmalltalkKernel({images: runtime.images, imageId: 'app'});
-          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
-
-          await assert.rejects(
-            installSmalltalkAllocationProtocol({
-              images, compilation: servicesFor(images), imageId: 'app', lane,
-            }),
-            /injected/,
-            `${lane}: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
-          );
-
-          // The identical operation, retried against a clean service, must complete and work.
-          await installSmalltalkAllocationProtocol({
-            images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
-          });
-          const shape = await emptyShape(runtime, 'app');
-          const point = await defineClass({
-            images: runtime.images, imageId: 'app', name: 'Point', instanceShapeRef: shape,
-          });
-          const instance = await evaluate(
-            runtime, 'app', `retry-${lane}-${failAt}-${commitThenThrow}`, '[ :c | c new ]', [point.classRef],
-          );
-          assert.equal((await runtime.images.getObject('app', instance.objectId)).kind, 'object');
+    const base = await forkableRuntime(async (runtime) => {
+      await runtime.images.createImage({id: 'app'});
+      await installSmalltalkKernel({images: runtime.images, imageId: 'app'});
+    });
+    try {
+      const total = await base.withFork(async (runtime) => {
+        const {images, writeCount} = faultingImages(runtime.images);
+        await installSmalltalkAllocationProtocol({
+          images, compilation: servicesFor(images), imageId: 'app', lane,
         });
+        return writeCount();
+      });
+      assert.ok(total > 5, `expected several writes in the ${lane} lane, saw ${total}`);
+
+      for (let failAt = 1; failAt <= total; failAt += 1) {
+        for (const commitThenThrow of [false, true]) {
+          await base.withFork(async (runtime) => {
+            const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+
+            await assert.rejects(
+              installSmalltalkAllocationProtocol({
+                images, compilation: servicesFor(images), imageId: 'app', lane,
+              }),
+              /injected/,
+              `${lane}: write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
+            );
+
+            // The identical operation, retried against a clean service, must complete and work.
+            await installSmalltalkAllocationProtocol({
+              images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
+            });
+            const shape = await emptyShape(runtime, 'app');
+            const point = await defineClass({
+              images: runtime.images, imageId: 'app', name: 'Point', instanceShapeRef: shape,
+            });
+            const instance = await evaluate(
+              runtime, 'app', `retry-${lane}-${failAt}-${commitThenThrow}`, '[ :c | c new ]', [point.classRef],
+            );
+            assert.equal((await runtime.images.getObject('app', instance.objectId)).kind, 'object');
+          });
+        }
       }
+    } finally {
+      await base.close();
     }
   });
 }

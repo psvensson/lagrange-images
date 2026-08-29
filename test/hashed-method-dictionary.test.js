@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CompilationService,
   booleanValue,
-  createDefaultCodeCompilerRegistry,
   createRuntime,
   defineClass,
   defineMethods,
@@ -32,6 +30,7 @@ import {
 import {MethodDictionaryValidationCache} from '../src/language/smalltalk-lookup.js';
 import {methodBlockRef} from '../src/language/smalltalk-class-builder.js';
 import {builtInHash} from '../src/language/smalltalk-equality.js';
+import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 
 // ADR 0049. The claim under test is narrow and total: dispatch reads a hashed selector table using
 // only pure built-in helpers, so nothing a program can define changes how a method is found.
@@ -772,67 +771,45 @@ test('a WASM caller dispatches through a hashed dictionary unchanged', async () 
 
 // --- migration recovery ---------------------------------------------------------------------------
 
-const WRITE_METHODS = ['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment'];
-
-function faultingImages(images, {failAt = null, commitThenThrow = false} = {}) {
-  let writes = 0;
-  const wrapped = Object.create(Object.getPrototypeOf(images));
-  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(images))) {
-    if (typeof images[key] !== 'function' || key === 'constructor') continue;
-    wrapped[key] = (...args) => images[key](...args);
-  }
-  for (const [key, value] of Object.entries(images)) {
-    if (typeof value === 'function') wrapped[key] = (...args) => images[key](...args);
-    else wrapped[key] = value;
-  }
-  for (const method of WRITE_METHODS) {
-    wrapped[method] = async (imageId, input, options) => {
-      writes += 1;
-      const index = writes;
-      if (index === failAt && !commitThenThrow) throw new Error(`injected failure at write ${index}`);
-      const result = await images[method](imageId, input, options);
-      if (index === failAt && commitThenThrow) throw new Error(`injected post-commit failure at write ${index}`);
-      return result;
-    };
-  }
-  return {images: wrapped, writeCount: () => writes};
-}
-
-const servicesFor = (images) => new CompilationService({images, compilers: createDefaultCodeCompilerRegistry()});
-
-// Enumerated, not sampled, with a commit-then-throw variant modelling a lost acknowledgement.
+// Enumerated, not sampled, with a commit-then-throw variant modelling a lost acknowledgement. The
+// seeded image with its legacy dictionary is prepared once and forked per iteration; only the
+// migration under test repeats.
 test('every write in a migration is recoverable by an identical retry', async () => {
-  const total = await withRuntime(async (runtime) => {
-    const kernel = await seed(runtime, 'count');
-    const plusBlock = await methodBlockRef({images: runtime.images, imageId: 'count', classRef: kernel.integerClass, selector: '+'});
-    await legacyDictionaryFor(runtime, 'count', kernel.integerClass, {'+': plusBlock});
-    const {images, writeCount} = faultingImages(runtime.images);
-    await migrateMethodDictionary({images, imageId: 'count', behaviorRef: kernel.integerClass});
-    return writeCount();
+  const base = await forkableRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const plusBlock = await methodBlockRef({images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: '+'});
+    await legacyDictionaryFor(runtime, 'app', kernel.integerClass, {'+': plusBlock});
+    return kernel;
   });
-  assert.ok(total >= 3, `expected several writes, saw ${total}`);
+  try {
+    const total = await base.withFork(async (runtime, kernel) => {
+      const {images, writeCount} = faultingImages(runtime.images);
+      await migrateMethodDictionary({images, imageId: 'app', behaviorRef: kernel.integerClass});
+      return writeCount();
+    });
+    assert.ok(total >= 3, `expected several writes, saw ${total}`);
 
-  for (let failAt = 1; failAt <= total; failAt += 1) {
-    for (const commitThenThrow of [false, true]) {
-      await withRuntime(async (runtime) => {
-        const kernel = await seed(runtime, 'app');
-        const plusBlock = await methodBlockRef({images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: '+'});
-        await legacyDictionaryFor(runtime, 'app', kernel.integerClass, {'+': plusBlock});
-        const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+    for (let failAt = 1; failAt <= total; failAt += 1) {
+      for (const commitThenThrow of [false, true]) {
+        await base.withFork(async (runtime, kernel) => {
+          const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
 
-        await assert.rejects(
-          migrateMethodDictionary({images, imageId: 'app', behaviorRef: kernel.integerClass}),
-          /injected/,
-          `write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
-        );
+          await assert.rejects(
+            migrateMethodDictionary({images, imageId: 'app', behaviorRef: kernel.integerClass}),
+            /injected/,
+            `write ${failAt} (commitThenThrow=${commitThenThrow}) should have failed`,
+          );
 
-        await migrateMethodDictionary({images: runtime.images, imageId: 'app', behaviorRef: kernel.integerClass});
-        assert.deepEqual(
-          await evaluate(runtime, 'app', `retry-${failAt}-${commitThenThrow}`, '[ :a :b | a + b ]', [integerValue(5), integerValue(6)]),
-          integerValue(11),
-          `not dispatching after retrying past write ${failAt}`,
-        );
-      });
+          await migrateMethodDictionary({images: runtime.images, imageId: 'app', behaviorRef: kernel.integerClass});
+          assert.deepEqual(
+            await evaluate(runtime, 'app', `retry-${failAt}-${commitThenThrow}`, '[ :a :b | a + b ]', [integerValue(5), integerValue(6)]),
+            integerValue(11),
+            `not dispatching after retrying past write ${failAt}`,
+          );
+        });
+      }
     }
+  } finally {
+    await base.close();
   }
 });
