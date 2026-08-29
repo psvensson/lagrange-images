@@ -7,6 +7,7 @@ import {
   ensureNamedClass,
   ensureSmalltalkShape,
 } from './smalltalk-class-builder.js';
+import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {
   DICTIONARY_SHAPE_ID,
   DICTIONARY_SHAPE_SLOTS,
@@ -173,7 +174,7 @@ async function installSmalltalkDictionaryProtocol({images, compilation, imageId,
     await installPrimitiveBlock({images, imageId, primitive});
   }
 
-  const {classRef} = await ensureNamedClass({
+  const {classRef, metaclassRef} = await ensureNamedClass({
     images,
     imageId,
     name: 'Dictionary',
@@ -223,6 +224,44 @@ async function installSmalltalkDictionaryProtocol({images, compilation, imageId,
         args: [receiver(), argument(0), argument(1)],
         imageId,
       }),
+    ],
+  });
+
+  // Workstream 3 (MessagePack pressure). Ordinary-source lookup conveniences composed from the
+  // primitives above — `MpSettings` and the type mappers read with `at:ifAbsent:`/`at:ifAbsentPut:`.
+  // No new primitive and no table access: a miss is one `at:put:` through the existing protocol.
+  await defineMethodsFromSource({
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef,
+    methods: [
+      {
+        selector: 'at:ifAbsent:',
+        source: '[ :key :aBlock | (self includesKey: key) ifTrue: [ ^ self at: key ] ifFalse: [ ^ aBlock value ] ]',
+      },
+      {
+        selector: 'at:ifAbsentPut:',
+        source: '[ :key :aBlock | (self includesKey: key) ifTrue: [ ^ self at: key ] ifFalse: [ ^ self at: key put: (aBlock value) ] ]',
+      },
+    ],
+  });
+
+  // Class-side. Upstream `createDictionary:` sends `Dictionary new: size`, where `size` is only a
+  // capacity *hint*. This Dictionary grows on demand from a fixed floor and has no capacity-taking
+  // allocation primitive, so the honest minimal class method accepts and ignores the hint. It lives
+  // on the metaclass — sending `new:` to the class object dispatches through the metaclass chain,
+  // exactly like `Array new:`. `self new` resolves to the inherited zero-argument `Class>>new`
+  // (basicNew + initialize), so it terminates rather than recursing into `new:`.
+  await defineMethodsFromSource({
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef: metaclassRef,
+    methods: [
+      {selector: 'new:', source: '[ :size | ^ self new ]'},
     ],
   });
 

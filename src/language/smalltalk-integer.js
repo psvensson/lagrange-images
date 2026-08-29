@@ -1,5 +1,6 @@
 import {booleanValue, objectRef, textValue} from '../value/index.js';
 import {defineMethods, ensureBlock, ensureCodeArtifact} from './smalltalk-class-builder.js';
+import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
@@ -176,6 +177,32 @@ async function installSmalltalkIntegerProtocol({images, compilation, imageId, la
         captures: [{...capture, value: primitives[primitive]}],
       };
     }),
+  });
+
+  // Workstream 3 (MessagePack pressure). Ordinary-source Integer protocol over the comparisons and
+  // arithmetic above — no new primitive, no compiler knowledge. Reached for by real upstream source:
+  // `writeInteger:` guards with `anInteger between: 0 and: 127`; `readArraySized:` loops `1 to: size
+  // do:`; `readMapSized:` loops `timesRepeat:`; `readInt8` negates. `negated`, `between:and:` and the
+  // loops are written against `<`, `<=`, `-`, `+`, `and:` and `whileTrue:`, all of which resolve at
+  // dispatch like any other send.
+  await defineMethodsFromSource({
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef: kernel.integerClass,
+    methods: [
+      {selector: 'negated', source: '[ ^ 0 - self ]'},
+      {selector: 'between:and:', source: '[ :min :max | ^ (min <= self) and: [ self <= max ] ]'},
+      {
+        selector: 'to:do:',
+        source: `[ :stop :aBlock | | i |
+          i := self.
+          [ i <= stop ] whileTrue: [ aBlock value: i. i := i + 1 ].
+          ^ self ]`,
+      },
+      {selector: 'timesRepeat:', source: '[ :aBlock | 1 to: self do: [ :i | aBlock value ]. ^ self ]'},
+    ],
   });
 
   return Object.freeze({integerClass: kernel.integerClass, ...primitives});
