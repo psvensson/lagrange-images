@@ -104,17 +104,25 @@ const SYMBOL_BINDING_ID = 'smalltalk/intrinsic/symbol';
 // Internal capture key for a resolved global. Prefixed so it cannot collide with any source name —
 // the tokenizer restricts those to identifier characters.
 const GLOBAL_CAPTURE_PREFIX = '$global:';
+// Internal capture key for a resolved class variable. Same prefixing rationale as globals.
+const CLASS_VAR_CAPTURE_PREFIX = '$classVar:';
 const INSTANCE_SLOT_WRITE_CAPTURE = '$instanceSlotWrite';
 
 class SemanticScope {
   constructor({
     parent = null, path, parameters = [], rootCaptures = new Map(), instanceVariables = new Map(),
-    methodHome = false, intrinsics = new Map(), globals = new Map(),
+    methodHome = false, intrinsics = new Map(), globals = new Map(), classVariables = new Map(),
   } = {}) {
     // ADR 0057. Name -> binding id, resolved from the image's namespace by the *caller* and handed
     // in. This compiler stays synchronous and image-independent: it never reads storage, and what it
     // emits is binding identity rather than any image-specific ref.
     this.globals = parent ? parent.globals : globals;
+    // Class variables: name -> binding id, resolved from the class hierarchy by the *caller*.
+    // Same compiler-purity rule as globals: the compiler sees only the flat map.
+    this.classVariables = parent ? parent.classVariables : classVariables;
+    // Which class-variable bindings this compilation actually resolved. Transient provenance,
+    // exactly like globalsUsed.
+    this.classVarsUsed = parent ? parent.classVarsUsed : new Set();
     // ADR 0057. Which global bindings this compilation actually resolved. Transient compiler
     // metadata — never part of `lagrange-code` — and the only correct answer to "is this capture a
     // global?", because a capture id does not say *why* the capture exists.
@@ -263,6 +271,10 @@ class SemanticScope {
     if (provided) return Object.freeze({op: 'binding', id: this.addCapture(name, provided).id});
     const slotId = this.instanceSlot(name);
     if (slotId) return this.instanceSlotRead(slotId);
+    // Class variables resolve after instance variables and before globals. A subclass method
+    // can read an ancestor's class var; an unrelated class cannot resolve it by name.
+    const classVar = this.resolveClassVariable(name);
+    if (classVar) return classVar;
     // Globals resolve LAST, so no future publication can change what a name already means inside a
     // method that binds it lexically or as an instance variable.
     const global = this.resolveGlobal(name);
@@ -306,6 +318,62 @@ class SemanticScope {
     });
   }
 
+  // A class-variable read is a `value` send to the binding — an ordinary send, exactly like a
+  // global read. The capture is keyed by the binding identity, not the source name.
+  resolveClassVariable(name) {
+    const bindingId = this.classVariables.get(name);
+    if (!bindingId) return null;
+    const root = this.rootScope();
+
+    // Same collision check as globals: an explicit caller capture must not silently share a
+    // durable binding id with a resolved class variable.
+    for (const [key, capture] of root.captures) {
+      if (capture.id === bindingId && !key.startsWith(CLASS_VAR_CAPTURE_PREFIX)) {
+        throw new TypeError(`capture ${key} collides with the class-variable binding id ${bindingId}`);
+      }
+    }
+
+    const key = `${CLASS_VAR_CAPTURE_PREFIX}${bindingId}`;
+    this.classVarsUsed.add(bindingId);
+    if (!root.captures.has(key)) {
+      root.captures.set(key, Object.freeze({id: bindingId, name, source: null, mutable: false}));
+    }
+    return Object.freeze({
+      op: 'send',
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: this.resolveName(key),
+      message: textValue('value'),
+      arguments: Object.freeze([]),
+    });
+  }
+
+  // A class-variable write is a `value:` send to the binding — an ordinary send. Unlike globals,
+  // class variables are mutable shared state, so assignment lowers to `value: newValue`.
+  resolveClassVariableWrite(name, valueExpression) {
+    const bindingId = this.classVariables.get(name);
+    if (!bindingId) return null;
+    const root = this.rootScope();
+
+    for (const [key, capture] of root.captures) {
+      if (capture.id === bindingId && !key.startsWith(CLASS_VAR_CAPTURE_PREFIX)) {
+        throw new TypeError(`capture ${key} collides with the class-variable binding id ${bindingId}`);
+      }
+    }
+
+    const key = `${CLASS_VAR_CAPTURE_PREFIX}${bindingId}`;
+    this.classVarsUsed.add(bindingId);
+    if (!root.captures.has(key)) {
+      root.captures.set(key, Object.freeze({id: bindingId, name, source: null, mutable: false}));
+    }
+    return Object.freeze({
+      op: 'send',
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: this.resolveName(key),
+      message: textValue('value:'),
+      arguments: Object.freeze([valueExpression]),
+    });
+  }
+
   // Assignment needs a cell, so only a temporary — or a capture that resolves to one — qualifies.
   // Parameters and the receiver are not assignable, and a root capture names a durable environment
   // binding rather than a cell, which ADR 0043 decision 2 keeps out of assignment's reach.
@@ -328,6 +396,10 @@ class SemanticScope {
     }
     const slotId = this.instanceSlot(name);
     if (slotId) return {kind: 'instance', slotId};
+    // Class variables are writable: assignment lowers to a `value:` send on the binding.
+    if (this.classVariables.has(name)) {
+      return {kind: 'classVariable', name};
+    }
     // ADR 0057: assignment never reaches a global, and the check sits *last* so it matches the read
     // order — a temporary or instance variable of the same name shadows a global for writes exactly
     // as it does for reads. A known global then gets a diagnosis saying what is actually wrong,
@@ -497,9 +569,9 @@ function compileExpression(syntax, scope, state) {
     case 'assign': {
       const target = scope.resolveWrite(syntax.name);
       const value = compileExpression(syntax.value, scope, state);
-      return target.kind === 'instance'
-        ? scope.instanceSlotWrite(target.slotId, value)
-        : Object.freeze({op: 'binding-write', id: target.id, value});
+      if (target.kind === 'instance') return scope.instanceSlotWrite(target.slotId, value);
+      if (target.kind === 'classVariable') return scope.resolveClassVariableWrite(target.name, value);
+      return Object.freeze({op: 'binding-write', id: target.id, value});
     }
     case 'send':
       return compileSend(
@@ -577,10 +649,11 @@ function compileBlockSyntax(syntax, {
   methodHome = false,
   intrinsics = new Map(),
   globals = new Map(),
+  classVariables = new Map(),
 } = {}) {
   const scope = new SemanticScope({
     parent, path, parameters: syntax.parameters, rootCaptures, instanceVariables, methodHome,
-    intrinsics, globals,
+    intrinsics, globals, classVariables,
   });
   const state = {path, nextBlock: 0, nextCascade: 0, representation};
   const body = compileBody(syntax.body, scope, state);
@@ -600,11 +673,13 @@ function compileBlockSyntax(syntax, {
     program,
     captureInitializers: scope.captureInitializers(representation),
     globalBindingIdsUsed: Object.freeze([...scope.globalsUsed]),
+    classVariableBindingIdsUsed: Object.freeze([...scope.classVarsUsed]),
   });
 }
 
 function compileSymmetricSmalltalkSemanticBlock(source, {
   captures = {}, instanceVariables = {}, methodHome = false, intrinsics = {}, globals = {},
+  classVariables = {},
 } = {}) {
   // ADR 0056: `nil` is the compiler's own intrinsic, so it is supplied here rather than by each
   // caller. Centralised for two reasons — every Symmetric Smalltalk compilation can write `nil`
@@ -631,16 +706,19 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
       [SYMBOL_CAPTURE, SYMBOL_BINDING_ID],
     ]),
     globals: new Map(Object.entries(globals)),
+    classVariables: new Map(Object.entries(classVariables)),
   });
   return Object.freeze({
     syntax,
     program: compiled.program,
     representation,
     globalBindingIdsUsed: compiled.globalBindingIdsUsed,
+    classVariableBindingIdsUsed: compiled.classVariableBindingIdsUsed,
   });
 }
 
 export {
+  CLASS_VAR_CAPTURE_PREFIX,
   INSTANCE_SLOT_READ_CAPTURE,
   NIL_BINDING_ID,
   NIL_CAPTURE,

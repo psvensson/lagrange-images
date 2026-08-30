@@ -6,6 +6,7 @@ import {
 } from './smalltalk-class-builder.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {globalDeclarations} from './smalltalk-globals.js';
+import {classVariableDeclarations} from './smalltalk-class-variables.js';
 import {visibleInstanceShape} from './smalltalk-lookup.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
@@ -193,6 +194,7 @@ async function compileSymmetricSmalltalkMethod({
     instanceVariables,
     // This entry point is the class-scoped one, so its compilations have a method to return from.
     methodHome: true,
+    classVariables: await classVariableDeclarations({images, imageId, classRef}),
   });
 
   // Every declaration becomes a program capture, referenced or not — that is the block compiler's
@@ -207,6 +209,8 @@ async function compileSymmetricSmalltalkMethod({
     captures: compiled.program.captures.map(({id, name}) => Object.freeze({id, name})),
     // Transient provenance: which of those captures are globals this compilation resolved.
     globalBindingIdsUsed: compiled.globalBindingIdsUsed,
+    // Transient provenance: which of those captures are class variables this compilation resolved.
+    classVariableBindingIdsUsed: compiled.classVariableBindingIdsUsed,
   });
 }
 
@@ -232,9 +236,10 @@ async function defineMethodsFromSource({images, compilation, imageId, classRef, 
     const method = await compileSymmetricSmalltalkMethod({
       images, imageId, classRef, selector, source, captures, globals,
     });
-    // Exactly what this method resolved as a global — so an explicit capture keeps its caller's
-    // value even when its id happens to equal a published binding id.
+    // Exactly what this method resolved as a global or class variable — so an explicit capture
+    // keeps its caller's value even when its id happens to equal a published binding id.
     const resolvedGlobals = new Set(method.globalBindingIdsUsed ?? []);
+    const resolvedClassVars = new Set(method.classVariableBindingIdsUsed ?? []);
     const bound = method.captures.map(({id, name}) => {
       if (primitiveIds.has(id)) return {id, name, value: objectRef(imageId, id)};
       // ADR 0056: the nil intrinsic resolves to this image's kernel nil, exactly as the slot
@@ -245,6 +250,8 @@ async function defineMethodsFromSource({images, compilation, imageId, classRef, 
       // ADR 0057: a resolved global binds to that binding object in *this* image. The artifact
       // carried only the id; the ref appears here, at installation.
       if (resolvedGlobals.has(id)) return {id, name, value: objectRef(imageId, id)};
+      // A resolved class variable binds to the ClassVariableBinding object in this image.
+      if (resolvedClassVars.has(id)) return {id, name, value: objectRef(imageId, id)};
       const value = supplied.get(id);
       if (value === undefined) {
         throw new TypeError(
