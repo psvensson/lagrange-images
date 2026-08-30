@@ -15,6 +15,10 @@ function requiredText(value, label) {
   return value;
 }
 
+function compareText(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function plainRecord(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError(`${label} must be a plain record`);
@@ -27,8 +31,8 @@ function plainRecord(value, label) {
 }
 
 function assertExactKeys(value, expected, label) {
-  const actual = Object.keys(value).sort();
-  const wanted = [...expected].sort();
+  const actual = Object.keys(value).sort(compareText);
+  const wanted = [...expected].sort(compareText);
   if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
     throw new TypeError(`${label} must contain exactly ${wanted.join(', ')}`);
   }
@@ -45,7 +49,7 @@ function normalizeUniqueTexts(values, label) {
   const normalized = values.map((value, index) => requiredText(value, `${label}[${index}]`));
   const unique = new Set(normalized);
   if (unique.size !== normalized.length) throw new TypeError(`${label} must not contain duplicates`);
-  return Object.freeze([...normalized].sort());
+  return Object.freeze([...normalized].sort(compareText));
 }
 
 function normalizeProjectMember(value, label = 'project member') {
@@ -66,7 +70,7 @@ function normalizeProjectDescriptor(value) {
   }
   if (!Array.isArray(value.members)) throw new TypeError('Project members must be an array');
   const members = value.members.map((member, index) => normalizeProjectMember(member, `Project members[${index}]`));
-  members.sort((a, b) => a.key.localeCompare(b.key));
+  members.sort((a, b) => compareText(a.key, b.key));
   const seen = new Set();
   for (const member of members) {
     if (seen.has(member.key)) throw new TypeError(`duplicate Project member key: ${member.key}`);
@@ -168,7 +172,7 @@ function canonicalJsonValue(value) {
   if (Array.isArray(value)) return value.map((entry) => canonicalJsonValue(entry));
   plainRecord(value, 'canonical JSON value');
   const result = {};
-  for (const key of Object.keys(value).sort()) result[key] = canonicalJsonValue(value[key]);
+  for (const key of Object.keys(value).sort(compareText)) result[key] = canonicalJsonValue(value[key]);
   return result;
 }
 
@@ -189,7 +193,7 @@ function releaseIdentity(body) {
 function normalizeReleaseMembers(values) {
   if (!Array.isArray(values)) throw new TypeError('Project release members must be an array');
   const members = values.map((member, index) => normalizeReleaseMember(member, `Project release members[${index}]`));
-  members.sort((a, b) => a.key.localeCompare(b.key));
+  members.sort((a, b) => compareText(a.key, b.key));
   const seen = new Set();
   for (const member of members) {
     if (seen.has(member.key)) throw new TypeError(`duplicate Project release member key: ${member.key}`);
@@ -204,7 +208,7 @@ function normalizeReleaseDependencies(values, projectId) {
   const dependencies = values.map((dependency, index) =>
     normalizeReleaseDependency(dependency, `Project release dependencies[${index}]`));
   dependencies.sort((a, b) =>
-    a.projectId.localeCompare(b.projectId) || a.releaseId.localeCompare(b.releaseId));
+    compareText(a.projectId, b.projectId) || compareText(a.releaseId, b.releaseId));
   const seen = new Set();
   for (const dependency of dependencies) {
     const key = `${dependency.projectId}\u0000${dependency.releaseId}`;
@@ -303,7 +307,7 @@ function normalizeFrontierRevision(value, label) {
 
 function normalizeFrontierMap(value) {
   plainRecord(value, 'Project release sourceFrontiers');
-  const imageIds = Object.keys(value).sort();
+  const imageIds = Object.keys(value).sort(compareText);
   if (imageIds.length === 0) throw new TypeError('Project release sourceFrontiers must not be empty');
   const normalized = {};
   for (const imageId of imageIds) {
@@ -335,12 +339,13 @@ function normalizeProjectReleaseProvenance(value) {
   if (!Array.isArray(value.memberSources)) throw new TypeError('Project release memberSources must be an array');
   const memberSources = value.memberSources.map((source, index) =>
     normalizeMemberSource(source, `Project release memberSources[${index}]`));
-  memberSources.sort((a, b) => a.key.localeCompare(b.key));
+  memberSources.sort((a, b) => compareText(a.key, b.key));
   const seen = new Set();
   for (const source of memberSources) {
     if (seen.has(source.key)) throw new TypeError(`duplicate Project release member source key: ${source.key}`);
     seen.add(source.key);
   }
+  if (memberSources.length === 0) throw new TypeError('Project release provenance must contain at least one member source');
   return Object.freeze({
     format: PROJECT_RELEASE_PROVENANCE_V1,
     projectId: requiredText(value.projectId, 'Project release provenance projectId'),
@@ -409,12 +414,13 @@ function normalizeProjectInstallation(value) {
   if (!Array.isArray(value.members)) throw new TypeError('Project installation members must be an array');
   const members = value.members.map((member, index) =>
     normalizeInstallationMember(member, targetImageId, `Project installation members[${index}]`));
-  members.sort((a, b) => a.key.localeCompare(b.key));
+  members.sort((a, b) => compareText(a.key, b.key));
   const seen = new Set();
   for (const member of members) {
     if (seen.has(member.key)) throw new TypeError(`duplicate Project installation member key: ${member.key}`);
     seen.add(member.key);
   }
+  if (members.length === 0) throw new TypeError('Project installation must contain at least one member');
   return Object.freeze({
     format: PROJECT_INSTALLATION_V1,
     projectId: requiredText(value.projectId, 'Project installation projectId'),
@@ -466,7 +472,7 @@ function planProjectUpgrade({installation, nextRelease} = {}) {
   }
   const currentByKey = new Map(current.members.map((member) => [member.key, member]));
   const nextByKey = new Map(next.members.map((member) => [member.key, member]));
-  const keys = [...new Set([...currentByKey.keys(), ...nextByKey.keys()])].sort();
+  const keys = [...new Set([...currentByKey.keys(), ...nextByKey.keys()])].sort(compareText);
   const actions = keys.map((key) => {
     const installed = currentByKey.get(key) ?? null;
     const desired = nextByKey.get(key) ?? null;
