@@ -337,6 +337,9 @@ test('the library adds no new kernel primitive', async () => {
     // `installSmalltalkSymbolProtocol` which the standard image runs.
     'perform-send',
     'perform-send-with',
+    // Class-hierarchy introspection: `subclasses-of` is installed by
+    // `installSmalltalkSubclassProtocol`, not by the library — the library still adds nothing.
+    'subclasses-of',
     'symbol-intern',
   ]);
 });

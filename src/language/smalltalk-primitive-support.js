@@ -77,6 +77,10 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   // runtime. `perform-send` is the 0-argument form; `perform-send-with` takes one argument.
   PERFORM_SEND: 'perform-send',
   PERFORM_SEND_WITH: 'perform-send-with',
+  // Class-hierarchy introspection (WS3): reads a class's durable subclass registry and answers an
+  // Array of its direct subclass refs. Same spirit as `class-of` reading the behavior edge — the
+  // registry is ordinary durable image state maintained by `defineClass`, never hidden JS state.
+  SUBCLASSES_OF: 'subclasses-of',
 });
 
 const SMALLTALK_PRIMITIVE_NAMES = Object.freeze(Object.values(SMALLTALK_PRIMITIVE));
@@ -119,6 +123,7 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.SYMBOL_INTERN]: 1,
   [SMALLTALK_PRIMITIVE.PERFORM_SEND]: 2,
   [SMALLTALK_PRIMITIVE.PERFORM_SEND_WITH]: 3,
+  [SMALLTALK_PRIMITIVE.SUBCLASSES_OF]: 1,
 });
 
 // One locality rule for every primitive. A foreign primitive Block must fail rather than answer a

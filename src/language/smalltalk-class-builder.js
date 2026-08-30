@@ -55,6 +55,7 @@ import {
 import {WASM_FUNCTION_V1, WASM_MODULE_V1} from '../code/wasm-artifacts.js';
 import {assembleWasmV1FunctionArtifact} from '../wasm/tree-installer-v1.js';
 import {ensureClassStateCompanion} from './smalltalk-class-state.js';
+import {maintainSubclassRegistries} from './smalltalk-subclasses.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 // Installing methods onto a class, and defining new classes with their metaclasses.
@@ -885,6 +886,20 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
       images, imageId, classRef: ref(classObjectId), classInstanceShapeRef: companionShapeRef,
     });
   }
+
+  // Class-hierarchy introspection: register the CLASS object's superclass edge (never the
+  // metaclass's derived one) in the superclass's durable subclass registry, and ensure this
+  // class's own empty registry. Lazy and tolerant — bootstrap classes are defined before the
+  // registry's Shape exists, and a foreign squatter on the deterministic id is left alone;
+  // absence reads as empty, so this converges on retry rather than failing the definition.
+  await maintainSubclassRegistries({
+    images,
+    imageId,
+    className: name,
+    classRef: ref(classObjectId),
+    superclassRef: superclass,
+    nilRef: kernel.nil,
+  });
   return Object.freeze({classRef: ref(classObjectId), metaclassRef: ref(metaclassObjectId)});
 }
 

@@ -9,6 +9,7 @@ import {
 } from '../value/index.js';
 import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
 import {classStateCompanionFor} from './smalltalk-class-state.js';
+import {subclassRegistryId} from './smalltalk-subclasses.js';
 import {
   SmalltalkDanglingEdgeError,
   SmalltalkMalformedBehaviorError,
@@ -28,6 +29,10 @@ import {
 // The object-shaped primitives: class identity, allocation, the indexed part, and instance-slot
 // access. Everything here acts on one object's durable record and runs no user code beyond the
 // conditions a failure may signal.
+
+// The Array instance layout `subclasses-of` builds its answer with. Same well-known id the
+// indexed protocol installs; the registry object itself shares this Shape.
+const ARRAY_INSTANCE_SHAPE_ID = 'smalltalk/array-instance-shape/v1';
 
 // ADR 0046: `instanceShape == nil` means "not instantiable", never "empty instance". Kept distinct
 // from a malformed Behavior and from a dangling Shape edge.
@@ -416,6 +421,68 @@ async function instanceSlotRead({images, primitiveImage, target, slotIdValue, co
   return record.slots[slotId];
 }
 
+// Class-hierarchy introspection (WS3). Reads the receiver class's durable subclass registry and
+// answers an image Array of its direct-subclass refs — the same spirit as `class-of` reading the
+// behavior edge. Absence reads as empty: kernel classes maintain no registries (the kernel
+// installer writes its class graph directly), so `Integer subclasses` is empty even though a
+// fuller image would give it subclasses. The Array is built like any allocated indexed object —
+// arena-minted inside an execution, durable create-once outside one — never a hidden host value.
+async function subclassesOf({images, primitiveImage, value, newObjectId, maxIdentityAttempts, context = null}) {
+  const primitive = SMALLTALK_PRIMITIVE.SUBCLASSES_OF;
+  const ref = assertLocalRef(value, primitiveImage, primitive, 'only a class has subclasses');
+
+  const kernel = await findSmalltalkKernel({images, imageId: primitiveImage});
+  if (!kernel) throw new TypeError(`image ${primitiveImage} has no Smalltalk kernel`);
+
+  let behavior;
+  try {
+    behavior = await readBehavior(images, ref);
+  } catch (error) {
+    throw new SmalltalkMalformedBehaviorError(ref, error);
+  }
+  const className = behavior.name.value;
+
+  let elements = [];
+  const registry = await images.getObject(primitiveImage, subclassRegistryId(className));
+  if (registry && Array.isArray(registry.indexed)) elements = registry.indexed;
+
+  const arrayShapeRef = objectRef(primitiveImage, ARRAY_INSTANCE_SHAPE_ID);
+  const arrayClassRef = objectRef(primitiveImage, 'smalltalk/class/Array');
+  // ADR 0060 decision 3, exactly as `allocate`: inside an execution the Array begins in the arena,
+  // durable only if it escapes. The layout is identical to the durable form, so promotion is a copy.
+  if (typeof context?.mintObject === 'function') {
+    return context.mintObject({
+      imageId: primitiveImage,
+      shape: arrayShapeRef,
+      behavior: arrayClassRef,
+      slots: {},
+      indexed: elements,
+      metadata: {},
+    });
+  }
+  // ADR 0046 identity rule, as `allocate`: a known collision chooses another candidate.
+  for (let attempt = 0; attempt < maxIdentityAttempts; attempt += 1) {
+    const candidate = newObjectId();
+    try {
+      const stored = await images.putObject(primitiveImage, {
+        id: candidate,
+        shape: arrayShapeRef,
+        behavior: arrayClassRef,
+        slots: {},
+        indexed: elements,
+        metadata: {},
+      }, {expectedVersion: 0});
+      return objectRef(primitiveImage, stored.id);
+    } catch (error) {
+      if (error?.name !== 'VersionConflictError') throw error;
+    }
+  }
+  throw new TypeError(
+    `Symmetric Smalltalk ${primitive} could not find a free object identity in ${primitiveImage} `
+    + `after ${maxIdentityAttempts} attempts`,
+  );
+}
+
 async function instanceSlotWrite({images, primitiveImage, target, slotIdValue, newValue, context}) {
   const {record, slotId} = await resolveSlotAccess({
     images, primitiveImage, primitive: SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE, target, slotIdValue, context,
@@ -449,4 +516,5 @@ export {
   indexedSize,
   instanceSlotRead,
   instanceSlotWrite,
+  subclassesOf,
 };

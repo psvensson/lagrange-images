@@ -155,6 +155,7 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `migrateMethodDictionary()` | rewrites one Behavior's shape-backed method dictionary into the ADR 0049 hashed form |
 | `installSmalltalkIndexedProtocol()` | `Array`, `Class >> basicNew:`, `Array class >> new:`, and `Array >> size`/`at:`/`at:put:` over four more `smalltalk-kernel-primitive/v1` Blocks (ADR 0047) |
 | `installSmalltalkSymbolProtocol()` | the Symbol Shape/class, `symbol-intern`/`perform-send`/`perform-send-with` primitives, `Symbol >> asString`, and `Object >> perform:`/`perform:with:` |
+| `installSmalltalkSubclassProtocol()` | the `subclasses-of` primitive Block, plus `Class >> subclasses` and `Class >> allSubclasses` written in Smalltalk over OrderedCollection; the per-class subclass registries themselves are maintained by `defineClass` |
 | `installSmalltalkClassVariableSupport()` | the ClassVariableBinding Shape/class with `value`/`value:` methods; `declareClassVariables()` creates hierarchy-scoped bindings |
 | `smalltalk-class-state.js` (`ensureClassStateCompanion()`, `classStateCompanionFor()`) | class-instance state: the per-class companion (`smalltalk/class-state/<ClassName>`) holding class-instance *values*, and the dynamic-self routing that resolves a class-side slot access to the dynamic class's companion |
 
@@ -176,6 +177,21 @@ Value still takes its class from its kind.
 A class is instantiable when its `instanceShape` is a Shape ref; `nil` there means not instantiable,
 and an empty Shape is a valid zero-slot layout. `defineClass()` still stores `nil` when no
 `instanceShapeRef` is supplied, so no class written before ADR 0046 changes meaning.
+
+Class-hierarchy introspection keeps its state out of the fixed Behavior record. `defineClass()`
+maintains a per-class durable subclass registry at `smalltalk/subclasses/<ClassName>` — an
+ordinary image object with this image's Array instance Shape (zero named slots, indexed values),
+no behavior (kernel representation, like a hashed MethodDictionary), holding direct-subclass refs
+in its indexed part. Defining `C` under superclass `S` appends `C` to `S`'s registry idempotently
+(CAS on the registry version) and ensures `C`'s own empty registry; only the class object's
+superclass edge is registered, never a metaclass edge. The maintenance is lazy and tolerant — a
+missing registry Shape (pre-indexed-protocol image) or a squatter on the id skips the link rather
+than failing bootstrap — and a missing registry reads as empty, which is also how kernel classes
+read: `installSmalltalkKernel` writes its class graph directly and maintains no registries, so
+`Integer subclasses` answers empty. `subclassesOf` reads the registry and answers an image Array
+(arena-minted inside an execution, durable create-once outside one); `Class >> subclasses` wraps
+it in an OrderedCollection and `Class >> allSubclasses` takes the transitive closure, both
+ordinary Smalltalk installed after the library.
 
 Nested Block publication is one implementation, in `smalltalk-nested-blocks.js`, shared by
 `installSymmetricSmalltalkBlock()` and by `defineMethods()`. A method's nested identities derive from

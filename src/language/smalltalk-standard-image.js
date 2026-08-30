@@ -13,6 +13,7 @@ import {installSmalltalkInstanceVariableProtocol} from './smalltalk-instance-var
 import {installSmalltalkIntegerProtocol} from './smalltalk-integer.js';
 import {findSmalltalkKernel, installSmalltalkKernel} from './smalltalk-kernel.js';
 import {installSmalltalkLibrary} from './smalltalk-library.js';
+import {installSmalltalkSubclassProtocol} from './smalltalk-subclasses.js';
 import {installSmalltalkSymbolProtocol} from './smalltalk-symbol.js';
 
 // The normal, complete Symmetric Smalltalk image. This is composition, not a new semantic layer:
@@ -123,6 +124,12 @@ async function installSymmetricSmalltalkStandardImage({
   const library = await installSmalltalkLibrary(options);
   await publishSmalltalkClassGlobals({images, imageId, names: [...LIBRARY_PUBLIC_CLASSES]});
 
+  // Class-hierarchy introspection. After the library because `subclasses`/`allSubclasses` are
+  // ordinary Smalltalk written against OrderedCollection and the Integer loop; the registry
+  // itself is maintained by `defineClass`, so every class already defined (kernel included) is
+  // introspectable the moment this protocol lands.
+  const subclasses = await installSmalltalkSubclassProtocol(options);
+
   return Object.freeze({
     protocol: SYMMETRIC_SMALLTALK_STANDARD_IMAGE_V1,
     imageId,
@@ -143,6 +150,7 @@ async function installSymmetricSmalltalkStandardImage({
       dictionary,
       symbol,
       globals,
+      subclasses,
     }),
     classes: Object.freeze({
       Array: indexed.arrayClass,
