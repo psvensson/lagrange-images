@@ -29,6 +29,7 @@ import {
   indexedSize,
   instanceSlotRead,
   instanceSlotWrite,
+  subclassesOf,
 } from './smalltalk-primitives-objects.js';
 import {
   SmalltalkDictionaryConflictError,
@@ -236,6 +237,10 @@ function createSmalltalkKernelPrimitiveV1Executor({
           });
         case SMALLTALK_PRIMITIVE.SYMBOL_INTERN:
           return await symbolIntern({images, primitiveImage, value});
+        case SMALLTALK_PRIMITIVE.SUBCLASSES_OF:
+          return await subclassesOf({
+            images, primitiveImage, value, newObjectId, maxIdentityAttempts, context,
+          });
         case SMALLTALK_PRIMITIVE.PERFORM_SEND:
           return await performSend({images, primitiveImage, value, second, context, primitive});
         case SMALLTALK_PRIMITIVE.PERFORM_SEND_WITH:
