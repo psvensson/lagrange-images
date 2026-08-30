@@ -17,6 +17,7 @@
     "./graph": "./src/graph/references.js",
     "./language": "./src/language/index.js",
     "./object": "./src/object/index.js",
+    "./project": "./src/project/index.js",
     "./toolchain": "./src/toolchain/index.js",
     "./value": "./src/value/index.js",
     "./wasm": "./src/wasm/index.js"
