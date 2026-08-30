@@ -8,6 +8,7 @@ import {
   objectRef,
 } from '../value/index.js';
 import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
+import {classStateCompanionFor} from './smalltalk-class-state.js';
 import {
   SmalltalkDanglingEdgeError,
   SmalltalkMalformedBehaviorError,
@@ -359,7 +360,8 @@ async function resolveSlotAccess({images, primitiveImage, primitive, target, slo
   if (!kernel) throw new TypeError(`image ${primitiveImage} has no Smalltalk kernel`);
 
   // Shared with the binder, and strict: a cycle or a dangling instance Shape raises here rather
-  // than presenting as "this method may not name that slot".
+  // than presenting as "this method may not name that slot". Permission comes from the DEFINING
+  // behavior: a method may name exactly the slots its own defining metaclass/class declares.
   const layout = await visibleInstanceShape({images, behaviorRef: frame.definingBehavior, nilRef: kernel.nil});
   if (!layout?.slots.some(({id}) => id === slotIdValue.value)) {
     throw new SmalltalkSlotAccessError(
@@ -372,15 +374,39 @@ async function resolveSlotAccess({images, primitiveImage, primitive, target, slo
   if (!record) throw new SmalltalkDanglingEdgeError('instance', target, target);
   const shape = await images.getShape(record.shape.imageId, record.shape.objectId);
   if (!shape) throw new SmalltalkDanglingEdgeError('instance shape', record, record.shape);
-  // A separate structural question from permission: stale or migrated layout is corruption, never
-  // nil and never an opportunity to add a slot.
-  if (!shape.slots.some(({id}) => id === slotIdValue.value)) {
+  if (shape.slots.some(({id}) => id === slotIdValue.value)) {
+    // Ordinary instance access: the receiver's own record physically carries the slot.
+    return {record, slotId: slotIdValue.value};
+  }
+
+  // Class-instance access (WS3 prereq B completion): the receiver is a class object and the slot
+  // is not physically in the fixed Behavior shape, so the logical class-instance slot resolves to
+  // the DYNAMIC self class's companion. Permission already came from the defining behavior above;
+  // receiver/layout compatibility now comes from the dynamic class's metaclass, and physical
+  // storage from that dynamic class's companion.
+  const routing = await classStateCompanionFor({images, selfRef: target});
+  if (!routing) {
     throw new SmalltalkSlotAccessError(
       primitive,
       `${slotIdValue.value} is absent from the current shape of ${target.imageId}/${target.objectId}`,
     );
   }
-  return {record, slotId: slotIdValue.value};
+  // The dynamic class's metaclass must itself declare the slot — an inherited class-side method
+  // running on a class whose class-instance layout lacks the slot is refused, not silently routed.
+  const dynamicShape = await images.getShape(
+    routing.metaclassInstanceShapeRef.imageId, routing.metaclassInstanceShapeRef.objectId,
+  );
+  if (!dynamicShape?.slots.some(({id}) => id === slotIdValue.value)) {
+    throw new SmalltalkSlotAccessError(
+      primitive,
+      `${slotIdValue.value} is absent from the class-instance layout of ${routing.className}`,
+    );
+  }
+  const companion = await images.getObject(routing.companionRef.imageId, routing.companionRef.objectId);
+  if (!companion) {
+    throw new SmalltalkDanglingEdgeError('class-state companion', target, routing.companionRef);
+  }
+  return {record: companion, slotId: slotIdValue.value};
 }
 
 async function instanceSlotRead({images, primitiveImage, target, slotIdValue, context}) {
