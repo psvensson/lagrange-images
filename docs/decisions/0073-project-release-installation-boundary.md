@@ -1,94 +1,79 @@
 # ADR 0073: Project release and installation boundary
 
-Status: accepted — first semantic contract implemented in `src/project/model.js`; durable Project-object storage, bundle materialization and Git sync remain follow-up work
+Status: accepted — first semantic contracts implemented in `src/project/model.js`; durable Project storage, materialization/deployment and Git sync remain follow-up work
 
 ## Problem
 
-The roadmap has deliberately kept Project semantics in Lagrange Images while moving Project UX to
-Lagrange Object Environment. That ownership split is sound, but it leaves an important semantic gap:
-what does it mean to deploy a Project, or part of one, **as** a new Image or **into** an existing
-Image? The same gap blocks a precise answer for upgrades, Project export/import and live Git
-projection.
+Project semantics belong in Lagrange Images because headless agents, tooling, deployment and
+import/export need them independently of the Object Environment. The current ownership split is
+sound, but it did not yet answer a concrete lifecycle question:
 
-A tempting answer is to blur Project and Image:
+```text
+What does it mean to deploy a Project, or part of one, as a new Image or into an existing Image?
+```
+
+The same missing boundary affects upgrades, native Project export/import and live Git projection.
+
+A tempting answer is to collapse the concepts:
 
 ```text
 Project ~= miniature Image ~= checkout ~= deployable unit
 ```
 
-That would be wrong. An Image is a persistent live world with identity, state, execution and history.
-A Project is semantic organization *inside and across* that world. Git is an external projection.
-Deployment needs an immutable boundary between a changing Project and a target Image, not another
-name for either endpoint.
+That is rejected. An Image is a persistent live world with identity, mutable state, execution and
+history. A Project is semantic organization of image-visible material. Git is an external
+projection. Deployment needs an immutable boundary between a changing Project and a target Image;
+it is not another name for either endpoint.
 
-This ADR also has to respect current substrate limits rather than designing against imaginary
-features:
+This decision must also fit what exists today:
 
-- ADR 0061 already decides that a Project may designate a namespace, but namespace nesting is
-  visibility, **not Project containment**, and neither structure implies authority.
-- ADR 0071 defines an Image frontier as a per-image history revision and states that a cross-image
-  Project position is a **map `{imageId -> revision}`**, with no Project-level sequencing decision yet.
-  Historical/as-of reads are not implemented.
-- Generic graph export/import is still a roadmap item. There is no lossless portable graph bundle
-  today.
-- Record deletion/tombstone semantics are explicitly unresolved. An upgrade cannot honestly promise
-  to delete an obsolete installed member.
-- Project objects/relationships themselves remain planned ordinary image objects/refs. The current
-  indexed mutation lane cannot yet express every future relationship edit, and this ADR must not
-  invent a hidden JSON Project store to work around that.
+- ADR 0061: namespace parenting is visibility, not Project containment, and implies no authority.
+- ADR 0071: an Image frontier is a per-image history position; a cross-image Project position is a
+  **map `{imageId -> revision}`**, not one scalar. Historical/as-of reads and a Project-level
+  sequencing primitive do not yet exist.
+- Generic lossless graph export/import is still a roadmap item.
+- Deletion/tombstone semantics are unresolved, so an upgrade cannot honestly promise to delete an
+  obsolete target object.
+- Durable Project objects/relationships are still planned ordinary image objects/refs. This ADR must
+  not invent a hidden JSON Project store merely because that service is not built yet.
 
-The goal is therefore the smallest durable semantic boundary that later storage, bundle, installer
-and Git work can consume without changing identity again.
+The goal is the smallest stable semantic boundary that later Project storage, bundle, installer and
+Git work can consume without changing identity again.
 
 ## Fresh-review corrections to the initial proposal
 
-The initial Image / Project / Release / Installation distinction survives review, with four important
-corrections.
+### Release identity is separate from source provenance
 
-### 1. Release identity and source provenance are separate
+Equivalent deployable content assembled from different development Images should have the same
+release identity. Source ObjectRefs and source frontier maps therefore do not enter `releaseId`.
+They are provenance. This follows the repository-wide `dependency != provenance` rule.
 
-A release assembled from equivalent Project content in two different development Images should have
-the same semantic release identity. Source ObjectRefs and source frontier maps therefore **must not**
-participate in release identity. They are provenance.
+### Cross-image frontier is a map, never one number
 
-This follows the repository-wide rule `dependency != provenance`: release dependencies describe what
-the release requires; provenance describes where this particular release materialization came from.
+V1 can record `{imageId -> revision}` provenance but cannot claim that Lagrange captured it atomically
+or can reread every member as-of it. Future frontier-aware reads or Project sequencing may strengthen
+the producer without changing the release format.
 
-### 2. Project frontier is a map, never one number
+### DeploymentProfile v1 is explicit selection
 
-ADR 0071 has already decided this. A source-provenance position is:
+V1 profiles select stable Project member keys. They do not infer role filters, namespace containment,
+graph reachability, package dependencies or a universal closure rule before Project relationships
+exist. Richer policy may later *produce* this explicit selection.
 
-```text
-{
-  imageA: revisionA,
-  imageB: revisionB,
-  ...
-}
-```
+### Detach is not delete
 
-There is no atomic cross-image capture primitive yet. V1 records the map as provenance but does not
-claim that Lagrange can derive it atomically or read every member as-of that position. A future
-Project commit/sequencing primitive may supply that guarantee without changing this manifest shape.
+When an installed member disappears from the desired release, v1 emits `detach`: the installation
+stops managing the existing target. Target cleanup awaits explicit deletion/tombstone/GC semantics.
 
-### 3. V1 deployment selection is explicit, not inferred
+### Installation must preserve Project role
 
-A `DeploymentProfile` is an explicit set of stable Project member keys. V1 does **not** infer
-selection from roles, graph reachability, namespaces, ObjectRefs or language/package dependency
-rules. Project relationship semantics are not implemented yet, so there is no evidence for one
-universal closure rule.
-
-A later profile producer may compute a closure from richer Project relationships, but the release
-boundary still receives an explicit member set.
-
-### 4. Upgrade detach is not delete
-
-If member `X` existed in release R1 and is absent from R2, the v1 reconciliation action is `detach`:
-the installation stops managing `X`. It does **not** delete the target object. Deletion/tombstone/GC
-semantics are a separate unresolved graph concern (ADR 0071).
+`role` is part of release semantics. A target installation therefore records it beside the material
+identity. Otherwise an upgrade could silently `retain` identical bytes whose Project meaning changed
+(for example `test` -> `runtime-component`). V1 treats role change as a reconciliation change.
 
 ## Decision
 
-### 1. Image, Project, release manifest and installation are distinct concepts
+### Image, working Project, release manifest and installation are distinct
 
 ```text
 Image
@@ -96,83 +81,65 @@ Image
 
 Project
   semantic organization of image-visible material
-  has a portable semantic projectId
-  members have stable Project-local keys
+  portable semantic projectId
+  stable Project-local member keys
 
 ProjectReleaseManifest
   immutable/content-addressed deployment intent for an explicit Project subset
-  contains no source Image refs/frontiers
+  no source Image refs/frontiers
 
 ProjectInstallation
-  target-Image-specific record of which release is installed
-  maps Project member keys -> concrete target ObjectRefs
+  target-Image-specific state for one installed release
+  Project member key -> concrete target ObjectRef
 ```
 
-A future **ProjectRelease** in the full transport sense is:
+A future fully transportable `ProjectRelease` is conceptually:
 
 ```text
 ProjectReleaseManifest + portable member material/bundle
 ```
 
-Only the manifest/identity half is implemented here because generic lossless graph export/import does
-not yet exist.
+Only the manifest/identity half is implemented now because lossless graph bundle/export-import is not.
 
-### 2. Deploying "as an Image" means creating an Image and installing a release
-
-No conversion exists from Project identity to Image identity.
+### Deploying "as an Image" is composition, not conversion
 
 ```text
-Project working state
-      |
-      v
-release/profile
-      |
-      v
-ProjectRelease
-      |
-      +---- install into existing Image
-      |
-      `---- create/fork suitable base Image -> install into it
+working Project
+    -> select profile
+    -> make release
+    -> either install into an existing Image
+       or create/fork a suitable base Image and install into it
 ```
 
-Image clone/fork remains a different operation: it derives another live world, including whatever
-state/history the clone contract preserves. Project deployment installs selected release material.
+Image clone/fork remains a separate operation that derives another live world according to the Image
+copy contract. A Project never becomes an Image by identity conversion.
 
-### 3. Project identity is semantic and portable; member identity is Project-local
+### Project identity and member identity are semantic
 
-`projectId` is an opaque non-empty semantic identity generated once and preserved across
-export/import/installations. It is **not** an ObjectRef, Project name, namespace path or Git remote.
-The first helper generates `project:<uuid>`, but the contract only requires opaque stable text.
+`projectId` is opaque stable text generated once and preserved across export/import/installations. It
+is not an ObjectRef, Project name, namespace path, Git path or remote. The helper currently generates
+`project:<uuid>`; consumers must treat the text as opaque.
 
-Each direct Project member has:
+Each direct working Project member is:
 
 ```text
 { key, role, target }
 ```
 
-- `key` — stable identity within this Project lineage; opaque text, **not a filesystem path**.
-- `role` — language/tool policy text (`source`, `test`, `component`, `note`, etc.); the generic layer
-  does not enumerate roles.
-- `target` — current unpinned ObjectRef. It may point into another Image.
+- `key`: stable Project-local member identity; opaque text, not a filesystem path.
+- `role`: language/tool policy text. The generic Project layer does not enumerate roles.
+- `target`: current unpinned ObjectRef; it may point into another Image.
 
-The same target may participate in several Projects or under several deliberate Project meanings.
-A Project member key names the Project relationship, not the target object's global identity.
+Member identity is the Project relationship, not the target object's global identity. Objects may
+participate in several Projects. V1 deliberately does not invent richer relationship kinds yet.
 
-V1 membership is deliberately minimal. Typed Project-to-Project/member relationships remain roadmap
-work and must not be guessed merely to make deployment profiles convenient.
+### A Project may span Images
 
-### 4. A Project may span Images
+Direct member refs may name several Images. A Project's designated namespace remains independent
+organization: it is not automatically membership, deployment closure or authority. If a deployment
+needs namespace/binding material, a concrete producer must include it explicitly.
 
-Project membership may contain refs from several Images. This is consistent with the existing graph
-and with ADR 0071's cross-image frontier analysis.
-
-A designated namespace remains separate organization (ADR 0061). It is not automatically a release
-member, dependency closure or deployment namespace. If deployable namespace/binding material is
-needed, a concrete release producer must materialize it explicitly as release members.
-
-### 5. DeploymentProfile v1 is an explicit key set
-
-A profile is:
+### DeploymentProfile/v1 is an explicit member-key set
 
 ```text
 {
@@ -183,37 +150,19 @@ A profile is:
 }
 ```
 
-Member keys are unique and canonicalized in lexical code-unit order. A profile must select existing
-members of the named Project.
+Keys are unique, canonicalized by host-independent code-unit ordering, and must exist in the named
+Project. V1 has no implicit traversal or role/package/namespace closure semantics.
 
-No v1 semantics for:
-
-- role predicates
-- implicit traversal of refs
-- automatic package/runtime dependency closure
-- "everything reachable"
-- namespace containment
-
-Those may become *profile-production policies* later. They do not change the explicit release
-boundary.
-
-### 6. ProjectReleaseManifest v1 is canonical and content-addressed
-
-The manifest contains only portable deployment identity/intent:
+### ProjectReleaseManifest/v1 is canonical and content-addressed
 
 ```text
 {
   format: 'lagrange-project-release-manifest/v1',
   projectId,
   profileId,
-  releaseId: 'sha256:<canonical-manifest-body>',
+  releaseId: 'sha256:<canonical-body>',
   members: [
-    {
-      key,
-      role,
-      representation,
-      contentIdentity
-    }, ...
+    { key, role, representation, contentIdentity }, ...
   ],
   dependencies: [
     { projectId, releaseId }, ...
@@ -221,22 +170,20 @@ The manifest contains only portable deployment identity/intent:
 }
 ```
 
-`representation` and `contentIdentity` are supplied by the representation/materialization owner.
-The generic Project layer does not pretend it can serialize every ordinary object graph today.
-`contentIdentity` must denote immutable material according to that representation's contract; the
-Project layer freezes *which identity was selected*, not the truth of an arbitrary external hash.
+`representation` and `contentIdentity` come from the materialization/representation owner. The
+Project layer does not pretend it can serialize every ordinary object graph today. A
+`contentIdentity` must denote immutable material according to that representation's contract; this
+layer freezes which identity was selected, not the truth of an arbitrary external digest.
 
-Members and dependencies are canonically ordered. `releaseId` is SHA-256 over the canonical body
-(`projectId`, `profileId`, selected member material identities and release dependencies). Reordering
-inputs, changing the Project display name or assembling the same semantic material from different
-source Image refs does not change the release id. Changing selected material does.
+Members and dependencies are canonicalized using host-independent code-unit ordering. `releaseId` is
+SHA-256 over canonical `projectId`, `profileId`, selected member semantics/material identities and
+release dependencies. Project display name, working ObjectRefs, source Images and source frontiers do
+not enter the hash. Changing a member role or material identity does.
 
-A release must not directly depend on another release of the same Project in v1. Upgrade lineage is
-represented by installations/reconciliation, not by making R2 depend on R1.
+A release cannot directly depend on another release of the same Project in v1. Upgrade lineage is
+installation/reconciliation state, not a release dependency on its predecessor.
 
-### 7. Release provenance is a separate record
-
-Source provenance is:
+### Release provenance is separate data
 
 ```text
 {
@@ -253,20 +200,17 @@ Source provenance is:
 }
 ```
 
-The frontier map is canonicalized by Image id and revisions are canonical decimal strings. It must
-cover at least every Image directly named by a selected member source. Extra frontiers are allowed
-because a representation-specific materialization may depend on declared/transitive material beyond
-its direct member root.
+Revisions are canonical decimal strings and Image ids are canonicalized by code-unit order. The map
+must cover every Image directly named by a selected member source; extra frontiers are permitted for
+representation-specific transitive material.
 
-This record is **evidence/provenance**, not release identity and not a historical-read API. V1 does
-not claim the source map was atomically captured. A producer is responsible for ensuring the
-`contentIdentity` it emits corresponds to what it actually read. Future frontier-aware reads or a
-Project commit primitive can strengthen that producer without changing release identity.
+This is evidence/provenance, not release identity and not an as-of read API. V1 does not claim atomic
+cross-image capture. The producer remains responsible for matching each emitted `contentIdentity` to
+what it actually read.
 
-### 8. ProjectInstallation is target-specific state
+### ProjectInstallation/v1 is target-specific mapping state
 
-After a materializer has created/resolved the selected members in target Image `T`, an installation
-records:
+After a materializer creates or resolves selected members in target Image `T`, the installation is:
 
 ```text
 {
@@ -277,6 +221,7 @@ records:
   members: [
     {
       key,
+      role,
       representation,
       contentIdentity,
       target: ObjectRef(T, ...)
@@ -285,73 +230,62 @@ records:
 }
 ```
 
-Every target ref must belong to the installation target Image. The installation maps portable
-Project member identity onto target-local object identity. It is **not** a copy of the Project and
-does not turn target ObjectRefs into Project identity.
+Every target ref belongs to `T`. The record maps portable Project member identity onto target-local
+object identity. Target refs never become Project identity. Durable storage of this descriptor as
+ordinary image objects remains follow-up work.
 
-Durable storage of the installation record as ordinary image objects remains follow-up work; this
-ADR fixes its semantic shape first.
-
-### 9. Upgrade is reconciliation from installed base to desired release
-
-The implemented v1 planner is pure/effect-free:
+### Upgrade v1 is pure reconciliation planning
 
 ```text
 (current ProjectInstallation, next ProjectReleaseManifest)
-       -> reconciliation actions
+      -> reconciliation plan
 ```
 
-For each stable member key:
+Per stable member key:
 
 - absent -> present: `install`
-- same representation + contentIdentity: `retain`
-- present with changed material: `replace`
+- same `role + representation + contentIdentity`: `retain`
+- present with changed role or material: `replace`
 - present -> absent: `detach`
 
-The planner does **not** mutate an Image, authorize anything, run migrations or decide a
-representation-specific materialization strategy. It also cannot detect local drift merely from the
-installation record: a future executor must compare the target's current managed state using the
-representation-specific contract before replacing it.
+The planner is effect-free. It does not mutate an Image, authorize operations, copy material, run
+migrations or choose a representation-specific materializer. It also cannot detect local target
+drift from the installation record alone. A future executor must compare the current managed target
+through the representation-specific contract before replacing it.
 
-This separation is intentional. A later deployment reconciler can be durable/idempotent and may use
-a final installation-record switch as the visible commit point, but it must be designed against real
-materializers and migration pressure.
+A later deployment reconciler may be durable/idempotent and may use an installation-record switch as
+a visible commit point, but that must be designed against real materializers and migration pressure.
 
-### 10. Managed definitions and live state remain different deployment concerns
+### Managed definitions and live state remain different concerns
 
-The generic release manifest does not claim that every Project member should be copied/replaced.
-Typical future materializers may distinguish:
+The generic manifest does not claim every selected thing should be copied/replaced identically.
+Future producers/materializers may distinguish, for example:
 
 ```text
-immutable code/component/artifact   -> release-managed
-configuration default               -> seed / explicit policy
-persistent domain object            -> preserve live target state
-schema evolution                    -> explicit migration
-notes/tests                          -> excluded by runtime profile unless selected
+immutable code/component/artifact -> release-managed
+configuration default             -> seed / explicit policy
+persistent domain object          -> preserve target live state
+schema evolution                  -> explicit migration
+notes/tests                        -> selected only when the profile wants them
 ```
 
-Those policies belong to concrete Project relationships/profile production/materializers. Do not add
-an enum to the generic Project model without a real deployment consumer proving the common cases.
+Do not add a generic enum for those cases until real deployment consumers prove a common contract.
 
-### 11. Native export and Git projection sit above the same identities
-
-The long-term layering is:
+### Native export and Git projection sit above the same identities
 
 ```text
 Project / ProjectReleaseManifest
-        |
-        +-- lossless Project bundle / generic graph export-import   (future)
-        |
-        `-- Git/file projection                                     (future)
+       |
+       +-- lossless Project bundle / generic graph export-import   (future)
+       |
+       `-- Git/file projection                                     (future)
 ```
 
-A native bundle is the lossless Lagrange transport needed to make a release self-contained. Git is
-not that format and does not become Image storage.
+A native bundle is the lossless Lagrange transport that can eventually make a release self-contained.
+Git is an interoperable projection, not Image storage and not the native release format.
 
-Git projection should map stable Project member keys to paths through explicit projection metadata.
-A path rename must not create a new Project member identity merely because a file moved.
-
-Live Git synchronization should later use a sync anchor such as:
+Git projection should keep an explicit `memberKey <-> path` mapping, so moving a file does not change
+Project member identity. Live sync should later use a common-base anchor, conceptually:
 
 ```text
 {
@@ -361,14 +295,12 @@ Live Git synchronization should later use a sync anchor such as:
 }
 ```
 
-and reconcile both sides from that common base. External file changes become candidate semantic
-Project changes, not direct writes to an Image record. Provider-specific GitHub/GitLab/Codeberg APIs
-sit above generic Git projection/sync semantics; credentials remain host/control-plane state, never
+and reconcile Image-side and Git-side changes from that base. External file changes become candidate
+semantic Project changes, not direct writes to arbitrary image records. GitHub/GitLab/Codeberg
+adapters and credentials sit above generic Git projection semantics; credentials never become
 Project data.
 
-### 12. Project/release/installation confer no authority
-
-The existing invariant remains strict:
+### None of these structures confer authority
 
 ```text
 Project membership != authority
@@ -378,13 +310,13 @@ installation        != authority
 Git projection      != authority
 ```
 
-Reading source material for release/export requires read authority. Installing/upgrading requires the
-appropriate create/write/edge authority on the target. Migrations require their own execution
-rights. Nothing in Project structure recursively widens authority.
+Release/export reads require read authority. Installation/upgrade requires explicit target create,
+write and edge authority. Migrations need their own execution rights. Project structure never widens
+authority transitively.
 
 ## Implemented in this slice
 
-`src/project/model.js` provides pure, host-independent contracts for:
+`src/project/model.js` provides pure contracts for:
 
 - `createProjectDescriptor` / `normalizeProjectDescriptor`
 - `createDeploymentProfile` / `selectProjectMembers`
@@ -393,62 +325,59 @@ rights. Nothing in Project structure recursively widens authority.
 - `createProjectInstallation`
 - effect-free `planProjectUpgrade`
 
-The model is exported from the package (`lagrange-images/project` and the main runtime barrel).
-Tests prove cross-Image membership, explicit subset selection, canonical release identity independent
-of source refs/order/name, provenance separation/frontier maps, target-local installation mapping and
-`install/retain/replace/detach` upgrade planning.
+The module is exported as `lagrange-images/project` and from the main runtime barrel. Tests prove:
 
-These descriptors are **not a shadow durable Project store**. The authoritative durable Project model
-still belongs in ordinary Image objects/refs when implemented. This module fixes the semantic
-contracts those objects/services must satisfy.
+- cross-Image working membership and unique stable member keys
+- explicit profile subset selection
+- canonical release identity independent of source refs/order/display name
+- release/provenance separation and cross-Image frontier maps
+- target-local installation mappings
+- `install/retain/replace/detach` upgrade planning
+- member role survives installation and role-only change is not silently retained
 
-## Deferred by evidence, not by omission
+These descriptors are **not** a shadow durable Project store. The authoritative working Project model
+still belongs in ordinary image objects/refs when that service is implemented. This module fixes the
+semantic contracts those objects/services must satisfy.
+
+## Deferred by evidence
 
 - durable Project object/member/relationship Shapes and mutation service
-- Project-level sequencing/commit semantics across several Image frontier axes
-- revision-aware capture of release material at a historical frontier
-- generic lossless graph bundle/export-import format
+- Project-level sequencing/commit semantics across multiple Image frontier axes
+- revision-aware capture at a historical frontier
+- generic lossless graph bundle/export-import
 - representation-specific member materializers/installers
 - durable/idempotent deployment reconciler and recovery protocol
 - migration contracts and local-drift/conflict semantics
 - target cleanup/deletion/GC after `detach`
-- Git/file projection format and path mapping
-- live bidirectional Git synchronization and provider adapters
+- Git/file projection format and stable path mapping
+- live bidirectional Git sync and provider adapters
 - Project branch/diff/merge/conflict objects
-
-Each has a stable boundary to attach to now; none is falsely claimed by this first slice.
 
 ## Consequences
 
-- Project and Image no longer need to blur for deployment. A Project can be released and installed
-  into zero, one or many Images while each target keeps its own object identity and live state.
-- Deploying a Project "as an Image" is composition (`create/fork base Image -> install release`), not
-  type conversion.
-- Partial deployment is explicit and reproducible through stable member keys and a profile.
-- Equivalent release content built from different development Images receives the same release id;
-  source provenance remains available without contaminating semantic identity.
-- Upgrade has a stable three-way-shaped base (`installed release`, `target mapping`, `desired
-  release`) without pretending the pure planner can perform or authorize the effects.
-- The absence of deletion semantics is reflected honestly as `detach`, leaving later GC/deletion work
-  free to choose the right model.
-- Git can later become a live interoperable projection without becoming the canonical ontology.
+The Image/Project deployment boundary is now explicit without overclaiming execution support. A
+Project can eventually be released and installed into zero, one or many Images while target Images
+keep their own object identity and live state. Partial deployment has an explicit reproducible
+selection. Equivalent content from different development Images shares release identity while source
+provenance remains available. Upgrade has a stable reconciliation base without pretending that a pure
+planner can copy, authorize or migrate anything. Git can later synchronize against the same semantic
+identities without becoming the platform ontology.
 
 ## Guardrails
 
 ```text
-Image != Project. Image is the live world; Project is semantic organization.
-Image fork/clone != Project deployment. Deploy-as-Image = create/fork base Image + install release.
-projectId is semantic portable identity, never ObjectRef/name/namespace/path/Git remote.
-member key is stable Project-local identity, never filesystem path; target ObjectRef is current
-  working identity and may be cross-Image.
+Image != Project.
+Image fork/clone != Project deployment.
+Deploy-as-Image = create/fork suitable base Image + install release.
+projectId is portable semantic identity, never ObjectRef/name/namespace/path/Git remote.
+member key is Project-local semantic identity, never a filesystem path.
 namespace visibility != Project membership != deployment closure != authority.
-DeploymentProfile/v1 is an explicit member-key set. No inferred reachability/role/package closure.
-release identity != release provenance. Source refs/frontiers never enter releaseId.
-ProjectReleaseManifest/v1 is content-addressed semantic intent, NOT yet a self-contained graph bundle.
-Project frontier provenance is {imageId -> revision}, never one scalar. V1 records but does not
-  atomically capture/read that map.
-ProjectInstallation maps member keys -> target-local refs; target refs never become Project identity.
-upgrade planning is effect-free install/retain/replace/detach. detach != delete.
-release/install/project membership confer no authority.
-Git/file is a projection; never canonical Image/Project storage.
+DeploymentProfile/v1 is explicit member-key selection; no inferred universal closure.
+release identity != release provenance; source refs/frontiers never enter releaseId.
+ProjectReleaseManifest/v1 is deployment intent, not yet a self-contained graph bundle.
+Project frontier provenance is {imageId -> revision}; v1 records but cannot atomically capture/read it.
+ProjectInstallation maps member keys -> target-local refs and preserves member role.
+upgrade is effect-free install/retain/replace/detach; detach != delete.
+Project/release/installation/Git projection confer no authority.
+Git/file is projection, never canonical Image/Project storage.
 ```
