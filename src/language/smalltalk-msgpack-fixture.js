@@ -337,11 +337,20 @@ function adaptMethod({className, side, method, adaptations}) {
     || selector.startsWith('writeExt')
     || selector.startsWith('writeFixext')
     || selector.startsWith('writeTimestamp')
-    || selector.startsWith('readExt')
-    || selector.startsWith('readFixext')
     || selector.startsWith('readFixedTimestamp')
     || selector.startsWith('readTimestamp')
-    || selector.startsWith('defineExtsActionsTo:')
+    // Both `defineExtsActionsTo:` overrides are dropped: the encode side
+    // references `MpExtValue`/`MpFixextValue`/`defineTimestampActionTo:`, and the
+    // ext readers the decode side maps (`readFixext:as:`, `readExtSized:as:`)
+    // reference `MpExtValue`/`MpFixextValue` and `ByteArray with:`/`next:` — all
+    // outside the pinned scalar closure. With both overrides dropped, the base
+    // `MpTypeMapper class>>defineExtsActionsTo:` no-op (`"override"` -> nil) is
+    // inherited, and `createActionMap` runs unchanged. Ext/timestamp decode then
+    // signals a normal unmapped-type error rather than reaching a half-bound
+    // method.
+    || (className !== 'MpTypeMapper' && selector.startsWith('defineExtsActionsTo:'))
+    || selector.startsWith('readFixext')
+    || selector.startsWith('readExt')
     || selector.startsWith('timestampFromSeconds')
     || selector.startsWith('unixSecondsWithNanosecondsFrom')
   ) {
