@@ -1,0 +1,15 @@
+{
+	"commentStamp" : "",
+	"super" : "Object",
+	"category" : "MessagePack-Core",
+	"classinstvars" : [ ],
+	"pools" : [ ],
+	"classvars" : [ ],
+	"instvars" : [
+		"writeStream",
+		"typeMapper",
+		"settings"
+	],
+	"name" : "MpEncoder",
+	"type" : "normal"
+}

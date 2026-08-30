@@ -1,0 +1,13 @@
+{
+	"commentStamp" : "",
+	"super" : "MpTypeMapper",
+	"category" : "MessagePack-Core",
+	"classinstvars" : [ ],
+	"pools" : [ ],
+	"classvars" : [ ],
+	"instvars" : [
+		"encoder"
+	],
+	"name" : "MpEncodeTypeMapper",
+	"type" : "normal"
+}
