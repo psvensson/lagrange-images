@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {ensureBlock, ensureCodeArtifact, ensureLexicalEnvironment} from '../graph/ensure-records.js';
-import {NIL_BINDING_ID} from './symmetric-smalltalk-semantic.js';
+import {NIL_BINDING_ID, SYMBOL_BINDING_ID} from './symmetric-smalltalk-semantic.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {globalDeclarations} from './smalltalk-globals.js';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
@@ -43,6 +43,7 @@ async function ensureCompilerSuppliedEnvironment({
   const captures = program.captures ?? [];
   const captureIds = new Set(captures.map(({id: captureId}) => captureId));
   const usesNil = captureIds.has(NIL_BINDING_ID);
+  const usesSymbol = captureIds.has(SYMBOL_BINDING_ID);
   // Exactly the globals compilation resolved — never every published id that happens to appear
   // among the captures. An explicit caller capture may legitimately use an id that is also a
   // published binding, and substituting the binding object for the caller's value would collapse
@@ -60,7 +61,7 @@ async function ensureCompilerSuppliedEnvironment({
     }
     globalCaptures.push(capture);
   }
-  if (!usesNil && globalCaptures.length === 0) return parent;
+  if (!usesNil && !usesSymbol && globalCaptures.length === 0) return parent;
 
   const bindings = {};
   if (usesNil) {
@@ -68,12 +69,17 @@ async function ensureCompilerSuppliedEnvironment({
     if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel; nil has no value there`);
     bindings[NIL_BINDING_ID] = {name: 'nil', value: kernel.nil};
   }
+  if (usesSymbol) {
+    bindings[SYMBOL_BINDING_ID] = {name: '$symbol', value: objectRef(imageId, 'smalltalk/primitive/symbol-intern')};
+  }
   for (const {id: bindingId, name} of globalCaptures) {
     // The image-local ref lives here, in the environment — never in the semantic artifact.
     bindings[bindingId] = {name, value: objectRef(imageId, bindingId)};
   }
 
-  const environmentId = globalCaptures.length === 0 ? `${id}:nil-environment` : `${id}:compiler-environment`;
+  const environmentId = globalCaptures.length === 0 && !usesSymbol
+    ? `${id}:nil-environment`
+    : `${id}:compiler-environment`;
   const record = await ensureLexicalEnvironment(images, imageId, {
     id: environmentId,
     ...(parent ? {parent} : {}),

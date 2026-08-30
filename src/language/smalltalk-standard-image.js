@@ -13,6 +13,7 @@ import {installSmalltalkInstanceVariableProtocol} from './smalltalk-instance-var
 import {installSmalltalkIntegerProtocol} from './smalltalk-integer.js';
 import {findSmalltalkKernel, installSmalltalkKernel} from './smalltalk-kernel.js';
 import {installSmalltalkLibrary} from './smalltalk-library.js';
+import {installSmalltalkSymbolProtocol} from './smalltalk-symbol.js';
 
 // The normal, complete Symmetric Smalltalk image. This is composition, not a new semantic layer:
 // every record is still owned by the installer that defines it, and all of those low-level
@@ -111,6 +112,7 @@ async function installSymmetricSmalltalkStandardImage({
   // so the condition installer never takes the slot-read dependency it deliberately avoids.
   const exceptionAccessors = await installSmalltalkExceptionAccessors(options);
   const dictionary = await installSmalltalkDictionaryProtocol(options);
+  const symbol = await installSmalltalkSymbolProtocol(options);
 
   // Namespace publication is deliberately separate from class creation. Installing the namespace
   // publishes the kernel classes; the public post-kernel classes are named explicitly here. In
@@ -139,6 +141,7 @@ async function installSymmetricSmalltalkStandardImage({
       conditions,
       exceptionAccessors,
       dictionary,
+      symbol,
       globals,
     }),
     classes: Object.freeze({

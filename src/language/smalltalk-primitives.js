@@ -58,6 +58,11 @@ import {
   nonLocalReturn,
   requireConditions,
 } from './smalltalk-primitives-control.js';
+import {
+  performSend,
+  performSendWith,
+  symbolIntern,
+} from './smalltalk-primitives-symbol.js';
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
 
 // The executor for the `smalltalk-kernel-primitive/v1` representation, and nothing else: the
@@ -229,6 +234,12 @@ function createSmalltalkKernelPrimitiveV1Executor({
             images, primitiveImage, value, blockValue: second,
             sendMessage: requireSendMessage(context, primitive, 'apply the pair Block'),
           });
+        case SMALLTALK_PRIMITIVE.SYMBOL_INTERN:
+          return await symbolIntern({images, primitiveImage, value});
+        case SMALLTALK_PRIMITIVE.PERFORM_SEND:
+          return await performSend({images, primitiveImage, value, second, context, primitive});
+        case SMALLTALK_PRIMITIVE.PERFORM_SEND_WITH:
+          return await performSendWith({images, primitiveImage, value, second, third, context, primitive});
         default:
           throw new TypeError(`unknown ${SMALLTALK_KERNEL_PRIMITIVE_V1} primitive: ${primitive}`);
       }

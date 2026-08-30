@@ -18,6 +18,7 @@ import {
   NIL_CAPTURE,
   NON_LOCAL_RETURN_CAPTURE,
   INSTANCE_SLOT_WRITE_CAPTURE,
+  SYMBOL_BINDING_ID,
   compileSymmetricSmalltalkSemanticBlock,
 } from './symmetric-smalltalk-semantic.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
@@ -239,6 +240,8 @@ async function defineMethodsFromSource({images, compilation, imageId, classRef, 
       // ADR 0056: the nil intrinsic resolves to this image's kernel nil, exactly as the slot
       // primitives resolve to this image's Blocks.
       if (id === NIL_BINDING_ID) return {id, name, value: kernelNil};
+      // The symbol intrinsic binds to the image-local interner primitive Block.
+      if (id === SYMBOL_BINDING_ID) return {id, name, value: objectRef(imageId, 'smalltalk/primitive/symbol-intern')};
       // ADR 0057: a resolved global binds to that binding object in *this* image. The artifact
       // carried only the id; the ref appears here, at installation.
       if (resolvedGlobals.has(id)) return {id, name, value: objectRef(imageId, id)};

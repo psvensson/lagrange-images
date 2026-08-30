@@ -333,6 +333,11 @@ test('the library adds no new kernel primitive', async () => {
     'integer-multiply',
     'integer-subtract',
     'non-local-return',
+    // Symbol protocol: interning and dynamic send, installed by
+    // `installSmalltalkSymbolProtocol` which the standard image runs.
+    'perform-send',
+    'perform-send-with',
+    'symbol-intern',
   ]);
 });
 
