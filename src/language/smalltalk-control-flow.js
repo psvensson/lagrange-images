@@ -1,5 +1,6 @@
 import {booleanValue, isObjectRef, textValue} from '../value/index.js';
 import {defineMethods} from './smalltalk-class-builder.js';
+import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
@@ -152,9 +153,40 @@ async function installSmalltalkControlFlow({images, compilation, imageId, lane =
     });
     installed[className] = classRef;
   }
+  // ifNil:/ifNotNil: — the nil-checking protocol, installed on UndefinedObject (nil) and
+  // Object (everything else). Ordinary Smalltalk methods over the existing conditional
+  // and identity protocol: no new primitive, no compiler knowledge.
+  //
+  // UndefinedObject (nil): ifNil: evaluates the block; ifNotNil: answers nil.
+  // Object (everything else): ifNil: answers self; ifNotNil: evaluates the block.
+  const undefinedObjectClass = await classOfSingleton(images, kernel.nil, 'nil');
+  await defineMethodsFromSource({
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef: undefinedObjectClass,
+    methods: [
+      {selector: 'ifNil:', source: '[ :aBlock | ^ aBlock value ]'},
+      {selector: 'ifNotNil:', source: '[ :aBlock | ^ nil ]'},
+    ],
+  });
+  await defineMethodsFromSource({
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef: kernel.objectClass,
+    methods: [
+      {selector: 'ifNil:', source: '[ :aBlock | ^ self ]'},
+      {selector: 'ifNotNil:', source: '[ :aBlock | ^ aBlock value ]'},
+    ],
+  });
+
   return Object.freeze({
     trueClass: installed.True,
     falseClass: installed.False,
+    undefinedObjectClass,
     selectors: SMALLTALK_CONTROL_FLOW_SELECTORS,
   });
 }

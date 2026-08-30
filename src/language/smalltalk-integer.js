@@ -202,6 +202,11 @@ async function installSmalltalkIntegerProtocol({images, compilation, imageId, la
           ^ self ]`,
       },
       {selector: 'timesRepeat:', source: '[ :aBlock | 1 to: self do: [ :i | aBlock value ]. ^ self ]'},
+      // Binary selector convenience for bitShift:. `a >> b` shifts right by b (negative bitShift);
+      // `a << b` shifts left by b (positive bitShift). Written against the installed primitive,
+      // not a new one.
+      {selector: '>>', source: '[ :shift | ^ self bitShift: 0 - shift ]'},
+      {selector: '<<', source: '[ :shift | ^ self bitShift: shift ]'},
     ],
   });
 
