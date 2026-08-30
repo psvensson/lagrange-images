@@ -512,13 +512,36 @@ async function installMessagePackFromFixture({images, compilation, imageId, fixt
       {selector: 'atEnd', source: '[ ^ position >= bytes size ]'},
     ],
   });
-  // The dialect adapter's factory overrides, reached through `MpPortableUtil
-  // default` (which is a `SymPortableUtil` via the adapted `detect...`).
+  // The dialect adapter's overrides, reached through `MpPortableUtil default`
+  // (which is a `SymPortableUtil` via the adapted `detect...`). These are the
+  // methods upstream declares `subclassResponsibility` in `MpPortableUtil`:
+  // the byte-stream factories and the big-endian 16/32/64-bit integer IO. All
+  // are ordinary Smalltalk over the image's general bitwise/shift protocol —
+  // no MessagePack-specific primitive. Signed values use two's complement via
+  // `bitAnd:` with the width mask, exactly as Standard Smalltalk does.
   await defineMethodsFromSource({
     images, compilation, imageId, lane, classRef: adapterClassRef,
     methods: [
       {selector: 'newByteWriteStream', source: '[ ^ SymByteWriteStream new ]'},
       {selector: 'readStreamOn:', source: '[ :aCollection | ^ SymByteReadStream new bytes: aCollection ]'},
+
+      // 16-bit
+      {selector: 'writeUint16:to:', source: '[ :value :stream | stream nextPut: (value >> 8). stream nextPut: (value bitAnd: 255) ]'},
+      {selector: 'readUint16From:', source: '[ :stream | ^ ((stream next) << 8) + (stream next) ]'},
+      {selector: 'writeInt16:to:', source: '[ :value :stream | self writeUint16: (value bitAnd: 65535) to: stream ]'},
+      {selector: 'readInt16From:', source: '[ :stream | | v | v := self readUint16From: stream. v >= 32768 ifTrue: [ ^ v - 65536 ]. ^ v ]'},
+
+      // 32-bit
+      {selector: 'writeUint32:to:', source: '[ :value :stream | self writeUint16: (value >> 16) to: stream. self writeUint16: (value bitAnd: 65535) to: stream ]'},
+      {selector: 'readUint32From:', source: '[ :stream | ^ ((self readUint16From: stream) << 16) + (self readUint16From: stream) ]'},
+      {selector: 'writeInt32:to:', source: '[ :value :stream | self writeUint32: (value bitAnd: 4294967295) to: stream ]'},
+      {selector: 'readInt32From:', source: '[ :stream | | v | v := self readUint32From: stream. v >= 2147483648 ifTrue: [ ^ v - 4294967296 ]. ^ v ]'},
+
+      // 64-bit
+      {selector: 'writeUint64:to:', source: '[ :value :stream | self writeUint32: (value >> 32) to: stream. self writeUint32: (value bitAnd: 4294967295) to: stream ]'},
+      {selector: 'readUint64From:', source: '[ :stream | ^ ((self readUint32From: stream) << 32) + (self readUint32From: stream) ]'},
+      {selector: 'writeInt64:to:', source: '[ :value :stream | self writeUint64: (value bitAnd: 18446744073709551615) to: stream ]'},
+      {selector: 'readInt64From:', source: '[ :stream | | v | v := self readUint64From: stream. v >= 9223372036854775808 ifTrue: [ ^ v - 18446744073709551616 ]. ^ v ]'},
     ],
   });
 
