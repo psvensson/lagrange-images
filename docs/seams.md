@@ -156,6 +156,18 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `installSmalltalkIndexedProtocol()` | `Array`, `Class >> basicNew:`, `Array class >> new:`, and `Array >> size`/`at:`/`at:put:` over four more `smalltalk-kernel-primitive/v1` Blocks (ADR 0047) |
 | `installSmalltalkSymbolProtocol()` | the Symbol Shape/class, `symbol-intern`/`perform-send`/`perform-send-with` primitives, `Symbol >> asString`, and `Object >> perform:`/`perform:with:` |
 | `installSmalltalkClassVariableSupport()` | the ClassVariableBinding Shape/class with `value`/`value:` methods; `declareClassVariables()` creates hierarchy-scoped bindings |
+| `smalltalk-class-state.js` (`ensureClassStateCompanion()`, `classStateCompanionFor()`) | class-instance state: the per-class companion (`smalltalk/class-state/<ClassName>`) holding class-instance *values*, and the dynamic-self routing that resolves a class-side slot access to the dynamic class's companion |
+
+Class-instance variables are the per-class counterpart of class variables. A metaclass instance
+Shape declares the logical class-instance layout; a per-class companion object holds the values.
+`defineClass()` ensures a companion whenever a class has a visible class-instance layout (its own
+or inherited), preserving already-written values on rediscovery. A class-side method names a slot
+by its *defining* metaclass but reads/writes the slot of its *dynamic* self class: the
+`instance-slot-read`/`instance-slot-write` primitives keep their single operation, and physical
+resolution routes a class object (whose slot is absent from the fixed Behavior shape) to the
+dynamic class's companion. An explicitly supplied `metaclassInstanceShapeRef` obeys the same
+complete inherited-slot-id rule as an ordinary instance Shape — a subclass may extend but must not
+drop inherited class-instance slots.
 
 A boolean Value dispatches by bridging to that image's `true`/`false` object, which becomes the
 send's `effectiveReceiver` — the optional second key of a dispatch resolution. Every other immediate

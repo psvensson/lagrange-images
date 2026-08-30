@@ -54,6 +54,7 @@ import {
 } from './smalltalk-kernel.js';
 import {WASM_FUNCTION_V1, WASM_MODULE_V1} from '../code/wasm-artifacts.js';
 import {assembleWasmV1FunctionArtifact} from '../wasm/tree-installer-v1.js';
+import {ensureClassStateCompanion} from './smalltalk-class-state.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 // Installing methods onto a class, and defining new classes with their metaclasses.
@@ -830,10 +831,15 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
 
   // Class-instance variables: when supplied, the metaclass gets a real instance shape so
   // class-side methods can access per-class state. Default nil means no class-instance state,
-  // which is what every class in an image has today.
+  // which is what every class in an image has today. An explicitly supplied metaclass instance
+  // shape obeys the SAME complete inherited-slot-id rule as an ordinary instance shape: a subclass
+  // may extend the class-instance layout but must not drop inherited class-instance slots.
   const metaclassInstanceShape = metaclassInstanceShapeRef === null
     ? kernel.nil
-    : metaclassInstanceShapeRef;
+    : await requireInstanceShape({
+      images, imageId, instanceShapeRef: metaclassInstanceShapeRef,
+      superclassRef: superMetaclass, name: `${name} class`, nilRef: kernel.nil,
+    });
 
   await ensureMethodDictionaryShape(images, imageId);
   const classObjectId = `smalltalk/class/${name}`;
@@ -856,6 +862,27 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
         'behavior-instance-shape': shapeRef,
       },
       metadata: {smalltalk: 'behavior', name: behaviorName},
+    });
+  }
+
+  // Companion lifecycle is production behavior, not fixture setup. When this class has a visible
+  // class-instance layout — its own or inherited — ensure a per-class companion exists. A subclass
+  // inheriting the layout needs its own companion even when it declares no new class-instance
+  // variables. Rediscovery preserves any values already written. The companion's shape is the
+  // *visible* class-instance layout: the explicit shape when supplied, else the nearest inherited
+  // one (whose ref we recover from the ancestor that declared it).
+  let companionShapeRef = null;
+  if (metaclassInstanceShapeRef !== null) {
+    companionShapeRef = metaclassInstanceShape; // a ref, already validated complete-inherited
+  } else {
+    const inheritedLayout = await nearestDeclaredInstanceShape({
+      images, superclassRef: superMetaclass, nilRef: kernel.nil, name: `${name} class`,
+    });
+    if (inheritedLayout) companionShapeRef = objectRef(inheritedLayout.imageId ?? imageId, inheritedLayout.id);
+  }
+  if (companionShapeRef) {
+    await ensureClassStateCompanion({
+      images, imageId, classRef: ref(classObjectId), classInstanceShapeRef: companionShapeRef,
     });
   }
   return Object.freeze({classRef: ref(classObjectId), metaclassRef: ref(metaclassObjectId)});
