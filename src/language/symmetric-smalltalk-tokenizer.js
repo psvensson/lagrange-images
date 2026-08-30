@@ -1,5 +1,9 @@
 const BINARY_SELECTOR_CHARS = new Set('+-*/=<>~&,@%?!\\'.split(''));
 
+// Symbol literal characters. `#` begins a symbol; what follows determines the form:
+// identifier chars (unary), keyword sequence (`#at:put:`), or binary selector chars (`#+`).
+// Quoted symbols are deliberately not supported.
+
 // ADR 0056 decision 3. Reserved pseudo-literals: they read as identifiers but are not names, so
 // nothing may declare, capture, shadow or assign to one.
 //
@@ -51,6 +55,49 @@ function tokenizeSymmetricSmalltalk(source) {
       if (index >= source.length) throw new SymmetricSmalltalkSyntaxError('unterminated comment', start);
       index += 1;
       continue;
+    }
+
+    // Symbol literal: `#` followed by identifier chars (unary), a keyword sequence
+    // (`#at:put:`), or binary selector chars (`#+`). The token carries the canonical
+    // selector text. No quoted/arbitrary symbol syntax.
+    if (char === '#') {
+      const start = index;
+      index += 1; // consume '#'
+      if (index >= source.length) {
+        throw new SymmetricSmalltalkSyntaxError('bare # is not a valid symbol literal', start);
+      }
+      const next = source[index];
+      if (isIdentifierStart(next)) {
+        // Unary or keyword symbol: read identifier chars, then optionally ':' sequences
+        let value = '';
+        while (index < source.length) {
+          if (isIdentifierPart(source[index])) {
+            value += source[index];
+            index += 1;
+            continue;
+          }
+          if (source[index] === ':' && source[index + 1] !== '=') {
+            value += ':';
+            index += 1;
+            continue;
+          }
+          break;
+        }
+        push('symbol', value, start);
+        continue;
+      }
+      if (BINARY_SELECTOR_CHARS.has(next)) {
+        let value = '';
+        while (index < source.length && BINARY_SELECTOR_CHARS.has(source[index])) {
+          value += source[index];
+          index += 1;
+        }
+        push('symbol', value, start);
+        continue;
+      }
+      throw new SymmetricSmalltalkSyntaxError(
+        `invalid symbol literal: #${next}`, start,
+      );
     }
 
     if (char === "'") {

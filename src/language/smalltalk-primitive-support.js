@@ -71,6 +71,12 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   CONDITION_RETURN: 'condition-return',
   // ADR 0055. Reached by a send the compiler lowers `^` to; never written by a programmer.
   NON_LOCAL_RETURN: 'non-local-return',
+  // Symbol interning: takes a Text spelling, answers the canonical image-local Symbol.
+  SYMBOL_INTERN: 'symbol-intern',
+  // Dynamic send: extracts the selector from a Symbol and re-enters the ordinary message
+  // runtime. `perform-send` is the 0-argument form; `perform-send-with` takes one argument.
+  PERFORM_SEND: 'perform-send',
+  PERFORM_SEND_WITH: 'perform-send-with',
 });
 
 const SMALLTALK_PRIMITIVE_NAMES = Object.freeze(Object.values(SMALLTALK_PRIMITIVE));
@@ -110,6 +116,9 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.CONDITION_RESUME]: 2,
   [SMALLTALK_PRIMITIVE.CONDITION_RETURN]: 2,
   [SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN]: 1,
+  [SMALLTALK_PRIMITIVE.SYMBOL_INTERN]: 1,
+  [SMALLTALK_PRIMITIVE.PERFORM_SEND]: 2,
+  [SMALLTALK_PRIMITIVE.PERFORM_SEND_WITH]: 3,
 });
 
 // One locality rule for every primitive. A foreign primitive Block must fail rather than answer a

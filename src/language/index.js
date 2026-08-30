@@ -32,6 +32,8 @@ export * from './smalltalk-method-dictionary.js';
 export * from './smalltalk-method-dictionary-migration.js';
 export * from './smalltalk-indexed.js';
 export * from './smalltalk-primitives.js';
+export * from './smalltalk-primitives-symbol.js';
 export * from './smalltalk-lookup.js';
+export * from './smalltalk-symbol.js';
 export * from './smalltalk-standard-image.js';
 export * from './cuis-export-materialization.js';

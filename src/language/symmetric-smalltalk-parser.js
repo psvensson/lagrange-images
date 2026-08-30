@@ -203,6 +203,10 @@ class Parser {
       this.advance();
       return node('string', {value: token.value});
     }
+    if (token.type === 'symbol') {
+      this.advance();
+      return node('symbol', {value: token.value});
+    }
     if (token.type === 'identifier') {
       this.advance();
       // The reserved words read as identifiers and are not names: each becomes its own syntax
