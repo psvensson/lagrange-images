@@ -177,12 +177,7 @@ function canonicalJsonValue(value) {
 }
 
 function releaseBody({projectId, profileId, members, dependencies}) {
-  return {
-    projectId,
-    profileId,
-    members,
-    dependencies,
-  };
+  return {projectId, profileId, members, dependencies};
 }
 
 function releaseIdentity(body) {
@@ -223,11 +218,7 @@ function normalizeReleaseDependencies(values, projectId) {
 
 function normalizeProjectReleaseManifest(value) {
   plainRecord(value, 'Project release manifest');
-  assertExactKeys(
-    value,
-    ['dependencies', 'format', 'members', 'profileId', 'projectId', 'releaseId'],
-    'Project release manifest',
-  );
+  assertExactKeys(value, ['dependencies', 'format', 'members', 'profileId', 'projectId', 'releaseId'], 'Project release manifest');
   if (value.format !== PROJECT_RELEASE_MANIFEST_V1) {
     throw new TypeError(`unsupported Project release manifest format: ${value.format}`);
   }
@@ -239,14 +230,7 @@ function normalizeProjectReleaseManifest(value) {
   if (value.releaseId !== expectedReleaseId) {
     throw new TypeError(`Project releaseId does not match canonical content; expected ${expectedReleaseId}`);
   }
-  return Object.freeze({
-    format: PROJECT_RELEASE_MANIFEST_V1,
-    projectId,
-    profileId,
-    releaseId: expectedReleaseId,
-    members,
-    dependencies,
-  });
+  return Object.freeze({format: PROJECT_RELEASE_MANIFEST_V1, projectId, profileId, releaseId: expectedReleaseId, members, dependencies});
 }
 
 function normalizeMaterializations(value, selectedMembers) {
@@ -276,17 +260,8 @@ function createProjectReleaseManifest({project, profile, materializations, depen
   const selectedMembers = selectProjectMembers(normalizedProject, normalizedProfile);
   const members = normalizeReleaseMembers(normalizeMaterializations(materializations, selectedMembers));
   const normalizedDependencies = normalizeReleaseDependencies(dependencies, normalizedProject.projectId);
-  const body = releaseBody({
-    projectId: normalizedProject.projectId,
-    profileId: normalizedProfile.profileId,
-    members,
-    dependencies: normalizedDependencies,
-  });
-  return normalizeProjectReleaseManifest({
-    format: PROJECT_RELEASE_MANIFEST_V1,
-    ...body,
-    releaseId: releaseIdentity(body),
-  });
+  const body = releaseBody({projectId: normalizedProject.projectId, profileId: normalizedProfile.profileId, members, dependencies: normalizedDependencies});
+  return normalizeProjectReleaseManifest({format: PROJECT_RELEASE_MANIFEST_V1, ...body, releaseId: releaseIdentity(body)});
 }
 
 function normalizeFrontierRevision(value, label) {
@@ -320,25 +295,17 @@ function normalizeFrontierMap(value) {
 function normalizeMemberSource(value, label = 'Project release member source') {
   plainRecord(value, label);
   assertExactKeys(value, ['key', 'source'], label);
-  return Object.freeze({
-    key: requiredText(value.key, `${label}.key`),
-    source: normalizeRef(value.source, `${label}.source`),
-  });
+  return Object.freeze({key: requiredText(value.key, `${label}.key`), source: normalizeRef(value.source, `${label}.source`)});
 }
 
 function normalizeProjectReleaseProvenance(value) {
   plainRecord(value, 'Project release provenance');
-  assertExactKeys(
-    value,
-    ['format', 'memberSources', 'projectId', 'releaseId', 'sourceFrontiers'],
-    'Project release provenance',
-  );
+  assertExactKeys(value, ['format', 'memberSources', 'projectId', 'releaseId', 'sourceFrontiers'], 'Project release provenance');
   if (value.format !== PROJECT_RELEASE_PROVENANCE_V1) {
     throw new TypeError(`unsupported Project release provenance format: ${value.format}`);
   }
   if (!Array.isArray(value.memberSources)) throw new TypeError('Project release memberSources must be an array');
-  const memberSources = value.memberSources.map((source, index) =>
-    normalizeMemberSource(source, `Project release memberSources[${index}]`));
+  const memberSources = value.memberSources.map((source, index) => normalizeMemberSource(source, `Project release memberSources[${index}]`));
   memberSources.sort((a, b) => compareText(a.key, b.key));
   const seen = new Set();
   for (const source of memberSources) {
@@ -387,13 +354,14 @@ function createProjectReleaseProvenance({release, project, sourceFrontiers} = {}
 
 function normalizeInstallationMember(value, targetImageId, label = 'Project installation member') {
   plainRecord(value, label);
-  assertExactKeys(value, ['contentIdentity', 'key', 'representation', 'target'], label);
+  assertExactKeys(value, ['contentIdentity', 'key', 'representation', 'role', 'target'], label);
   const target = normalizeRef(value.target, `${label}.target`);
   if (target.imageId !== targetImageId) {
     throw new TypeError(`${label}.target must belong to installation target image ${targetImageId}`);
   }
   return Object.freeze({
     key: requiredText(value.key, `${label}.key`),
+    role: requiredText(value.role, `${label}.role`),
     representation: requiredText(value.representation, `${label}.representation`),
     contentIdentity: requiredText(value.contentIdentity, `${label}.contentIdentity`),
     target,
@@ -402,18 +370,13 @@ function normalizeInstallationMember(value, targetImageId, label = 'Project inst
 
 function normalizeProjectInstallation(value) {
   plainRecord(value, 'Project installation');
-  assertExactKeys(
-    value,
-    ['format', 'members', 'projectId', 'releaseId', 'targetImageId'],
-    'Project installation',
-  );
+  assertExactKeys(value, ['format', 'members', 'projectId', 'releaseId', 'targetImageId'], 'Project installation');
   if (value.format !== PROJECT_INSTALLATION_V1) {
     throw new TypeError(`unsupported Project installation format: ${value.format}`);
   }
   const targetImageId = requiredText(value.targetImageId, 'Project installation targetImageId');
   if (!Array.isArray(value.members)) throw new TypeError('Project installation members must be an array');
-  const members = value.members.map((member, index) =>
-    normalizeInstallationMember(member, targetImageId, `Project installation members[${index}]`));
+  const members = value.members.map((member, index) => normalizeInstallationMember(member, targetImageId, `Project installation members[${index}]`));
   members.sort((a, b) => compareText(a.key, b.key));
   const seen = new Set();
   for (const member of members) {
@@ -443,25 +406,17 @@ function createProjectInstallation({release, targetImageId, targets} = {}) {
     }
     return {
       key: releaseMember.key,
+      role: releaseMember.role,
       representation: releaseMember.representation,
       contentIdentity: releaseMember.contentIdentity,
       target: targets[releaseMember.key],
     };
   });
-  return normalizeProjectInstallation({
-    format: PROJECT_INSTALLATION_V1,
-    projectId: normalizedRelease.projectId,
-    releaseId: normalizedRelease.releaseId,
-    targetImageId,
-    members,
-  });
+  return normalizeProjectInstallation({format: PROJECT_INSTALLATION_V1, projectId: normalizedRelease.projectId, releaseId: normalizedRelease.releaseId, targetImageId, members});
 }
 
 function frozenMaterial(member) {
-  return Object.freeze({
-    representation: member.representation,
-    contentIdentity: member.contentIdentity,
-  });
+  return Object.freeze({role: member.role, representation: member.representation, contentIdentity: member.contentIdentity});
 }
 
 function planProjectUpgrade({installation, nextRelease} = {}) {
@@ -476,27 +431,18 @@ function planProjectUpgrade({installation, nextRelease} = {}) {
   const actions = keys.map((key) => {
     const installed = currentByKey.get(key) ?? null;
     const desired = nextByKey.get(key) ?? null;
-    if (!installed) {
-      return Object.freeze({kind: 'install', key, desired: frozenMaterial(desired)});
-    }
+    if (!installed) return Object.freeze({kind: 'install', key, desired: frozenMaterial(desired)});
     if (!desired) {
-      // Deliberately NOT delete: deletion/tombstone semantics are not defined in the image graph.
-      // Upgrade stops managing the member; collection is a separate future concern.
       return Object.freeze({kind: 'detach', key, target: installed.target, installed: frozenMaterial(installed)});
     }
     if (
+      installed.role === desired.role &&
       installed.representation === desired.representation &&
       installed.contentIdentity === desired.contentIdentity
     ) {
       return Object.freeze({kind: 'retain', key, target: installed.target, material: frozenMaterial(installed)});
     }
-    return Object.freeze({
-      kind: 'replace',
-      key,
-      target: installed.target,
-      installed: frozenMaterial(installed),
-      desired: frozenMaterial(desired),
-    });
+    return Object.freeze({kind: 'replace', key, target: installed.target, installed: frozenMaterial(installed), desired: frozenMaterial(desired)});
   });
   return Object.freeze({
     format: PROJECT_RECONCILIATION_V1,
