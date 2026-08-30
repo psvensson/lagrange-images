@@ -155,6 +155,7 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `migrateMethodDictionary()` | rewrites one Behavior's shape-backed method dictionary into the ADR 0049 hashed form |
 | `installSmalltalkIndexedProtocol()` | `Array`, `Class >> basicNew:`, `Array class >> new:`, and `Array >> size`/`at:`/`at:put:` over four more `smalltalk-kernel-primitive/v1` Blocks (ADR 0047) |
 | `installSmalltalkSymbolProtocol()` | the Symbol Shape/class, `symbol-intern`/`perform-send`/`perform-send-with` primitives, `Symbol >> asString`, and `Object >> perform:`/`perform:with:` |
+| `installSmalltalkClassVariableSupport()` | the ClassVariableBinding Shape/class with `value`/`value:` methods; `declareClassVariables()` creates hierarchy-scoped bindings |
 
 A boolean Value dispatches by bridging to that image's `true`/`false` object, which becomes the
 send's `effectiveReceiver` — the optional second key of a dispatch resolution. Every other immediate

@@ -644,7 +644,7 @@ async function ensureSmalltalkShape(images, imageId, desired) {
 // change — names, the class/metaclass behavior edges, superclass, both instance Shapes — and
 // deliberately excludes the method dictionary, which is the mutable part with its own retry-safe
 // installer. Carrying the right instance Shape is not the same as being this class.
-async function ensureNamedClass({images, imageId, name, superclassRef = null, instanceShapeRef = null} = {}) {
+async function ensureNamedClass({images, imageId, name, superclassRef = null, instanceShapeRef = null, metaclassInstanceShapeRef = null} = {}) {
   requiredText(name, 'class name');
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
@@ -652,10 +652,11 @@ async function ensureNamedClass({images, imageId, name, superclassRef = null, in
   const metaclassRef = objectRef(imageId, `smalltalk/metaclass/${name}`);
   const superclass = superclassRef ?? kernel.objectClass;
   const instanceShape = instanceShapeRef ?? kernel.nil;
+  const metaclassInstanceShape = metaclassInstanceShapeRef ?? kernel.nil;
 
   const existing = await images.getObject(imageId, classRef.objectId);
   if (!existing) {
-    const defined = await defineClass({images, imageId, name, superclassRef: superclass, instanceShapeRef});
+    const defined = await defineClass({images, imageId, name, superclassRef: superclass, instanceShapeRef, metaclassInstanceShapeRef});
     return Object.freeze({classRef: defined.classRef, metaclassRef: defined.metaclassRef});
   }
 
@@ -683,7 +684,7 @@ async function ensureNamedClass({images, imageId, name, superclassRef = null, in
   const superBehavior = await readBehavior(images, superclass);
   if (!sameRef(metaclass.record.behavior, kernel.metaclassClass)) throw conflict();
   if (!sameRef(metaclass.superclass, superBehavior.record.behavior)) throw conflict();
-  if (!sameRef(metaclass.instanceShape, kernel.nil)) throw conflict();
+  if (!sameRef(metaclass.instanceShape, metaclassInstanceShape)) throw conflict();
   return Object.freeze({classRef, metaclassRef});
 }
 
@@ -806,7 +807,7 @@ async function requireInstanceShape({images, imageId, instanceShapeRef, supercla
   return instanceShapeRef;
 }
 
-async function defineClass({images, imageId, name, superclassRef = null, instanceShapeRef = null} = {}) {
+async function defineClass({images, imageId, name, superclassRef = null, instanceShapeRef = null, metaclassInstanceShapeRef = null} = {}) {
   requiredText(name, 'class name');
   requiredText(imageId, 'image id');
   const kernel = await findSmalltalkKernel({images, imageId});
@@ -827,14 +828,20 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
     ? kernel.nil
     : await requireInstanceShape({images, imageId, instanceShapeRef, superclassRef: superclass, name, nilRef: kernel.nil});
 
+  // Class-instance variables: when supplied, the metaclass gets a real instance shape so
+  // class-side methods can access per-class state. Default nil means no class-instance state,
+  // which is what every class in an image has today.
+  const metaclassInstanceShape = metaclassInstanceShapeRef === null
+    ? kernel.nil
+    : metaclassInstanceShapeRef;
+
   await ensureMethodDictionaryShape(images, imageId);
   const classObjectId = `smalltalk/class/${name}`;
   const metaclassObjectId = `smalltalk/metaclass/${name}`;
 
-  // The metaclass keeps `nil`: constructing new Class/Metaclass objects from inside Smalltalk is
-  // deferred, so a metaclass is not instantiable.
+  // The metaclass keeps `nil` unless a metaclass instance shape is explicitly supplied.
   for (const [id, behaviorName, superRef, behaviorRef, shapeRef] of [
-    [metaclassObjectId, `${name} class`, superMetaclass, kernel.metaclassClass, kernel.nil],
+    [metaclassObjectId, `${name} class`, superMetaclass, kernel.metaclassClass, metaclassInstanceShape],
     [classObjectId, name, superclass, ref(metaclassObjectId), instanceShape],
   ]) {
     await ensureEmptyMethodDictionary(images, imageId, methodsId(id), {owner: id}, kernel.nil);
