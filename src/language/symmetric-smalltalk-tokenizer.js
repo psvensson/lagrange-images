@@ -25,6 +25,22 @@ class SymmetricSmalltalkSyntaxError extends SyntaxError {
   }
 }
 
+// WS3 (general language widening): a negative integer literal such as `-32` is
+// Standard Smalltalk syntax, and the runtime's `0 - 32` already evaluates to a
+// negative Value, so the literal is not new semantics — it is the canonical
+// spelling of a value that already exists. The tokenizer still emits `-` as a
+// binary selector so that `5-3`, `a-3` and `5 - 3` keep their binary-send
+// meaning; the parser calls this only at an operand position (the start of a
+// primary), where a leading `-` can only be a sign. `-16r1F` is covered too.
+function isNegativeIntegerLiteralAt(tokens, index) {
+  const minus = tokens[index];
+  const next = tokens[index + 1];
+  return Boolean(
+    minus && minus.type === 'binary' && minus.value === '-'
+    && next && next.type === 'integer',
+  );
+}
+
 function isIdentifierStart(char) {
   return /[A-Za-z_]/.test(char ?? '');
 }
@@ -217,6 +233,7 @@ function tokenizeSymmetricSmalltalk(source) {
 export {
   RESERVED_WORDS,
   isReservedWord,
+  isNegativeIntegerLiteralAt,
   SymmetricSmalltalkSyntaxError,
   tokenizeSymmetricSmalltalk,
 };

@@ -2,6 +2,7 @@ import {
   SymmetricSmalltalkSyntaxError,
   tokenizeSymmetricSmalltalk,
   isReservedWord,
+  isNegativeIntegerLiteralAt,
 } from './symmetric-smalltalk-tokenizer.js';
 
 // One rule, one message shape, for every site that would otherwise decide independently.
@@ -195,6 +196,14 @@ class Parser {
 
   parsePrimary() {
     const token = this.current();
+    // Operand position only: a leading `-` here is a sign, never the binary
+    // selector `parseBinaryMessage` consumes after a receiver. `5-3` and `a-3`
+    // are unaffected because their `-` is read in binary-message position.
+    if (isNegativeIntegerLiteralAt(this.tokens, this.index)) {
+      this.advance(); // consume '-'
+      const digits = this.advance(); // consume the integer
+      return node('integer', {value: `-${digits.value}`});
+    }
     if (token.type === 'integer') {
       this.advance();
       return node('integer', {value: token.value});
@@ -237,7 +246,11 @@ class Parser {
       parameters.push(nameToken.value);
     }
     if (parameters.length > 0) this.expect('|', 'expected | after block parameters');
-    const body = this.parseBody(']');
+    // WS3 (general language widening): an empty block `[]` is Standard Smalltalk
+    // and answers nil when evaluated. Upstream dispatch uses it as the "no value"
+    // idiom (`at: key ifAbsent: []`). This is block-level only: a program still
+    // requires at least one statement.
+    const body = this.current().type === ']' ? node('nil') : this.parseBody(']');
     const close = this.expect(']', 'expected ]');
     return node('block', {
       parameters: Object.freeze(parameters),
