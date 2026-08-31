@@ -207,15 +207,13 @@ function adaptMethod({className, side, method, adaptations}) {
     return null;
   }
 
-  // Adaptation 6: array literals `#()`/`#[]` are a general language facility the
-  // image does not yet have (separate follow-up), and the two methods using them
-  // are not on the scalar round-trip. Dropped and recorded rather than
-  // hand-rewritten — the array path is rebuilt once array literals exist.
-  if (
-    (className === 'MpDecoder' && selector.startsWith('createArray:'))
-    || (className === 'MpDecoder' && selector.startsWith('readFixRaw:'))
-  ) {
-    record('drop-method', 'dropped method using #()/#[ ] array literals (general facility deferred)');
+  // Adaptation 6: the empty literal array `#()` is now a general facility (it lowers to
+  // `Array new: 0`), so `createArray:` — the one `#(...)` use in the pinned closure, and the
+  // empty form the RED demands — runs unchanged. The byte-array literal `#[]` is a separate,
+  // still-absent facility; `readFixRaw:` (out of the supported round-trip) is dropped until
+  // `#[ ]` is classified and added.
+  if (className === 'MpDecoder' && selector.startsWith('readFixRaw:')) {
+    record('drop-method', 'dropped method using #[] byte-array literals (separate facility, out of round-trip)');
     return null;
   }
 
@@ -298,7 +296,6 @@ function adaptMethod({className, side, method, adaptations}) {
     || selector.startsWith('writeStrBytes')
     || selector.startsWith('writeBinBytes')
     || selector.startsWith('writeRawBytes')
-    || selector.startsWith('writeArray')
     || selector.startsWith('writeMap')
     || selector.startsWith('writeString')
     || selector.startsWith('writeWideString')
@@ -316,15 +313,11 @@ function adaptMethod({className, side, method, adaptations}) {
     || selector.startsWith('readString8')
     || selector.startsWith('readString16')
     || selector.startsWith('readString32')
-    || selector.startsWith('readArray16')
-    || selector.startsWith('readArray32')
-    || selector.startsWith('readArraySized:')
     || selector.startsWith('readMap16')
     || selector.startsWith('readMap32')
     || selector.startsWith('readMapSized:')
     || selector.startsWith('readFixStr')
     || selector.startsWith('readFixString')
-    || selector.startsWith('readFixArray')
     || selector.startsWith('readFixMap')
     || selector === 'bytesAsRaw'
     || selector === 'bytesAsString'

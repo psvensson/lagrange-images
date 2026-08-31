@@ -148,3 +148,87 @@ test('the encoded byte stream matches the MessagePack spec', async () => {
     assert.deepEqual(await evaluate('s9', '[ (MpMessagePack pack: 42) at: 1 ]'), integerValue(42));
   });
 });
+
+// --- authentic Array round-trip ------------------------------------------------------------------
+//
+// The Array path exercises `writeArray:`/`writeArraySize:` (encode) and
+// `readFixArray:`/`readArraySized:`/`createArray:` (decode), with element dispatch through the
+// real perform-based type mapper. It depends on the general facilities this workstream added:
+// `Array do:` (enumeration), the `#()` empty literal (lowered to `Array new: 0`), and Behavior
+// `allSubclasses` (which builds the encode action map).
+
+test('encode a non-empty Array produces the spec bytes (fixarray header + fixints)', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    // Build the Array into a variable, then pack it. (Packing the literal Block
+    // `[ ... ]` would encode the Block, not its value — `pack:` does not evaluate.)
+    const src = (tail) => `[ | a | a := Array new: 3. a at: 1 put: 1. a at: 2 put: 2. a at: 3 put: 3. ${tail} ]`;
+    // [1 2 3] -> 0x93 0x01 0x02 0x03
+    assert.deepEqual(await evaluate('ae-size', src('(MpMessagePack pack: a) size')), integerValue(4));
+    assert.deepEqual(await evaluate('ae-h', src('(MpMessagePack pack: a) at: 1')), integerValue(147));
+    assert.deepEqual(await evaluate('ae-1', src('(MpMessagePack pack: a) at: 2')), integerValue(1));
+    assert.deepEqual(await evaluate('ae-2', src('(MpMessagePack pack: a) at: 3')), integerValue(2));
+    assert.deepEqual(await evaluate('ae-3', src('(MpMessagePack pack: a) at: 4')), integerValue(3));
+  });
+});
+
+test('decode fixarray bytes produces a real image Array observable via size/at:', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    const src = (tail) => `[ | b | b := Array new: 4. b at: 1 put: 147. b at: 2 put: 1. b at: 3 put: 2. b at: 4 put: 3. ${tail} ]`;
+    assert.deepEqual(
+      await evaluate('ad-class', src('(MpMessagePack unpack: b) class == Array')), booleanValue(true),
+    );
+    assert.deepEqual(await evaluate('ad-size', src('(MpMessagePack unpack: b) size')), integerValue(3));
+    assert.deepEqual(await evaluate('ad-1', src('(MpMessagePack unpack: b) at: 1')), integerValue(1));
+    assert.deepEqual(await evaluate('ad-2', src('(MpMessagePack unpack: b) at: 2')), integerValue(2));
+    assert.deepEqual(await evaluate('ad-3', src('(MpMessagePack unpack: b) at: 3')), integerValue(3));
+  });
+});
+
+test('encode(decode(bytes)) == bytes and decode(encode(array)) == array', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    assert.deepEqual(
+      await evaluate(
+        'rt-ed',
+        '[ | b s | b := Array new: 4. b at: 1 put: 147. b at: 2 put: 1. b at: 3 put: 2. b at: 4 put: 3. '
+        + 's := MpMessagePack pack: (MpMessagePack unpack: b). '
+        + '(s size = 4) and: [ (s at: 1) = 147 and: [ (s at: 2) = 1 and: [ (s at: 3) = 2 and: [ (s at: 4) = 3 ] ] ] ] ]',
+      ),
+      booleanValue(true),
+    );
+    assert.deepEqual(
+      await evaluate(
+        'rt-de',
+        `[ | a d | a := Array new: 3. a at: 1 put: 1. a at: 2 put: 2. a at: 3 put: 3. `
+        + 'd := MpMessagePack unpack: (MpMessagePack pack: a). '
+        + '(d size = 3) and: [ (d at: 1) = 1 and: [ (d at: 2) = 2 and: [ (d at: 3) = 3 ] ] ] ]',
+      ),
+      booleanValue(true),
+    );
+  });
+});
+
+test('the empty Array round-trips both ways (#() in createArray:; fixarray-0 header)', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    // Decode 0x90 (fixarray of length 0) -> an empty image Array via `createArray:` = `^#()`.
+    assert.deepEqual(
+      await evaluate(
+        'ar-empty-dec',
+        '[ | b a | b := Array new: 1. b at: 1 put: 144. a := MpMessagePack unpack: b. '
+        + '(a size = 0) and: [ a class == Array ] ]',
+      ),
+      booleanValue(true),
+    );
+    // Encode an empty Array -> the single fixarray-0 header byte 0x90.
+    assert.deepEqual(
+      await evaluate(
+        'ar-empty-enc',
+        '[ | s | s := MpMessagePack pack: (Array new: 0). (s size = 1) and: [ (s at: 1) = 144 ] ]',
+      ),
+      booleanValue(true),
+    );
+  });
+});
+
+// A Symbol element inside an Array dispatches to `writeString:`/the str read path — the
+// String/Text slice (WS3 next), not this one — so its in-array proof lands there. The Array
+// slice proves recursive dispatch through the real type mapper with the integer elements above.

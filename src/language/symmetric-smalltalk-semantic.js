@@ -101,6 +101,12 @@ const NIL_BINDING_ID = 'smalltalk/intrinsic/nil';
 // spelling as a Text literal — never an image-specific Symbol ref.
 const SYMBOL_CAPTURE = '$symbol';
 const SYMBOL_BINDING_ID = 'smalltalk/intrinsic/symbol';
+// The empty literal Array `#()` (WS3) lowers to `new: 0` sent to the image-local Array class,
+// reached through this intrinsic — exactly as Symbol lowers to a send to the interner and `nil`
+// to a read of the nil intrinsic. The compiler names no class and bakes no image-local ref: the
+// binding carries the id only, and installation supplies that image's Array class.
+const ARRAY_CAPTURE = '$array';
+const ARRAY_BINDING_ID = 'smalltalk/intrinsic/array';
 // Internal capture key for a resolved global. Prefixed so it cannot collide with any source name —
 // the tokenizer restricts those to identifier characters.
 const GLOBAL_CAPTURE_PREFIX = '$global:';
@@ -554,6 +560,25 @@ function compileExpression(syntax, scope, state) {
         message: textValue('value:'),
         arguments: Object.freeze([Object.freeze({op: 'literal', value: textValue(syntax.value)})]),
       });
+    // Literal Array `#( )` (WS3). The authentic upstream RED demands only the empty form, which
+    // lowers to `new: 0` sent to the image-local Array class through the `$array` intrinsic —
+    // composed from the existing Array allocation machinery, exactly as Symbol lowers to a send
+    // to the interner. The compiler names no class and bakes no image-local ref (the intrinsic
+    // binding carries the id; installation supplies the class). No new lagrange-code op, no
+    // generic Value array-literal kind, no literal carrying nested Smalltalk objects. Element
+    // forms are a separate facility; the parser rejects them deterministically until demanded.
+    case 'arrayLiteral': {
+      if (syntax.elements.length !== 0) {
+        throw new TypeError('literal Array element syntax is not supported; only the empty literal #() is');
+      }
+      return Object.freeze({
+        op: 'send',
+        languageId: SYMMETRIC_SMALLTALK_ID,
+        receiver: scope.requireIntrinsic(ARRAY_CAPTURE),
+        message: textValue('new:'),
+        arguments: Object.freeze([Object.freeze({op: 'literal', value: integerValue(0)})]),
+      });
+    }
     case 'name':
       return scope.resolveName(syntax.name);
     case 'return': {
@@ -692,6 +717,9 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
   if (Object.hasOwn(intrinsics, SYMBOL_CAPTURE)) {
     throw new TypeError(`the ${SYMBOL_CAPTURE} intrinsic is owned by the compiler and cannot be replaced`);
   }
+  if (Object.hasOwn(intrinsics, ARRAY_CAPTURE)) {
+    throw new TypeError(`the ${ARRAY_CAPTURE} intrinsic is owned by the compiler and cannot be replaced`);
+  }
   const syntax = parseSymmetricSmalltalkBlock(source);
   const representation = selectSemanticRepresentation(syntax);
   const compiled = compileBlockSyntax(syntax, {
@@ -704,6 +732,7 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
       ...Object.entries(intrinsics),
       [NIL_CAPTURE, NIL_BINDING_ID],
       [SYMBOL_CAPTURE, SYMBOL_BINDING_ID],
+      [ARRAY_CAPTURE, ARRAY_BINDING_ID],
     ]),
     globals: new Map(Object.entries(globals)),
     classVariables: new Map(Object.entries(classVariables)),
@@ -718,6 +747,8 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
 }
 
 export {
+  ARRAY_BINDING_ID,
+  ARRAY_CAPTURE,
   CLASS_VAR_CAPTURE_PREFIX,
   INSTANCE_SLOT_READ_CAPTURE,
   NIL_BINDING_ID,

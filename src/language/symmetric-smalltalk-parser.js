@@ -231,6 +231,18 @@ class Parser {
       this.expect(')', 'expected )');
       return expression;
     }
+    // Literal Array `#( ... )` (WS3). The authentic upstream MessagePack RED demands only the
+    // empty form `#()`; element forms are a separate general facility, so a non-empty literal is
+    // rejected deterministically here rather than half-parsed.
+    if (this.match('arrayOpen')) {
+      if (this.current().type !== ')') {
+        throw new SymmetricSmalltalkSyntaxError(
+          'literal Array element syntax is not supported; only the empty literal #() is', this.current().start,
+        );
+      }
+      this.expect(')', 'expected ) to close a literal Array');
+      return node('arrayLiteral', {elements: Object.freeze([])});
+    }
     if (this.match('[')) return this.parseBlockAfterOpen(token.start);
     throw new SymmetricSmalltalkSyntaxError('expected expression', token.start);
   }

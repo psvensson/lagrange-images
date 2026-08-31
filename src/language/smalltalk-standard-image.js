@@ -8,7 +8,7 @@ import {
   installSmalltalkGlobalNamespace,
   publishSmalltalkClassGlobals,
 } from './smalltalk-globals.js';
-import {installSmalltalkIndexedProtocol} from './smalltalk-indexed.js';
+import {installSmalltalkArrayEnumerationProtocol, installSmalltalkIndexedProtocol} from './smalltalk-indexed.js';
 import {installSmalltalkInstanceVariableProtocol} from './smalltalk-instance-variables.js';
 import {installSmalltalkIntegerProtocol} from './smalltalk-integer.js';
 import {findSmalltalkKernel, installSmalltalkKernel} from './smalltalk-kernel.js';
@@ -124,6 +124,11 @@ async function installSymmetricSmalltalkStandardImage({
   const library = await installSmalltalkLibrary(options);
   await publishSmalltalkClassGlobals({images, imageId, names: [...LIBRARY_PUBLIC_CLASSES]});
 
+  // `Array do:`, a general collection protocol the upstream encoder needs. After the library
+  // because it composes the indexed primitives with the Block enumeration loop, which is not yet
+  // installed when the indexed protocol runs; Array is a kernel class outside `Collection`.
+  const arrayEnumeration = await installSmalltalkArrayEnumerationProtocol(options);
+
   // Class-hierarchy introspection. After the library because `subclasses`/`allSubclasses` are
   // ordinary Smalltalk written against OrderedCollection and the Integer loop; the registry
   // itself is maintained by `defineClass`, so every class already defined (kernel included) is
@@ -150,6 +155,7 @@ async function installSymmetricSmalltalkStandardImage({
       dictionary,
       symbol,
       globals,
+      arrayEnumeration,
       subclasses,
     }),
     classes: Object.freeze({

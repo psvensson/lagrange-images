@@ -83,6 +83,19 @@ function tokenizeSymmetricSmalltalk(source) {
         throw new SymmetricSmalltalkSyntaxError('bare # is not a valid symbol literal', start);
       }
       const next = source[index];
+      // Literal Array `#( ... )` (WS3): `#(` opens a literal Array, distinct from a symbol.
+      // `#[ ... ]` (byte-array literal) is deliberately NOT this facility — its resulting class
+      // and element restrictions differ, and it is classified separately when upstream demands it.
+      if (next === '(') {
+        index += 1; // consume '('
+        push('arrayOpen', '(', start);
+        continue;
+      }
+      if (next === '[') {
+        throw new SymmetricSmalltalkSyntaxError(
+          '#[ is byte-array literal syntax, which is not the #() literal-Array facility', start,
+        );
+      }
       if (isIdentifierStart(next)) {
         // Unary or keyword symbol: read identifier chars, then optionally ':' sequences
         let value = '';
