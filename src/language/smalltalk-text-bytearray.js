@@ -1,6 +1,7 @@
 import {objectRef, textValue} from '../value/index.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {defineMethods} from './smalltalk-class-builder.js';
+import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
   SMALLTALK_PRIMITIVE,
@@ -109,6 +110,14 @@ async function installSmalltalkTextByteArrayProtocol({images, compilation, image
     methods: [capturedMethod({
       selector: 'utf8Bytes', primitive: SMALLTALK_PRIMITIVE.TEXT_UTF8_BYTES, args: [receiver()], imageId,
     })],
+  });
+
+  // Text >> asString answers the receiver: a Text's string form is itself. Standard,
+  // general protocol (a String answers `asString` with itself in every dialect); it
+  // lets a uniform `aString asString` conversion reach both Text and Symbol.
+  await defineMethodsFromSource({
+    images, compilation, imageId, lane, classRef: kernel.textClass,
+    methods: [{selector: 'asString', source: '[ ^ self ]'}],
   });
 
   // ByteArray >> utf8Text / size / at:
