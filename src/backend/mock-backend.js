@@ -76,6 +76,14 @@ function readStreamFrom(state, stream, {afterRevision = 0} = {}) {
   return clone(events.filter((event) => event.revision > afterRevision));
 }
 
+// The current committed head revision of a stream: the last appended event's
+// revision, or 0 for a stream with no events. Read-only; a direct head read from
+// the stream's own state, never a scan.
+function streamHeadFrom(state, stream) {
+  const events = state.streams.get(stream) ?? [];
+  return events.length === 0 ? 0 : events[events.length - 1].revision;
+}
+
 function transactionView(state, isActive) {
   const active = () => {
     if (!isActive()) throw new TypeError('backend transaction is no longer active');
@@ -101,6 +109,10 @@ function transactionView(state, isActive) {
     async readStream(stream, options = {}) {
       active();
       return readStreamFrom(state, stream, options);
+    },
+    async streamHead(stream) {
+      active();
+      return streamHeadFrom(state, stream);
     },
   });
 }
@@ -150,6 +162,10 @@ class MockBackend {
 
   async readStream(stream, options = {}) {
     return readStreamFrom(this, stream, options);
+  }
+
+  async streamHead(stream) {
+    return streamHeadFrom(this, stream);
   }
 
   // An independent MockBackend holding a deep copy of this one's current state — versions,

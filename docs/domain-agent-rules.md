@@ -40,7 +40,7 @@ main -> agent/<task> -> pull request -> GitHub Actions -> squash merge -> main
 
 ## Backend transactions
 
-- Every backend implements `transaction(callback)`; the scoped transaction exposes only `get`, `put`, `scan`, `append` and `readStream`.
+- Every backend implements `transaction(callback)`; the scoped transaction exposes only `get`, `put`, `scan`, `append`, `readStream` and `streamHead`. `streamHead` is the read-only direct head read of a stream's committed high-water revision (the backend owns stream persistence/head mechanics; it never scans/reconstructs the log).
 - Commit a materialized image record and its corresponding history event in one backend transaction.
 - Construct history events from the stored record inside the transaction when the assigned `_version` is part of the event.
 - A transaction callback must use its scoped transaction object, not call the owning backend recursively.
