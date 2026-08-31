@@ -310,7 +310,6 @@ function adaptMethod({className, side, method, adaptations}) {
     || (className === 'MpDecoder' && side === 'instance' && selector === 'decodeFrom:setting:')
     || selector.startsWith('writeBinBytes')
     || selector.startsWith('writeRawBytes')
-    || selector.startsWith('writeMap')
     || selector.startsWith('writeWideString')
     // NOTE: `readStream`/`readStream:` are the decoder's stream accessors and
     // must survive; the compound read paths below are matched by their full
@@ -320,13 +319,8 @@ function adaptMethod({className, side, method, adaptations}) {
     || selector.startsWith('readBin32')
     || selector.startsWith('readRaw16')
     || selector.startsWith('readRaw32')
-    || selector.startsWith('readMap16')
-    || selector.startsWith('readMap32')
-    || selector.startsWith('readMapSized:')
-    || selector.startsWith('readFixMap')
     || selector === 'bytesAsRaw'
     || selector === 'stringAsError'
-    || selector === 'createDictionary:'
     || selector === 'createOrderedCollection:'
     // Extension/timestamp types (`MpExtValue`, `MpFixextValue`, `DateAndTime`)
     // are outside the pinned closure and the scalar round-trip.
