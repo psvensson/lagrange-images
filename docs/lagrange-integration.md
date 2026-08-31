@@ -16,12 +16,12 @@ lifecycle
 
 ordinary operations
   get / put / scan
-  append / readStream
+  append / readStream / streamHead
 
 atomic work
   transaction(callback)
     -> get / put / scan
-    -> append / readStream
+    -> append / readStream / streamHead
 ```
 
 A transaction callback commits all scoped operations or none of them. Scoped reads see staged writes, optimistic version conflicts abort the transaction, and the scoped object expires when the callback settles.

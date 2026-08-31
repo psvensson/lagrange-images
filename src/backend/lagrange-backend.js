@@ -152,6 +152,20 @@ async function readEvents(database, stream, {afterRevision = 0} = {}) {
   return rows(result).map(storedEvent);
 }
 
+// The current committed head revision of a stream: the dedicated stream-heads row
+// this backend already maintains at append (CAS high-water mark), read directly —
+// O(1), never a scan/reconstruction of the event log. 0 for a stream with no
+// committed events (no row yet).
+async function readStreamHead(database, stream) {
+  const route = streamRoute(stream);
+  const result = await database.query(
+    `SELECT revision FROM ${LAGRANGE_IMAGE_TABLES.streamHeads} WHERE id = ?`,
+    [route.id],
+  );
+  const current = rows(result)[0] ?? null;
+  return current ? Number(current.revision) : 0;
+}
+
 function transactionView(database, isActive) {
   const activeDatabase = () => {
     if (!isActive()) throw new TypeError('backend transaction is no longer active');
@@ -172,6 +186,9 @@ function transactionView(database, isActive) {
     },
     async readStream(stream, options = {}) {
       return await readEvents(activeDatabase(), stream, options);
+    },
+    async streamHead(stream) {
+      return await readStreamHead(activeDatabase(), stream);
     },
   });
 }
@@ -254,6 +271,10 @@ class LagrangeBackend {
 
   async readStream(stream, options = {}) {
     return await readEvents(this.assertStarted(), stream, options);
+  }
+
+  async streamHead(stream) {
+    return await readStreamHead(this.assertStarted(), stream);
   }
 
   async transaction(work) {

@@ -4,6 +4,11 @@ const REQUIRED_TRANSACTION_METHODS = Object.freeze([
   'scan',
   'append',
   'readStream',
+  // Read-only stream-head read: the current committed high-water revision of a
+  // stream. The backend owns stream persistence/head mechanics; this is a direct
+  // head read, never a scan/reconstruction. Kept about STREAM HEADS only — the
+  // backend has no notion of an Image frontier or a Project.
+  'streamHead',
 ]);
 
 const REQUIRED_BACKEND_METHODS = Object.freeze([

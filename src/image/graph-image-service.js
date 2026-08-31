@@ -390,6 +390,21 @@ class ImageService {
     return await this.backend.readStream(history(imageId), options);
   }
 
+  // ADR 0071 Q1: the current committed Image frontier — the per-image
+  // history-stream high-water revision. This is a stable-current-position fence,
+  // not an as-of read, atomic snapshot, retention promise, multi-Image
+  // transaction, or Project frontier capture. Reading it advances nothing.
+  //
+  // Ownership: this method is about the current committed IMAGE FRONTIER. The
+  // private history-stream name stays inside the Images layer; the backend's
+  // `streamHead` stays about stream heads and never learns what an Image
+  // frontier is. Frontier is the HISTORY revision, categorically distinct from a
+  // record's per-record `_version` (ADR 0069/0071).
+  async frontier(imageId) {
+    await this.getImage(imageId);
+    return await this.backend.streamHead(history(imageId));
+  }
+
   async snapshot(imageId, {id = randomUUID(), label = null} = {}) {
     const image = await this.getImage(imageId);
     const data = {id, imageId, label, createdAt: this.now(), image, records: await this.listRecords(imageId)};
