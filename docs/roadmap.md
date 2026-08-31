@@ -170,7 +170,7 @@ Authority remains transient execution context. Identity/contact pickers and invi
 
 - [ ] real Lagrange process-restart durability proof
 - [ ] multi-node failure/recovery durability tests
-- [ ] logical snapshot/revision frontiers
+- [ ] logical snapshot/revision frontiers (first current-Image frontier primitive exists — `GraphImageService.frontier()` via the backend `streamHead` seam, PR #158, ADR 0071; snapshot/compaction/revision-aware reads below remain open)
 - [ ] revision-aware reads
 - [ ] indexed graph reachability and derivation lookup
 - [ ] export/import graph format
@@ -182,7 +182,7 @@ Authority remains transient execution context. Identity/contact pickers and invi
 
 Project remains an image-level concept because it is useful without a graphical environment.
 
-- [ ] Project objects and relationships over ordinary image objects/refs
+- [x] Project objects and relationships over ordinary image objects/refs (`src/project/working-state.js`, PR #156, ADR 0073; durable Project/member objects, member key as identity, `readProjectDescriptor` feeding the pure model)
 - [ ] code + notes + tests + data + work items
 - [ ] first-class package/binary/component/runtime relationships
 - [ ] manifest/lock/runtime-image artifacts as Project members
