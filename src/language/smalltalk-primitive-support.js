@@ -81,6 +81,16 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   // Array of its direct subclass refs. Same spirit as `class-of` reading the behavior edge — the
   // registry is ordinary durable image state maintained by `defineClass`, never hidden JS state.
   SUBCLASSES_OF: 'subclasses-of',
+  // WS3 Text/ByteArray slice: a tiny byte-sequence primitive family over the native immutable
+  // Value representations. A Text Value and an immediate bytes Value are physically different
+  // models from Array's indexed storage, so these are deliberately a separate family rather than
+  // a widening of the ADR 0047 indexed-object primitives (see smalltalk-primitives-bytes.js).
+  TEXT_UTF8_BYTES: 'text-utf8-bytes',
+  BYTEARRAY_UTF8_TEXT: 'bytearray-utf8-text',
+  BYTEARRAY_SIZE: 'bytearray-size',
+  BYTEARRAY_AT: 'bytearray-at',
+  // `fromArray:` backing: an Array/OrderedCollection of integers 0..255 -> a native bytes Value.
+  ARRAY_TO_BYTEARRAY: 'array-to-bytearray',
 });
 
 const SMALLTALK_PRIMITIVE_NAMES = Object.freeze(Object.values(SMALLTALK_PRIMITIVE));
@@ -124,6 +134,11 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.PERFORM_SEND]: 2,
   [SMALLTALK_PRIMITIVE.PERFORM_SEND_WITH]: 3,
   [SMALLTALK_PRIMITIVE.SUBCLASSES_OF]: 1,
+  [SMALLTALK_PRIMITIVE.TEXT_UTF8_BYTES]: 1,
+  [SMALLTALK_PRIMITIVE.BYTEARRAY_UTF8_TEXT]: 1,
+  [SMALLTALK_PRIMITIVE.BYTEARRAY_SIZE]: 1,
+  [SMALLTALK_PRIMITIVE.BYTEARRAY_AT]: 2,
+  [SMALLTALK_PRIMITIVE.ARRAY_TO_BYTEARRAY]: 1,
 });
 
 // One locality rule for every primitive. A foreign primitive Block must fail rather than answer a

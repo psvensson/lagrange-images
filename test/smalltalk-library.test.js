@@ -293,6 +293,11 @@ test('every library method is an ordinary Smalltalk method with a semantic artif
 test('the library adds no new kernel primitive', async () => {
   const {SMALLTALK_PRIMITIVE_NAMES} = await import('../src/language/smalltalk-primitives.js');
   assert.deepEqual([...SMALLTALK_PRIMITIVE_NAMES].sort(), [
+    // WS3 Text/ByteArray slice: the byte-sequence family, installed by
+    // `installSmalltalkTextByteArrayProtocol` — a separate family, not a widening
+    // of the ADR 0047 indexed primitives (a bytes Value is a Value, not an indexed
+    // image object).
+    'array-to-bytearray',
     'basic-new',
     'basic-new-sized',
     'block-ensure',
@@ -302,6 +307,9 @@ test('the library adds no new kernel primitive', async () => {
     'block-while-true',
     'built-in-equals',
     'built-in-hash',
+    'bytearray-at',
+    'bytearray-size',
+    'bytearray-utf8-text',
     'class-of',
     'condition-resume',
     'condition-return',
@@ -341,6 +349,7 @@ test('the library adds no new kernel primitive', async () => {
     // `installSmalltalkSubclassProtocol`, not by the library — the library still adds nothing.
     'subclasses-of',
     'symbol-intern',
+    'text-utf8-bytes',
   ]);
 });
 
