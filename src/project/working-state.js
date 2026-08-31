@@ -1,5 +1,6 @@
 import {isObjectRef, objectRef, textValue} from '../value/index.js';
 import {SHAPE_INDEXED} from '../object/model.js';
+import {OBJECT_READ_OPERATION, objectResource} from '../authority/object-resource.js';
 import {normalizeProjectDescriptor} from './model.js';
 
 // Durable Project working state: the image-level Project library/service
@@ -31,6 +32,19 @@ import {normalizeProjectDescriptor} from './model.js';
 // Authority: Project membership conveys NO authority over the referenced object
 // (ADR 0073). These are plain graph reads/writes; no authorization is added or
 // implied here.
+//
+// THE UNIT-LEVEL PROJECT READ RULE (the authorized semantic read seam below).
+// ADR 0039 §2 says "authority for A must not imply authority for B" — that rule
+// is about refs as LOCATORS TO INDEPENDENT objects. A Project's backing member
+// records are NOT independent objects: they ARE the Project's storage
+// representation (members are separate objects only so a retarget is a slot
+// update on a stable member id; the member key is the identity). Therefore ONE
+// authorized `object/read` on the Project object authorizes reading the
+// Project's own backing member records — this is the Project-semantic rule this
+// module owns, NOT a transitive ref-follow. It does NOT extend to member
+// TARGETS: a target is merely a locator, and reading a target's CONTENT still
+// independently requires `object/read` on that target object. Membership itself
+// creates NO grants.
 
 const PROJECT_SHAPE_ID = 'lagrange-project/project/v1';
 const PROJECT_MEMBER_SHAPE_ID = 'lagrange-project/member/v1';
@@ -251,10 +265,47 @@ async function readProjectDescriptor({images, imageId, projectId} = {}) {
   });
 }
 
+// The AUTHORIZED semantic ProjectDescriptor read seam. This is the single
+// authority-respecting way to read a durable Project as a semantic unit.
+//
+// `require` is the caller-supplied authority check (a closure over an issued,
+// LIVE authority context — e.g. `(demand) => authorityService.require(context,
+// demand)`). A revoked context fails closed with AuthorityError (the intended
+// behavior). This function:
+//   1. Authorizes `object/read` on the Project object BEFORE any existence
+//      disclosure, so a denied caller learns AuthorityError whether or not the
+//      Project exists (no-existence-oracle — the same property as
+//      image-object-read-binding/v1). The Project object id is derived HERE
+//      (projectObjectId), so the caller never builds a storage id.
+//   2. Delegates assembly + canonicalization to readProjectDescriptor (which
+//      reads the Project + its backing member records and hands the record to
+//      normalizeProjectDescriptor). The single require on the Project object IS
+//      the authority boundary (see the unit-level rule above): the backing
+//      member records are read internally as the Project's own storage, with NO
+//      per-member authority and NO grants created.
+//
+// The result is the canonical descriptor {format, projectId, name, namespace,
+// members:[{key, role, target}]} — no backing ids, Shape ids, or slot ids escape.
+// A dangling member ref surfaces a distinct TypeError to an AUTHORIZED reader
+// (the no-existence-oracle covers the Project object; a corrupt Project is a
+// separate integrity error, correctly disclosed to one who may read it).
+// TOCTOU note: the require check and the subsequent read are two reads (the
+// Project could change between); for a read-only consumer this is benign.
+async function authorizedReadProjectDescriptor({images, imageId, projectId, require} = {}) {
+  requiredText(imageId, 'imageId');
+  requiredText(projectId, 'projectId');
+  if (typeof require !== 'function') {
+    throw new TypeError('authorizedReadProjectDescriptor requires a require(demand) authority-check function');
+  }
+  require({operation: OBJECT_READ_OPERATION, resource: objectResource(imageId, projectObjectId(projectId))});
+  return readProjectDescriptor({images, imageId, projectId});
+}
+
 export {
   PROJECT_MEMBER_SHAPE_ID,
   PROJECT_SHAPE_ID,
   addProjectMember,
+  authorizedReadProjectDescriptor,
   createProject,
   projectMemberObjectId,
   projectObjectId,
