@@ -6,6 +6,7 @@ import {
   ensureBlock,
   ensureCodeArtifact,
 } from './smalltalk-class-builder.js';
+import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {
   SmalltalkKernelConflictError,
   canonicalJson,
@@ -271,9 +272,40 @@ async function installSmalltalkIndexedProtocol({images, compilation, imageId, la
   });
 }
 
+// `do:` for Array, installed as a separate post-Block/Integer step because it
+// composes the indexed primitives with the Block enumeration loop (which is not
+// yet installed when `installSmalltalkIndexedProtocol` runs). A general
+// collection protocol the upstream MessagePack encoder needs (`writeArray:`
+// sends `array do:`); Array is a kernel class outside the `Collection`
+// hierarchy, so it does not inherit the library's `Collection do:`.
+const ARRAY_ENUMERATION_METHODS = Object.freeze([
+  {
+    selector: 'do:',
+    source: `[ :aBlock | | index |
+      index := 1.
+      [ index <= self size ] whileTrue: [
+        aBlock value: (self at: index).
+        index := index + 1 ] ]`,
+  },
+]);
+
+async function installSmalltalkArrayEnumerationProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
+  requiredText(imageId, 'image id');
+  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  await defineMethodsFromSource({
+    images, compilation, imageId, lane,
+    classRef: objectRef(imageId, ARRAY_CLASS_ID),
+    methods: ARRAY_ENUMERATION_METHODS,
+  });
+  return Object.freeze({protocol: 'smalltalk-array-enumeration/v1'});
+}
+
 export {
   ARRAY_INSTANCE_SHAPE_ID,
   CAPTURE as SMALLTALK_INDEXED_CAPTURE,
   INDEXED_PRIMITIVE_BLOCK_ID as SMALLTALK_INDEXED_PRIMITIVE_BLOCK_ID,
+  installSmalltalkArrayEnumerationProtocol,
   installSmalltalkIndexedProtocol,
 };
