@@ -243,19 +243,34 @@ function adaptMethod({className, side, method, adaptations}) {
     }
   }
 
-  // Adaptation 8: upstream names the string class `String`; this image's text
-  // class is `Text` (a kernel global). Substitute the image's class name.
-  if (/\bString\b/.test(source)) {
-    record('replace-name', 'String -> Text (image text class is named Text)');
-    return {file, category, selector, source: source.replaceAll(/\bString\b/g, 'Text')};
-  }
-
   // Adaptation 8b: dialects split symbols into `ByteSymbol`/`WideSymbol`; this
   // image has a single `Symbol` class. `defineSymbolActionTo:` maps both to
   // string writes; here it maps the one `Symbol` class to `#writeString:`.
   if (className === 'MpEncodeTypeMapper' && side === 'class' && selector.startsWith('defineSymbolActionTo:')) {
     record('replace-body', 'ByteSymbol/WideSymbol -> single Symbol class, mapped to #writeString:');
     return {file, category, selector, source: '[ :map | map at: Symbol put: #writeString: ]'};
+  }
+
+  // Adaptation 8c: upstream maps `String -> #writeStrBytes:` directly, because its
+  // reference dialect's `String` is byte-oriented (`size` is the byte count and
+  // `nextPutAll:` writes the bytes). This image's `Text` Value is NOT byte-oriented
+  // — UTF-8 byte count differs from character count. The upstream-correct UTF-8
+  // route is `writeString:` (which converts via `bytesFromString:`), exactly what
+  // upstream's own 2008/`stringAsBytes:true` path and the Pharo portable util use.
+  // So the dialect maps `Text -> #writeString:` — an explicit, logged policy
+  // adaptation, not a MessagePack-specific primitive. Checked BEFORE the generic
+  // String->Text rename (Adaptation 8), which would otherwise rewrite this same
+  // method to the byte-oriented `Text -> #writeStrBytes:` mapping.
+  if (className === 'MpEncodeTypeMapper' && side === 'class' && selector.startsWith('defineStrBytesActionTo:')) {
+    record('replace-body', 'String->#writeStrBytes: becomes Text->#writeString: (image Text is not byte-oriented; route through UTF-8 conversion)');
+    return {file, category, selector, source: '[ :map | map at: Text put: #writeString: ]'};
+  }
+
+  // Adaptation 8: upstream names the string class `String`; this image's text
+  // class is `Text` (a kernel global). Substitute the image's class name.
+  if (/\bString\b/.test(source)) {
+    record('replace-name', 'String -> Text (image text class is named Text)');
+    return {file, category, selector, source: source.replaceAll(/\bString\b/g, 'Text')};
   }
 
   // Adaptation 9a: the byte-sink hook `createWriteStream` and the byte-source
@@ -293,35 +308,23 @@ function adaptMethod({className, side, method, adaptations}) {
     || (className === 'MpDecoder' && side === 'class' && ['on:', 'onBytes:', 'decodeFrom:setting:'].includes(selector))
     || (className === 'MpEncoder' && side === 'instance' && selector === 'encode:on:setting:')
     || (className === 'MpDecoder' && side === 'instance' && selector === 'decodeFrom:setting:')
-    || selector.startsWith('writeStrBytes')
     || selector.startsWith('writeBinBytes')
     || selector.startsWith('writeRawBytes')
     || selector.startsWith('writeMap')
-    || selector.startsWith('writeString')
     || selector.startsWith('writeWideString')
     // NOTE: `readStream`/`readStream:` are the decoder's stream accessors and
     // must survive; the compound read paths below are matched by their full
     // prefixed forms, never the bare `readStr`/`readStream` accessors.
-    || selector.startsWith('readStr8')
-    || selector.startsWith('readStr16')
-    || selector.startsWith('readStr32')
     || selector.startsWith('readBin8')
     || selector.startsWith('readBin16')
     || selector.startsWith('readBin32')
     || selector.startsWith('readRaw16')
     || selector.startsWith('readRaw32')
-    || selector.startsWith('readString8')
-    || selector.startsWith('readString16')
-    || selector.startsWith('readString32')
     || selector.startsWith('readMap16')
     || selector.startsWith('readMap32')
     || selector.startsWith('readMapSized:')
-    || selector.startsWith('readFixStr')
-    || selector.startsWith('readFixString')
     || selector.startsWith('readFixMap')
     || selector === 'bytesAsRaw'
-    || selector === 'bytesAsString'
-    || selector === 'stringAsBytes'
     || selector === 'stringAsError'
     || selector === 'createDictionary:'
     || selector === 'createOrderedCollection:'
@@ -492,6 +495,15 @@ async function installMessagePackFromFixture({images, compilation, imageId, fixt
     methods: [
       {selector: 'bytes', source: '[ ^ bytes ifNil: [ bytes := OrderedCollection new ] ]'},
       {selector: 'nextPut:', source: '[ :aByte | self bytes add: aByte ]'},
+      // WS3 String slice: ordinary collection write, composed from the argument's
+      // size/at: (1-based) and this stream's existing nextPut:. Works uniformly over
+      // an Array, an OrderedCollection, and a native ByteArray Value — all three
+      // answer size and at:.
+      {selector: 'nextPutAll:', source: `[ :aCollection | | index |
+        index := 1.
+        [ index <= aCollection size ] whileTrue: [
+          self nextPut: (aCollection at: index).
+          index := index + 1 ] ]`},
       {selector: 'contents', source: '[ ^ self bytes asArray ]'},
       {selector: 'size', source: '[ ^ self bytes size ]'},
     ],
@@ -502,6 +514,18 @@ async function installMessagePackFromFixture({images, compilation, imageId, fixt
       {selector: 'initialize', source: '[ position := 0. self ]'},
       {selector: 'bytes:', source: '[ :aCollection | bytes := aCollection. position := 0. self ]'},
       {selector: 'next', source: '[ position := position + 1. ^ bytes at: position ]'},
+      // WS3 String slice: gather `size` integer bytes into an Array and convert it
+      // through the general `ByteArray class>>fromArray:` (which validates every
+      // element). The result is the native ByteArray the decoder hands to
+      // `stringFromBytes:` / `utf8Text`. The stream internals stay Array/OrderedCollection
+      // for this slice — only this read boundary converts.
+      {selector: 'next:', source: `[ :size | | gathered index |
+        gathered := Array new: size.
+        index := 1.
+        [ index <= size ] whileTrue: [
+          gathered at: index put: self next.
+          index := index + 1 ].
+        ^ ByteArray fromArray: gathered ]`},
       {selector: 'atEnd', source: '[ ^ position >= bytes size ]'},
     ],
   });
@@ -535,6 +559,15 @@ async function installMessagePackFromFixture({images, compilation, imageId, fixt
       {selector: 'readUint64From:', source: '[ :stream | ^ ((self readUint32From: stream) << 32) + (self readUint32From: stream) ]'},
       {selector: 'writeInt64:to:', source: '[ :value :stream | self writeUint64: (value bitAnd: 18446744073709551615) to: stream ]'},
       {selector: 'readInt64From:', source: '[ :stream | | v | v := self readUint64From: stream. v >= 9223372036854775808 ifTrue: [ ^ v - 18446744073709551616 ]. ^ v ]'},
+
+      // WS3 String slice: the upstream dialect seam, overridden exactly as the Pharo
+      // portable util overrides them with an explicit UTF-8 codec. Composition over
+      // the general Text/ByteArray + UTF-8 protocol — no MessagePack-specific
+      // encoding primitive. Upstream's `bytesFromString:` = `^aString asByteArray`
+      // and `stringFromBytes:` = `^aByteArray asString` are the generic fallback;
+      // the explicit UTF-8 policy lives here, as dialect policy.
+      {selector: 'bytesFromString:', source: '[ :aString | ^ aString asString utf8Bytes ]'},
+      {selector: 'stringFromBytes:', source: '[ :bytes | ^ bytes utf8Text ]'},
     ],
   });
 

@@ -8,6 +8,7 @@ import {
   installSymmetricSmalltalkBlock,
   integerValue,
   booleanValue,
+  textValue,
   objectRef,
 } from '../src/runtime.js';
 import {
@@ -230,5 +231,107 @@ test('the empty Array round-trips both ways (#() in createArray:; fixarray-0 hea
 });
 
 // A Symbol element inside an Array dispatches to `writeString:`/the str read path — the
-// String/Text slice (WS3 next), not this one — so its in-array proof lands there. The Array
-// slice proves recursive dispatch through the real type mapper with the integer elements above.
+// String/Text slice, proven below. The Array slice proves recursive dispatch through the
+// real type mapper with the integer elements above.
+
+// --- authentic String/Text round-trip -----------------------------------------------------------
+//
+// The String path exercises `writeString:`/`writeStrBytesSize:` (encode, via the dialect's
+// `Text -> #writeString:` adaptation — the image's Text is not byte-oriented, so it routes
+// through the UTF-8 conversion upstream's Pharo portable util uses) and
+// `readFixStr:`/`readFixString:`/`readStr8`/`readString8`/`readStr16`/`readStr32` (decode), with
+// `SymPortableUtil bytesFromString:`/`stringFromBytes:` overriding the dialect seam with
+// `utf8Bytes`/`utf8Text`. No MessagePack-specific encoding primitive.
+
+test('encode an ASCII string produces spec-exact fixstr bytes', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    // "hi" -> fixstr len 2 = 0xA2, then 'h'(0x68) 'i'(0x69)
+    assert.deepEqual(await evaluate('se-size', `[ (MpMessagePack pack: 'hi') size ]`), integerValue(3));
+    assert.deepEqual(await evaluate('se-h', `[ (MpMessagePack pack: 'hi') at: 1 ]`), integerValue(162));
+    assert.deepEqual(await evaluate('se-1', `[ (MpMessagePack pack: 'hi') at: 2 ]`), integerValue(104));
+    assert.deepEqual(await evaluate('se-2', `[ (MpMessagePack pack: 'hi') at: 3 ]`), integerValue(105));
+  });
+});
+
+test('the empty string round-trips (fixstr-0 header 0xA0)', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    assert.deepEqual(await evaluate('se-empty-h', `[ (MpMessagePack pack: '') at: 1 ]`), integerValue(160));
+    assert.deepEqual(await evaluate('se-empty-size', `[ (MpMessagePack pack: '') size ]`), integerValue(1));
+    assert.deepEqual(await evaluate('se-empty-rt', `[ MpMessagePack packUnpack: '' ]`), textValue(''));
+  });
+});
+
+test('non-ASCII 2/3/4-byte UTF-8 strings produce spec-exact headers and lengths', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    // é (U+00E9) -> 2 UTF-8 bytes C3 A9 -> fixstr len 2 = 0xA2
+    assert.deepEqual(await evaluate('se-2b-h', `[ (MpMessagePack pack: 'é') at: 1 ]`), integerValue(162));
+    assert.deepEqual(await evaluate('se-2b-size', `[ (MpMessagePack pack: 'é') size ]`), integerValue(3));
+    assert.deepEqual(await evaluate('se-2b-b1', `[ (MpMessagePack pack: 'é') at: 2 ]`), integerValue(195));
+    // € (U+20AC) -> 3 UTF-8 bytes -> fixstr len 3 = 0xA3
+    assert.deepEqual(await evaluate('se-3b-h', `[ (MpMessagePack pack: '€') at: 1 ]`), integerValue(163));
+    assert.deepEqual(await evaluate('se-3b-size', `[ (MpMessagePack pack: '€') size ]`), integerValue(4));
+    // 😀 (U+1F600) -> 4 UTF-8 bytes -> fixstr len 4 = 0xA4
+    assert.deepEqual(await evaluate('se-4b-h', `[ (MpMessagePack pack: '😀') at: 1 ]`), integerValue(164));
+    assert.deepEqual(await evaluate('se-4b-size', `[ (MpMessagePack pack: '😀') size ]`), integerValue(5));
+  });
+});
+
+test('encode -> decode equals the original Text, and decode -> encode reproduces the bytes', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    const source = 'aé€😀z'; // ASCII + 2/3/4-byte code points
+    assert.deepEqual(
+      await evaluate('st-rt', `[ :t | MpMessagePack packUnpack: t ]`, [textValue(source)]),
+      textValue(source),
+    );
+    // decode(encode(t)) == t AND encode(decode(bytes)) == bytes
+    assert.deepEqual(
+      await evaluate(
+        'st-rt-bytes',
+        `[ | b d re | b := MpMessagePack pack: 'héllo'. d := MpMessagePack unpack: b. re := MpMessagePack pack: d. `
+        + '(re size = b size) and: [ (re at: 1) = (b at: 1) and: [ (re at: 2) = (b at: 2) and: [ (re at: b size) = (b at: b size) ] ] ] ]',
+      ),
+      booleanValue(true),
+    );
+  });
+});
+
+test('a String nested inside an Array round-trips', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    assert.deepEqual(
+      await evaluate(
+        'st-arr',
+        `[ | a d | a := Array new: 1. a at: 1 put: 'hi'. d := MpMessagePack unpack: (MpMessagePack pack: a). `
+        + '(d size = 1) and: [ (d at: 1) = ' + "'hi'" + ' ] ]',
+      ),
+      booleanValue(true),
+    );
+  });
+});
+
+test('a Symbol nested inside an Array encodes through its String conversion', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    // Symbol -> writeString: -> bytesFromString: -> asString utf8Bytes; decodes to the Text form.
+    assert.deepEqual(
+      await evaluate(
+        'st-sym-arr',
+        `[ | a d | a := Array new: 1. a at: 1 put: #name. d := MpMessagePack unpack: (MpMessagePack pack: a). `
+        + '(d size = 1) and: [ (d at: 1) = ' + "'name'" + ' ] ]',
+      ),
+      booleanValue(true),
+    );
+    assert.deepEqual(await evaluate('st-sym-alone', `[ MpMessagePack packUnpack: #name ]`), textValue('name'));
+  });
+});
+
+test('malformed UTF-8 in a str payload refuses rather than producing corrupted Text', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    // fixstr len 1 (0xA1) followed by 0xFF — 0xFF is never valid UTF-8.
+    await assert.rejects(
+      evaluate(
+        'st-bad',
+        '[ | b | b := Array new: 2. b at: 1 put: 161. b at: 2 put: 255. MpMessagePack unpack: b ]',
+      ),
+      /malformed UTF-8|UTF-8/,
+    );
+  });
+});
