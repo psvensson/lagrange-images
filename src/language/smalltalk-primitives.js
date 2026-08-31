@@ -32,6 +32,13 @@ import {
   subclassesOf,
 } from './smalltalk-primitives-objects.js';
 import {
+  arrayToByteArray,
+  byteArrayAt,
+  byteArraySize,
+  byteArrayUtf8Text,
+  textUtf8Bytes,
+} from './smalltalk-primitives-bytes.js';
+import {
   SmalltalkDictionaryConflictError,
   SmalltalkDictionaryKeyNotFoundError,
   SmalltalkDictionaryProtocolError,
@@ -245,6 +252,16 @@ function createSmalltalkKernelPrimitiveV1Executor({
           return await performSend({images, primitiveImage, value, second, context, primitive});
         case SMALLTALK_PRIMITIVE.PERFORM_SEND_WITH:
           return await performSendWith({images, primitiveImage, value, second, third, context, primitive});
+        case SMALLTALK_PRIMITIVE.TEXT_UTF8_BYTES:
+          return await textUtf8Bytes({value});
+        case SMALLTALK_PRIMITIVE.BYTEARRAY_UTF8_TEXT:
+          return await byteArrayUtf8Text({value});
+        case SMALLTALK_PRIMITIVE.BYTEARRAY_SIZE:
+          return await byteArraySize({value});
+        case SMALLTALK_PRIMITIVE.BYTEARRAY_AT:
+          return await byteArrayAt({value, indexValue: second});
+        case SMALLTALK_PRIMITIVE.ARRAY_TO_BYTEARRAY:
+          return await arrayToByteArray({images, primitiveImage, value});
         default:
           throw new TypeError(`unknown ${SMALLTALK_KERNEL_PRIMITIVE_V1} primitive: ${primitive}`);
       }

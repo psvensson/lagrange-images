@@ -38,5 +38,6 @@ export * from './smalltalk-class-variables.js';
 export * from './smalltalk-class-state.js';
 export * from './smalltalk-symbol.js';
 export * from './smalltalk-subclasses.js';
+export * from './smalltalk-text-bytearray.js';
 export * from './smalltalk-standard-image.js';
 export * from './cuis-export-materialization.js';
