@@ -335,3 +335,112 @@ test('malformed UTF-8 in a str payload refuses rather than producing corrupted T
     );
   });
 });
+
+// --- authentic Map/Dictionary round-trip ---------------------------------------------------------
+//
+// The closing WS3 compound-type proof. `writeMap:` enumerates with the representation-owned
+// `keysAndValuesDo:`; `readMapSized:` builds with `timesRepeat:` + `at:put:`; `createDictionary:`
+// = `Dictionary new: size` via the existing `new:` shim. No new Dictionary machinery.
+//
+// Map order: MessagePack does not order map entries, and `keysAndValuesDo:` promises no order
+// (ADR 0048). So the proofs assert the *mapping* and spec bytes, never Dictionary iteration
+// order. `encode(decode(bytes))` is checked by decoding the re-encoded bytes back to the same
+// mapping (order-invariant), not by byte-equality of two enumerations.
+
+test('encode an empty map produces the fixmap-0 header 0x80', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    assert.deepEqual(await evaluate('me-h', `[ (MpMessagePack pack: (Dictionary new)) at: 1 ]`), integerValue(128));
+    assert.deepEqual(await evaluate('me-size', `[ (MpMessagePack pack: (Dictionary new)) size ]`), integerValue(1));
+  });
+});
+
+test('encode a one-entry map produces spec-exact small-map bytes', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    // Build the Dictionary into a variable, then pack it (packing the literal Block
+    // `[ ... ]` would encode the Block, not its value — pack: does not evaluate).
+    const src = (tail) => `[ | d | d := Dictionary new. d at: 'a' put: 1. ${tail} ]`;
+    // {'a': 1} -> fixmap len 1 = 0x81, fixstr 'a' = 0xA1 0x61, fixint 1 = 0x01
+    assert.deepEqual(await evaluate('mm-h', src('(MpMessagePack pack: d) at: 1')), integerValue(129));
+    assert.deepEqual(await evaluate('mm-k1', src('(MpMessagePack pack: d) at: 2')), integerValue(161));
+    assert.deepEqual(await evaluate('mm-k2', src('(MpMessagePack pack: d) at: 3')), integerValue(97));
+    assert.deepEqual(await evaluate('mm-v', src('(MpMessagePack pack: d) at: 4')), integerValue(1));
+    assert.deepEqual(await evaluate('mm-size', src('(MpMessagePack pack: d) size')), integerValue(4));
+  });
+});
+
+test('decode fixmap bytes returns a real image Dictionary observable via ordinary protocol', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    // bytes: 0x81 0xA1 'a' 0x01  ->  {'a': 1}. Build the byte Array into a variable.
+    const src = (tail) => `[ | b | b := Array new: 4. b at: 1 put: 129. b at: 2 put: 161. b at: 3 put: 97. b at: 4 put: 1. ${tail} ]`;
+    assert.deepEqual(
+      await evaluate('md-class', src('(MpMessagePack unpack: b) class == Dictionary')), booleanValue(true),
+    );
+    assert.deepEqual(await evaluate('md-size', src('(MpMessagePack unpack: b) size')), integerValue(1));
+    assert.deepEqual(await evaluate('md-at', src('(MpMessagePack unpack: b) at: ' + "'a'")), integerValue(1));
+    // A Text key is the decode result of a fixstr key — ordinary protocol sees it as Text.
+    assert.deepEqual(
+      await evaluate('md-key', src('(MpMessagePack unpack: b) includesKey: ' + "'a'")), booleanValue(true),
+    );
+  });
+});
+
+test('decode(encode(dictionary)) has the same mapping for multiple entries', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    assert.deepEqual(
+      await evaluate(
+        'mm-rt',
+        `[ | d r | d := Dictionary new. d at: 'a' put: 1. d at: 'b' put: 2. d at: 'c' put: 3. `
+        + 'r := MpMessagePack unpack: (MpMessagePack pack: d). '
+        + '(r size = 3) and: [ (r at: ' + "'a') = 1 and: [ (r at: 'b') = 2 and: [ (r at: 'c') = 3 ] ] ] ]",
+      ),
+      booleanValue(true),
+    );
+  });
+});
+
+test('nested Array and Dictionary values round-trip through the map', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    assert.deepEqual(
+      await evaluate(
+        'mm-nested',
+        `[ | d inner arr r | d := Dictionary new. inner := Dictionary new. inner at: 'x' put: 9. `
+        + 'arr := Array new: 2. arr at: 1 put: 1. arr at: 2 put: 2. '
+        + 'd at: ' + "'list' put: arr. d at: 'sub' put: inner. "
+        + 'r := MpMessagePack unpack: (MpMessagePack pack: d). '
+        + '((r at: ' + "'list') size = 2) and: [ ((r at: 'sub') at: 'x') = 9 and: [ ((r at: 'list') at: 2) = 2 ] ] ]",
+      ),
+      booleanValue(true),
+    );
+  });
+});
+
+test('encode(decode(bytes)) reproduces the same mapping (order-invariant)', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    // bytes for {'a': 1, 'b': 2}. MessagePack map order is not contractual, and
+    // keysAndValuesDo: promises none, so we assert the re-encoded bytes decode back
+    // to the identical mapping rather than asserting byte-equality of two enumerations.
+    assert.deepEqual(
+      await evaluate(
+        'mm-rt-bytes',
+        `[ | b d re | b := Array new: 7. b at: 1 put: 130. b at: 2 put: 161. b at: 3 put: 97. b at: 4 put: 1. `
+        + 'b at: 5 put: 161. b at: 6 put: 98. b at: 7 put: 2. '
+        + 'd := MpMessagePack unpack: b. re := MpMessagePack pack: d. d := MpMessagePack unpack: re. '
+        + '(d size = 2) and: [ (d at: ' + "'a') = 1 and: [ (d at: 'b') = 2 ] ] ]",
+      ),
+      booleanValue(true),
+    );
+  });
+});
+
+test('the empty map round-trips decode(encode) to an empty Dictionary', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    assert.deepEqual(
+      await evaluate(
+        'me-rt',
+        '[ | r | r := MpMessagePack unpack: (MpMessagePack pack: (Dictionary new)). '
+        + '(r class == Dictionary) and: [ r size = 0 ] ]',
+      ),
+      booleanValue(true),
+    );
+  });
+});
