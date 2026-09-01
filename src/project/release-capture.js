@@ -58,6 +58,16 @@ function requiredText(value, label) {
   return value;
 }
 
+// Recursively freeze a plain record/array snapshot (already deep-cloned by the
+// caller). Values are canonical tagged records / plain data; nothing here mutates
+// the input — this freezes the clone, never the stored graph record.
+function deepFreeze(value) {
+  if (value && typeof value === 'object') {
+    for (const entry of Object.values(value)) deepFreeze(entry);
+  }
+  return Object.freeze(value);
+}
+
 function requireMaterialization(value, key) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError(`materializeRecord for member ${key} must return a record`);
@@ -108,10 +118,20 @@ async function captureCurrentProjectRelease({
   const materializations = {};
   for (const member of selected) {
     const source = member.target;
-    const record = await images.getObject(source.imageId, source.objectId);
+    // The generic graph-record seam: any durable record kind the graph owner can
+    // return (object, shape, code-artifact, lexical-environment, block) is a valid
+    // member source. The coordinator does NOT branch on record kind and learns no
+    // CodeArtifact/Shape/Block/Smalltalk semantics — that stays the
+    // representation-specific materializer's concern. A genuinely missing record
+    // still raises the explicit source error.
+    const record = await images.getRecord(source.imageId, source.objectId);
     if (!record) throw new ProjectCaptureSourceError({key: member.key, source});
     const materialization = requireMaterialization(
-      await materializeRecord({member, source, record: structuredClone(record)}),
+      // An isolated AND immutable snapshot: deep-cloned and recursively frozen, so
+      // no alias reaches live graph state and the materializer cannot rewrite its
+      // own input (which would make identity depend on callback mutation). The
+      // stored graph record itself is never frozen or mutated.
+      await materializeRecord({member, source, record: deepFreeze(structuredClone(record))}),
       member.key,
     );
     materializations[member.key] = materialization;

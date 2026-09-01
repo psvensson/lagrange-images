@@ -347,7 +347,144 @@ test('materializer isolation: it receives only member/source + an immutable reco
   });
 });
 
+// --- non-object record kinds + immutable snapshot (repair of the direct-record materializer contract) ---
+
+// A Project member target is a GENERIC ObjectRef (ADR 0073): it may reference any
+// durable record kind the graph owner can return, not only generic objects. The
+// coordinator reads through images.getRecord and passes the record to the
+// representation-specific materializer WITHOUT learning CodeArtifact/Shape/Block
+// semantics. A member materializer here asserts on the frozen record snapshot.
+
+test('CodeArtifact member: captured with record.kind === code-artifact, no generic-object adaptation', async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'img'});
+    await runtime.images.putCodeArtifact('img', {id: 'code', representation: 'neutral-expression/v0', content: textValue('1+1')});
+    const codeRef = objectRef('img', 'code');
+    const projectId = createProjectId();
+    await createProject({images: runtime.images, imageId: 'img', projectId, name: 'P'});
+    await addProjectMember({images: runtime.images, imageId: 'img', projectId, key: 'k', role: 'source', target: codeRef});
+    const profile = createDeploymentProfile({
+      project: {format: 'lagrange-project/v1', projectId, name: 'P', namespace: null, members: [{key: 'k', role: 'source', target: codeRef}]},
+      profileId: 'deploy', members: ['k'],
+    });
+    let seen = null;
+    const materializer = async (args) => { seen = args.record; return recordMaterializer(args); };
+    const {release} = await captureCurrentProjectRelease({
+      images: runtime.images, projectImageId: 'img', projectId, profile, materializeRecord: materializer,
+    });
+    // The coordinator handed the real CodeArtifact record through, unchanged.
+    assert.equal(seen.kind, 'code-artifact');
+    assert.equal(seen.id, 'code');
+    assert.equal(release.members[0].contentIdentity, 'record:code:1');
+  });
+});
+
+test('Shape member: another non-object record kind is accepted (no CodeArtifact special-casing)', async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'img'});
+    await runtime.images.putShape('img', {id: 'shape', slots: [{id: 'v', name: 'v'}]});
+    const shapeRef = objectRef('img', 'shape');
+    const projectId = createProjectId();
+    await createProject({images: runtime.images, imageId: 'img', projectId, name: 'P'});
+    await addProjectMember({images: runtime.images, imageId: 'img', projectId, key: 'k', role: 'source', target: shapeRef});
+    const profile = createDeploymentProfile({
+      project: {format: 'lagrange-project/v1', projectId, name: 'P', namespace: null, members: [{key: 'k', role: 'source', target: shapeRef}]},
+      profileId: 'deploy', members: ['k'],
+    });
+    let seen = null;
+    const materializer = async (args) => { seen = args.record; return recordMaterializer(args); };
+    const {release} = await captureCurrentProjectRelease({
+      images: runtime.images, projectImageId: 'img', projectId, profile, materializeRecord: materializer,
+    });
+    assert.equal(seen.kind, 'shape');
+    assert.equal(release.members[0].contentIdentity, 'record:shape:1');
+  });
+});
+
+test('materializer record snapshot is deeply frozen: top-level and nested mutation fail, stored graph state unchanged', async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'img'});
+    // A CodeArtifact has a NESTED content value — ideal for proving recursive freeze.
+    await runtime.images.putCodeArtifact('img', {id: 'code', representation: 'neutral-expression/v0', content: textValue('1+1')});
+    const codeRef = objectRef('img', 'code');
+    const projectId = createProjectId();
+    await createProject({images: runtime.images, imageId: 'img', projectId, name: 'P'});
+    await addProjectMember({images: runtime.images, imageId: 'img', projectId, key: 'k', role: 'source', target: codeRef});
+    const profile = createDeploymentProfile({
+      project: {format: 'lagrange-project/v1', projectId, name: 'P', namespace: null, members: [{key: 'k', role: 'source', target: codeRef}]},
+      profileId: 'deploy', members: ['k'],
+    });
+    let seen = null;
+    const materializer = async (args) => { seen = args.record; return recordMaterializer(args); };
+    await captureCurrentProjectRelease({images: runtime.images, projectImageId: 'img', projectId, profile, materializeRecord: materializer});
+
+    // Top-level: frozen (strict-mode assignment to a frozen object throws).
+    assert.ok(Object.isFrozen(seen), 'record snapshot frozen');
+    assert.throws(() => { seen.id = 'rewritten'; }, TypeError);
+    // Nested: the content value object is also frozen (recursive).
+    assert.ok(Object.isFrozen(seen.content), 'nested content value frozen');
+    assert.throws(() => { seen.content.value = 'HACKED'; }, TypeError);
+    // The stored graph record is NOT frozen/mutated by the capture.
+    const stored = await runtime.images.getRecord('img', 'code');
+    assert.equal(stored.content.value, '1+1', 'stored graph record untouched');
+    assert.ok(!Object.isFrozen(stored), 'stored graph record is not frozen by the capture');
+  });
+});
+
+test('non-object member stability: replacing the selected CodeArtifact during materialization REFUSES', async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'img'});
+    await runtime.images.putCodeArtifact('img', {id: 'code', representation: 'neutral-expression/v0', content: textValue('1+1')});
+    const codeRef = objectRef('img', 'code');
+    const projectId = createProjectId();
+    await createProject({images: runtime.images, imageId: 'img', projectId, name: 'P'});
+    await addProjectMember({images: runtime.images, imageId: 'img', projectId, key: 'k', role: 'source', target: codeRef});
+    const profile = createDeploymentProfile({
+      project: {format: 'lagrange-project/v1', projectId, name: 'P', namespace: null, members: [{key: 'k', role: 'source', target: codeRef}]},
+      profileId: 'deploy', members: ['k'],
+    });
+    const sabotage = async (args) => {
+      // Commit ANY new record in the source Image during capture -> the Image
+      // frontier advances -> detected, refuse. (putCodeArtifact is create-only;
+      // a fresh Shape commit advances the same Image history the member lives in.)
+      await runtime.images.putShape('img', {id: 'concurrent-shape', slots: []});
+      return recordMaterializer(args);
+    };
+    await assert.rejects(
+      captureCurrentProjectRelease({images: runtime.images, projectImageId: 'img', projectId, profile, materializeRecord: sabotage}),
+      ProjectCaptureConflictError,
+    );
+  });
+});
+
 // --- falsification ---------------------------------------------------------------------------------
+
+test('FALSIFIABLE: reverting getRecord -> getObject turns the non-object-kind proofs red', async () => {
+  // This proof exists to be pointed at by the mutation check: if the coordinator
+  // reverts to images.getObject (generic-object-only), the CodeArtifact member is
+  // wrongly treated as missing. The GREEN assertion below is the correct behavior;
+  // the mutation (getRecord->getObject) makes it go red by raising
+  // ProjectCaptureSourceError instead of capturing the CodeArtifact.
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'img'});
+    await runtime.images.putCodeArtifact('img', {id: 'code', representation: 'neutral-expression/v0', content: textValue('1+1')});
+    const codeRef = objectRef('img', 'code');
+    const projectId = createProjectId();
+    await createProject({images: runtime.images, imageId: 'img', projectId, name: 'P'});
+    await addProjectMember({images: runtime.images, imageId: 'img', projectId, key: 'k', role: 'source', target: codeRef});
+    const profile = createDeploymentProfile({
+      project: {format: 'lagrange-project/v1', projectId, name: 'P', namespace: null, members: [{key: 'k', role: 'source', target: codeRef}]},
+      profileId: 'deploy', members: ['k'],
+    });
+    // Correct behavior: capture succeeds for a non-object record.
+    const {release} = await captureCurrentProjectRelease({
+      images: runtime.images, projectImageId: 'img', projectId, profile, materializeRecord: recordMaterializer,
+    });
+    assert.equal(release.members[0].contentIdentity, 'record:code:1');
+  });
+});
+
+
 
 test('FALSIFIABLE: removing the final frontier comparison turns the concurrent-mutation proof red', async () => {
   await withRuntime(async (runtime) => {
