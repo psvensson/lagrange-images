@@ -1,5 +1,6 @@
 import {createProjectReleaseManifest, createProjectReleaseProvenance, selectProjectMembers} from './model.js';
 import {readProjectDescriptor} from './working-state.js';
+import {createProjectReleaseMaterial, materializeProjectGraphRelease} from './graph-release-materialization.js';
 
 // First truthful current Project release capture (ADR 0073), the coordinator owner
 // for the interaction:
@@ -149,18 +150,21 @@ function createStableCurrentReadSession({images}) {
   return Object.freeze({getRecord, getObject, assertStable, frontierMap});
 }
 
-async function captureCurrentProjectRelease({
+// --- ONE private capture coordinator ----------------------------------------------
+// The DIRECT path and the GRAPH path share EXACTLY this sequence: session ->
+// descriptor -> selection -> materializeSelection -> assertStable -> release ->
+// provenance. `materializeSelection` is MODULE-OWNED only — never a public
+// graph-capable callback. It receives the session and the selected members and
+// returns {materializations, ...path-specific output}. There is no second copy of
+// the capture algorithm.
+async function runCurrentProjectCapture({
   images,
   projectImageId,
   projectId,
   profile,
-  materializeRecord,
   dependencies = [],
-} = {}) {
-  requiredText(projectImageId, 'projectImageId');
-  requiredText(projectId, 'projectId');
-  if (typeof materializeRecord !== 'function') throw new TypeError('materializeRecord must be a function');
-
+  materializeSelection,
+}) {
   // 1. ONE bracket owner: the stable-current read session. No eager frontier
   //    pre-computation — reading is what brackets an Image.
   const session = createStableCurrentReadSession({images});
@@ -173,49 +177,126 @@ async function captureCurrentProjectRelease({
   // 3. Select members with the EXISTING Project model — no profile semantics here.
   const selected = selectProjectMembers(project, profile);
 
-  // 4. Read each selected member's CURRENT direct source record THROUGH THE
-  //    SESSION; hand an isolated snapshot plus the semantic member/source identity
-  //    to the materializer. A missing/dangling source is an explicit failure.
-  const materializations = {};
-  for (const member of selected) {
-    const source = member.target;
-    // The generic graph-record seam: any durable record kind the graph owner can
-    // return (object, shape, code-artifact, lexical-environment, block) is a valid
-    // member source. The coordinator does NOT branch on record kind and learns no
-    // CodeArtifact/Shape/Block/Smalltalk semantics — that stays the
-    // representation-specific materializer's concern. A genuinely missing record
-    // still raises the explicit source error.
-    const record = await session.getRecord(source.imageId, source.objectId);
-    if (!record) throw new ProjectCaptureSourceError({key: member.key, source});
-    const materialization = requireMaterialization(
-      // An isolated AND immutable snapshot: deep-cloned and recursively frozen, so
-      // no alias reaches live graph state and the materializer cannot rewrite its
-      // own input (which would make identity depend on callback mutation). The
-      // stored graph record itself is never frozen or mutated.
-      await materializeRecord({member, source, record: deepFreeze(structuredClone(record))}),
-      member.key,
-    );
-    materializations[member.key] = materialization;
-  }
+  // 4. The module-owned materialization path. Whatever it reads goes THROUGH THE
+  //    SESSION, so every Image it touches (direct or transitively discovered) is
+  //    bracketed by the ONE stability owner.
+  const materialized = await materializeSelection({session, selected, project});
 
-  // 5. Re-read every Image actually read, INCLUDING the Project host. Any
-  //    before/after difference refuses the whole capture — no release+warn.
+  // 5. Re-read every Image actually read, INCLUDING the Project host and any
+  //    dynamically discovered transitive Image. Any before/after difference
+  //    refuses the whole capture — no release+warn, no partial output.
   await session.assertStable();
 
   // 6. Only now, with the stability fence held, derive the release + provenance
   //    through the EXISTING Project model. The frontier map covers every Image the
   //    capture actually read: the Project host (descriptor input unchanged) plus
-  //    every selected direct member-source Image.
-  const release = createProjectReleaseManifest({project, profile, materializations, dependencies});
+  //    every direct or transitively-read source Image.
+  const release = createProjectReleaseManifest({
+    project, profile, materializations: materialized.materializations, dependencies,
+  });
   const provenance = createProjectReleaseProvenance({release, project, sourceFrontiers: session.frontierMap()});
 
-  // 7. Return both; nothing is persisted here.
+  return {project, release, provenance, materialized};
+}
+
+async function captureCurrentProjectRelease({
+  images,
+  projectImageId,
+  projectId,
+  profile,
+  materializeRecord,
+  dependencies = [],
+} = {}) {
+  requiredText(projectImageId, 'projectImageId');
+  requiredText(projectId, 'projectId');
+  if (typeof materializeRecord !== 'function') throw new TypeError('materializeRecord must be a function');
+
+  const {release, provenance} = await runCurrentProjectCapture({
+    images,
+    projectImageId,
+    projectId,
+    profile,
+    dependencies,
+    // The DIRECT path. The public callback STILL receives only
+    // {member, source, immutable isolated direct-record snapshot} — no session,
+    // no reader, no images, no frontier API.
+    materializeSelection: async ({session, selected}) => {
+      const materializations = {};
+      for (const member of selected) {
+        const source = member.target;
+        // The generic graph-record seam: any durable record kind the graph owner
+        // can return (object, shape, code-artifact, lexical-environment, block)
+        // is a valid member source. The coordinator does NOT branch on record
+        // kind and learns no CodeArtifact/Shape/Block/Smalltalk semantics — that
+        // stays the representation-specific materializer's concern. A genuinely
+        // missing record still raises the explicit source error.
+        const record = await session.getRecord(source.imageId, source.objectId);
+        if (!record) throw new ProjectCaptureSourceError({key: member.key, source});
+        const materialization = requireMaterialization(
+          // An isolated AND immutable snapshot: deep-cloned and recursively
+          // frozen, so no alias reaches live graph state and the materializer
+          // cannot rewrite its own input (which would make identity depend on
+          // callback mutation). The stored graph record itself is never frozen
+          // or mutated.
+          await materializeRecord({member, source, record: deepFreeze(structuredClone(record))}),
+          member.key,
+        );
+        materializations[member.key] = materialization;
+      }
+      return {materializations};
+    },
+  });
   return Object.freeze({release, provenance});
+}
+
+// The GRAPH path (ADR 0075 first materialization slice). The coordinator wires the
+// TRUSTED graph release materializer to the session itself — no arbitrary caller
+// gets the scoped graph reader. Returns {release, provenance, material} where
+// material is ONE fully-closed multi-root graph bundle for the entire selection.
+async function captureCurrentGraphProjectRelease({
+  images,
+  projectImageId,
+  projectId,
+  profile,
+  dependencies = [],
+  crypto,
+} = {}) {
+  requiredText(projectImageId, 'projectImageId');
+  requiredText(projectId, 'projectId');
+
+  const {release, provenance, materialized} = await runCurrentProjectCapture({
+    images,
+    projectImageId,
+    projectId,
+    profile,
+    dependencies,
+    // Module-owned ONLY: the graph materializer receives {getRecord} from the
+    // session — never the session, the images service, a frontier or a backend.
+    // Ordering: the bundle is exported BEFORE assertStable runs (inside the
+    // coordinator); if a transitively discovered source Image moved, there is no
+    // successful release, provenance or material.
+    materializeSelection: async ({session, selected}) =>
+      await materializeProjectGraphRelease({
+        reader: {getRecord: session.getRecord},
+        members: selected,
+        crypto,
+      }),
+  });
+
+  const material = createProjectReleaseMaterial({
+    release,
+    bundle: materialized.bundle,
+    contentIdentity: materialized.contentIdentity,
+    crypto,
+  });
+
+  return Object.freeze({release, provenance, material});
 }
 
 export {
   ProjectCaptureConflictError,
   ProjectCaptureSourceError,
+  captureCurrentGraphProjectRelease,
   captureCurrentProjectRelease,
   createStableCurrentReadSession,
 };
