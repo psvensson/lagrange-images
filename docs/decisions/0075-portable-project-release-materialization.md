@@ -1,9 +1,9 @@
 # ADR 0075: portable Project release materialization — a design investigation
 
-Status: accepted — investigation outcome; **first prerequisite implemented** (the stable-current
-read session below; the graph release materializer, material package and installation coordinator
-remain pending)
-Proven by: test/stable-current-read-session.test.js, test/project-release-capture.test.js
+Status: accepted — investigation outcome; **stable-session prerequisite + graph release
+materializer + ProjectReleaseMaterial/v1 implemented; the installation coordinator remains pending**
+Proven by: test/stable-current-read-session.test.js, test/project-release-capture.test.js,
+test/graph-project-release.test.js
 
 **Decides how ADR 0073's Project release capture composes with ADR 0074's portable graph bundle,
 so that a selected set of Project members becomes ONE portable, content-addressed release material
@@ -320,10 +320,19 @@ remain four separate things (ADR 0073 guardrails unchanged).
 2. **`src/project/graph-release-materialization.js`** implementing Decisions 2–6: one multi-root
    export through the facade with internalize-all policy, empty-externals/pinned refusal,
    per-member whole-bundle materializations, the v1 material package; capture coordinator gains
-   the graph path returning `{release, provenance, material}`. **PENDING** — the session above is
-   the facade it consumes.
+   the graph path returning `{release, provenance, material}`. **DONE** —
+   `materializeProjectGraphRelease({reader, members, crypto}) -> {bundle, contentIdentity,
+   materializations}` (exactly one `exportGraphBundle`; `referencePolicy` = always-internal;
+   empty-externals gate via `ProjectGraphReleaseMaterializationError`; every member gets the
+   whole-bundle hash); `createProjectReleaseMaterial`/`normalizeProjectReleaseMaterial` own the
+   `lagrange-project-release-material/v1` package (intrinsic + release-linkage validation incl.
+   the root-keys === member-keys check; immutable isolated package). The capture coordinator was
+   refactored around ONE private `runCurrentProjectCapture` (no second capture algorithm); the
+   public graph path is `captureCurrentGraphProjectRelease(...) -> {release, provenance,
+   material}`; the direct path is behavior-unchanged and gains no material field.
 3. Proofs: all 12 adversarial examples, the Decision-7 headline falsifier, lazy-bracket
    conflict-on-third-Image refusal, and exporter/importer byte-compatibility (untouched owners).
+   **DONE** (test/graph-project-release.test.js — 18 proofs, 8 falsifiers verified red).
 
 The installation coordinator (Decision 8) is the slice AFTER, gated on real installation pressure;
 its pre-effect contract is frozen here so it cannot inherit an orphan-graph failure mode.
