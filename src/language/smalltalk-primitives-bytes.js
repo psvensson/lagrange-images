@@ -1,4 +1,4 @@
-import {Buffer} from 'node:buffer';
+import {base64Decode, bytesEqual, utf8DecodeLossy, utf8Encode} from '../support/portable-bytes.js';
 import {
   VALUE_KIND,
   bytesValue,
@@ -44,7 +44,7 @@ function requireBytes(value, primitive) {
   if (normalized.kind !== VALUE_KIND.BYTES) {
     throw new SmalltalkPrimitiveReceiverError(primitive, `a ${normalized.kind} Value; ${primitive} requires a ByteArray Value`);
   }
-  return Buffer.from(normalized.base64, 'base64');
+  return base64Decode(normalized.base64);
 }
 
 // A lone surrogate is ill-formed Unicode scalar data: there is no valid UTF-8
@@ -69,13 +69,13 @@ function assertWellFormedText(text, primitive) {
   return text;
 }
 
-// Strict UTF-8 decode: Buffer's default `toString` substitutes U+FFFD for
-// malformed sequences, so decode is validated by re-encoding and comparing —
-// any lossy substitution changes the bytes and is detected. Overlong forms and
+// Strict UTF-8 decode: a lossy decode substitutes U+FFFD for malformed
+// sequences, so decode is validated by re-encoding and comparing — any lossy
+// substitution changes the bytes and is detected. Overlong forms and
 // out-of-range sequences are likewise rejected by the round-trip check.
-function decodeUtf8Strict(buffer, primitive) {
-  const text = buffer.toString('utf8');
-  if (!Buffer.from(text, 'utf8').equals(buffer)) {
+function decodeUtf8Strict(bytes, primitive) {
+  const text = utf8DecodeLossy(bytes);
+  if (!bytesEqual(utf8Encode(text), bytes)) {
     throw new SmalltalkPrimitiveReceiverError(primitive, 'a malformed UTF-8 byte sequence; decode refused');
   }
   return text;
@@ -83,7 +83,7 @@ function decodeUtf8Strict(buffer, primitive) {
 
 async function textUtf8Bytes({value}) {
   const text = assertWellFormedText(requireText(value, 'text-utf8-bytes'), 'text-utf8-bytes');
-  return bytesValue(Buffer.from(text, 'utf8'));
+  return bytesValue(utf8Encode(text));
 }
 
 async function byteArrayUtf8Text({value}) {

@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {uuid as randomUUID} from '../support/default-crypto.js';
 import {SHAPE_INDEXED} from '../object/model.js';
 import {objectRef, textValue} from '../value/index.js';
 import {assertBlockApplicationReceiver} from '../execution/block-application.js';

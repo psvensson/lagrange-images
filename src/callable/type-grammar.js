@@ -1,4 +1,5 @@
-import {createHash} from 'node:crypto';
+import {getDefaultCryptoProvider} from '../support/default-crypto.js';
+import {utf8Encode} from '../support/portable-bytes.js';
 import {CALLABLE_TYPES} from './interface-artifacts.js';
 
 // The callable-interface/v2 type grammar.
@@ -193,7 +194,7 @@ function reachableDeclarations(type, types) {
 // artifact identity would hide a graph relationship inside the envelope bytes.
 function typeFingerprint(type, types = {}) {
   const schema = {type, types: reachableDeclarations(type, types)};
-  return createHash('sha256').update(canonicalTypeJson(schema), 'utf8').digest();
+  return getDefaultCryptoProvider().sha256(utf8Encode(canonicalTypeJson(schema)));
 }
 
 function resolveDeclaredType(type, types) {

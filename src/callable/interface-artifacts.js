@@ -1,4 +1,5 @@
-import {randomUUID} from 'node:crypto';
+import {base64Decode} from '../support/portable-bytes.js';
+import {uuid as randomUUID} from '../support/default-crypto.js';
 import {VALUE_KIND, booleanValue, bytesValue, canonicalizeValue, float64ToNumber, float64Value, integerValue, textValue} from '../value/index.js';
 
 // A callable interface describes a callable shape and nothing else. It deliberately
@@ -129,7 +130,7 @@ function canonicalToHostLeaf(value, type, label) {
     case 'f32': return Math.fround(float64ToNumber(normalized));
     case 'f64': return float64ToNumber(normalized);
     case 'string': return normalized.value;
-    case 'list<u8>': return new Uint8Array(Buffer.from(normalized.base64, 'base64'));
+    case 'list<u8>': return base64Decode(normalized.base64);
     default: throw new TypeError(`${label} has unsupported leaf type ${type}`);
   }
 }

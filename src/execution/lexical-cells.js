@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {uuid as randomUUID} from '../support/default-crypto.js';
 import {TupleMap} from '../support/tuple-map.js';
 import {canonicalizeValue, objectRef} from '../value/index.js';
 import {isTransientObjectId, transientObjectId} from '../value/transient-ref.js';

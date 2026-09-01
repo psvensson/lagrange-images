@@ -1,3 +1,4 @@
+import {base64Decode, base64Encode} from '../support/portable-bytes.js';
 import {VALUE_KIND} from './kinds.js';
 
 const freeze = (record) => Object.freeze(record);
@@ -46,8 +47,8 @@ function textValue(value) {
 
 function bytesFromBase64(base64) {
   if (typeof base64 !== 'string') throw invalid('bytes base64 must be a string');
-  const decoded = Buffer.from(base64, 'base64');
-  if (decoded.toString('base64') !== base64) throw invalid('bytes value must use canonical base64');
+  const decoded = base64Decode(base64);
+  if (base64Encode(decoded) !== base64) throw invalid('bytes value must use canonical base64');
   return freeze({kind: VALUE_KIND.BYTES, base64});
 }
 
@@ -56,7 +57,7 @@ function bytesValue(value) {
   if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
   else if (ArrayBuffer.isView(value)) bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   else throw invalid('bytes value must be an ArrayBuffer or typed-array view');
-  return bytesFromBase64(Buffer.from(bytes).toString('base64'));
+  return bytesFromBase64(base64Encode(bytes));
 }
 
 function requiredText(value, label) {

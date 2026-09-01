@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {uuid as randomUUID} from '../support/default-crypto.js';
 import {
   booleanValue,
   bytesValue,

@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {uuid as randomUUID} from '../support/default-crypto.js';
 import {assertBackend, assertBackendTransaction} from '../backend/backend-contract.js';
 import {assertObjectMatchesShape, createObjectRecord, createShapeRecord, normalizeMetadata} from '../object/index.js';
 import {

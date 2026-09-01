@@ -1,4 +1,5 @@
 import {objectResource} from '../authority/object-resource.js';
+import {base64urlDecode, base64urlEncode, utf8DecodeLossy, utf8Encode} from '../support/portable-bytes.js';
 
 // Opaque optimistic-concurrency tokens for image objects, per ADR 0042 decision 5.
 //
@@ -48,7 +49,7 @@ function objectVersionToken(imageId, objectId, backendVersion) {
     requiredText(imageId, 'object version imageId'),
     requiredText(objectId, 'object version objectId'),
   );
-  const version = Buffer.from(String(assertBackendVersion(backendVersion)), 'utf8').toString('base64url');
+  const version = base64urlEncode(utf8Encode(String(assertBackendVersion(backendVersion))));
   // `objectResource` is base64url plus '.', so ':' is an unambiguous separator.
   return `${OBJECT_VERSION_TOKEN_V0}:${scope}:${version}`;
 }
@@ -69,12 +70,12 @@ function parseObjectVersionToken(token, imageId, objectId) {
   if (parts[1] !== expectedScope) {
     throw new ObjectVersionTokenError('object version token was issued for a different object');
   }
-  const decoded = Buffer.from(parts[2], 'base64url');
-  if (decoded.toString('base64url') !== parts[2]) {
+  const decoded = base64urlDecode(parts[2]);
+  if (base64urlEncode(decoded) !== parts[2]) {
     throw new ObjectVersionTokenError(`malformed ${OBJECT_VERSION_TOKEN_V0} token`);
   }
-  const version = Number(decoded.toString('utf8'));
-  if (!/^\d+$/.test(decoded.toString('utf8'))) {
+  const version = Number(utf8DecodeLossy(decoded));
+  if (!/^\d+$/.test(utf8DecodeLossy(decoded))) {
     throw new ObjectVersionTokenError(`malformed ${OBJECT_VERSION_TOKEN_V0} token`);
   }
   return assertBackendVersion(version);

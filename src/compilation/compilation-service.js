@@ -1,5 +1,5 @@
 import {ensureCodeArtifact} from '../graph/ensure-records.js';
-import {randomUUID} from 'node:crypto';
+import {uuid as randomUUID} from '../support/default-crypto.js';
 import {normalizeArtifactDependencies} from '../execution/model.js';
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
 import {normalizeMetadata} from '../object/model.js';

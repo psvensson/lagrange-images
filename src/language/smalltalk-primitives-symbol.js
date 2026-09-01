@@ -1,4 +1,4 @@
-import {createHash} from 'node:crypto';
+import {base64urlEncode, utf8Encode} from '../support/portable-bytes.js';
 import {
   VALUE_KIND,
   canonicalizeValue,
@@ -35,7 +35,7 @@ const SYMBOL_CLASS_NAME = 'Symbol';
 const SYMBOL_SPELLING_SLOT = 'symbol-spelling';
 
 function symbolObjectId(spelling) {
-  return `smalltalk/symbol/${Buffer.from(spelling, 'utf8').toString('base64url')}`;
+  return `smalltalk/symbol/${base64urlEncode(utf8Encode(spelling))}`;
 }
 
 async function symbolIntern({images, primitiveImage, value}) {
