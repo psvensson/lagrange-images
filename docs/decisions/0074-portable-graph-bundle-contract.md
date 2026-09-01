@@ -1,6 +1,8 @@
 # ADR 0074: portable graph bundle contract — a design investigation
 
-Status: accepted — investigation outcome; **decision-only, nothing implemented here**
+Status: accepted — investigation outcome; **export + import implemented** (export: PR #164; tuple-key
+bookkeeping repair: PR #166; import: see §H update below)
+Proven by: test/graph-bundle.test.js, test/graph-bundle-import.test.js
 
 **Decides the smallest generic, language-neutral contract that turns one or more durable graph
 roots into portable, deterministic material — preserving cycles and shared identity, never
@@ -241,6 +243,25 @@ atomic-creation owner rather than several per-kind paths:
 This ADR does **not** implement the importer. It records that the export format carries everything
 a future heterogeneous atomic-creation owner needs, so import is a following slice gated on that
 capability, not a redesign.
+
+**Update (importer implemented):** `importGraphBundle({images, targetImageId, bundle,
+externalBindings = {}, expectedContentIdentity, crypto}) -> {roots, contentIdentity}` now exists in
+the same owner (`src/graph/bundle.js`), publishing through `ImageService.createRecords` (the atomic
+heterogeneous publication owner from the §H follow-up). The implementation follows exactly the
+shape this section designed: whole-bundle validation (`assertGraphBundleV1` — structure, canonical
+key domains, referential integrity, no smuggled source refs, closure completeness: every record
+reachable from a root, every external descriptor used) BEFORE any durable effect; optional
+`expectedContentIdentity` verification before any minting/publication (zero durable effect on
+mismatch — the seam a Project installation later uses); externals resolved ONLY through explicit
+caller bindings (one per external, no extras; unpinned -> existing-target ObjectRef verified to
+exist; pinned -> PinnedRef preserved faithfully, no historical read pretended); ALL target ids
+minted up front in canonical localId order via the active crypto provider's `uuid()` (never derived
+from localId/source id/contentIdentity/root key; the map is transient import state); refs rewritten
+generically (no per-kind importer); ONE `createRecords` call as the only durable effect; only
+semantic roots returned. Fresh-copy semantics: re-importing mints new ids, and
+export -> import -> export preserves the canonical bundle and contentIdentity. NOT claimed:
+authorized export/import lane, Project release installation/materialization, reconciliation/dedup,
+historical portability, retained pins, importer retry.
 
 ## Adversarial examples — concrete answers
 
