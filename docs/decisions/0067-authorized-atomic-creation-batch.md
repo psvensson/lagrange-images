@@ -11,6 +11,16 @@ is `image-creation-batch-binding/v1` (multi-class: each member carries its own `
 per-class `object/create` require), committed atomically via `images.putObjects` (one
 `backend.transaction`, insert-only `expectedVersion: 0`, CAS retry).
 
+**Relationship to the heterogeneous creation primitive (later).** `images.putObjects` remains the
+generic-**Object**-only authorized batch this ADR specifies; the authorization contract here is
+unchanged and is NOT widened to heterogeneous record kinds. A later substrate operation,
+`ImageService.createRecords` (ADR 0074 §H follow-up), provides atomic *heterogeneous* insert-only
+creation for the graph-bundle importer. The two now share ONE atomic commit owner inside
+GraphImageService (`commitCandidateRecords`: N records + N per-kind history events -> one backend
+transaction) and the same per-kind prepare/validate/event owners — `putObjects` is the narrow
+authorized Object batch *reusing* the generic atomic creation envelope, not a second implementation
+of atomic commit, and `createRecords` is the trusted substrate seam with no authority lane of its own.
+
 ## Problem
 
 The motivating operation is the environment's Perspective save (`savePerspective`, env PR #15): create

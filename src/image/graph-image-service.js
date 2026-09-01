@@ -74,6 +74,168 @@ async function putWithHistory(backend, {
   });
 }
 
+// --- atomic heterogeneous record creation (bead lagrange-images-595) ----------
+//
+// ONE owner for "N durable records + N history events -> one backend transaction".
+// Both the existing single-record put paths and the heterogeneous batch route
+// through the SAME per-kind prepare/validate/event owners below, so the batch can
+// never drift from the single-record semantics. The backend stays unaware of
+// record kinds/image semantics.
+//
+// The per-kind history event. Single owner for the exact event payload each record
+// kind emits; the single-record put methods and the batch share it, so no generic
+// `record.put` event can ever be invented and ADR 0071 replay stays truthful.
+function putEventForRecord(saved, at) {
+  switch (saved.kind) {
+    case 'shape':
+      return {type: 'shape.put', at, shapeId: saved.id, shapeVersion: saved._version, shape: structuredClone(saved)};
+    case 'object':
+      return {type: 'object.put', at, objectId: saved.id, objectVersion: saved._version, object: structuredClone(saved)};
+    case 'code-artifact':
+      return {type: 'code-artifact.put', at, artifactId: saved.id, artifactVersion: saved._version, artifact: structuredClone(saved)};
+    case 'lexical-environment':
+      return {type: 'lexical-environment.put', at, environmentId: saved.id, environmentVersion: saved._version, environment: structuredClone(saved)};
+    case 'block':
+      return {type: 'block.put', at, blockId: saved.id, blockVersion: saved._version, block: structuredClone(saved)};
+    default:
+      throw new TypeError(`unknown record kind for history event: ${saved?.kind ?? 'missing'}`);
+  }
+}
+
+// The ONE owner of "N prepared candidate records + N history events -> one backend
+// transaction". Both `putObjects` (generic-object batch) and `createRecords`
+// (heterogeneous batch) delegate the actual atomic commit here, so there is exactly
+// one place that pairs a per-record put with its per-kind history append inside a
+// single transaction. A module-level function (not a private method) because the
+// service is consumed through lane wrappers that cannot reach private receivers.
+// expectedVersion is insert-only 0 unless a caller deliberately overrides (the ADR
+// 0067 batch's CAS-retry contract).
+async function commitCandidateRecords(backend, imageId, candidates, {at, expectedVersion = 0} = {}) {
+  return await backend.transaction(async (candidate) => {
+    const transaction = assertBackendTransaction(candidate);
+    const results = [];
+    for (const record of candidates) {
+      assertNoTransientIdentity(records(imageId), record.id, record, {keyIsObjectId: true});
+      const stored = await transaction.put(records(imageId), record.id, record, {expectedVersion});
+      await transaction.append(history(imageId), putEventForRecord(stored, at));
+      results.push(stored);
+    }
+    return results;
+  });
+}
+
+// The field whitelist each kind's write seam enforces (identical to the single-record
+// put methods). One definition so the batch cannot drift.
+const RECORD_INPUT_FIELDS = Object.freeze({
+  'shape': new Set(['id', 'slots', 'indexed', 'metadata']),
+  'object': new Set(['id', 'shape', 'behavior', 'slots', 'indexed', 'metadata']),
+  'code-artifact': new Set(['id', 'languageId', 'representation', 'content', 'dependencies', 'derivedFrom', 'metadata']),
+  'lexical-environment': new Set(['id', 'parent', 'bindings', 'metadata']),
+  'block': new Set(['id', 'code', 'environment', 'metadata']),
+});
+
+// The human-readable label each kind's field-whitelist error uses, matching the
+// established single-record put contracts exactly (so error messages do not change).
+const RECORD_INPUT_LABEL = Object.freeze({
+  'shape': 'shape',
+  'object': 'generic object',
+  'code-artifact': 'code artifact',
+  'lexical-environment': 'lexical environment',
+  'block': 'block',
+});
+
+// Phase 1: build the canonical candidate record from the existing record-model
+// owner, with the kind's field whitelist enforced. No relational validation and no
+// durable effect here. `at` is the one operation timestamp for the whole batch.
+function prepareCandidateRecord(kind, imageId, input, {at, mintId}) {
+  // The `kind` discriminant selects the schema; it is not itself a record field, so
+  // it is excluded from the field whitelist (the single-record put methods never
+  // see it). Everything else is validated exactly as the single-record path does.
+  const {kind: _kind, ...fields} = input;
+  assertAllowedFields(fields, RECORD_INPUT_FIELDS[kind], RECORD_INPUT_LABEL[kind]);
+  const id = input.id ?? mintId();
+  switch (kind) {
+    case 'shape':
+      return createShapeRecord({
+        id, imageId, slots: input.slots ?? [], metadata: input.metadata ?? {}, updatedAt: at,
+        ...(Object.hasOwn(input, 'indexed') ? {indexed: input.indexed} : {}),
+      });
+    case 'object':
+      return createObjectRecord({
+        id, imageId, shape: input.shape, behavior: input.behavior ?? null, slots: input.slots ?? {},
+        metadata: input.metadata ?? {}, updatedAt: at,
+        ...(Object.hasOwn(input, 'indexed') ? {indexed: input.indexed} : {}),
+      });
+    case 'code-artifact':
+      return createCodeArtifactRecord({
+        id, imageId, languageId: input.languageId ?? null, representation: input.representation,
+        content: input.content, dependencies: input.dependencies ?? [], derivedFrom: input.derivedFrom ?? [],
+        metadata: input.metadata ?? {}, updatedAt: at,
+      });
+    case 'lexical-environment':
+      return createLexicalEnvironmentRecord({
+        id, imageId, parent: input.parent ?? null, bindings: input.bindings ?? {},
+        metadata: input.metadata ?? {}, updatedAt: at,
+      });
+    case 'block':
+      return createBlockRecord({
+        id, imageId, code: input.code, environment: input.environment ?? null,
+        metadata: input.metadata ?? {}, updatedAt: at,
+      });
+    default:
+      throw new TypeError(`unknown record kind: ${kind}`);
+  }
+}
+
+// Phase 3: relational validation against a resolver. EXACTLY the rules the
+// single-record put methods enforce — no broadened or narrowed semantics. The
+// resolver is batch-local for the heterogeneous path (a fresh record created in the
+// same batch resolves), and the plain GraphImageService record read for a single
+// put. `resolve(ref)` must return the candidate/existing record or null, and
+// `resolveKind(ref)` its kind (or null). `existing` is the pre-existing durable
+// record at the candidate's own id (for the lexical-environment layout rule), if any.
+async function validateCandidateRecord(candidate, {resolve, resolveKind, existing}) {
+  switch (candidate.kind) {
+    case 'shape':
+      return; // Shape's own model validation already ran in prepare; no graph edges.
+    case 'object': {
+      if ((await resolveKind(candidate.shape)) !== 'shape') {
+        throw new TypeError(`shape not found: ${candidate.shape.imageId}/${candidate.shape.objectId}`);
+      }
+      assertObjectMatchesShape(candidate, await resolve(candidate.shape));
+      return;
+    }
+    case 'code-artifact':
+      for (const dependency of candidate.dependencies) {
+        if ((await resolveKind(dependency.artifact)) !== 'code-artifact') {
+          throw new TypeError(`code artifact dependency ${dependency.role} must reference a code-artifact: ${dependency.artifact.imageId}/${dependency.artifact.objectId}`);
+        }
+      }
+      return;
+    case 'lexical-environment':
+      if (candidate.parent && (await resolveKind(candidate.parent)) !== 'lexical-environment') {
+        throw new TypeError(`lexical environment parent must reference a lexical-environment: ${candidate.parent.imageId}/${candidate.parent.objectId}`);
+      }
+      if (existing) {
+        if (existing.kind !== 'lexical-environment') {
+          throw new TypeError(`record already exists with another kind: ${candidate.imageId}/${candidate.id}`);
+        }
+        assertLexicalEnvironmentLayoutCompatible(existing, candidate);
+      }
+      return;
+    case 'block':
+      if ((await resolveKind(candidate.code)) !== 'code-artifact') {
+        throw new TypeError(`block code must reference a code-artifact: ${candidate.code.imageId}/${candidate.code.objectId}`);
+      }
+      if (candidate.environment && (await resolveKind(candidate.environment)) !== 'lexical-environment') {
+        throw new TypeError(`block environment must reference a lexical-environment: ${candidate.environment.imageId}/${candidate.environment.objectId}`);
+      }
+      return;
+    default:
+      throw new TypeError(`unknown record kind: ${candidate.kind}`);
+  }
+}
+
 class ImageService {
   constructor({backend, clock = () => new Date()} = {}) {
     this.backend = assertBackend(backend);
@@ -112,29 +274,19 @@ class ImageService {
 
   async putShape(imageId, input) {
     await this.getImage(imageId);
-    // The write seam is where every other record kind rejects unknown input fields, and Shape was
-    // the one that did not. That was survivable while every Shape field was mandatory; ADR 0047's
-    // optional `indexed` made a typo silently store a *different layout* and fail at a distance, on
-    // the later object write, naming neither the typo nor this call.
-    assertAllowedFields(input, new Set(['id', 'slots', 'indexed', 'metadata']), 'shape');
-    const id = input.id ?? randomUUID();
     const at = this.now();
-    const shape = createShapeRecord({
-      id,
-      imageId,
-      slots: input.slots ?? [],
-      metadata: input.metadata ?? {},
-      updatedAt: at,
-      ...(Object.hasOwn(input, 'indexed') ? {indexed: input.indexed} : {}),
-    });
+    // One owner: prepare/validate/event all route through the shared per-kind owners,
+    // so the single-record path and the heterogeneous batch can never drift apart.
+    const shape = prepareCandidateRecord('shape', imageId, input, {at, mintId: randomUUID});
+    await validateCandidateRecord(shape, {resolve: () => null, resolveKind: () => null, existing: null});
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
       keyIsObjectId: true,
-      key: id,
+      key: shape.id,
       value: shape,
       expectedVersion: 0,
       stream: history(imageId),
-      event: (saved) => ({type: 'shape.put', at, shapeId: id, shapeVersion: saved._version, shape: structuredClone(saved)}),
+      event: (saved) => putEventForRecord(saved, at),
     });
     return stored;
   }
@@ -168,30 +320,21 @@ class ImageService {
 
   async putObject(imageId, input, {expectedVersion} = {}) {
     await this.getImage(imageId);
-    assertAllowedFields(input, new Set(['id', 'shape', 'behavior', 'slots', 'indexed', 'metadata']), 'generic object');
-    const id = input.id ?? randomUUID();
     const at = this.now();
-    const object = createObjectRecord({
-      id,
-      imageId,
-      shape: input.shape,
-      behavior: input.behavior ?? null,
-      slots: input.slots ?? {},
-      metadata: input.metadata ?? {},
-      updatedAt: at,
-      ...(Object.hasOwn(input, 'indexed') ? {indexed: input.indexed} : {}),
+    const object = prepareCandidateRecord('object', imageId, input, {at, mintId: randomUUID});
+    await validateCandidateRecord(object, {
+      resolve: (ref) => this.getRecord(ref.imageId, ref.objectId),
+      resolveKind: async (ref) => (await this.getRecord(ref.imageId, ref.objectId))?.kind ?? null,
+      existing: null,
     });
-    const shape = await this.getShape(object.shape.imageId, object.shape.objectId);
-    if (!shape) throw new TypeError(`shape not found: ${object.shape.imageId}/${object.shape.objectId}`);
-    assertObjectMatchesShape(object, shape);
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
       keyIsObjectId: true,
-      key: id,
+      key: object.id,
       value: object,
       expectedVersion,
       stream: history(imageId),
-      event: (saved) => ({type: 'object.put', at, objectId: id, objectVersion: saved._version, object: structuredClone(saved)}),
+      event: (saved) => putEventForRecord(saved, at),
     });
     return stored;
   }
@@ -206,43 +349,99 @@ class ImageService {
     }
     await this.getImage(imageId);
     const at = this.now();
+    // Phase 1 + 3: build and validate each generic Object candidate through the SAME
+    // owners the heterogeneous batch uses. putObjects is objects-only and resolves
+    // Shapes from EXISTING storage (its ADR 0067 contract predates the batch-local
+    // overlay), so its resolver is the plain record read — no fresh-in-batch shapes.
     const prepared = [];
     for (const [index, input] of inputs.entries()) {
-      assertAllowedFields(input, new Set(['id', 'shape', 'behavior', 'slots', 'indexed', 'metadata']), `generic object ${index}`);
-      const id = input.id ?? randomUUID();
-      const object = createObjectRecord({
-        id,
-        imageId,
-        shape: input.shape,
-        behavior: input.behavior ?? null,
-        slots: input.slots ?? {},
-        metadata: input.metadata ?? {},
-        updatedAt: at,
-        ...(Object.hasOwn(input, 'indexed') ? {indexed: input.indexed} : {}),
+      const object = prepareCandidateRecord('object', imageId, input, {at, mintId: randomUUID});
+      await validateCandidateRecord(object, {
+        resolve: (ref) => this.getRecord(ref.imageId, ref.objectId),
+        resolveKind: async (ref) => (await this.getRecord(ref.imageId, ref.objectId))?.kind ?? null,
+        existing: null,
       });
-      const shape = await this.getShape(object.shape.imageId, object.shape.objectId);
-      if (!shape) throw new TypeError(`shape not found: ${object.shape.imageId}/${object.shape.objectId}`);
-      assertObjectMatchesShape(object, shape);
-      prepared.push({id, object});
+      prepared.push(object);
     }
-    const storedList = await this.backend.transaction(async (candidate) => {
-      const transaction = assertBackendTransaction(candidate);
-      const results = [];
-      for (const {id, object} of prepared) {
-        assertNoTransientIdentity(records(imageId), id, object, {keyIsObjectId: true});
-        const stored = await transaction.put(records(imageId), id, object, {expectedVersion});
-        await transaction.append(history(imageId), {
-          type: 'object.put',
-          at,
-          objectId: id,
-          objectVersion: stored._version,
-          object: structuredClone(stored),
-        });
-        results.push(stored);
+    // Phase 4: the SAME atomic commit owner as the heterogeneous batch.
+    return await commitCandidateRecords(this.backend, imageId, prepared, {at, expectedVersion});
+  }
+
+  // The ONE owner of "N prepared candidate records + N history events -> one
+  // backend transaction". Both `putObjects` (generic-object batch) and
+  // `createRecords` (heterogeneous batch) delegate the actual atomic commit here,
+  // so there is exactly one place that pairs a per-record put with its history
+  // ADR 0074 §H follow-up (bead lagrange-images-595): ONE atomic heterogeneous
+  // insert-only creation operation for the existing durable record kinds. Every
+  // prepared record + its correct per-kind history event commits, or none do. This
+  // is a trusted GraphImageService substrate seam — NOT arbitrary heterogeneous
+  // mutation, a general multi-record transaction API, deletion, a cross-Image
+  // transaction, an authority surface, or graph-bundle import.
+  //
+  // Inputs are discriminated by the EXISTING durable record kind:
+  //   {kind:'shape'| 'object'| 'code-artifact'| 'lexical-environment'| 'block', ...}
+  //
+  // The batch-local overlay (Phase 2) lets a record reference another record created
+  // in the SAME batch — a fresh Object -> fresh Shape, Block -> fresh CodeArtifact +
+  // LexicalEnvironment, CodeArtifact -> fresh CodeArtifact dependency — without
+  // pretending the referenced record pre-existed. Validation reuses EXACTLY the
+  // single-record semantic owners; no broadened or narrowed graph semantics.
+  async createRecords(imageId, inputs) {
+    if (!Array.isArray(inputs) || inputs.length === 0) {
+      throw new TypeError('createRecords inputs must be a non-empty array');
+    }
+    await this.getImage(imageId);
+    const at = this.now();
+
+    // Phase 1 — structural preparation, no durable effect. Build every canonical
+    // candidate via the existing record-model owner; enforce non-empty, known kinds,
+    // unique candidate ids, target-image membership, no _version, no transient, and
+    // insert-only semantics.
+    const candidates = [];
+    const byId = new Map();
+    for (const [index, input] of inputs.entries()) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        throw new TypeError(`createRecords input ${index} must be a record spec object`);
       }
-      return results;
-    });
-    return storedList;
+      const kind = input.kind;
+      if (!Object.hasOwn(RECORD_INPUT_FIELDS, kind)) {
+        throw new TypeError(`createRecords input ${index} has unknown record kind: ${kind}`);
+      }
+      if (Object.hasOwn(input, '_version')) {
+        throw new TypeError(`createRecords input ${index} must not supply _version (insert-only)`);
+      }
+      const record = prepareCandidateRecord(kind, imageId, input, {at, mintId: randomUUID});
+      if (byId.has(record.id)) {
+        throw new TypeError(`createRecords duplicate candidate id: ${imageId}/${record.id}`);
+      }
+      if (record.imageId !== imageId) {
+        throw new TypeError(`createRecords candidate ${record.id} belongs to image ${record.imageId}, not ${imageId}`);
+      }
+      byId.set(record.id, record);
+      candidates.push(record);
+    }
+
+    // Phase 2 — batch-local overlay resolver. Exactly one purpose: resolve(ref) is
+    // the prepared batch candidate if ref names one, otherwise the existing durable
+    // record via GraphImageService. Transaction/preparation-local only — not a new
+    // graph namespace or durable identity system.
+    const resolveOverlay = async (ref) => {
+      if (ref.imageId === imageId && byId.has(ref.objectId)) return byId.get(ref.objectId);
+      return await this.getRecord(ref.imageId, ref.objectId);
+    };
+    const resolveKind = async (ref) => (await resolveOverlay(ref))?.kind ?? null;
+
+    // Phase 3 — relational validation via the overlay, reusing EXACTLY the
+    // single-record semantic owners. Any failure -> ZERO records, ZERO history.
+    for (const candidate of candidates) {
+      const existing = await this.getRecord(imageId, candidate.id);
+      await validateCandidateRecord(candidate, {resolve: resolveOverlay, resolveKind, existing});
+    }
+
+    // Phase 4 — ONE backend transaction. Each candidate put insert-only
+    // (expectedVersion: 0) + the EXACT per-kind history event the single-record path
+    // would emit. Any put/append/backend failure aborts the whole transaction.
+    return await commitCandidateRecords(this.backend, imageId, candidates, {at, expectedVersion: 0});
   }
 
   async getObject(imageId, objectId) {
@@ -256,31 +455,21 @@ class ImageService {
 
   async putCodeArtifact(imageId, input) {
     await this.getImage(imageId);
-    assertAllowedFields(input, new Set(['id', 'languageId', 'representation', 'content', 'dependencies', 'derivedFrom', 'metadata']), 'code artifact');
-    const id = input.id ?? randomUUID();
     const at = this.now();
-    const artifact = createCodeArtifactRecord({
-      id,
-      imageId,
-      languageId: input.languageId ?? null,
-      representation: input.representation,
-      content: input.content,
-      dependencies: input.dependencies ?? [],
-      derivedFrom: input.derivedFrom ?? [],
-      metadata: input.metadata ?? {},
-      updatedAt: at,
+    const artifact = prepareCandidateRecord('code-artifact', imageId, input, {at, mintId: randomUUID});
+    await validateCandidateRecord(artifact, {
+      resolve: (ref) => this.getRecord(ref.imageId, ref.objectId),
+      resolveKind: async (ref) => (await this.getRecord(ref.imageId, ref.objectId))?.kind ?? null,
+      existing: null,
     });
-    for (const dependency of artifact.dependencies) {
-      await this.requireRecordKind(dependency.artifact, 'code-artifact', `code artifact dependency ${dependency.role}`);
-    }
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
       keyIsObjectId: true,
-      key: id,
+      key: artifact.id,
       value: artifact,
       expectedVersion: 0,
       stream: history(imageId),
-      event: (saved) => ({type: 'code-artifact.put', at, artifactId: id, artifactVersion: saved._version, artifact: structuredClone(saved)}),
+      event: (saved) => putEventForRecord(saved, at),
     });
     return stored;
   }
@@ -296,31 +485,22 @@ class ImageService {
 
   async putLexicalEnvironment(imageId, input, {expectedVersion} = {}) {
     await this.getImage(imageId);
-    assertAllowedFields(input, new Set(['id', 'parent', 'bindings', 'metadata']), 'lexical environment');
-    const id = input.id ?? randomUUID();
     const at = this.now();
-    const environment = createLexicalEnvironmentRecord({
-      id,
-      imageId,
-      parent: input.parent ?? null,
-      bindings: input.bindings ?? {},
-      metadata: input.metadata ?? {},
-      updatedAt: at,
+    const environment = prepareCandidateRecord('lexical-environment', imageId, input, {at, mintId: randomUUID});
+    const current = await this.getRecord(imageId, environment.id);
+    await validateCandidateRecord(environment, {
+      resolve: (ref) => this.getRecord(ref.imageId, ref.objectId),
+      resolveKind: async (ref) => (await this.getRecord(ref.imageId, ref.objectId))?.kind ?? null,
+      existing: current,
     });
-    if (environment.parent) await this.requireRecordKind(environment.parent, 'lexical-environment', 'lexical environment parent');
-    const current = await this.getRecord(imageId, id);
-    if (current) {
-      if (current.kind !== 'lexical-environment') throw new TypeError(`record already exists with another kind: ${imageId}/${id}`);
-      assertLexicalEnvironmentLayoutCompatible(current, environment);
-    }
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
       keyIsObjectId: true,
-      key: id,
+      key: environment.id,
       value: environment,
       expectedVersion: expectedVersion ?? current?._version ?? 0,
       stream: history(imageId),
-      event: (saved) => ({type: 'lexical-environment.put', at, environmentId: id, environmentVersion: saved._version, environment: structuredClone(saved)}),
+      event: (saved) => putEventForRecord(saved, at),
     });
     return stored;
   }
@@ -336,27 +516,21 @@ class ImageService {
 
   async putBlock(imageId, input) {
     await this.getImage(imageId);
-    assertAllowedFields(input, new Set(['id', 'code', 'environment', 'metadata']), 'block');
-    const id = input.id ?? randomUUID();
     const at = this.now();
-    const block = createBlockRecord({
-      id,
-      imageId,
-      code: input.code,
-      environment: input.environment ?? null,
-      metadata: input.metadata ?? {},
-      updatedAt: at,
+    const block = prepareCandidateRecord('block', imageId, input, {at, mintId: randomUUID});
+    await validateCandidateRecord(block, {
+      resolve: (ref) => this.getRecord(ref.imageId, ref.objectId),
+      resolveKind: async (ref) => (await this.getRecord(ref.imageId, ref.objectId))?.kind ?? null,
+      existing: null,
     });
-    await this.requireRecordKind(block.code, 'code-artifact', 'block code');
-    if (block.environment) await this.requireRecordKind(block.environment, 'lexical-environment', 'block environment');
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
       keyIsObjectId: true,
-      key: id,
+      key: block.id,
       value: block,
       expectedVersion: 0,
       stream: history(imageId),
-      event: (saved) => ({type: 'block.put', at, blockId: id, blockVersion: saved._version, block: structuredClone(saved)}),
+      event: (saved) => putEventForRecord(saved, at),
     });
     return stored;
   }
