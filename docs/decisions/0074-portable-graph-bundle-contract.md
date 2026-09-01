@@ -23,7 +23,7 @@ exporter. This ADR defines the generic substrate materializer such an owner can 
 |---|---|---|
 | **Portable graph bundle semantics** (closure, bundle-local identity, external-ref rule, canonical form, content identity) | **Graph bundle model — a NEW module under the image/object layer, `src/graph/bundle.js`** | The semantics are exactly the language-neutral graph semantics of `src/graph/references.js` (which owns edge enumeration) and `src/object/`/`src/execution/` (which own record payloads). One owner; NOT split across Project, CodeArtifact, language personalities, or import code. |
 | **Interaction: durable records → portable bundle (export)** | The **same graph bundle model**, reading through `GraphImageService` | `GraphImageService` keeps owning record read/storage. The bundle owner consumes `getRecord`/`referencesOfRecord`; it never duplicates graph storage or invents a second traversal. |
-| **Interaction: portable bundle → target Image records (import)** | The **same graph bundle model**, writing through `GraphImageService.putObjects`/the ADR 0067 atomic batch | One owner for both directions of the translation so the identity/closure rules cannot diverge. Import is a **later slice**; this ADR only proves the format is importable. |
+| **Interaction: portable bundle → target Image records (import)** | The **same graph bundle model**, writing through ONE future heterogeneous atomic-creation owner (see §H correction — `putObjects`/ADR 0067 is generic-Object-only and does NOT suffice) | One owner for both directions of the translation so the identity/closure rules cannot diverge. Import is a **later slice** gated on that heterogeneous atomic-creation capability; this ADR only proves the format is importable in principle. |
 | **Project release semantics** | `src/project/model.js` + release-capture coordinator (unchanged) | The Project layer keeps owning release/manifest/frontier semantics and stays **not** the exporter. A graph materializer is a *representation owner* that the coordinator calls, exactly as today. |
 | **Authorized public export lane** | A future binding executor (separate ADR) | The generic graph materializer is initially an **unguarded host-level substrate function** like the current release-capture internals. An authorized lane is designed only after these semantics exist (question G). |
 
@@ -185,10 +185,25 @@ public export lane** is a separate interaction owner (a future binding executor 
 `require` policy), designed only after these generic semantics exist and proven. Nothing here
 decides that lane's authority model.
 
-## H. Import — proven importable, implemented in a later slice
+## H. Import — proven importable in principle, implemented in a later slice
 
-The format is designed so a target-Image importer can be built on the **existing ADR 0067 atomic
-creation batch** rather than a second multi-object creation path:
+**Correction (follow-up, bead lagrange-images-fzt):** the original text of this section claimed a
+future importer "can reuse one ADR 0067 / `GraphImageService.putObjects()` batch." Verified against
+current code, that claim is **false**: `putObjects()` accepts **only generic Object creation
+records** (field whitelist `id/shape/behavior/slots/indexed/metadata` → `createObjectRecord` →
+`object.put`). It cannot atomically create Shape + CodeArtifact + Block + LexicalEnvironment
+records; every other kind is a single-record put in its own transaction. **No heterogeneous atomic
+durable-record creation path exists today.** The real unresolved requirement is:
+
+> future graph import needs ONE owner for atomic heterogeneous durable-record
+> creation/reconstruction.
+
+That capability is deliberately **not** implemented by the export slice and must not be worked
+around with several local puts or per-kind import transactions. The bundle **format** below remains
+implementable and importable in principle; only the claimed *existing* import mechanism was wrong.
+
+The format is designed so a target-Image importer can be built on **one** such future heterogeneous
+atomic-creation owner rather than several per-kind paths:
 
 - **local-id → fresh ObjectRef mapping:** the importer walks `records` in canonical order and, for
   each `<localId>`, mints a fresh server-side target id (ids are server-minted; the bundle's
@@ -196,13 +211,13 @@ creation batch** rather than a second multi-object creation path:
   `localId -> freshObjectRef` map.
 - **Cycles:** because edges are `local-ref`, the importer first *reserves/mints* a fresh id for
   every `<localId>` (so every edge target has a known fresh ref), then writes payloads with edges
-  rewritten through the map. ADR 0067's transaction-local fresh-object provenance already justifies
-  intra-batch edges to freshly created objects, which is exactly what a cycle needs.
+  rewritten through the map. The atomic-creation owner's intra-batch fresh-object provenance (the
+  ADR 0067 pattern) is what justifies intra-batch edges to freshly created records — exactly what a
+  cycle needs.
 - **Creation order / staging:** Shapes before the objects that reference them is satisfied by
   canonical BFS order from roots (a record's Shape is reached no later than the record); the
   two-phase mint-then-write makes ordering non-load-bearing for correctness anyway.
-- **Atomicity:** one ADR 0067 batch / `putObjects` commit — all records or none (insert-only,
-  `expectedVersion: 0`, CAS retry). No partial import.
+- **Atomicity:** one heterogeneous atomic commit — all records or none. No partial import.
 - **External resolution:** each `external-ref` is resolved by the caller against the target
   environment (already-present well-known record, or an explicit provided mapping) BEFORE the batch
   is written; an unresolvable external fails the import explicitly.
@@ -212,7 +227,8 @@ creation batch** rather than a second multi-object creation path:
   installation-layer policy (ADR 0073), not bundle-import semantics.
 
 This ADR does **not** implement the importer. It records that the export format carries everything
-the ADR 0067 machinery needs, so import is a following slice, not a redesign.
+a future heterogeneous atomic-creation owner needs, so import is a following slice gated on that
+capability, not a redesign.
 
 ## Adversarial examples — concrete answers
 

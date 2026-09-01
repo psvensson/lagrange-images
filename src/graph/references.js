@@ -11,7 +11,11 @@ function referencesOfRecord(record) {
     assertObjectRecord(record);
     const refs = [record.shape];
     if (record.behavior) refs.push(record.behavior);
-    for (const value of Object.values(record.slots)) refs.push(...referencesOfValue(value));
+    // Canonical edge order: slot edges are enumerated by stable slot id (code-unit order), never
+    // by insertion order, so two semantically identical records built with opposite insertion
+    // order yield the same edge sequence. Fixed structural edges (shape, behavior) keep their
+    // semantic order first; the indexed part (an ordinary ordered array) retains its own order.
+    for (const slotId of Object.keys(record.slots).sort()) refs.push(...referencesOfValue(record.slots[slotId]));
     // ADR 0047: an indexed Value is just as much graph as a named-slot Value. Omitting this walk
     // would make a ref durable and readable while invisible to every graph operation built here.
     for (const value of record.indexed ?? []) refs.push(...referencesOfValue(value));
@@ -28,7 +32,12 @@ function referencesOfRecord(record) {
   if (record?.kind === 'lexical-environment') {
     assertLexicalEnvironmentRecord(record);
     const refs = record.parent ? [record.parent] : [];
-    for (const binding of Object.values(record.bindings)) refs.push(...referencesOfValue(binding.value));
+    // Canonical edge order: binding edges are enumerated by stable binding id (code-unit order),
+    // never by insertion order. `parent` (a fixed structural edge) keeps its semantic position
+    // first. Note a binding may be {value} | {unbound} | {cell}; only `value` carries a ref.
+    for (const bindingId of Object.keys(record.bindings).sort()) {
+      refs.push(...referencesOfValue(record.bindings[bindingId].value));
+    }
     return refs;
   }
   if (record?.kind === 'block') {
