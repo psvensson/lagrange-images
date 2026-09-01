@@ -202,6 +202,18 @@ That capability is deliberately **not** implemented by the export slice and must
 around with several local puts or per-kind import transactions. The bundle **format** below remains
 implementable and importable in principle; only the claimed *existing* import mechanism was wrong.
 
+**Update (implemented):** the required owner now exists — `ImageService.createRecords(imageId,
+inputs)` (bead lagrange-images-595), an insert-only atomic heterogeneous creation primitive in
+GraphImageService: one record-kind dispatch shared with the single-record puts, a batch-local
+overlay resolver so intra-batch fresh references (Object → fresh Shape, Block → fresh
+CodeArtifact/LexicalEnvironment, CodeArtifact → fresh CodeArtifact dependency) validate with
+*exactly* the single-record semantics, and one backend transaction committing every record with
+its existing per-kind history event (`shape.put`/`object.put`/`code-artifact.put`/
+`lexical-environment.put`/`block.put`) or none. `putObjects` (the ADR 0067 generic-Object batch)
+now routes through the same atomic commit owner; its authorized contract is unchanged and NOT
+widened to heterogeneous kinds. Graph-bundle import itself, external resolution, and the
+localId → target ObjectRef minting remain unimplemented future slices.
+
 The format is designed so a target-Image importer can be built on **one** such future heterogeneous
 atomic-creation owner rather than several per-kind paths:
 

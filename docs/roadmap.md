@@ -173,7 +173,7 @@ Authority remains transient execution context. Identity/contact pickers and invi
 - [ ] logical snapshot/revision frontiers (first current-Image frontier primitive exists — `GraphImageService.frontier()` via the backend `streamHead` seam, PR #158, ADR 0071; snapshot/compaction/revision-aware reads below remain open)
 - [ ] revision-aware reads
 - [ ] indexed graph reachability and derivation lookup
-- [ ] export/import graph format (EXPORT slice DONE: ADR 0074 + `src/graph/bundle.js` `exportGraphBundle` — one owner, bundle-local identity not source ObjectRef, explicit internal/external ref rule, deterministic canonical `contentIdentity`, cycles + shared refs, frontier/authority outside the bundle; IMPORT slice remains: gated on ONE owner for atomic heterogeneous durable-record creation — §H correction: `putObjects`/ADR 0067 is generic-Object-only and does NOT suffice)
+- [ ] export/import graph format (EXPORT slice DONE: ADR 0074 + `src/graph/bundle.js` `exportGraphBundle` — one owner, bundle-local identity not source ObjectRef, explicit internal/external ref rule, deterministic canonical `contentIdentity`, cycles + shared refs, frontier/authority outside the bundle. ATOMIC HETEROGENEOUS CREATION DONE: `ImageService.createRecords` — one record-kind dispatch shared with the single puts, batch-local overlay resolver, one backend transaction with per-kind history events; `putObjects` routes through the same atomic commit owner. IMPORT slice remains: bundle localId -> fresh target ObjectRef minting, external resolution, and the importer itself)
 - [ ] garbage-collection rules respecting history and pinned refs
 - [ ] object migration between immutable Shapes
 - [ ] measure partitioning/index choices on large images
