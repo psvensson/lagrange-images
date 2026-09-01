@@ -10,7 +10,7 @@ import {
   concatBytes,
   utf8Encode,
 } from '../src/support/portable-bytes.js';
-import {createNodeCryptoProvider} from '../src/support/crypto-provider.js';
+import {createNodeCryptoProvider} from '../src/support/node-crypto-provider.js';
 import {
   getDefaultCryptoProvider,
   resetDefaultCryptoProvider,
@@ -197,7 +197,7 @@ test('cross-provider AES-256-GCM differential: test provider decrypts Node provi
 });
 
 test('typeFingerprint is provider-independent (identical digest from either provider)', () => {
-  resetDefaultCryptoProvider();
+  setDefaultCryptoProvider(createNodeCryptoProvider());
   const asNode = typeFingerprint('string', {});
   setDefaultCryptoProvider(createDeterministicTestProvider());
   const asTest = typeFingerprint('string', {});
@@ -212,15 +212,15 @@ test('composite codec produces identical envelope bytes regardless of crypto pro
   const types = {Person: {kind: 'record', fields: [
     {name: 'name', type: 'string'}, {name: 'age', type: 's32'}, {name: 'tags', type: {kind: 'list', element: 'string'}},
   ]}};
-  resetDefaultCryptoProvider();
+  setDefaultCryptoProvider(createNodeCryptoProvider());
   const envNode = packCompositeValue(value, type, types);
   setDefaultCryptoProvider(createDeterministicTestProvider());
   const envTest = packCompositeValue(value, type, types);
-  resetDefaultCryptoProvider();
   // Identical base64 envelope -> identical bytes (fingerprint + payload).
   assert.equal(envTest.base64, envNode.base64);
-  // Round-trip decodes to the same value.
+  // Round-trip decodes to the same value (still under the test provider).
   assert.deepEqual(unpackCompositeValue(envNode, type, types), value);
+  resetDefaultCryptoProvider();
 });
 
 test('object version token is byte-for-byte stable and round-trips', () => {
@@ -250,12 +250,17 @@ test('observation cursor security semantics are provider-driven and provider-agn
   }
 });
 
-test('default provider resolves to Node reference and can be swapped and reset', () => {
+test('default provider installs explicitly, can be swapped and reset, and throws when unset', () => {
   resetDefaultCryptoProvider();
+  // No auto-default: a bare semantic module with nothing installed refuses loudly,
+  // which is exactly what tells a portable host it must install its provider first.
+  assert.throws(() => getDefaultCryptoProvider(), /no crypto provider installed/);
+  // The Node root installs the Node reference provider explicitly.
+  setDefaultCryptoProvider(createNodeCryptoProvider());
   assert.ok(getDefaultCryptoProvider().sha256(utf8Encode('x')) instanceof Uint8Array);
   const determ = createDeterministicTestProvider();
   setDefaultCryptoProvider(determ);
   assert.equal(getDefaultCryptoProvider(), determ);
   resetDefaultCryptoProvider();
-  assert.notEqual(getDefaultCryptoProvider(), determ);
+  assert.throws(() => getDefaultCryptoProvider(), /no crypto provider installed/);
 });

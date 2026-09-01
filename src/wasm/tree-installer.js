@@ -1,5 +1,5 @@
 import {ensureBlock, ensureCodeArtifact} from '../graph/ensure-records.js';
-import {randomUUID} from 'node:crypto';
+import {uuid as randomUUID} from '../support/default-crypto.js';
 import {
   LAGRANGE_CODE_V0,
   normalizeLagrangeCodeProgram,

@@ -1,4 +1,6 @@
 import {createBackend} from './backend/create-backend.js';
+import {getDefaultCryptoProvider, setDefaultCryptoProvider} from './support/default-crypto.js';
+import {createNodeCryptoProvider} from './support/node-crypto-provider.js';
 import {createSmalltalkTemporaryInitializer} from './language/smalltalk-kernel.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
@@ -27,6 +29,17 @@ import {
   createSymmetricSmalltalkDispatcher,
 } from './language/index.js';
 import {ToolchainProviderRegistry, ToolchainService} from './toolchain/index.js';
+
+// The Node composition root installs the Node reference crypto provider exactly once,
+// at module load, so the pure synchronous semantic functions (typeFingerprint, version
+// token, observation cursor) resolve it with zero wiring — preserving PR #161's Node
+// ergonomics. A portable host instead calls setDefaultCryptoProvider(nativeProvider)
+// itself; this install never overrides an already-installed (e.g. host) provider.
+try {
+  getDefaultCryptoProvider();
+} catch {
+  setDefaultCryptoProvider(createNodeCryptoProvider());
+}
 
 async function createRuntime(options = {}) {
   const backend = await createBackend(options.backend ?? {});

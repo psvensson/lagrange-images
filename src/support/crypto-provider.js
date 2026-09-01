@@ -1,11 +1,11 @@
-// The narrow host crypto/random primitive seam (ADR: host portability, bead
-// lagrange-images-g58).
+// The narrow host crypto/random primitive contract (ADR: host portability, beads
+// lagrange-images-g58, lagrange-images-16q). PORTABLE — no Node imports.
 //
 // Crypto is a true HOST PRIMITIVE seam, but lagrange-images retains ALL semantic
-// ownership. This provider computes primitives ONLY. It is deliberately the
-// narrowest contract the executed Object Environment acceptance closure needs —
-// it is NOT modeled on the broad Node `node:crypto` API, and no host is asked to
-// supply Node's personality.
+// ownership. A provider computes primitives ONLY. The contract is deliberately the
+// narrowest the executed portable-client acceptance closure needs — it is NOT
+// modeled on the broad Node `node:crypto` API, and no host is asked to supply
+// Node's personality.
 //
 // THE CONTRACT IS SYNCHRONOUS. `typeFingerprint` (inside the synchronous
 // `packCompositeValue`), `objectVersionToken`, and the observation cursor
@@ -28,54 +28,37 @@
 //
 // POLICY LIVES ABOVE. `image-observation-binding` alone decides the cursor format,
 // the AES-GCM policy (key derivation, IV length, tag layout), what is
-// authenticated, parsing, and integrity-failure handling. This provider never
-// sees a cursor — only key/iv/plaintext/ciphertext/tag.
+// authenticated, parsing, and integrity-failure handling. A provider never sees a
+// cursor — only key/iv/plaintext/ciphertext/tag.
+//
+// IMPLEMENTATIONS. The Node reference implementation is `node-crypto-provider.js`
+// (imported only by the Node composition root). This module stays import-clean so
+// the portable runtime's static closure never touches `node:crypto`.
 
-import {createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID} from 'node:crypto';
+const REQUIRED_METHODS = Object.freeze([
+  'secureRandomBytes',
+  'sha256',
+  'aes256gcmEncrypt',
+  'aes256gcmDecrypt',
+  'uuid',
+]);
 
-function requireBytes(value, label, length = null) {
-  if (!(value instanceof Uint8Array)) throw new TypeError(`${label} must be a Uint8Array`);
-  if (length !== null && value.length !== length) {
-    throw new TypeError(`${label} must be ${length} bytes, got ${value.length}`);
+// Validate that a candidate supplies the full contract and freeze it. Every
+// provider — the Node reference and any host-supplied one — passes through here so
+// the contract has exactly one definition.
+function assertCryptoProvider(candidate) {
+  if (!candidate || typeof candidate !== 'object') {
+    throw new TypeError('crypto provider must be an object');
   }
-  return value;
-}
-
-// The Node default/reference provider. It is the reference implementation of the
-// contract: any second provider must produce identical results for identical
-// inputs (differential proof), and identical security properties.
-function createNodeCryptoProvider() {
-  return Object.freeze({
-    secureRandomBytes(length) {
-      return new Uint8Array(randomBytes(length));
-    },
-    sha256(bytes) {
-      return new Uint8Array(createHash('sha256').update(requireBytes(bytes, 'sha256 input')).digest());
-    },
-    aes256gcmEncrypt({key, iv, plaintext}) {
-      requireBytes(key, 'AES-256-GCM key', 32);
-      requireBytes(iv, 'AES-256-GCM iv', 12);
-      requireBytes(plaintext, 'AES-256-GCM plaintext');
-      const cipher = createCipheriv('aes-256-gcm', key, iv);
-      const ciphertext = new Uint8Array(Buffer.concat([cipher.update(plaintext), cipher.final()]));
-      const tag = new Uint8Array(cipher.getAuthTag());
-      return {ciphertext, tag};
-    },
-    aes256gcmDecrypt({key, iv, ciphertext, tag}) {
-      requireBytes(key, 'AES-256-GCM key', 32);
-      requireBytes(iv, 'AES-256-GCM iv', 12);
-      requireBytes(ciphertext, 'AES-256-GCM ciphertext');
-      requireBytes(tag, 'AES-256-GCM tag', 16);
-      const decipher = createDecipheriv('aes-256-gcm', key, iv);
-      decipher.setAuthTag(tag);
-      return new Uint8Array(Buffer.concat([decipher.update(ciphertext), decipher.final()]));
-    },
-    uuid() {
-      return randomUUID();
-    },
-  });
+  for (const method of REQUIRED_METHODS) {
+    if (typeof candidate[method] !== 'function') {
+      throw new TypeError(`crypto provider must supply ${method}()`);
+    }
+  }
+  return Object.freeze(candidate);
 }
 
 export {
-  createNodeCryptoProvider,
+  REQUIRED_METHODS as CRYPTO_PROVIDER_METHODS,
+  assertCryptoProvider,
 };

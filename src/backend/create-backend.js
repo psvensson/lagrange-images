@@ -75,7 +75,13 @@ async function createBackend(options = {}) {
     return options.instance;
   }
 
-  const mode = options.mode ?? process.env.LAGRANGE_BACKEND ?? 'auto';
+  // `process.env` is a Node host API. Read it defensively so this module stays
+  // loadable/usable on a portable JS host with no `process` global: an explicit
+  // `options.mode` (what the portable composition root always passes) never touches
+  // it, and a host without `process` simply gets the 'auto' default rather than a
+  // ReferenceError. Node behavior is unchanged.
+  const envBackend = typeof process !== 'undefined' && process.env ? process.env.LAGRANGE_BACKEND : undefined;
+  const mode = options.mode ?? envBackend ?? 'auto';
 
   if (!['auto', 'mock', 'lagrange'].includes(mode)) {
     throw new Error(`unknown backend mode: ${mode}`);
