@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {uuid as randomUUID} from '../support/default-crypto.js';
 import {isTransientObjectId} from '../value/transient-ref.js';
 import {SHAPE_INDEXED} from '../object/model.js';
 import {objectRef, pinnedRef, textValue} from '../value/index.js';

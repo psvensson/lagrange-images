@@ -1,3 +1,4 @@
+import {base64urlEncode, utf8Encode} from '../support/portable-bytes.js';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
 import {SHAPE_INDEXED, shapeIndexedKind} from '../object/model.js';
@@ -82,7 +83,7 @@ function methodRepresentation(program) {
 
 const methodsId = (ownerId) => `${ownerId}/methods`;
 const methodId = (classObjectId, selector) =>
-  `${classObjectId}/method/${Buffer.from(selector, 'utf8').toString('base64url')}`;
+  `${classObjectId}/method/${base64urlEncode(utf8Encode(selector))}`;
 
 // Full Behavior identity, not merely `shape.objectId`: cross-image shape refs are legal, so another
 // image's `smalltalk/behavior-shape/v1` must not qualify a record as this image's Behavior.
@@ -575,7 +576,7 @@ async function defineMethods({
   // Injective, not probabilistic: this is durable identity, and the canonical selector array
   // encodes directly. A truncated digest would make two distinct selector sets collide with some
   // small probability, which is not a property durable ids should have.
-  const fingerprint = Buffer.from(JSON.stringify(selectors), 'utf8').toString('base64url');
+  const fingerprint = base64urlEncode(utf8Encode(JSON.stringify(selectors)));
   const shape = await ensureShape(images, imageId, {
     id: `${methodsId(classRef.objectId)}/shape/${fingerprint}`,
     slots,

@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {uuid as randomUUID} from '../support/default-crypto.js';
 import {ensureBlock, ensureCodeArtifact, ensureLexicalEnvironment} from '../graph/ensure-records.js';
 import {ARRAY_BINDING_ID, NIL_BINDING_ID, SYMBOL_BINDING_ID} from './symmetric-smalltalk-semantic.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';

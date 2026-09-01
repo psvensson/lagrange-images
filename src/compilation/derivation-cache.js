@@ -1,4 +1,5 @@
-import {createHash} from 'node:crypto';
+import {getDefaultCryptoProvider} from '../support/default-crypto.js';
+import {bytesToHex, utf8Encode} from '../support/portable-bytes.js';
 
 const DERIVATION_KEY_VERSION = 'lagrange-derivation-key/v0';
 
@@ -54,7 +55,7 @@ async function createDerivationDescriptor(compiler, request, context = {}, artif
     normalized,
     normalizedMetadata,
   ]);
-  const key = createHash('sha256').update(payload).digest('hex');
+  const key = bytesToHex(getDefaultCryptoProvider().sha256(utf8Encode(payload)));
   return Object.freeze({compilerIdentity: contract.identity, derivationKey: key});
 }
 

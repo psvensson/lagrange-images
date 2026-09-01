@@ -1,3 +1,5 @@
+import {base64urlDecode, base64urlEncode, utf8DecodeLossy, utf8Encode} from '../support/portable-bytes.js';
+
 // Canonical authority resource names for image objects, per ADR 0039 decision 5.
 //
 // Concatenating identifiers is unsafe. Neither imageId nor objectId forbids a separator, so
@@ -22,7 +24,7 @@ function requiredText(value, label) {
 }
 
 function encodePart(value) {
-  return Buffer.from(value, 'utf8').toString('base64url');
+  return base64urlEncode(utf8Encode(value));
 }
 
 function objectResource(imageId, objectId) {
@@ -41,9 +43,9 @@ function parseObjectResource(resource) {
     throw new TypeError(`invalid ${OBJECT_RESOURCE_V0}: ${resource}`);
   }
   const decode = (part, label) => {
-    const decoded = Buffer.from(part, 'base64url');
-    if (decoded.toString('base64url') !== part) throw new TypeError(`invalid ${OBJECT_RESOURCE_V0} ${label}`);
-    return decoded.toString('utf8');
+    const decoded = base64urlDecode(part);
+    if (base64urlEncode(decoded) !== part) throw new TypeError(`invalid ${OBJECT_RESOURCE_V0} ${label}`);
+    return utf8DecodeLossy(decoded);
   };
   return Object.freeze({
     imageId: decode(text.slice(0, index), 'imageId'),

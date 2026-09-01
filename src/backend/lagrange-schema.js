@@ -1,3 +1,4 @@
+import {bytesToHex, utf8Encode} from '../support/portable-bytes.js';
 const LAGRANGE_IMAGE_TABLES = Object.freeze({
   images: 'lagrange_images_images',
   records: 'lagrange_images_records',
@@ -51,7 +52,7 @@ function assertStorageName(value, label) {
 }
 
 function encodePart(value, label) {
-  return Buffer.from(assertStorageName(value, label), 'utf8').toString('hex');
+  return bytesToHex(utf8Encode(assertStorageName(value, label)));
 }
 
 function imageIdFrom(name, suffix) {

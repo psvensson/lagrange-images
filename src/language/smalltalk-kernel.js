@@ -1,3 +1,4 @@
+import {base64urlEncode, utf8Encode} from '../support/portable-bytes.js';
 import {SHAPE_INDEXED} from '../object/model.js';
 import {VALUE_KIND, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {
@@ -71,7 +72,7 @@ function methodDictionarySlots(selectors) {
       throw new TypeError(`method dictionary declares duplicate selector: ${selector}`);
     }
     seen.add(selector);
-    return {id: `selector:${Buffer.from(selector, 'utf8').toString('base64url')}`, name: selector};
+    return {id: `selector:${base64urlEncode(utf8Encode(selector))}`, name: selector};
   });
 }
 

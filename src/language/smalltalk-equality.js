@@ -1,4 +1,5 @@
-import {createHash} from 'node:crypto';
+import {getDefaultCryptoProvider} from '../support/default-crypto.js';
+import {utf8Encode} from '../support/portable-bytes.js';
 import {
   VALUE_KIND,
   booleanValue,
@@ -129,10 +130,10 @@ function builtInEquals(leftInput, rightInput) {
 // on it. A host-randomized or address-derived hash would relocate every key on restart.
 function builtInHash(value) {
   const form = equalityNormalForm(value);
-  const digest = createHash('sha256')
-    .update(JSON.stringify([SMALLTALK_EQUALITY_DOMAIN, ...form]), 'utf8')
-    .digest();
-  return integerValue(digest.readBigUInt64BE(0) & SMALLTALK_HASH_MASK);
+  const digest = getDefaultCryptoProvider().sha256(
+    utf8Encode(JSON.stringify([SMALLTALK_EQUALITY_DOMAIN, ...form])),
+  );
+  return integerValue(new DataView(digest.buffer, digest.byteOffset, digest.byteLength).getBigUint64(0, false) & SMALLTALK_HASH_MASK);
 }
 
 // ADR 0045 makes the `true`/`false` singleton the effective receiver of a boolean send, so a

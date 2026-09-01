@@ -1,4 +1,5 @@
-import {createHash, randomUUID} from 'node:crypto';
+import {getDefaultCryptoProvider} from '../support/default-crypto.js';
+import {bytesToHex, utf8Encode} from '../support/portable-bytes.js';
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
 
 const PROJECT_DESCRIPTOR_V1 = 'lagrange-project/v1';
@@ -86,7 +87,7 @@ function normalizeProjectDescriptor(value) {
 }
 
 function createProjectId() {
-  return `project:${randomUUID()}`;
+  return `project:${getDefaultCryptoProvider().uuid()}`;
 }
 
 function createProjectDescriptor({projectId = createProjectId(), name, namespace = null, members = []} = {}) {
@@ -182,7 +183,7 @@ function releaseBody({projectId, profileId, members, dependencies}) {
 
 function releaseIdentity(body) {
   const canonical = JSON.stringify(canonicalJsonValue(body));
-  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
+  return `sha256:${bytesToHex(getDefaultCryptoProvider().sha256(utf8Encode(canonical)))}`;
 }
 
 function normalizeReleaseMembers(values) {

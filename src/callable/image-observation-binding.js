@@ -1,4 +1,5 @@
-import {createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID} from 'node:crypto';
+import {getDefaultCryptoProvider} from '../support/default-crypto.js';
+import {base64urlDecode, base64urlEncode, concatBytes, utf8DecodeLossy, utf8Encode} from '../support/portable-bytes.js';
 import {objectRef, textValue} from '../value/index.js';
 import {assertBlockApplicationReceiver} from '../execution/block-application.js';
 import {OBJECT_READ_OPERATION, objectResource} from '../authority/object-resource.js';
@@ -67,29 +68,35 @@ function requiredText(value, label) {
 // integrity (tamper fails decryption). The revision is therefore genuinely opaque to the consumer:
 // it cannot be read out, two cursors cannot be gap-compared, and a forged one is rejected. This —
 // not base64 (which is trivially decodable) — is what actually closes the gap-analysis channel.
-function observationKey(secret) {
-  return createHash('sha256').update(`${OBSERVATION_CURSOR_V1}:${secret}`, 'utf8').digest();
+//
+// POLICY LIVES HERE, never in the crypto provider: the key derivation, the 12-byte IV, the
+// iv+tag+ciphertext layout, what is authenticated, and the base64url cursor format are all decided
+// by this module. The provider computes primitives only.
+function observationKey(crypto, secret) {
+  return crypto.sha256(utf8Encode(`${OBSERVATION_CURSOR_V1}:${secret}`));
 }
 
-function encodeObservationCursor(secret, revision) {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', observationKey(secret), iv);
-  const ciphertext = Buffer.concat([cipher.update(String(revision), 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return `${OBSERVATION_CURSOR_V1}:${Buffer.concat([iv, tag, ciphertext]).toString('base64url')}`;
+function encodeObservationCursor(crypto, secret, revision) {
+  const iv = crypto.secureRandomBytes(12);
+  const {ciphertext, tag} = crypto.aes256gcmEncrypt({
+    key: observationKey(crypto, secret),
+    iv,
+    plaintext: utf8Encode(String(revision)),
+  });
+  return `${OBSERVATION_CURSOR_V1}:${base64urlEncode(concatBytes([iv, tag, ciphertext]))}`;
 }
 
 // An empty after-cursor means "start from the current end" (live-follow, no backlog replay)
 // and is the only unauthenticated cursor form. Anything else must be a well-formed token that
 // DECRYPTS under this lane's key — tamper is a TypeError (GCM auth failure), never a silent accept.
-function decodeObservationCursor(secret, cursor) {
+function decodeObservationCursor(crypto, secret, cursor) {
   if (cursor === LIVE_FOLLOW_CURSOR) return null;
   if (typeof cursor !== 'string' || !cursor.startsWith(`${OBSERVATION_CURSOR_V1}:`)) {
     throw new TypeError('observation cursor is not an obs-cursor/v1 token');
   }
   let payload;
   try {
-    payload = Buffer.from(cursor.slice(OBSERVATION_CURSOR_V1.length + 1), 'base64url');
+    payload = base64urlDecode(cursor.slice(OBSERVATION_CURSOR_V1.length + 1));
   } catch (error) {
     throw new TypeError('malformed observation cursor', {cause: error});
   }
@@ -100,9 +107,12 @@ function decodeObservationCursor(secret, cursor) {
   const ciphertext = payload.subarray(28);
   let revisionText;
   try {
-    const decipher = createDecipheriv('aes-256-gcm', observationKey(secret), iv);
-    decipher.setAuthTag(tag);
-    revisionText = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+    revisionText = utf8DecodeLossy(crypto.aes256gcmDecrypt({
+      key: observationKey(crypto, secret),
+      iv,
+      ciphertext,
+      tag,
+    }));
   } catch (error) {
     throw new TypeError('observation cursor failed its integrity check', {cause: error});
   }
@@ -193,8 +203,9 @@ async function installImageObservationBinding({
   images,
   callableInterface,
   imageId = null,
-  bindingId = randomUUID(),
-  blockId = randomUUID(),
+  crypto = getDefaultCryptoProvider(),
+  bindingId = crypto.uuid(),
+  blockId = crypto.uuid(),
   bindingMetadata = {},
   blockMetadata = {},
 } = {}) {
@@ -231,7 +242,10 @@ async function installImageObservationBinding({
   return Object.freeze({bindingArtifact, block, interfaceRef});
 }
 
-function createImageObservationBindingV1Executor({cursorSecret = randomUUID()} = {}) {
+function createImageObservationBindingV1Executor({
+  crypto = getDefaultCryptoProvider(),
+  cursorSecret = crypto.uuid(),
+} = {}) {
   if (typeof cursorSecret !== 'string' || cursorSecret.length === 0) {
     throw new TypeError('cursorSecret must be a non-empty string');
   }
@@ -257,7 +271,7 @@ function createImageObservationBindingV1Executor({cursorSecret = randomUUID()} =
       // Decode/verify BEFORE any scan. A tampered cursor fails here, so it can never be used
       // as an oracle against the stream. A valid older cursor is simply a smaller number —
       // an idempotent resume, not an error.
-      const decoded = decodeObservationCursor(cursorSecret, afterCursor);
+      const decoded = decodeObservationCursor(crypto, cursorSecret, afterCursor);
       // Exactly one internal scan of the private stream. Live-follow (empty after-cursor)
       // starts at the end of THIS scan — the current end by definition — so the same scan
       // both establishes the high-water mark and supplies the events after a resume cursor.
@@ -284,14 +298,14 @@ function createImageObservationBindingV1Executor({cursorSecret = randomUUID()} =
         visible.push({
           [OBJECT_ID_FIELD]: event.objectId,
           [KIND_FIELD]: event.type,
-          [EVENT_CURSOR_FIELD]: encodeObservationCursor(cursorSecret, event.revision),
+          [EVENT_CURSOR_FIELD]: encodeObservationCursor(crypto, cursorSecret, event.revision),
         });
       }
 
       return packCompositeValue(
         {
           [EVENTS_FIELD]: visible,
-          [CURSOR_FIELD]: encodeObservationCursor(cursorSecret, highWater),
+          [CURSOR_FIELD]: encodeObservationCursor(crypto, cursorSecret, highWater),
         },
         descriptor.result,
         descriptor.types ?? {},

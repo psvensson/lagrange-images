@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {uuid as randomUUID} from '../support/default-crypto.js';
 import {canonicalizeValue, isReference, objectRef, pinnedRef, textValue} from '../value/index.js';
 import {isTransientObjectId} from '../value/transient-ref.js';
 import {assertBlockApplicationReceiver} from '../execution/block-application.js';
