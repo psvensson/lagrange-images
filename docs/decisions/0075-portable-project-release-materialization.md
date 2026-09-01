@@ -1,6 +1,9 @@
 # ADR 0075: portable Project release materialization — a design investigation
 
-Status: accepted — investigation outcome; **decision-only, nothing implemented here**
+Status: accepted — investigation outcome; **first prerequisite implemented** (the stable-current
+read session below; the graph release materializer, material package and installation coordinator
+remain pending)
+Proven by: test/stable-current-read-session.test.js, test/project-release-capture.test.js
 
 **Decides how ADR 0073's Project release capture composes with ADR 0074's portable graph bundle,
 so that a selected set of Project members becomes ONE portable, content-addressed release material
@@ -306,10 +309,19 @@ remain four separate things (ADR 0073 guardrails unchanged).
 1. **Extract the stable-current read session** (`src/project/` — the capture coordinator's owner):
    `read`/`assertStable`/`frontierMap` per Decision 5, and route the EXISTING direct-record
    capture path through it. Behavior-preserving; existing release-capture proofs stay green.
+   **DONE** — implemented as `createStableCurrentReadSession({images}) ->
+   {getRecord, getObject, assertStable, frontierMap}` inside
+   `src/project/release-capture.js` (the coordinator owner, not a generic Image primitive).
+   `readProjectDescriptor` receives the session as its images reader, so the Project object AND
+   its backing member records sit inside the same host-Image bracket; `getObject` derives through
+   `getRecord` (never a raw `images.getObject`); `frontierMap()` is gated on successful
+   `assertStable()`. All eager bracket machinery (`beforeHostFrontier`, `sourceImageIds`,
+   `beforeFrontiers`, the manual final loop) was removed — ONE bracket owner remains.
 2. **`src/project/graph-release-materialization.js`** implementing Decisions 2–6: one multi-root
    export through the facade with internalize-all policy, empty-externals/pinned refusal,
    per-member whole-bundle materializations, the v1 material package; capture coordinator gains
-   the graph path returning `{release, provenance, material}`.
+   the graph path returning `{release, provenance, material}`. **PENDING** — the session above is
+   the facade it consumes.
 3. Proofs: all 12 adversarial examples, the Decision-7 headline falsifier, lazy-bracket
    conflict-on-third-Image refusal, and exporter/importer byte-compatibility (untouched owners).
 
