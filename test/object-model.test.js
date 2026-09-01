@@ -41,13 +41,17 @@ test('objects separate shape, behavior and value slots', () => {
     },
   });
   assertObjectMatchesShape(object, shape);
+  // Canonical edge order: fixed structural edges (shape, behavior) first, then slot
+  // edges by stable slot id in code-unit order, NOT insertion order. slot-count
+  // (integer, no ref) yields nothing; slot-history < slot-peer, so the pinned-ref
+  // precedes the plain ref. This is the ordering ADR 0074's graph bundle traversal owns.
   assert.deepEqual(
     referencesOfRecord(object).map(({kind, imageId, objectId}) => [kind, imageId, objectId]),
     [
-      ['ref', 'demo', 'node-shape'],
-      ['ref', 'smalltalk-core', 'Node'],
-      ['ref', 'demo', 'node-b'],
-      ['pinned-ref', 'demo', 'node-b'],
+      ['ref', 'demo', 'node-shape'], // shape
+      ['ref', 'smalltalk-core', 'Node'], // behavior
+      ['pinned-ref', 'demo', 'node-b'], // slot-history (sorts before slot-peer)
+      ['ref', 'demo', 'node-b'], // slot-peer
     ],
   );
 });
