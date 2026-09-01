@@ -81,6 +81,74 @@ function requireMaterialization(value, key) {
   return {representation: value.representation, contentIdentity: value.contentIdentity};
 }
 
+// --- THE stable-current read session (ADR 0075, first prerequisite) --------------
+// ONE bracket owner for truthful current capture. READING is what brackets an
+// Image: the FIRST read from Image X awaits images.frontier(X) and records it as
+// X's BEFORE frontier BEFORE any record is read from X; every later read from X
+// reuses the same BEFORE. assertStable() re-reads every Image actually read and
+// refuses on any movement. frontierMap() is the provenance evidence, available
+// ONLY after stability has held (so a caller cannot lift a frontier map from an
+// unproven capture window).
+//
+// Semantic equivalence to eager bracketing (ADR 0075): v1's truthfulness claim is
+// per-Image — every record read from Image X occurred while X remained at one
+// unchanged frontier window. v1 does NOT claim one atomic cross-Image instant, and
+// this session does not strengthen it into one.
+//
+// This session is part of the Project release-capture coordinator owner. It is NOT
+// a generic Image primitive: frontier semantics live here, not in
+// src/graph/bundle.js, not in working-state.js, not in GraphImageService beyond
+// its existing frontier(), and not in a generic utility package.
+function createStableCurrentReadSession({images}) {
+  if (!images || typeof images.frontier !== 'function' || typeof images.getRecord !== 'function') {
+    throw new TypeError('stable-current read session requires an images reader with frontier() and getRecord()');
+  }
+  const before = new Map(); // imageId -> BEFORE frontier, set on FIRST read from that Image
+  let stable = false;
+
+  // The FIRST read from an Image brackets it: the frontier read MUST complete
+  // before the first record read from that Image.
+  async function bracket(imageId) {
+    if (!before.has(imageId)) before.set(imageId, await images.frontier(imageId));
+  }
+
+  async function getRecord(imageId, objectId) {
+    await bracket(imageId);
+    return await images.getRecord(imageId, objectId);
+  }
+
+  // Derived THROUGH getRecord — never a raw images.getObject — so the durable
+  // Project descriptor and its backing member records sit inside the same
+  // host-Image bracket as everything else the capture reads.
+  async function getObject(imageId, objectId) {
+    const record = await getRecord(imageId, objectId);
+    return record?.kind === 'object' ? record : null;
+  }
+
+  async function assertStable() {
+    // Canonical image-id order so the conflict choice is deterministic. No retries.
+    for (const imageId of [...before.keys()].sort()) {
+      const after = await images.frontier(imageId);
+      if (before.get(imageId) !== after) {
+        throw new ProjectCaptureConflictError({imageId, before: before.get(imageId), after});
+      }
+    }
+    stable = true;
+  }
+
+  // Provenance evidence only — {imageId -> BEFORE frontier} for every Image
+  // actually read, canonicalized by image id. NOT an as-of read or retained
+  // snapshot, and only available after stability has been proven.
+  function frontierMap() {
+    if (!stable) throw new TypeError('frontierMap is available only after assertStable() has held');
+    const map = {};
+    for (const imageId of [...before.keys()].sort()) map[imageId] = before.get(imageId);
+    return map;
+  }
+
+  return Object.freeze({getRecord, getObject, assertStable, frontierMap});
+}
+
 async function captureCurrentProjectRelease({
   images,
   projectImageId,
@@ -93,27 +161,20 @@ async function captureCurrentProjectRelease({
   requiredText(projectId, 'projectId');
   if (typeof materializeRecord !== 'function') throw new TypeError('materializeRecord must be a function');
 
-  // 1. Bracket the Project host BEFORE reading the durable descriptor.
-  const beforeHostFrontier = await images.frontier(projectImageId);
+  // 1. ONE bracket owner: the stable-current read session. No eager frontier
+  //    pre-computation — reading is what brackets an Image.
+  const session = createStableCurrentReadSession({images});
 
-  // 2. Read the durable Project through the working-state owner.
-  const project = await readProjectDescriptor({images, imageId: projectImageId, projectId});
+  // 2. Read the durable Project through the working-state owner, with the SESSION
+  //    as its images reader — the Project object AND its backing member records
+  //    are inside the same host-Image bracket.
+  const project = await readProjectDescriptor({images: session, imageId: projectImageId, projectId});
 
   // 3. Select members with the EXISTING Project model — no profile semantics here.
   const selected = selectProjectMembers(project, profile);
 
-  // 4. The direct source Image ids of the selected member targets (canonical order).
-  const sourceImageIds = [...new Set(selected.map(({target}) => target.imageId))].sort();
-
-  // 5. BEFORE frontier per source Image, before reading any record from it. The
-  //    Project host reuses its already-read frontier; other Images are read now.
-  const beforeFrontiers = new Map([[projectImageId, beforeHostFrontier]]);
-  for (const imageId of sourceImageIds) {
-    if (!beforeFrontiers.has(imageId)) beforeFrontiers.set(imageId, await images.frontier(imageId));
-  }
-
-  // 6. Read each selected member's CURRENT direct source record via the graph
-  //    owner; hand an isolated snapshot plus the semantic member/source identity
+  // 4. Read each selected member's CURRENT direct source record THROUGH THE
+  //    SESSION; hand an isolated snapshot plus the semantic member/source identity
   //    to the materializer. A missing/dangling source is an explicit failure.
   const materializations = {};
   for (const member of selected) {
@@ -124,7 +185,7 @@ async function captureCurrentProjectRelease({
     // CodeArtifact/Shape/Block/Smalltalk semantics — that stays the
     // representation-specific materializer's concern. A genuinely missing record
     // still raises the explicit source error.
-    const record = await images.getRecord(source.imageId, source.objectId);
+    const record = await session.getRecord(source.imageId, source.objectId);
     if (!record) throw new ProjectCaptureSourceError({key: member.key, source});
     const materialization = requireMaterialization(
       // An isolated AND immutable snapshot: deep-cloned and recursively frozen, so
@@ -137,28 +198,18 @@ async function captureCurrentProjectRelease({
     materializations[member.key] = materialization;
   }
 
-  // 7. Re-read every participating frontier, INCLUDING the Project host. Any
+  // 5. Re-read every Image actually read, INCLUDING the Project host. Any
   //    before/after difference refuses the whole capture — no release+warn.
-  for (const imageId of [...beforeFrontiers.keys()].sort()) {
-    const before = beforeFrontiers.get(imageId);
-    const after = await images.frontier(imageId);
-    if (before !== after) throw new ProjectCaptureConflictError({imageId, before, after});
-  }
+  await session.assertStable();
 
-  // 8. Only now, with the stability fence held, derive the release + provenance
-  //    through the EXISTING Project model.
+  // 6. Only now, with the stability fence held, derive the release + provenance
+  //    through the EXISTING Project model. The frontier map covers every Image the
+  //    capture actually read: the Project host (descriptor input unchanged) plus
+  //    every selected direct member-source Image.
   const release = createProjectReleaseManifest({project, profile, materializations, dependencies});
+  const provenance = createProjectReleaseProvenance({release, project, sourceFrontiers: session.frontierMap()});
 
-  // The frontier map covers every direct member-source Image; the Project host is
-  // added as an EXTRA frontier when it is not already a source (ADR 0073 permits
-  // extra frontiers) — proving the descriptor/profile input itself was unchanged.
-  const sourceFrontiers = {};
-  for (const imageId of [...beforeFrontiers.keys()].sort()) {
-    sourceFrontiers[imageId] = beforeFrontiers.get(imageId);
-  }
-  const provenance = createProjectReleaseProvenance({release, project, sourceFrontiers});
-
-  // 9. Return both; nothing is persisted here.
+  // 7. Return both; nothing is persisted here.
   return Object.freeze({release, provenance});
 }
 
@@ -166,4 +217,5 @@ export {
   ProjectCaptureConflictError,
   ProjectCaptureSourceError,
   captureCurrentProjectRelease,
+  createStableCurrentReadSession,
 };
