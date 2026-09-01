@@ -373,3 +373,117 @@ test('projection/edge-owner guard: rewritten refs correspond exactly to referenc
     assert.equal(bundle.records.r0.slots.v.kind, 'local-ref');
   });
 });
+
+// --- Tuple-key bookkeeping proofs (joined-string collision defect repair) ---------
+// The old implementation keyed internal dedup by `${imageId}${objectId}` and external
+// dedup by analogous joined strings. Image ids, object ids and revision text are
+// arbitrary strings, so those keys were not injective. These proofs pin the exact
+// tuples as the bookkeeping identity. The public bundle format is unchanged.
+
+test('INTERNAL COLLISION: source tuples (ab,c) and (a,bc) -> distinct localIds and distinct records', async () => {
+  await withRuntime(async (runtime) => {
+    // Root imageIds {'ab','a'} make both roots internal under the default policy.
+    await runtime.images.createImage({id: 'ab'});
+    await runtime.images.putShape('ab', {id: 'shape', slots: []});
+    await runtime.images.putObject('ab', {id: 'c', shape: objectRef('ab', 'shape'), slots: {}});
+    await runtime.images.createImage({id: 'a'});
+    await runtime.images.putShape('a', {id: 'shape', slots: []});
+    await runtime.images.putObject('a', {id: 'bc', shape: objectRef('a', 'shape'), slots: {}});
+    const {bundle} = await exportGraphBundle({
+      images: runtime.images,
+      roots: {first: objectRef('ab', 'c'), second: objectRef('a', 'bc')},
+    });
+    assert.notEqual(bundle.roots.first, bundle.roots.second, 'ambiguous joined key must NOT collapse the two roots');
+    assert.equal(Object.keys(bundle.records).length, 4, 'two objects + two shapes, nothing collapsed');
+    assert.equal(bundle.records[bundle.roots.first].kind, 'object');
+    assert.equal(bundle.records[bundle.roots.second].kind, 'object');
+  });
+});
+
+test('SHARED IDENTITY STILL DEDUPS: the exact same (imageId, objectId) reached twice -> one localId', async () => {
+  await withRuntime(async (runtime) => {
+    const shape = await seedShape(runtime, 'img');
+    await runtime.images.putObject('img', {id: 'child', shape, slots: {v: integerValue(3)}});
+    const {bundle} = await exportGraphBundle({
+      images: runtime.images,
+      roots: {a: objectRef('img', 'child'), b: objectRef('img', 'child')},
+    });
+    assert.equal(bundle.roots.a, bundle.roots.b, 'identical tuple still dedups to one localId');
+    assert.equal(Object.keys(bundle.records).length, 2, 'child + shape only');
+  });
+});
+
+test('UNPINNED EXTERNAL COLLISION: ambiguous (ab,c) vs (a,bc) -> two distinct externalKeys/descriptors', async () => {
+  await withRuntime(async (runtime) => {
+    const shape = await seedShape(runtime, 'img');
+    // Cross-Image refs are external under the default policy; targets are never fetched.
+    await runtime.images.putObject('img', {id: 'x', shape, slots: {v: objectRef('ab', 'c')}});
+    await runtime.images.putObject('img', {id: 'y', shape, slots: {v: objectRef('a', 'bc')}});
+    const {bundle} = await exportGraphBundle({
+      images: runtime.images,
+      roots: {x: objectRef('img', 'x'), y: objectRef('img', 'y')},
+    });
+    const keyX = bundle.records[bundle.roots.x].slots.v.externalKey;
+    const keyY = bundle.records[bundle.roots.y].slots.v.externalKey;
+    assert.notEqual(keyX, keyY, 'ambiguous joined key must NOT collapse the two external requirements');
+    assert.equal(Object.keys(bundle.externals).length, 2);
+    assert.deepEqual(bundle.externals[keyX], {pinned: false, imageId: 'ab', objectId: 'c'});
+    assert.deepEqual(bundle.externals[keyY], {pinned: false, imageId: 'a', objectId: 'bc'});
+  });
+});
+
+test('PINNED EXTERNAL COLLISION — ID BOUNDARY: ambiguous (ab,c) vs (a,bc) pins -> distinct externals', async () => {
+  await withRuntime(async (runtime) => {
+    const shape = await seedShape(runtime, 'img');
+    await runtime.images.putObject('img', {id: 'x', shape, slots: {v: pinnedRef('ab', 'c', '7')}});
+    await runtime.images.putObject('img', {id: 'y', shape, slots: {v: pinnedRef('a', 'bc', '7')}});
+    const {bundle} = await exportGraphBundle({
+      images: runtime.images,
+      roots: {x: objectRef('img', 'x'), y: objectRef('img', 'y')},
+    });
+    const keyX = bundle.records[bundle.roots.x].slots.v.externalKey;
+    const keyY = bundle.records[bundle.roots.y].slots.v.externalKey;
+    assert.notEqual(keyX, keyY);
+    assert.equal(Object.keys(bundle.externals).length, 2);
+    assert.deepEqual(bundle.externals[keyX], {pinned: true, imageId: 'ab', objectId: 'c', revision: '7'});
+    assert.deepEqual(bundle.externals[keyY], {pinned: true, imageId: 'a', objectId: 'bc', revision: '7'});
+  });
+});
+
+test('PINNED EXTERNAL COLLISION — REVISION BOUNDARY: (x,y,rz) vs (x,yr,z) — identical old concatenation — stay distinct', async () => {
+  await withRuntime(async (runtime) => {
+    const shape = await seedShape(runtime, 'img');
+    // Old joined key for both was 'pinned'+'x'+'y'+'rz' === 'pinned'+'x'+'yr'+'z'.
+    await runtime.images.putObject('img', {id: 'x', shape, slots: {v: pinnedRef('x', 'y', 'rz')}});
+    await runtime.images.putObject('img', {id: 'y', shape, slots: {v: pinnedRef('x', 'yr', 'z')}});
+    const {bundle} = await exportGraphBundle({
+      images: runtime.images,
+      roots: {x: objectRef('img', 'x'), y: objectRef('img', 'y')},
+    });
+    const keyX = bundle.records[bundle.roots.x].slots.v.externalKey;
+    const keyY = bundle.records[bundle.roots.y].slots.v.externalKey;
+    assert.notEqual(keyX, keyY, 'revision-boundary collision must NOT merge the two pins');
+    assert.equal(Object.keys(bundle.externals).length, 2);
+    assert.deepEqual(bundle.externals[keyX], {pinned: true, imageId: 'x', objectId: 'y', revision: 'rz'});
+    assert.deepEqual(bundle.externals[keyY], {pinned: true, imageId: 'x', objectId: 'yr', revision: 'z'});
+  });
+});
+
+test('EXISTING BUNDLE COMPATIBILITY: representative graph -> byte-identical canonical bundle + contentIdentity (regression anchor)', async () => {
+  await withRuntime(async (runtime) => {
+    const shape = await seedShape(runtime, 'img');
+    await runtime.images.putObject('img', {id: 'child', shape, slots: {v: integerValue(42)}});
+    await runtime.images.putObject('img', {id: 'obj', shape, slots: {v: objectRef('img', 'child')}});
+    // The expected hash below was captured from the PRE-repair (joined-string)
+    // implementation for this exact graph and verified byte-identical post-repair;
+    // the tuple-key repair must not move a single byte for any non-collision case.
+    const first = await exportGraphBundle({images: runtime.images, roots: {root: objectRef('img', 'obj')}});
+    const second = await exportGraphBundle({images: runtime.images, roots: {root: objectRef('img', 'obj')}});
+    assert.equal(first.contentIdentity, second.contentIdentity);
+    assert.equal(
+      first.contentIdentity,
+      'sha256:b36e08989b3ee333f2288c904345917cbcfb195a9b690d4739e4d4c508b2e499',
+      'contentIdentity unchanged by the tuple-key repair',
+    );
+  });
+});
