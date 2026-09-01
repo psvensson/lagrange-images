@@ -173,7 +173,7 @@ Authority remains transient execution context. Identity/contact pickers and invi
 - [ ] logical snapshot/revision frontiers (first current-Image frontier primitive exists — `GraphImageService.frontier()` via the backend `streamHead` seam, PR #158, ADR 0071; snapshot/compaction/revision-aware reads below remain open)
 - [ ] revision-aware reads
 - [ ] indexed graph reachability and derivation lookup
-- [ ] export/import graph format
+- [ ] export/import graph format (contract DECIDED: ADR 0074 portable graph bundle — one `src/graph/bundle.js` owner, bundle-local identity not source ObjectRef, explicit internal/external ref rule, deterministic canonical `contentIdentity`, frontier/authority outside the bundle; FIRST slice = export-only with cycles + shared refs; import via ADR 0067 batch is the following slice)
 - [ ] garbage-collection rules respecting history and pinned refs
 - [ ] object migration between immutable Shapes
 - [ ] measure partitioning/index choices on large images
