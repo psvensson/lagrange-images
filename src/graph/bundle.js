@@ -2,6 +2,7 @@ import {referencesOfRecord} from './references.js';
 import {canonicalizeValue, isObjectRef, isPinnedRef, isReference, VALUE_KIND} from '../value/index.js';
 import {getDefaultCryptoProvider} from '../support/default-crypto.js';
 import {bytesToHex, utf8Encode} from '../support/portable-bytes.js';
+import {TupleMap} from '../support/tuple-map.js';
 
 // ADR 0074 first slice: durable graph roots -> portable graph bundle + deterministic
 // contentIdentity. EXPORT ONLY.
@@ -47,9 +48,13 @@ function requiredRef(value, label) {
 
 // A source ObjectRef is an internal/bookkeeping key only. Pinned refs are never
 // internal closure targets (ADR 0074 §C: always external by construction).
-function sourceKey(ref) {
-  return `${ref.imageId}${ref.objectId}`;
-}
+//
+// Bookkeeping keys are TUPLES, never joined strings: image ids, object ids and
+// revision text are arbitrary strings, so any separator is ambiguous — ('ab','c')
+// and ('a','bc') join to the same key, silently collapsing two distinct records to
+// one localId (or two distinct external requirements to one externalKey) and
+// corrupting aliasing/cycles. The repository's tuple-key owner (TupleMap) makes
+// that mistake unavailable rather than discouraged.
 
 // The default per-ref policy (ADR 0074 §C). `rootImageIds` is the set of Image ids
 // the closure is allowed to internalize: by default exactly the Images named by the
@@ -95,8 +100,9 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
   });
   if (typeof policy.classify !== 'function') fail('referencePolicy must supply classify(ref)');
 
-  const sourceToLocal = new Map();     // sourceKey -> localId (visited/dedup only)
-  const externalToKey = new Map();     // external identity -> externalKey (dedup only)
+  const sourceToLocal = new TupleMap(2);        // [imageId, objectId] -> localId (visited/dedup only)
+  const unpinnedExternalToKey = new TupleMap(2); // [imageId, objectId] -> externalKey (dedup only)
+  const pinnedExternalToKey = new TupleMap(3);   // [imageId, objectId, revision] -> externalKey (dedup only)
   const records = {};                  // localId -> canonical portable record
   const externals = {};                // externalKey -> external descriptor
   const rootLocalIds = {};             // rootKey -> localId
@@ -108,13 +114,15 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
   function edgeToken(ref, ownerLocalId) {
     if (isPinnedRef(ref)) {
       // Pinned historical ref: ALWAYS external by construction; no policy may
-      // internalize it. The exact pin is the external requirement.
-      const identity = `pinned${ref.imageId}${ref.objectId}${ref.revision}`;
-      let externalKey = externalToKey.get(identity);
+      // internalize it. The exact pin is the external requirement. The dedup key is
+      // the exact 3-tuple — the revision is a distinct part, so two pins whose
+      // concatenations would collide stay distinct.
+      const identity = [ref.imageId, ref.objectId, ref.revision];
+      let externalKey = pinnedExternalToKey.get(identity);
       if (externalKey === undefined) {
         externalKey = `e${nextExternal}`;
         nextExternal += 1;
-        externalToKey.set(identity, externalKey);
+        pinnedExternalToKey.set(identity, externalKey);
         externals[externalKey] = {
           pinned: true,
           imageId: ref.imageId,
@@ -132,12 +140,12 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
       return {kind: 'local-ref', localId: assignLocalId(ref)};
     }
     if (decision === 'external') {
-      const identity = `unpinned${ref.imageId}${ref.objectId}`;
-      let externalKey = externalToKey.get(identity);
+      const identity = [ref.imageId, ref.objectId];
+      let externalKey = unpinnedExternalToKey.get(identity);
       if (externalKey === undefined) {
         externalKey = `e${nextExternal}`;
         nextExternal += 1;
-        externalToKey.set(identity, externalKey);
+        unpinnedExternalToKey.set(identity, externalKey);
         externals[externalKey] = {
           pinned: false,
           imageId: ref.imageId,
@@ -189,12 +197,12 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
   // Assign (or reuse) the local id for an unpinned internal ref, in the order the
   // caller (the BFS, driven by referencesOfRecord) presents it.
   function assignLocalId(ref) {
-    const key = sourceKey(ref);
-    let localId = sourceToLocal.get(key);
+    const identity = [ref.imageId, ref.objectId];
+    let localId = sourceToLocal.get(identity);
     if (localId === undefined) {
       localId = `r${nextLocal}`;
       nextLocal += 1;
-      sourceToLocal.set(key, localId);
+      sourceToLocal.set(identity, localId);
     }
     return localId;
   }
