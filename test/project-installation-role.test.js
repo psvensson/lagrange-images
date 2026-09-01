@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import './ensure-node-crypto.test-helper.js';
 import test from 'node:test';
 
 import {
