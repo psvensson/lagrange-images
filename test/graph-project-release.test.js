@@ -494,6 +494,93 @@ test('15. Material package linkage: wrong projectId/releaseId/identity, missing/
   });
 });
 
+test('15b. Root/member key-set comparison is STRUCTURAL: joined-string collisions refuse, in both directions', async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'img'});
+    const rec1 = await seedShapeAndObject(runtime, 'img', 'rec1', {v: integerValue(1)});
+    const rec2 = await seedShapeAndObject(runtime, 'img', 'rec2', {v: integerValue(2)});
+    const projectId = createProjectId();
+
+    // A genuine two-root bundle whose root labels JOIN-COLLIDE with the member
+    // keys below: roots ["a","bc"] vs members ["ab","c"] (both join to "abc").
+    const {exportGraphBundle} = await import('../src/graph/bundle.js');
+    const {bundle, contentIdentity} = await exportGraphBundle({
+      images: runtime.images,
+      roots: {'a': rec1, 'bc': rec2},
+      referencePolicy: {classify: () => 'internal'},
+    });
+    assert.deepEqual(Object.keys(bundle.externals), []);
+
+    // A VALID manifest whose members ALL carry this bundle's exact
+    // representation + recomputed contentIdentity — every other linkage check
+    // passes; only the root/member key-set comparison can refuse.
+    const collidingRelease = createProjectReleaseManifest({
+      project: {
+        format: 'lagrange-project/v1', projectId, name: 'P', namespace: null,
+        members: [
+          {key: 'ab', role: 'source', target: rec1},
+          {key: 'c', role: 'source', target: rec2},
+        ],
+      },
+      profile: {format: 'lagrange-project-deployment-profile/v1', projectId, profileId: 'deploy', members: ['ab', 'c']},
+      materializations: {
+        ab: {representation: GRAPH_BUNDLE_V1, contentIdentity},
+        c: {representation: GRAPH_BUNDLE_V1, contentIdentity},
+      },
+    });
+    assert.throws(
+      () => createProjectReleaseMaterial({release: collidingRelease, bundle, contentIdentity}),
+      /exactly equal/,
+      'COLLISION: roots ["a","bc"] vs members ["ab","c"] must REFUSE (joined-string false positive)',
+    );
+
+    // Reverse collision: members ["a","bc"], roots ["ab","c"].
+    const {bundle: bundle2, contentIdentity: contentIdentity2} = await exportGraphBundle({
+      images: runtime.images,
+      roots: {'ab': rec1, 'c': rec2},
+      referencePolicy: {classify: () => 'internal'},
+    });
+    const reverseRelease = createProjectReleaseManifest({
+      project: {
+        format: 'lagrange-project/v1', projectId, name: 'P', namespace: null,
+        members: [
+          {key: 'a', role: 'source', target: rec1},
+          {key: 'bc', role: 'source', target: rec2},
+        ],
+      },
+      profile: {format: 'lagrange-project-deployment-profile/v1', projectId, profileId: 'deploy', members: ['a', 'bc']},
+      materializations: {
+        a: {representation: GRAPH_BUNDLE_V1, contentIdentity: contentIdentity2},
+        bc: {representation: GRAPH_BUNDLE_V1, contentIdentity: contentIdentity2},
+      },
+    });
+    assert.throws(
+      () => createProjectReleaseMaterial({release: reverseRelease, bundle: bundle2, contentIdentity: contentIdentity2}),
+      /exactly equal/,
+      'REVERSE COLLISION: roots ["ab","c"] vs members ["a","bc"] must REFUSE',
+    );
+
+    // Same set, different insertion/source order -> still accepted (canonical
+    // ordering, not input order).
+    const matchingRelease = createProjectReleaseManifest({
+      project: {
+        format: 'lagrange-project/v1', projectId, name: 'P', namespace: null,
+        members: [
+          {key: 'bc', role: 'source', target: rec2}, // insertion order differs from root order
+          {key: 'a', role: 'source', target: rec1},
+        ],
+      },
+      profile: {format: 'lagrange-project-deployment-profile/v1', projectId, profileId: 'deploy', members: ['bc', 'a']},
+      materializations: {
+        a: {representation: GRAPH_BUNDLE_V1, contentIdentity},
+        bc: {representation: GRAPH_BUNDLE_V1, contentIdentity},
+      },
+    });
+    const accepted = createProjectReleaseMaterial({release: matchingRelease, bundle, contentIdentity});
+    assert.equal(accepted.contentIdentity, contentIdentity, 'same key set in different insertion order succeeds');
+  });
+});
+
 test('16. Material immutability: package, nested records, roots/externals cannot be mutated', async () => {
   await withRuntime(async (runtime) => {
     await runtime.images.createImage({id: 'img'});

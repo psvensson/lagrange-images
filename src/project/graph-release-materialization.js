@@ -190,9 +190,18 @@ function createProjectReleaseMaterial({release, bundle, contentIdentity, crypto}
       fail(`release member ${member.key} contentIdentity does not match the material contentIdentity`);
     }
   }
-  const rootKeys = sortedKeys(bundle.roots).join('');
-  const memberKeys = normalizedRelease.members.map(({key}) => key).sort().join('');
-  if (rootKeys !== memberKeys) {
+  // Exact sequence equality after canonical sorting — NEVER a joined-string
+  // comparison: member keys/root labels are arbitrary opaque text, so
+  // concatenation is not injective (["ab","c"] and ["a","bc"] both join to "abc",
+  // the same defect class PR #166 repaired for ObjectRef bookkeeping). A false
+  // positive here would let malformed material pass preflight, commit the graph
+  // import, and only then have createProjectInstallation reject the roots — an
+  // orphan imported graph. Structural equality only.
+  const rootKeys = sortedKeys(bundle.roots);
+  const memberKeys = normalizedRelease.members.map(({key}) => key).sort();
+  const sameKeySet = rootKeys.length === memberKeys.length
+    && rootKeys.every((key, index) => key === memberKeys[index]);
+  if (!sameKeySet) {
     fail('bundle root-key set must exactly equal the release member-key set');
   }
 
