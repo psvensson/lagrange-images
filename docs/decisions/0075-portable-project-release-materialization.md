@@ -261,7 +261,9 @@ second install of the same release is a second fresh copy, not hidden reconcilia
 recorded crash window: between the importer's atomic `createRecords` commit and the caller
 persisting the returned `ProjectInstallation/v1` descriptor, a crash leaves an installed graph
 with no durable descriptor — the pressure the durable-storage slice must close. The coordinator
-documents this window and never works around it locally.
+documents this window and never works around it locally. **Update:** the durable managed-installation
+protocol that closes this window is decided in ADR 0076 (ONE atomic graph + installation-state
+batch, stable head commit point, lost-ack idempotency by stable key).
 
 ## Decision 9 — selection boundary: reachability is not membership
 

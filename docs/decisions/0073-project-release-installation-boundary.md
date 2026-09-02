@@ -232,7 +232,8 @@ After a materializer creates or resolves selected members in target Image `T`, t
 
 Every target ref belongs to `T`. The record maps portable Project member identity onto target-local
 object identity. Target refs never become Project identity. Durable storage of this descriptor as
-ordinary image objects remains follow-up work.
+ordinary image objects was follow-up work and is now decided: ADR 0076 (stable head + immutable
+snapshot + member records, committed atomically with the imported graph).
 
 ### Upgrade v1 is pure reconciliation planning
 
