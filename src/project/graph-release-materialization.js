@@ -162,31 +162,36 @@ function normalizeProjectReleaseMaterial(value, {crypto} = {}) {
   return value;
 }
 
-// Construct + link: the material is validated intrinsically AND against the
-// release it claims to belong to. After this constructor succeeds, every cheap
-// semantic check that could later fail has already run.
-function createProjectReleaseMaterial({release, bundle, contentIdentity, crypto} = {}) {
+// THE release <-> material linkage owner. Validates an ALREADY-SUPPLIED material
+// package intrinsically AND against the release it claims to belong to, then
+// returns an ISOLATED, DEEPLY FROZEN snapshot of that material. Both the capture
+// constructor (createProjectReleaseMaterial) and the installation coordinator
+// route through this ONE definition — linkage rules are never copied.
+//
+// The isolated snapshot matters: installation has an async import between
+// validation and descriptor creation, and the caller must not be able to mutate a
+// previously validated material object during that window.
+function validateProjectReleaseMaterialForRelease({release, material, crypto} = {}) {
   const normalizedRelease = normalizeProjectReleaseManifest(release);
-  const candidate = {
-    format: PROJECT_RELEASE_MATERIAL_V1,
-    projectId: normalizedRelease.projectId,
-    releaseId: normalizedRelease.releaseId,
-    representation: GRAPH_BUNDLE_V1,
-    contentIdentity,
-    bundle,
-  };
-  normalizeProjectReleaseMaterial(candidate, {crypto});
+  normalizeProjectReleaseMaterial(material, {crypto});
 
-  // Release linkage: EVERY release member carries this representation and the
-  // whole-bundle identity, and the bundle root-key set EXACTLY equals the release
-  // member-key set (canonical code-unit comparison — no extra root, no missing
-  // root). This is the ADR 0075 Decision 8 property that makes a later
-  // installation's semantic-mismatch failure impossible after import succeeds.
+  // Release linkage: the package's identity fields match the release; EVERY
+  // release member carries this representation and the whole-bundle identity; and
+  // the bundle root-key set EXACTLY equals the release member-key set (canonical
+  // code-unit comparison — no extra root, no missing root). This is the ADR 0075
+  // Decision 8 property that makes a later installation's semantic-mismatch
+  // failure impossible after import succeeds.
+  if (material.projectId !== normalizedRelease.projectId) {
+    fail(`material projectId ${JSON.stringify(material.projectId)} does not match the release projectId`);
+  }
+  if (material.releaseId !== normalizedRelease.releaseId) {
+    fail(`material releaseId ${JSON.stringify(material.releaseId)} does not match the release releaseId`);
+  }
   for (const member of normalizedRelease.members) {
     if (member.representation !== GRAPH_BUNDLE_V1) {
       fail(`release member ${member.key} representation ${JSON.stringify(member.representation)} does not match the material representation`);
     }
-    if (member.contentIdentity !== contentIdentity) {
+    if (member.contentIdentity !== material.contentIdentity) {
       fail(`release member ${member.key} contentIdentity does not match the material contentIdentity`);
     }
   }
@@ -197,7 +202,7 @@ function createProjectReleaseMaterial({release, bundle, contentIdentity, crypto}
   // positive here would let malformed material pass preflight, commit the graph
   // import, and only then have createProjectInstallation reject the roots — an
   // orphan imported graph. Structural equality only.
-  const rootKeys = sortedKeys(bundle.roots);
+  const rootKeys = sortedKeys(material.bundle.roots);
   const memberKeys = normalizedRelease.members.map(({key}) => key).sort();
   const sameKeySet = rootKeys.length === memberKeys.length
     && rootKeys.every((key, index) => key === memberKeys[index]);
@@ -205,9 +210,26 @@ function createProjectReleaseMaterial({release, bundle, contentIdentity, crypto}
     fail('bundle root-key set must exactly equal the release member-key set');
   }
 
-  // Isolate AND immobilize: the returned package cannot be mutated into a state
-  // where material.contentIdentity != contentIdentityForBundle(material.bundle).
-  return deepFreeze(structuredClone(candidate));
+  // Isolate AND immobilize: the returned snapshot cannot be mutated into a state
+  // where material.contentIdentity != contentIdentityForBundle(material.bundle),
+  // and caller-side mutation of the original cannot race the async window.
+  return deepFreeze(structuredClone(material));
+}
+
+// Construct + link: the candidate package is assembled from the release and then
+// routed through THE SAME linked-validation owner — one definition of
+// release<->material linkage.
+function createProjectReleaseMaterial({release, bundle, contentIdentity, crypto} = {}) {
+  const normalizedRelease = normalizeProjectReleaseManifest(release);
+  const candidate = {
+    format: PROJECT_RELEASE_MATERIAL_V1,
+    projectId: normalizedRelease.projectId,
+    releaseId: normalizedRelease.releaseId,
+    representation: GRAPH_BUNDLE_V1,
+    contentIdentity,
+    bundle,
+  };
+  return validateProjectReleaseMaterialForRelease({release: normalizedRelease, material: candidate, crypto});
 }
 
 export {
@@ -217,4 +239,5 @@ export {
   createProjectReleaseMaterial,
   materializeProjectGraphRelease,
   normalizeProjectReleaseMaterial,
+  validateProjectReleaseMaterialForRelease,
 };

@@ -1,9 +1,10 @@
 # ADR 0075: portable Project release materialization — a design investigation
 
 Status: accepted — investigation outcome; **stable-session prerequisite + graph release
-materializer + ProjectReleaseMaterial/v1 implemented; the installation coordinator remains pending**
+materializer + ProjectReleaseMaterial/v1 + the installation coordinator implemented;
+durable/idempotent installation storage, crash recovery and reconciliation execution remain pending**
 Proven by: test/stable-current-read-session.test.js, test/project-release-capture.test.js,
-test/graph-project-release.test.js
+test/graph-project-release.test.js, test/project-release-installation.test.js
 
 **Decides how ADR 0073's Project release capture composes with ADR 0074's portable graph bundle,
 so that a selected set of Project members becomes ONE portable, content-addressed release material
@@ -220,7 +221,13 @@ with merge-on-install) is wrong by construction.
 
 ## Decision 8 — installation composition, and the pre-effect guarantee
 
-A future Project installation coordinator (named here, NOT built) composes existing owners:
+The Project installation coordinator (named here, IMPLEMENTED as
+`installProjectRelease` in `src/project/release-installation.js`, proven by
+`test/project-release-installation.test.js`) composes existing owners — exactly this shape,
+absorbing none of them. The linked pre-effect validation itself is owned once by
+`validateProjectReleaseMaterialForRelease` in the graph-release materializer (the SAME owner
+the capture constructor routes through); the coordinator calls it and never re-implements
+linkage rules:
 
 ```text
 release manifest + release material (+ external bindings ONLY if a future representation
@@ -248,7 +255,13 @@ effect — the same discipline the bundle importer itself uses. The graph import
 a Project is; the Project installer owns the semantic member-key -> target mapping.
 
 Durable/idempotent installation storage, recovery and drift/reconciliation execution remain later
-work (ADR 0073 deferrals unchanged).
+work (ADR 0073 deferrals unchanged). The implemented coordinator deliberately persists NOTHING:
+the target Image holds exactly the imported graph (one history event per imported record), and a
+second install of the same release is a second fresh copy, not hidden reconciliation. The
+recorded crash window: between the importer's atomic `createRecords` commit and the caller
+persisting the returned `ProjectInstallation/v1` descriptor, a crash leaves an installed graph
+with no durable descriptor — the pressure the durable-storage slice must close. The coordinator
+documents this window and never works around it locally.
 
 ## Decision 9 — selection boundary: reachability is not membership
 
