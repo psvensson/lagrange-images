@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import {resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
+import {createNodeSourceReader} from '../src/portable-artifact/node-source-reader.js';
 import {setDefaultCryptoProvider, resetDefaultCryptoProvider} from '../src/support/default-crypto.js';
 import {createNodeCryptoProvider} from '../src/support/node-crypto-provider.js';
 import {createPortableRuntime} from '../src/portable-runtime.js';
@@ -26,59 +27,36 @@ import {unpackCompositeValue} from '../src/callable/composite-codec.js';
 // system — never inside the portable closure being measured.)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = resolve(HERE, '..', 'src');
+const REPO = resolve(HERE, '..');
 
-// The forbidden host APIs the portable closure must never touch.
-const FORBIDDEN = new Set([
-  'node:crypto', 'node:buffer', 'node:child_process', 'node:readline',
-  'node:fs', 'node:fs/promises', 'node:path', 'node:os', 'node:util', 'node:process',
-]);
+// The traversal is NOT defined here. `src/portable-artifact/module-closure.js` is the ONE
+// definition of what a static import means for portability, and the artifact producer
+// consumes that same definition — so the closure this proof measures and the closure that
+// actually ships cannot drift apart. There is no test walker versus shipping walker.
+// (node:path/node:url are imported HERE, in the Node harness, never inside the portable
+// closure being measured.)
+const readRepoSource = createNodeSourceReader(REPO);
 
-const IMPORT_RE = /(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
-
-function walkStaticClosure(entryFile) {
-  const visited = new Set();
-  const offenders = []; // {file, spec}
-  const queue = [resolve(entryFile)];
-  while (queue.length > 0) {
-    const file = queue.shift();
-    const norm = resolve(file);
-    if (visited.has(norm)) continue;
-    visited.add(norm);
-    let src;
-    try {
-      src = readFileSync(norm, 'utf8');
-    } catch {
-      continue;
-    }
-    for (const match of src.matchAll(IMPORT_RE)) {
-      const spec = match[1] ?? match[2];
-      if (!spec) continue;
-      if (spec.startsWith('node:')) {
-        if (FORBIDDEN.has(spec)) offenders.push({file: norm, spec});
-        continue;
-      }
-      if (spec.startsWith('./') || spec.startsWith('../')) {
-        const base = resolve(dirname(norm), spec);
-        for (const candidate of [base, `${base}.js`, `${base}.mjs`, resolve(base, 'index.js')]) {
-          try {
-            readFileSync(candidate);
-            queue.push(candidate);
-            break;
-          } catch { /* try next candidate */ }
-        }
-      }
-      // Bare specifiers (npm packages) are host-provided; not walked here.
-    }
-  }
-  return {visited, offenders};
+function walkStaticClosure(entryLogicalPath) {
+  const {modules, violations, dynamic} = collectStaticModuleClosure({
+    entry: entryLogicalPath,
+    readSource: readRepoSource,
+  });
+  return {
+    visited: new Set(modules.map(({path}) => path)),
+    offenders: violations
+      .filter(({reason}) => reason === 'node-builtin')
+      .map(({path, specifier}) => ({file: path, spec: specifier})),
+    violations,
+    dynamic,
+  };
 }
 
 test('STRUCTURAL: portable-runtime.js static closure contains no forbidden node:* module', () => {
-  const {visited, offenders} = walkStaticClosure(resolve(SRC, 'portable-runtime.js'));
+  const {visited, offenders} = walkStaticClosure('src/portable-runtime.js');
   assert.ok(visited.size > 30, `closure is non-trivial (${visited.size} modules), so the check is meaningful`);
   assert.deepEqual(
-    offenders.map(({file, spec}) => `${spec} <- ${file.replace(SRC, 'src')}`),
+    offenders.map(({file, spec}) => `${spec} <- ${file}`),
     [],
     'the portable entrypoint must not statically reach any forbidden node:* module',
   );
@@ -88,7 +66,7 @@ test('STRUCTURAL is non-vacuous: the SAME walker flags the broad-barrel Node-run
   // Demonstrate the walker actually catches the problem it exists for: src/runtime.js
   // statically imports the foreign-runtime/toolchain barrels (node:child_process,
   // node:readline, node:fs, node:path, node:os, node:util) and the Node crypto provider.
-  const {offenders} = walkStaticClosure(resolve(SRC, 'runtime.js'));
+  const {offenders} = walkStaticClosure('src/runtime.js');
   const specs = new Set(offenders.map(({spec}) => spec));
   assert.ok(offenders.length > 0, 'the walker must find node:* offenders in the broad Node root');
   for (const expected of ['node:child_process', 'node:readline', 'node:crypto']) {
@@ -98,7 +76,7 @@ test('STRUCTURAL is non-vacuous: the SAME walker flags the broad-barrel Node-run
 
 test('STRUCTURAL is non-vacuous: the walker flags a module that imports the Node crypto provider', () => {
   // The Node provider module itself imports node:crypto; the walker must catch it.
-  const {offenders} = walkStaticClosure(resolve(SRC, 'support/node-crypto-provider.js'));
+  const {offenders} = walkStaticClosure('src/support/node-crypto-provider.js');
   assert.ok(offenders.some(({spec}) => spec === 'node:crypto'), 'walker catches node:crypto in the Node provider');
 });
 
