@@ -19,10 +19,15 @@
 //
 // CRYPTO. A portable host MUST install its synchronous crypto provider via
 // `setDefaultCryptoProvider(nativeProvider)` BEFORE calling `createPortableRuntime`
-// (or before any semantic work needing UUID/SHA/AES). This module never imports the
-// Node provider; the Node root installs it automatically instead.
+// (or before any semantic work needing UUID/SHA/AES). That configuration seam is
+// re-exported from THIS root — the same function `support/default-crypto.js` owns,
+// not a wrapper, second registry or host object — so a portable host composes the
+// runtime entirely through this public entrypoint and never needs a private module
+// path. Provider validation stays in `support/crypto-provider.js`; installation of
+// the active provider stays in `support/default-crypto.js`. This module never
+// imports the Node provider; the Node root installs it automatically instead.
 
-import {getDefaultCryptoProvider} from './support/default-crypto.js';
+import {getDefaultCryptoProvider, setDefaultCryptoProvider} from './support/default-crypto.js';
 import {createBackend} from './backend/create-backend.js';
 import {ImageService} from './image/graph-image-service.js';
 import {createAuthorityService} from './authority/authority-service.js';
@@ -198,4 +203,8 @@ export {
   createPortableRuntime,
   createPortableCodeExecutorRegistry,
   createRuntimeCore,
+  // Re-export, NOT a re-implementation: the identical function owned by
+  // `support/default-crypto.js`. The portable root owns exposing the configuration
+  // seam a portable host needs to compose it; it owns no crypto semantics.
+  setDefaultCryptoProvider,
 };
