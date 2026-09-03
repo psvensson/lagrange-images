@@ -16,6 +16,12 @@ import {normalizeTypeDeclarations} from '../src/callable/type-grammar.js';
 import {objectRef, referencesOfValue, textValue} from '../src/value/scalars.js';
 import {objectResource, parseObjectResource} from '../src/authority/object-resource.js';
 import {objectVersionToken} from '../src/object/version-token.js';
+import {
+  addProjectMember,
+  authorizedReadProjectDescriptor,
+  createProject,
+  projectObjectId,
+} from '../src/project/working-state.js';
 import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
 import {createNodeSourceReader} from '../src/portable-artifact/node-source-reader.js';
 
@@ -41,6 +47,10 @@ const owned = Object.freeze({
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
+  authorizedReadProjectDescriptor,
+  createProject,
+  addProjectMember,
+  projectObjectId,
 });
 
 test('portable-runtime exposes the exact Object Environment composition owner bindings', () => {
@@ -58,6 +68,13 @@ test('the bounded public seam does not broaden the portable static closure', () 
     readSource: createNodeSourceReader(repo),
   });
 
-  assert.equal(modules.length, 107, 'all exposed owners must already be in the reviewed closure');
+  const paths = modules.map(({path}) => path);
+  const projectPaths = paths.filter((path) => path.startsWith('src/project/'));
+
+  assert.equal(modules.length, 109, 'Project exposure adds exactly the two reviewed owner modules');
+  assert.deepEqual(projectPaths, [
+    'src/project/model.js',
+    'src/project/working-state.js',
+  ], 'the bounded seam must not pull the broader Project barrel or release/deployment graph into the artifact');
   assert.deepEqual(violations, [], 'the portable closure remains closed and Node-free');
 });

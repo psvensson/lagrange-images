@@ -94,6 +94,12 @@ import {normalizeTypeDeclarations} from './callable/type-grammar.js';
 import {objectRef, referencesOfValue, textValue} from './value/scalars.js';
 import {objectResource, parseObjectResource} from './authority/object-resource.js';
 import {objectVersionToken} from './object/version-token.js';
+import {
+  addProjectMember,
+  authorizedReadProjectDescriptor,
+  createProject,
+  projectObjectId,
+} from './project/working-state.js';
 
 // The portable code-executor registry: neutral expression + the image lanes +
 // (via composition) the Smalltalk kernel primitive. It deliberately omits the
@@ -249,4 +255,12 @@ export {
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
+  // The authorized Project descriptor read is the Object Environment's
+  // production seam. The other three bindings are bounded host/control-plane
+  // setup helpers used by the native acceptance composition. All four are
+  // exact owner-function identities, never portable-runtime wrappers.
+  authorizedReadProjectDescriptor,
+  createProject,
+  addProjectMember,
+  projectObjectId,
 };

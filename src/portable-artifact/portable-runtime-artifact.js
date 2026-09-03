@@ -10,9 +10,10 @@
 //
 // THE ENTRY IS THE REAL MODULE. `entry` is `src/portable-runtime.js` itself — the
 // actual composition root source, not a generated wrapper. The artifact therefore
-// exposes exactly what the portable root exposes (currently
-// `createPortableRuntime`, `createRuntimeCore`, `createPortableCodeExecutorRegistry`,
-// `setDefaultCryptoProvider`), and a consumer needs no `src/support/*` path.
+// exposes exactly what the portable root exposes: runtime composition plus its
+// bounded public host-integration helpers (including crypto configuration and
+// the authorized Project working-state seam). A consumer needs no private
+// `src/support/*` or `src/project/*` path.
 //
 // THE ESM GRAPH IS PRESERVED EXACTLY. One entry per closure module, each carrying
 // byte-exact UTF-8 source with its relative import specifiers untouched. No
