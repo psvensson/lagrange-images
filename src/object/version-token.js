@@ -81,9 +81,42 @@ function parseObjectVersionToken(token, imageId, objectId) {
   return assertBackendVersion(version);
 }
 
+// THE ONE conditional persistence seam for a token holder (ADR 0042 decision 5,
+// ADR 0080). The backend's VersionConflictError carries collection, key,
+// expectedVersion and actualVersion, and puts both numbers in its message.
+// Propagating it — even as a `cause`, which would leave actualVersion reachable —
+// would defeat the opaque token outright. Every lane that persists under a
+// caller-supplied token therefore writes through here, and a conflict says only
+// that the caller's assumption was stale: no actual version, no replacement
+// token, no cause. The put itself is the image service's put (CAS + history in
+// one backend transaction); this owner adds nothing but the translation.
+class ObjectMutationConflictError extends Error {
+  constructor(imageId, objectId) {
+    super(`object mutation conflict: the supplied version token is stale for ${imageId}/${objectId}`);
+    this.name = 'ObjectMutationConflictError';
+    this.imageId = imageId;
+    this.objectId = objectId;
+  }
+}
+
+async function putObjectAtExpectedVersion(images, imageId, input, expectedVersion) {
+  assertBackendVersion(expectedVersion);
+  try {
+    return await images.putObject(imageId, input, {expectedVersion});
+  } catch (error) {
+    if (error?.name === 'VersionConflictError') {
+      // Deliberately no cause: attaching it would leave actualVersion reachable.
+      throw new ObjectMutationConflictError(imageId, input.id);
+    }
+    throw error;
+  }
+}
+
 export {
   OBJECT_VERSION_TOKEN_V0,
+  ObjectMutationConflictError,
   ObjectVersionTokenError,
   objectVersionToken,
   parseObjectVersionToken,
+  putObjectAtExpectedVersion,
 };

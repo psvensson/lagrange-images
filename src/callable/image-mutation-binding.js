@@ -2,8 +2,13 @@ import {uuid as randomUUID} from '../support/default-crypto.js';
 import {canonicalizeValue, isReference, objectRef, pinnedRef, textValue} from '../value/index.js';
 import {isTransientObjectId} from '../value/transient-ref.js';
 import {assertBlockApplicationReceiver} from '../execution/block-application.js';
-import {objectResource} from '../authority/object-resource.js';
-import {objectVersionToken, parseObjectVersionToken} from '../object/version-token.js';
+import {OBJECT_WRITE_OPERATION, objectResource} from '../authority/object-resource.js';
+import {
+  ObjectMutationConflictError,
+  objectVersionToken,
+  parseObjectVersionToken,
+  putObjectAtExpectedVersion,
+} from '../object/version-token.js';
 import {
   CALLABLE_INTERFACE_DEPENDENCY_ROLE,
   assertBindingDependencies,
@@ -19,24 +24,16 @@ import {resolveDeclaredType} from './type-grammar.js';
 // projection lane — an ordinary callable Block, nothing beyond `require` in the executor
 // context, and no privileged write API for foreign code.
 const IMAGE_MUTATION_BINDING_V1 = 'image-mutation-binding/v1';
-const OBJECT_WRITE_OPERATION = 'object/write';
 // ADR 0065 §2: adding a ref element to an existing object's indexed part is edge creation, honored
 // per ADR 0042 §7 with the same per-target grant creation uses (ADR 0062 §4) — never plain object/write.
 const OBJECT_EDGE_WRITE_OPERATION = 'object/edge-write';
 const PIN_PREFIX = 'pin:';
 
-// The backend's conflict error carries collection, key, expectedVersion and actualVersion, and
-// puts both numbers in its message. Propagating it — even as a `cause`, which would leave
-// actualVersion reachable — would defeat the opaque token outright. The lane translates instead:
-// a conflict says only that the caller's assumption was stale.
-class ObjectMutationConflictError extends Error {
-  constructor(imageId, objectId) {
-    super(`object mutation conflict: the supplied version token is stale for ${imageId}/${objectId}`);
-    this.name = 'ObjectMutationConflictError';
-    this.imageId = imageId;
-    this.objectId = objectId;
-  }
-}
+// A stale token surfaces as ObjectMutationConflictError, translated by the ONE conditional
+// persistence seam (`putObjectAtExpectedVersion`, src/object/version-token.js): a conflict says
+// only that the caller's assumption was stale. OBJECT_WRITE_OPERATION and the error class are
+// re-exported from here for existing consumers; their owners are the authority resource module
+// and the version-token module.
 
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be a non-empty string`);
@@ -392,25 +389,16 @@ function createImageMutationBindingV1Executor() {
         slots[slot] = hostLeafToCanonical(value[field.name], field.type, `mutated field ${field.name}`);
       }
 
-      let stored;
-      try {
-        stored = await images.putObject(imageId, {
-          id: objectId,
-          shape: object.shape,
-          behavior: object.behavior,
-          slots,
-          // The indexed part is part of the same object record: preserved verbatim when untouched,
-          // or the new append/reorder value when the binding has an indexed field (ADR 0065).
-          ...(indexed === undefined ? {} : {indexed}),
-          metadata: object.metadata,
-        }, {expectedVersion});
-      } catch (error) {
-        if (error?.name === 'VersionConflictError') {
-          // Deliberately no cause: attaching it would leave actualVersion reachable.
-          throw new ObjectMutationConflictError(imageId, objectId);
-        }
-        throw error;
-      }
+      const stored = await putObjectAtExpectedVersion(images, imageId, {
+        id: objectId,
+        shape: object.shape,
+        behavior: object.behavior,
+        slots,
+        // The indexed part is part of the same object record: preserved verbatim when untouched,
+        // or the new append/reorder value when the binding has an indexed field (ADR 0065).
+        ...(indexed === undefined ? {} : {indexed}),
+        metadata: object.metadata,
+      }, expectedVersion);
 
       return textValue(objectVersionToken(imageId, objectId, stored._version));
     },
