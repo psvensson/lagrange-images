@@ -55,6 +55,25 @@ Those ADRs otherwise stand as written; their decisions about closed inputs, host
 identity are unchanged. The value moved from `metadata` to `logicalPath`; nothing else about them
 moves.
 
+## Migration and no fallback
+
+Consumers read `logicalPath` with no fallback to the old `metadata.fileName` / `metadata.path`, by
+design: a fallback would work in-image but still be dropped by a graph bundle, reintroducing exactly
+the half-broken round-trip this ADR removes. An artifact persisted before this change (with the
+value only in `metadata`) therefore fails fast when materialized — but such an artifact already lost
+the value on any capture/install, and the project is pre-release with no durable-compatibility
+guarantee, so no data migration is provided. Re-put the artifact with `logicalPath` set.
+
+## One owner for the base path rule
+
+`normalizeLogicalPath` (the CodeArtifact owner) is the single definition of a safe
+portable-relative artifact path, and it is reused rather than re-implemented at the toolchain output
+boundary. Consumers layer their *stricter* rules on top of the value the owner already guaranteed —
+a Cuis name is a single segment with a required extension (`safeFileName`); a Cargo path must sit
+under `vendor/` or avoid the reserved manifest/lock/config layout. That layering (owner: base;
+consumer: stricter) is deliberate, not accidental duplication; the portable-runtime artifact's
+source-root path rule is a different subsystem's concern and stays separate.
+
 ## Proof
 
 `test/artifact-logical-path.test.js`:

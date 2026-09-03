@@ -1,7 +1,7 @@
 import {TupleMap, TupleSet} from '../support/tuple-map.js';
 import {randomUUID} from 'node:crypto';
 import {normalizeDerivationKeyMaterial} from '../compilation/derivation-cache.js';
-import {normalizeArtifactDependencies} from '../execution/model.js';
+import {normalizeArtifactDependencies, normalizeLogicalPath} from '../execution/model.js';
 import {normalizeMetadata} from '../object/model.js';
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
 import {createToolchainDerivationDescriptor} from './derivation-cache.js';
@@ -68,8 +68,8 @@ function toolchainArtifactSnapshot(artifact) {
     representation: artifact.representation,
     content: structuredClone(artifact.content),
     // logicalPath is semantic input a provider materializes from (a Rust source's path, a Cuis
-    // image's name), so it is part of the build-relevant view AND the derivation key — unlike
-    // metadata, which is provenance the snapshot carries but the key excludes.
+    // image's name), so the build-relevant snapshot carries it — like every other snapshot field
+    // (metadata included, per ADR 0020), it participates in the derivation key.
     logicalPath: artifact.logicalPath ?? null,
     dependencies: structuredClone(artifact.dependencies ?? []),
     metadata: structuredClone(artifact.metadata ?? {}),
@@ -126,7 +126,7 @@ function normalizeProviderOutput(output, index) {
       : requiredText(output.languageId, `toolchain output ${index} languageId`),
     representation: requiredText(output.representation, `toolchain output ${index} representation`),
     content: canonicalizeValue(output.content),
-    logicalPath: output.logicalPath ?? null,
+    logicalPath: normalizeLogicalPath(output.logicalPath ?? null, `toolchain output ${index} logicalPath`),
     dependencies: normalizeArtifactDependencies(output.dependencies ?? []),
     metadata: normalizeMetadata(output.metadata ?? {}, `toolchain output ${index} metadata`),
   });

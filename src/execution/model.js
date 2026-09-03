@@ -50,16 +50,16 @@ function normalizeReferenceList(values, label) {
 // stripped, non-identity provenance. Consumers (the Cargo and Cuis providers) read it here and
 // apply their own stricter rules (a Cuis name is a single-segment path with a required
 // extension; a Cargo path may nest). Absent is `null`.
-function normalizeLogicalPath(value) {
+function normalizeLogicalPath(value, label = 'code artifact logicalPath') {
   if (value === null || value === undefined) return null;
-  const path = requiredText(value, 'code artifact logicalPath');
+  const path = requiredText(value, label);
   if (path.includes('\\') || path.includes('\0')) {
-    throw new TypeError('code artifact logicalPath must be a portable path without backslashes or NUL');
+    throw new TypeError(`${label} must be a portable path without backslashes or NUL`);
   }
-  if (path.startsWith('/')) throw new TypeError('code artifact logicalPath must be relative, not absolute');
+  if (path.startsWith('/')) throw new TypeError(`${label} must be relative, not absolute`);
   const segments = path.split('/');
   if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
-    throw new TypeError('code artifact logicalPath must not contain empty, . or .. segments');
+    throw new TypeError(`${label} must not contain empty, . or .. segments`);
   }
   return path;
 }
@@ -236,6 +236,7 @@ export {
   assertLexicalEnvironmentRecord,
   createBlockRecord,
   createCodeArtifactRecord,
+  normalizeLogicalPath,
   createLexicalEnvironmentRecord,
   normalizeArtifactDependencies,
 };
