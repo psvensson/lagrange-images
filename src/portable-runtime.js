@@ -26,6 +26,13 @@
 // path. Provider validation stays in `support/crypto-provider.js`; installation of
 // the active provider stays in `support/default-crypto.js`. This module never
 // imports the Node provider; the Node root installs it automatically instead.
+//
+// ENVIRONMENT COMPOSITION. A portable Object Environment needs the same public
+// adapter-construction helpers that the Node root exposes, but must not import
+// private `src/...` paths from a shipped artifact. The exact named re-exports
+// below expose those existing owner functions through this one public root.
+// They are identities, not wrappers: their language/callable/value/authority/
+// object modules retain all semantics and validation.
 
 import {getDefaultCryptoProvider, setDefaultCryptoProvider} from './support/default-crypto.js';
 import {createBackend} from './backend/create-backend.js';
@@ -43,10 +50,12 @@ import {
 import {
   IMAGE_MUTATION_BINDING_V1,
   createImageMutationBindingV1Executor,
+  installImageMutationBinding,
 } from './callable/image-mutation-binding.js';
 import {
   IMAGE_CREATION_BINDING_V1,
   createImageCreationBindingV1Executor,
+  installImageCreationBinding,
 } from './callable/image-creation-binding.js';
 import {
   IMAGE_CREATION_BATCH_BINDING_V1,
@@ -59,19 +68,32 @@ import {
 import {
   IMAGE_OBJECT_READ_BINDING_V1,
   createImageObjectReadBindingV1Executor,
+  installImageObjectReadBinding,
 } from './callable/image-object-read-binding.js';
 import {
   IMAGE_OBSERVATION_BINDING_V1,
   createImageObservationBindingV1Executor,
+  installImageObservationBinding,
 } from './callable/image-observation-binding.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
   createSmalltalkKernelPrimitiveV1Executor,
 } from './language/smalltalk-primitives.js';
-import {createSmalltalkTemporaryInitializer} from './language/smalltalk-kernel.js';
+import {
+  createSmalltalkTemporaryInitializer,
+  findSmalltalkKernel,
+  installSmalltalkKernel,
+} from './language/smalltalk-kernel.js';
+import {defineClass} from './language/smalltalk-class-builder.js';
 import {createDefaultLanguagePlatform} from './language/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './language/symmetric-smalltalk.js';
 import {createSymmetricSmalltalkDispatcher} from './language/symmetric-smalltalk-dispatcher.js';
+import {installCallableInterfaceV2} from './callable/interface-v2-artifacts.js';
+import {packCompositeValue, unpackCompositeValue} from './callable/composite-codec.js';
+import {normalizeTypeDeclarations} from './callable/type-grammar.js';
+import {objectRef, referencesOfValue, textValue} from './value/scalars.js';
+import {objectResource, parseObjectResource} from './authority/object-resource.js';
+import {objectVersionToken} from './object/version-token.js';
 
 // The portable code-executor registry: neutral expression + the image lanes +
 // (via composition) the Smalltalk kernel primitive. It deliberately omits the
@@ -207,4 +229,24 @@ export {
   // `support/default-crypto.js`. The portable root owns exposing the configuration
   // seam a portable host needs to compose it; it owns no crypto semantics.
   setDefaultCryptoProvider,
+  // Exact existing owner bindings needed to construct ImageClientAdapter in a
+  // portable Object Environment. Public exposure does not move their semantics
+  // into this composition root.
+  installSmalltalkKernel,
+  findSmalltalkKernel,
+  defineClass,
+  installCallableInterfaceV2,
+  installImageCreationBinding,
+  installImageMutationBinding,
+  installImageObjectReadBinding,
+  installImageObservationBinding,
+  objectRef,
+  textValue,
+  referencesOfValue,
+  objectResource,
+  parseObjectResource,
+  objectVersionToken,
+  packCompositeValue,
+  unpackCompositeValue,
+  normalizeTypeDeclarations,
 };
