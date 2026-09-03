@@ -43,6 +43,12 @@ const TYPES = normalizeTypeDeclarations({
 
 const readGrant = (id) => ({operation: OBJECT_READ_OPERATION, resource: objectResource('demo', id)});
 
+function assertCursorIsNotRawRevision(token, revision) {
+  assert.match(token, /^obs-cursor\/v1:[A-Za-z0-9_-]+$/);
+  assert.ok(Number.isNaN(Number(token)), 'the cursor is not parseable as a number');
+  assert.notEqual(token, String(revision), 'the cursor is not the raw revision');
+}
+
 async function seed({grants = null, objects = []} = {}) {
   const authority = createAuthorityService();
   const runtime = await createRuntime({backend: {mode: 'mock'}, authority});
@@ -141,8 +147,9 @@ test('an emitted event is exactly {object-id, kind, cursor} — no slots/indexed
   }
 });
 
-// Case 3 — no gap leak: the cursor is opaque. It is not parseable as a number, does not equal
-// String(revision), and its visible text carries no decimal the consumer could compare.
+// Case 3 — no gap leak: the cursor is an opaque token rather than a bare revision, and the
+// response carries no count/gap field. Ciphertext is allowed to contain coincidental digit runs;
+// secrecy comes from authenticated encryption, whose tamper/resume behavior is proven below.
 test('the cursor is opaque: not a number, not the raw revision, no gap analysis', async () => {
   const {runtime, observe, mutate} = await seed({grants: [readGrant('a')], objects: ['a', 'b']});
   try {
@@ -155,16 +162,11 @@ test('the cursor is opaque: not a number, not the raw revision, no gap analysis'
     const result = await observe(start.cursor);
     assert.equal(result.events.length, 1);
     for (const token of [result.cursor, result.events[0].cursor]) {
-      assert.match(token, /^obs-cursor\/v1:/);
-      assert.ok(Number.isNaN(Number(token)), 'the cursor is not parseable as a number');
-      assert.notEqual(token, String(lastRevision), 'the cursor is not the raw revision');
-      // No plain readable decimal the consumer could compare: the token body is base64url, and
-      // no maximal digit run in it decodes back to the raw revision it encodes.
-      const body = token.slice('obs-cursor/v1:'.length);
-      for (const run of body.match(/\d+/g) ?? []) {
-        assert.notEqual(run, String(lastRevision), `token carries a readable revision: ${token}`);
-      }
+      assertCursorIsNotRawRevision(token, lastRevision);
     }
+    // Exact regression for CI run 33592165825: an encrypted base64url payload may legitimately
+    // contain the decimal revision as a substring without exposing it as a readable field.
+    assertCursorIsNotRawRevision('obs-cursor/v1:RC61dxYJKUzXnT8XnBqcVnEnwEaVJBXDL-6xJNe2', 61);
     // The invisible B write sits between the start cursor and the visible A write in the global
     // sequence, yet NOTHING in the result marks it: the per-event cursor and the result cursor
     // are both the position after the A write (the last scanned event), and the tokens expose
