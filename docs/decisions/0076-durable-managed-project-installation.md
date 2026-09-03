@@ -1,6 +1,6 @@
 # ADR 0076: durable managed Project installation — atomic first install, lost-ack idempotency, head + immutable snapshot state
 
-Status: accepted — decision; prepared-import seam implemented, installation-state and managed-coordinator slices pending
+Status: accepted — decision; prepared-import and installation-state slices implemented, managed-coordinator slice pending
 
 ADR 0073 decided the ProjectInstallation/v1 semantics and explicitly deferred its durable storage
 ("durable storage of this descriptor as ordinary image objects remains follow-up work"). ADR 0075
@@ -71,7 +71,7 @@ ONE current managed installation per `(targetImageId, projectId)`.
 `installProjectRelease` keeps its proven contract: untracked fresh-copy materialization, no
 durable installation state, install-twice means two copies. It is NOT silently redefined.
 
-New managed lifecycle API (implementation pending):
+New managed lifecycle API (`installManagedProjectRelease` pending; durable read implemented):
 
 ```text
 installManagedProjectRelease({images, targetImageId, release, material, crypto})
@@ -157,7 +157,7 @@ Exactly one owner per concern; the new interaction has exactly one owner.
 | Concern | Owner | Status |
 | --- | --- | --- |
 | ProjectInstallation/v1 semantics (canonicalization, validation, member ordering) | Project model (`src/project/model.js`) | current, unchanged |
-| ProjectInstallation/v1 <-> ordinary target-Image installation objects | **Project installation-state translator (`src/project/installation-state.js`)** | NEW, pending |
+| ProjectInstallation/v1 <-> ordinary target-Image installation objects | **Project installation-state translator (`src/project/installation-state.js`)** | current, implemented |
 | bundle localId -> fresh target identity; portable ref -> target ref; durable graph candidates | Graph bundle model (`src/graph/bundle.js`) | current; gains a preparation seam (below) |
 | N prepared candidates -> one atomic commit | `ImageService.createRecords` | current, unchanged |
 | managed first-install sequencing: preflight -> prepare -> canonical installation -> installation record specs -> ONE createRecords -> idempotent return/conflict | **managed installation coordinator (`src/project/managed-installation.js`)** | NEW, pending |
@@ -468,7 +468,7 @@ structurally rather than by apology, retry hint or post-hoc scan.
    re-implement `importGraphBundle` as prepare + one `createRecords`; frozen plan; no behavior
    change (existing import proofs stay green; new proofs: plan immutability, no durable effect,
    no localId leakage, standalone/managed consume the same owner).
-2. **Installation-state translator** `src/project/installation-state.js`: well-known Shapes +
+2. **Installation-state translator (implemented)** `src/project/installation-state.js`: well-known Shapes +
    race-tolerant `ensureInstallationShapes`; deterministic head id;
    `materializeInstallationRecords` (from canonical descriptor only);
    `readManagedProjectInstallation` with the Decision 10 corruption taxonomy, proven by real

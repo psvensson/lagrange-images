@@ -272,7 +272,7 @@ bundle atomically with fresh target identities, and returns a canonical target-s
 a second copy, and the returned descriptor is not yet durable installation state. ADR 0076 has
 decided the stable-head/snapshot/member representation and single-batch managed installer that will
 close that crash/recovery window. Its effect-free, deeply frozen `prepareGraphBundleImport()` seam
-is implemented; the durable installation-state translator and managed coordinator remain pending.
+and durable installation-state translator are implemented; the managed coordinator remains pending.
 
 ## Portable runtime delivery
 

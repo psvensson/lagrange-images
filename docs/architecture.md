@@ -345,9 +345,9 @@ The substrate has now been pressured by:
 
 Managed Project installation remains the immediate substrate gap: ADR 0076 has decided the durable
 head/snapshot/member representation and one-batch idempotent protocol. The graph owner's effect-free
-prepared-import seam is implemented; the installation-state translator and managed coordinator are
-still pending. Project browsing/collaboration and graphical-environment pressure belongs in Lagrange
-Object Environment. Missing generic primitives discovered there should feed back here through the
-public boundary.
+prepared-import seam and the durable installation-state translator are implemented; the managed
+coordinator is still pending. Project browsing/collaboration and graphical-environment pressure
+belongs in Lagrange Object Environment. Missing generic primitives discovered there should feed
+back here through the public boundary.
 
 See [docs/README.md](README.md), [object-environment-boundary.md](object-environment-boundary.md) and [decisions/README.md](decisions/README.md).
