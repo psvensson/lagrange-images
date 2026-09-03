@@ -129,7 +129,7 @@ async function commitCandidateRecords(backend, imageId, candidates, {at, expecte
 const RECORD_INPUT_FIELDS = Object.freeze({
   'shape': new Set(['id', 'slots', 'indexed', 'metadata']),
   'object': new Set(['id', 'shape', 'behavior', 'slots', 'indexed', 'metadata']),
-  'code-artifact': new Set(['id', 'languageId', 'representation', 'content', 'dependencies', 'derivedFrom', 'metadata']),
+  'code-artifact': new Set(['id', 'languageId', 'representation', 'content', 'logicalPath', 'dependencies', 'derivedFrom', 'metadata']),
   'lexical-environment': new Set(['id', 'parent', 'bindings', 'metadata']),
   'block': new Set(['id', 'code', 'environment', 'metadata']),
 });
@@ -169,7 +169,8 @@ function prepareCandidateRecord(kind, imageId, input, {at, mintId}) {
     case 'code-artifact':
       return createCodeArtifactRecord({
         id, imageId, languageId: input.languageId ?? null, representation: input.representation,
-        content: input.content, dependencies: input.dependencies ?? [], derivedFrom: input.derivedFrom ?? [],
+        content: input.content, logicalPath: input.logicalPath ?? null,
+        dependencies: input.dependencies ?? [], derivedFrom: input.derivedFrom ?? [],
         metadata: input.metadata ?? {}, updatedAt: at,
       });
     case 'lexical-environment':

@@ -43,6 +43,9 @@ function runtimeArtifactSnapshot(artifact) {
     languageId: artifact.languageId ?? null,
     representation: artifact.representation,
     content: structuredClone(artifact.content),
+    // A Cuis image/changes/sources/package materializes at its logicalPath (its filename), so the
+    // runtime definition view must carry it — it is semantic input, not stripped provenance.
+    logicalPath: artifact.logicalPath ?? null,
     dependencies: structuredClone(artifact.dependencies ?? []),
     metadata: structuredClone(artifact.metadata ?? {}),
   });

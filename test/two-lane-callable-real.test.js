@@ -96,13 +96,13 @@ test('a Rust Component and a live Cuis image satisfy the same callable interface
     });
 
     const baseImage = await put('cuis-image', CUIS_IMAGE_V1, bytesValue(await readFile(imagePath)), {
-      metadata: {fileName: 'Cuis7.9-8090.image'},
+      logicalPath: 'Cuis7.9-8090.image',
     });
     const baseChanges = await put('cuis-changes', CUIS_CHANGES_V1, bytesValue(await readFile(changesPath)), {
-      metadata: {fileName: 'Cuis7.9-8090.changes'},
+      logicalPath: 'Cuis7.9-8090.changes',
     });
     const baseSources = await put('cuis-sources', CUIS_SOURCES_V1, bytesValue(await readFile(sourcesPath)), {
-      metadata: {fileName: 'Cuis7.8.sources'},
+      logicalPath: 'Cuis7.8.sources',
     });
     const runtimeDefinition = await put('cuis-runtime', CUIS_RUNTIME_DEFINITION_V1, textValue(CUIS_RUNTIME_DEFINITION_CONTRACT_V0), {
       dependencies: [

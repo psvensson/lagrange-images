@@ -80,7 +80,7 @@ async function putRustCargoProject(runtime) {
     languageId: 'rust',
     representation: RUST_SOURCE_V1,
     content: textValue('#[no_mangle]\npub extern "C" fn add(left: i32, right: i32) -> i32 { left + right }\nfn main() {}\n'),
-    metadata: {path: 'src/main.rs'},
+    logicalPath: 'src/main.rs',
   });
   const lock = await runtime.images.putCodeArtifact('mixed', {
     id: 'rust-lock',
@@ -175,7 +175,7 @@ test('Symmetric Smalltalk composes Cargo-derived WASM and Cuis Blocks identicall
       languageId: 'smalltalk',
       representation: CUIS_IMAGE_V1,
       content: bytesValue(Buffer.from('fake-cuis-image')),
-      metadata: {fileName: 'Mixed.image'},
+      logicalPath: 'Mixed.image',
     });
     const cuisDefinition = await runtime.images.putCodeArtifact('mixed', {
       id: 'cuis-runtime',

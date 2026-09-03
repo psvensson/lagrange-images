@@ -65,6 +65,7 @@ move in. Never move it the other way to make a claim easier to write.
 - [0020 — deterministic toolchain result reuse](0020-toolchain-result-reuse.md): provider-opt-in external build cache over the explicit artifact graph.
 - [0077 — real digest-pinned Cargo/rustc OCI proof](0077-real-digest-pinned-cargo-oci-proof.md): prove the Cargo boundary with a real compiler in CI, and make the executed program an explicit entrypoint.
 - [0078 — derivation cache contract follows execution semantics](0078-derivation-cache-contract-follows-execution-semantics.md): a cache contract names the computation, so the Cargo contract moves to v1 with the entrypoint change.
+- [0079 — artifact logicalPath is content](0079-artifact-logical-path-is-content.md): promote the materialization path out of stripped provenance metadata into a canonical CodeArtifact field that survives portable release.
 - [0022 — OpenSmalltalkVM compatibility direction](0022-opensmalltalkvm-compatibility-direction.md): native Symmetric Smalltalk plus real OpenSmalltalkVM compatibility/runtime/toolchain/migration paths.
 - [0026 — OpenSmalltalkVM + Cuis toolchain provider](0026-opensmalltalkvm-cuis-toolchain-provider.md): compile explicit Cuis image/package graphs with the real Smalltalk environment into derived runnable image artifacts.
 

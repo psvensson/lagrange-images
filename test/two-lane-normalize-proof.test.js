@@ -157,7 +157,7 @@ async function setUpTwoLanes(root) {
     representation: CUIS_IMAGE_V1,
     content: bytesValue(Buffer.from('fake-image')),
     languageId: 'smalltalk',
-    metadata: {fileName: 'Proof.image'},
+    logicalPath: 'Proof.image',
   });
   const cuisDefinition = await runtime.images.putCodeArtifact('demo', {
     id: 'cuis-definition',

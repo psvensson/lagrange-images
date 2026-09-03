@@ -114,12 +114,12 @@ function validateGraph(request) {
   const baseImage = baseImageNode.artifact;
   if (baseImage.representation !== CUIS_IMAGE_V1) throw new TypeError(`base-image must be ${CUIS_IMAGE_V1}`);
   bytesArtifact(baseImage, 'OpenSmalltalk Cuis base image');
-  const baseImageFileName = safeFileName(baseImage.metadata?.fileName, '.image', 'OpenSmalltalk Cuis base image metadata.fileName');
+  const baseImageFileName = safeFileName(baseImage.logicalPath, '.image', 'OpenSmalltalk Cuis base image logicalPath');
 
   const changesNode = baseChanges[0];
   const changes = changesNode.artifact;
   if (changes.representation !== CUIS_CHANGES_V1) throw new TypeError(`base-changes must be ${CUIS_CHANGES_V1}`);
-  const changesFileName = safeFileName(changes.metadata?.fileName, '.changes', 'OpenSmalltalk Cuis base changes metadata.fileName');
+  const changesFileName = safeFileName(changes.logicalPath, '.changes', 'OpenSmalltalk Cuis base changes logicalPath');
   const expectedChangesFileName = `${imageStem(baseImageFileName)}.changes`;
   if (changesFileName !== expectedChangesFileName) {
     throw new TypeError(`OpenSmalltalk Cuis base changes filename must be ${expectedChangesFileName}`);
@@ -128,14 +128,14 @@ function validateGraph(request) {
   const sourcesNode = baseSources.length === 1 ? baseSources[0] : null;
   const sources = sourcesNode?.artifact ?? null;
   if (sources && sources.representation !== CUIS_SOURCES_V1) throw new TypeError(`base-sources must be ${CUIS_SOURCES_V1}`);
-  const sourcesFileName = sources ? safeFileName(sources.metadata?.fileName, '.sources', 'OpenSmalltalk Cuis base sources metadata.fileName') : null;
+  const sourcesFileName = sources ? safeFileName(sources.logicalPath, '.sources', 'OpenSmalltalk Cuis base sources logicalPath') : null;
 
   const packageRecords = [];
   const packageNames = new Set();
   for (const node of packages) {
     const {artifact} = node;
     if (artifact.representation !== CUIS_PACKAGE_V1) throw new TypeError(`package dependency must be ${CUIS_PACKAGE_V1}`);
-    const fileName = safeFileName(artifact.metadata?.fileName, '.st', `OpenSmalltalk Cuis package ${artifact.id} metadata.fileName`);
+    const fileName = safeFileName(artifact.logicalPath, '.st', `OpenSmalltalk Cuis package ${artifact.id} logicalPath`);
     if (!fileName.endsWith('.pck.st')) throw new TypeError(`OpenSmalltalk Cuis package ${artifact.id} filename must end in .pck.st`);
     if (packageNames.has(fileName)) throw new TypeError(`duplicate OpenSmalltalk Cuis package filename: ${fileName}`);
     packageNames.add(fileName);
@@ -534,16 +534,18 @@ function createOpenSmalltalkCuisToolchainProvider({
             languageId: 'smalltalk',
             representation: CUIS_IMAGE_V1,
             content: bytesValue(imageBytes),
+            logicalPath: target.fileName,
             dependencies: sourceDependencies,
-            metadata: {...commonMetadata, fileName: target.fileName, companionChangesFileName: changesFileName},
+            metadata: {...commonMetadata, companionChangesFileName: changesFileName},
           }),
           Object.freeze({
             name: 'changes',
             languageId: 'smalltalk',
             representation: CUIS_CHANGES_V1,
             content: bytesValue(changesBytes),
+            logicalPath: changesFileName,
             dependencies: [],
-            metadata: {...commonMetadata, fileName: changesFileName, companionImageFileName: target.fileName},
+            metadata: {...commonMetadata, companionImageFileName: target.fileName},
           }),
         ];
         if (semanticExportText !== null) {
@@ -552,8 +554,9 @@ function createOpenSmalltalkCuisToolchainProvider({
             languageId: 'smalltalk',
             representation: CUIS_SEMANTIC_EXPORT_V1,
             content: textValue(semanticExportText),
+            logicalPath: semanticExportFileName,
             dependencies: [],
-            metadata: {...commonMetadata, fileName: semanticExportFileName},
+            metadata: {...commonMetadata},
           }));
         }
         return Object.freeze({

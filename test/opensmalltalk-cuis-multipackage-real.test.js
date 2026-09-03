@@ -45,12 +45,13 @@ const CLUSTER = [
   {key: 'COMPRESSION', fileName: 'Compression.pck.st', env: 'LAGRANGE_CUIS_COMPRESSION_PACKAGE_PATH', blob: '243d8265b411fc36a72dd101f21a18e7c94b2d87'},
 ];
 
-async function put(runtime, id, representation, content, {metadata = {}, dependencies = []} = {}) {
+async function put(runtime, id, representation, content, {metadata = {}, dependencies = [], logicalPath = null} = {}) {
   return await runtime.images.putCodeArtifact('build-image', {
     id,
     languageId: 'smalltalk',
     representation,
     content,
+    ...(logicalPath ? {logicalPath} : {}),
     metadata,
     dependencies,
   });
@@ -78,13 +79,13 @@ async function makeProviders() {
 
 async function putBase(runtime) {
   const baseImage = await put(runtime, 'cuis-base-image', CUIS_IMAGE_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_IMAGE_PATH)), {
-    metadata: {fileName: 'Cuis7.9-8090.image'},
+    logicalPath: 'Cuis7.9-8090.image',
   });
   const baseChanges = await put(runtime, 'cuis-base-changes', CUIS_CHANGES_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_CHANGES_PATH)), {
-    metadata: {fileName: 'Cuis7.9-8090.changes'},
+    logicalPath: 'Cuis7.9-8090.changes',
   });
   const baseSources = await put(runtime, 'cuis-base-sources', CUIS_SOURCES_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_SOURCES_PATH)), {
-    metadata: {fileName: 'Cuis7.8.sources'},
+    logicalPath: 'Cuis7.8.sources',
   });
   return {baseImage, baseChanges, baseSources};
 }
@@ -93,7 +94,7 @@ async function putPackage(runtime, spec) {
   const path = process.env[spec.env];
   assert.ok(path, `${spec.env} integration path is required`);
   return await put(runtime, `cuis-package-${spec.fileName}`, CUIS_PACKAGE_V1, textValue(await readFile(path, 'utf8')), {
-    metadata: {fileName: spec.fileName, identity: `cuis-package/${spec.fileName.replace(/\.pck\.st$/, '')}/${CUIS_COMMIT}/gitblob:${spec.blob}`},
+    logicalPath: spec.fileName, metadata: {identity: `cuis-package/${spec.fileName.replace(/\.pck\.st$/, '')}/${CUIS_COMMIT}/gitblob:${spec.blob}`},
   });
 }
 
@@ -179,7 +180,7 @@ test('multi-package build with a missing dependency FAILS (failure diagnostics, 
       `!provides: 'Lagrange-Unsatisfiable' 1 0!\n` +
       `!requires: '${ABSENT_FEATURE}' 1 0 nil!\n`,
     ), {
-      metadata: {fileName: 'LagrangeUnsatisfiable.pck.st'},
+      logicalPath: 'LagrangeUnsatisfiable.pck.st',
     });
 
     const build = await put(runtime, 'cuis-cluster-build-missing', CUIS_BUILD_V1, textValue(CUIS_BUILD_CONTRACT_V0), {

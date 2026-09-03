@@ -39,12 +39,13 @@ const I32_ADD_WASM = Buffer.from([
   0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
 ]);
 
-async function put(runtime, id, representation, content, {metadata = {}, dependencies = []} = {}) {
+async function put(runtime, id, representation, content, {metadata = {}, dependencies = [], logicalPath = null} = {}) {
   return await runtime.images.putCodeArtifact('build-image', {
     id,
     languageId: 'smalltalk',
     representation,
     content,
+    ...(logicalPath ? {logicalPath} : {}),
     metadata,
     dependencies,
   });
@@ -81,16 +82,16 @@ test('real Cuis toolchain participates in a resumable Lagrange-WASM mixed Block 
   await runtime.images.createImage({id: 'build-image'});
   try {
     const baseImage = await put(runtime, 'cuis-base-image', CUIS_IMAGE_V1, bytesValue(await readFile(imagePath)), {
-      metadata: {fileName: 'Cuis7.9-8090.image'},
+      logicalPath: 'Cuis7.9-8090.image',
     });
     const baseChanges = await put(runtime, 'cuis-base-changes', CUIS_CHANGES_V1, bytesValue(await readFile(changesPath)), {
-      metadata: {fileName: 'Cuis7.9-8090.changes'},
+      logicalPath: 'Cuis7.9-8090.changes',
     });
     const baseSources = await put(runtime, 'cuis-base-sources', CUIS_SOURCES_V1, bytesValue(await readFile(sourcesPath)), {
-      metadata: {fileName: 'Cuis7.8.sources'},
+      logicalPath: 'Cuis7.8.sources',
     });
     const jsonPackage = await put(runtime, 'cuis-json-package', CUIS_PACKAGE_V1, textValue(await readFile(jsonPackagePath, 'utf8')), {
-      metadata: {fileName: 'JSON.pck.st', identity: CUIS_JSON_IDENTITY},
+      logicalPath: 'JSON.pck.st', metadata: {identity: CUIS_JSON_IDENTITY},
     });
     const build = await put(runtime, 'cuis-json-build', CUIS_BUILD_V1, textValue(CUIS_BUILD_CONTRACT_V0), {
       dependencies: [

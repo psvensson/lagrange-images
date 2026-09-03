@@ -156,7 +156,7 @@ function validateCuisRuntimeDefinition(spec) {
   const image = imageNode.artifact;
   if (image.representation !== CUIS_IMAGE_V1) throw new TypeError(`runtime image must be ${CUIS_IMAGE_V1}`);
   bytesArtifact(image, 'OpenSmalltalk Cuis runtime image');
-  const imageFileName = safeFileName(image.metadata?.fileName, '.image', 'OpenSmalltalk Cuis runtime image metadata.fileName');
+  const imageFileName = safeFileName(image.logicalPath, '.image', 'OpenSmalltalk Cuis runtime image logicalPath');
 
   const changesNode = changes[0] ?? null;
   const changesArtifact = changesNode?.artifact ?? null;
@@ -164,7 +164,7 @@ function validateCuisRuntimeDefinition(spec) {
   if (changesArtifact) {
     if (changesArtifact.representation !== CUIS_CHANGES_V1) throw new TypeError(`runtime changes must be ${CUIS_CHANGES_V1}`);
     artifactBytes(changesArtifact, 'OpenSmalltalk Cuis runtime changes');
-    changesFileName = safeFileName(changesArtifact.metadata?.fileName, '.changes', 'OpenSmalltalk Cuis runtime changes metadata.fileName');
+    changesFileName = safeFileName(changesArtifact.logicalPath, '.changes', 'OpenSmalltalk Cuis runtime changes logicalPath');
     const expected = `${imageStem(imageFileName)}.changes`;
     if (changesFileName !== expected) throw new TypeError(`OpenSmalltalk Cuis runtime changes filename must be ${expected}`);
   }
@@ -175,7 +175,7 @@ function validateCuisRuntimeDefinition(spec) {
   if (sourcesArtifact) {
     if (sourcesArtifact.representation !== CUIS_SOURCES_V1) throw new TypeError(`runtime sources must be ${CUIS_SOURCES_V1}`);
     artifactBytes(sourcesArtifact, 'OpenSmalltalk Cuis runtime sources');
-    sourcesFileName = safeFileName(sourcesArtifact.metadata?.fileName, '.sources', 'OpenSmalltalk Cuis runtime sources metadata.fileName');
+    sourcesFileName = safeFileName(sourcesArtifact.logicalPath, '.sources', 'OpenSmalltalk Cuis runtime sources logicalPath');
   }
 
   const packageRecords = [];
@@ -184,7 +184,7 @@ function validateCuisRuntimeDefinition(spec) {
     const artifact = node.artifact;
     if (artifact.representation !== CUIS_PACKAGE_V1) throw new TypeError(`runtime package must be ${CUIS_PACKAGE_V1}`);
     artifactBytes(artifact, `OpenSmalltalk Cuis runtime package ${artifact.id}`);
-    const fileName = safeFileName(artifact.metadata?.fileName, '.st', `OpenSmalltalk Cuis runtime package ${artifact.id} metadata.fileName`);
+    const fileName = safeFileName(artifact.logicalPath, '.st', `OpenSmalltalk Cuis runtime package ${artifact.id} logicalPath`);
     if (!fileName.endsWith('.pck.st')) throw new TypeError(`OpenSmalltalk Cuis runtime package ${artifact.id} filename must end in .pck.st`);
     if (packageFileNames.has(fileName)) throw new TypeError(`duplicate OpenSmalltalk Cuis runtime package filename: ${fileName}`);
     packageFileNames.add(fileName);

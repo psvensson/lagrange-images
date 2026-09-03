@@ -49,7 +49,7 @@ async function putCargoProject(runtime, {
     languageId: 'rust',
     representation: RUST_SOURCE_V1,
     content: textValue(sourceText),
-    metadata: {path: sourcePath},
+    logicalPath: sourcePath,
   });
   const lock = await runtime.images.putCodeArtifact('demo', {
     id: 'cargo-lock',
@@ -83,21 +83,21 @@ async function putVendoredDependency(runtime, {badChecksum = false} = {}) {
     languageId: 'rust',
     representation: RUST_CARGO_VENDOR_FILE_V1,
     content: textValue(VENDOR_MANIFEST),
-    metadata: {path: 'vendor/tiny_math/Cargo.toml'},
+    logicalPath: 'vendor/tiny_math/Cargo.toml',
   });
   const vendorLib = await runtime.images.putCodeArtifact('demo', {
     id: 'vendor-lib',
     languageId: 'rust',
     representation: RUST_CARGO_VENDOR_FILE_V1,
     content: textValue(VENDOR_LIB),
-    metadata: {path: 'vendor/tiny_math/src/lib.rs'},
+    logicalPath: 'vendor/tiny_math/src/lib.rs',
   });
   const vendorAsset = await runtime.images.putCodeArtifact('demo', {
     id: 'vendor-asset',
     languageId: 'rust',
     representation: RUST_CARGO_VENDOR_FILE_V1,
     content: bytesValue(VENDOR_ASSET),
-    metadata: {path: 'vendor/tiny_math/assets/data.bin'},
+    logicalPath: 'vendor/tiny_math/assets/data.bin',
   });
   const checksumValue = badChecksum
     ? VENDOR_CHECKSUM.replace('084abb700c372b9420868b22516aacda02912e4db9d5223004a1c9d3f552ae13', '0'.repeat(64))
@@ -107,7 +107,7 @@ async function putVendoredDependency(runtime, {badChecksum = false} = {}) {
     languageId: 'rust',
     representation: RUST_CARGO_VENDOR_FILE_V1,
     content: textValue(checksumValue),
-    metadata: {path: 'vendor/tiny_math/.cargo-checksum.json'},
+    logicalPath: 'vendor/tiny_math/.cargo-checksum.json',
   });
   return {config, vendorManifest, vendorLib, vendorAsset, vendorChecksum};
 }
@@ -330,15 +330,11 @@ test('Cargo/rustc OCI provider rejects tags, unsupported artifacts and unsafe so
     });
     await secondRuntime.images.createImage({id: 'demo'});
     try {
-      project = await putCargoProject(secondRuntime, {sourcePath: '../escape.rs'});
+      // A workspace-escaping logicalPath is refused by the CodeArtifact owner at put time — the
+      // unsafe path never even becomes an artifact, so the provider never sees it.
       await assert.rejects(
-        secondRuntime.toolchains.run({
-          providerId: CARGO_RUSTC_OCI_PROVIDER_ID,
-          imageId: 'demo',
-          roots: [objectRef('demo', project.manifest.id)],
-          target: cargoTarget(),
-        }),
-        /portable relative POSIX path|must not contain/,
+        putCargoProject(secondRuntime, {sourcePath: '../escape.rs'}),
+        /logicalPath must not contain empty, \. or \.\. segments/,
       );
       assert.equal(runs, 0);
     } finally {
@@ -356,7 +352,7 @@ test('Cargo/rustc OCI provider rejects tags, unsupported artifacts and unsafe so
       });
       const badVendor = await thirdRuntime.images.putCodeArtifact('demo', {
         id: 'bad-vendor', languageId: 'rust', representation: RUST_CARGO_VENDOR_FILE_V1,
-        content: textValue('x'), metadata: {path: 'not-vendor/file.rs'},
+        content: textValue('x'), logicalPath: 'not-vendor/file.rs',
       });
       project = await putCargoProject(thirdRuntime, {
         extraDependencies: [

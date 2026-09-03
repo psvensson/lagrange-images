@@ -126,7 +126,7 @@ function artifactByRepresentation(request, representation) {
 function vendorPackageFiles(vendorFiles) {
   const packages = new Map();
   for (const artifact of vendorFiles) {
-    const path = normalizeVendorPath(artifact.metadata?.path, `Cargo vendor file ${artifact.id} metadata.path`);
+    const path = normalizeVendorPath(artifact.logicalPath, `Cargo vendor file ${artifact.id} logicalPath`);
     const segments = path.split('/');
     const packageDirectory = segments[1];
     const relativePath = segments.slice(2).join('/');
@@ -256,13 +256,13 @@ async function materializeCargoProject(request, workspace) {
     await writeProjectFile(workspace, '.cargo/config.toml', Buffer.from(CARGO_VENDOR_CONFIG_V1, 'utf8'));
   }
   for (const source of graph.sources) {
-    const path = normalizeRustSourcePath(source.metadata?.path, `Rust source ${source.id} metadata.path`);
+    const path = normalizeRustSourcePath(source.logicalPath, `Rust source ${source.id} logicalPath`);
     if (paths.has(path)) throw new TypeError(`duplicate Cargo project path: ${path}`);
     paths.add(path);
     await writeProjectFile(workspace, path, Buffer.from(textContent(source, `Rust source ${source.id}`), 'utf8'));
   }
   for (const vendorFile of graph.vendorFiles) {
-    const path = normalizeVendorPath(vendorFile.metadata?.path, `Cargo vendor file ${vendorFile.id} metadata.path`);
+    const path = normalizeVendorPath(vendorFile.logicalPath, `Cargo vendor file ${vendorFile.id} logicalPath`);
     if (paths.has(path)) throw new TypeError(`duplicate Cargo project path: ${path}`);
     paths.add(path);
     await writeProjectFile(workspace, path, artifactFileBytes(vendorFile, `Cargo vendor file ${vendorFile.id}`));

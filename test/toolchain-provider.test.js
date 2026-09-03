@@ -165,7 +165,7 @@ test('toolchain service resolves dependency graph and persists provider outputs 
     const sourceSnapshot = observedRequest.artifacts[0].artifact;
     assert.deepEqual(
       Object.keys(sourceSnapshot).sort(),
-      ['kind', 'id', 'imageId', 'languageId', 'representation', 'content', 'dependencies', 'metadata'].sort(),
+      ['kind', 'id', 'imageId', 'languageId', 'representation', 'content', 'logicalPath', 'dependencies', 'metadata'].sort(),
     );
     assert.equal(Object.hasOwn(sourceSnapshot, 'derivedFrom'), false);
     assert.equal(Object.hasOwn(sourceSnapshot, 'updatedAt'), false);

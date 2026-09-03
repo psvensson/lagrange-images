@@ -48,12 +48,13 @@ class FakeCuisToolchainRunner {
   }
 }
 
-async function put(runtime, id, representation, content, {metadata = {}, dependencies = []} = {}) {
+async function put(runtime, id, representation, content, {metadata = {}, dependencies = [], logicalPath = null} = {}) {
   return await runtime.images.putCodeArtifact('demo', {
     id,
     languageId: 'smalltalk',
     representation,
     content,
+    ...(logicalPath ? {logicalPath} : {}),
     metadata,
     dependencies,
   });
@@ -61,16 +62,16 @@ async function put(runtime, id, representation, content, {metadata = {}, depende
 
 async function fixture(runtime) {
   const baseImage = await put(runtime, 'base-image', CUIS_IMAGE_V1, bytesValue(Buffer.from('base-image')), {
-    metadata: {fileName: 'Cuis7.9-8090.image'},
+    logicalPath: 'Cuis7.9-8090.image',
   });
   const baseChanges = await put(runtime, 'base-changes', CUIS_CHANGES_V1, bytesValue(Buffer.from('base-changes')), {
-    metadata: {fileName: 'Cuis7.9-8090.changes'},
+    logicalPath: 'Cuis7.9-8090.changes',
   });
   const baseSources = await put(runtime, 'base-sources', CUIS_SOURCES_V1, bytesValue(Buffer.from('base-sources')), {
-    metadata: {fileName: 'Cuis7.8.sources'},
+    logicalPath: 'Cuis7.8.sources',
   });
   const json = await put(runtime, 'json-package', CUIS_PACKAGE_V1, textValue('json-package'), {
-    metadata: {fileName: 'JSON.pck.st'},
+    logicalPath: 'JSON.pck.st',
   });
   const build = await put(runtime, 'build', CUIS_BUILD_V1, textValue(CUIS_BUILD_CONTRACT_V0), {
     dependencies: [
@@ -120,7 +121,7 @@ test('OpenSmalltalk Cuis toolchain materializes explicit graph and persists runn
     const changes = await runtime.images.getCodeArtifact('demo', 'derived-changes');
     assert.deepEqual(image.content, bytesValue(Buffer.from('derived-image')));
     assert.deepEqual(changes.content, bytesValue(Buffer.from('derived-changes')));
-    assert.equal(image.metadata.fileName, 'Derived.image');
+    assert.equal(image.logicalPath, 'Derived.image');
     assert.equal(image.metadata.companionChangesFileName, 'Derived.changes');
     assert.equal(image.metadata.vmIdentity, provider.vmIdentity);
     assert.equal(image.metadata.snapshotMethod, 'saveAndQuitAs/v0');
@@ -152,27 +153,16 @@ test('OpenSmalltalk Cuis toolchain validates roles, filenames and target before 
   await runtime.images.createImage({id: 'demo'});
   try {
     const base = await put(runtime, 'base', CUIS_IMAGE_V1, bytesValue(Buffer.from('base')), {
-      metadata: {fileName: 'Base.image'},
+      logicalPath: 'Base.image',
     });
     const changes = await put(runtime, 'base-changes-validation', CUIS_CHANGES_V1, bytesValue(Buffer.from('changes')), {
-      metadata: {fileName: 'Base.changes'},
+      logicalPath: 'Base.changes',
     });
-    const badPackage = await put(runtime, 'bad-package', CUIS_PACKAGE_V1, textValue('bad'), {
-      metadata: {fileName: '../Bad.pck.st'},
-    });
-    const build = await put(runtime, 'bad-build', CUIS_BUILD_V1, textValue(CUIS_BUILD_CONTRACT_V0), {
-      dependencies: [
-        {role: 'base-image', artifact: objectRef('demo', base.id)},
-        {role: 'base-changes', artifact: objectRef('demo', changes.id)},
-        {role: 'package', artifact: objectRef('demo', badPackage.id)},
-      ],
-    });
-    await assert.rejects(runtime.toolchains.run({
-      providerId: OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
-      imageId: 'demo',
-      roots: [objectRef('demo', build.id)],
-      target: {representation: CUIS_IMAGE_V1, fileName: 'Derived.image'},
-    }), /safe \.st basename/);
+    // A workspace-escaping package logicalPath is refused by the CodeArtifact owner at put time.
+    await assert.rejects(
+      put(runtime, 'bad-package', CUIS_PACKAGE_V1, textValue('bad'), {logicalPath: '../Bad.pck.st'}),
+      /logicalPath must not contain empty, \. or \.\. segments/,
+    );
     assert.equal(runner.runs.length, 0);
 
     const noChangesBuild = await put(runtime, 'no-changes-build', CUIS_BUILD_V1, textValue(CUIS_BUILD_CONTRACT_V0), {
