@@ -61,5 +61,13 @@ request, output id included:
 
 ## Consequence
 
-A Cargo derivation cached before ADR 0077 is not admissible after it. Nothing is migrated or deleted;
-the old records simply stop matching, and the next build under the new semantics writes a new one.
+A Cargo derivation cached before ADR 0077 is not admissible after it. Nothing is migrated or
+deleted; the old records simply stop matching.
+
+What happens next depends on the requested output ids. With fresh or omitted ids the next build
+under the new semantics runs and writes a new record. A request that pins an id an old record still
+occupies runs the toolchain and is then **refused** — `ToolchainService` will not overwrite an
+existing artifact — so the old result is neither reused nor silently replaced, and the remedy is to
+request a different output id. That refusal is deliberate; that it is discovered only after paying
+the build is a pre-existing property of the service's ordering, recorded as follow-up work
+(Bead lagrange-images-iu6) rather than changed here.

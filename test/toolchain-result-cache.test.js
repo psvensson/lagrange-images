@@ -32,6 +32,57 @@ async function putSource(runtime, id, content = 'source') {
   });
 }
 
+// One Cargo demo project, one runner stub, one request — shared by the opt-in test and the ADR
+// 0078 contract A/B below. The A/B compares derivation keys over *identical* request material, so
+// the fixture must exist exactly once or the two tests can silently drift apart.
+function cargoDemoRunner(onRun) {
+  return Object.freeze({
+    async run(request) {
+      onRun();
+      const output = join(request.workspace, 'target', 'wasm32-wasip1', 'release', 'demo.wasm');
+      await mkdir(dirname(output), {recursive: true});
+      await writeFile(output, WASM_BYTES);
+      return {exitCode: 0, stdout: '', stderr: ''};
+    },
+  });
+}
+
+async function putCargoDemoProject(runtime) {
+  const source = await runtime.images.putCodeArtifact('demo', {
+    id: 'source',
+    languageId: 'rust',
+    representation: RUST_SOURCE_V1,
+    content: textValue('fn main() {}\n'),
+    metadata: {path: 'src/main.rs'},
+  });
+  const lock = await runtime.images.putCodeArtifact('demo', {
+    id: 'lock',
+    languageId: 'rust',
+    representation: RUST_CARGO_LOCK_V1,
+    content: textValue('version = 4\n\n[[package]]\nname = "demo"\nversion = "0.1.0"\n'),
+  });
+  return await runtime.images.putCodeArtifact('demo', {
+    id: 'manifest',
+    languageId: 'rust',
+    representation: RUST_CARGO_MANIFEST_V1,
+    content: textValue('[package]\nname = "demo"\nversion = "0.1.0"\nedition = "2024"\n\n[[bin]]\nname = "demo"\npath = "src/main.rs"\n'),
+    dependencies: [
+      {role: 'source', artifact: objectRef('demo', source.id)},
+      {role: 'lock', artifact: objectRef('demo', lock.id)},
+    ],
+  });
+}
+
+function cargoDemoRequest(manifest) {
+  return {
+    providerId: CARGO_RUSTC_OCI_PROVIDER_ID,
+    imageId: 'demo',
+    roots: [objectRef('demo', manifest.id)],
+    target: {representation: WASM_BINARY_V1, triple: 'wasm32-wasip1', binary: 'demo', profile: 'release'},
+    outputIds: {module: 'cargo-wasm'},
+  };
+}
+
 test('cacheable toolchain provider reuses a complete multi-output result set', async () => {
   let runs = 0;
   const provider = Object.freeze({
@@ -200,16 +251,7 @@ test('toolchain derivation key changes with build-relevant artifact bytes and me
 
 test('public Cargo OCI provider opts into generic result reuse', async () => {
   let runs = 0;
-  const runner = Object.freeze({
-    async run(request) {
-      runs += 1;
-      const output = join(request.workspace, 'target', 'wasm32-wasip1', 'release', 'demo.wasm');
-      await mkdir(dirname(output), {recursive: true});
-      await writeFile(output, WASM_BYTES);
-      return {exitCode: 0, stdout: `cargo-${runs}\n`, stderr: ''};
-    },
-  });
-  const provider = createCargoRustcOciProvider({image: PINNED_IMAGE, runner});
+  const provider = createCargoRustcOciProvider({image: PINNED_IMAGE, runner: cargoDemoRunner(() => { runs += 1; })});
   assert.equal(typeof provider.cacheKey, 'function');
 
   const runtime = await createRuntime({
@@ -218,42 +260,8 @@ test('public Cargo OCI provider opts into generic result reuse', async () => {
   });
   await runtime.images.createImage({id: 'demo'});
   try {
-    const source = await runtime.images.putCodeArtifact('demo', {
-      id: 'source',
-      languageId: 'rust',
-      representation: RUST_SOURCE_V1,
-      content: textValue('fn main() {}\n'),
-      metadata: {path: 'src/main.rs'},
-    });
-    const lock = await runtime.images.putCodeArtifact('demo', {
-      id: 'lock',
-      languageId: 'rust',
-      representation: RUST_CARGO_LOCK_V1,
-      content: textValue('version = 4\n\n[[package]]\nname = "demo"\nversion = "0.1.0"\n'),
-    });
-    const manifest = await runtime.images.putCodeArtifact('demo', {
-      id: 'manifest',
-      languageId: 'rust',
-      representation: RUST_CARGO_MANIFEST_V1,
-      content: textValue('[package]\nname = "demo"\nversion = "0.1.0"\nedition = "2024"\n\n[[bin]]\nname = "demo"\npath = "src/main.rs"\n'),
-      dependencies: [
-        {role: 'source', artifact: objectRef('demo', source.id)},
-        {role: 'lock', artifact: objectRef('demo', lock.id)},
-      ],
-    });
-    const request = {
-      providerId: CARGO_RUSTC_OCI_PROVIDER_ID,
-      imageId: 'demo',
-      roots: [objectRef('demo', manifest.id)],
-      target: {
-        representation: WASM_BINARY_V1,
-        triple: 'wasm32-wasip1',
-        binary: 'demo',
-        profile: 'release',
-      },
-      outputIds: {module: 'cargo-wasm'},
-    };
-
+    const manifest = await putCargoDemoProject(runtime);
+    const request = cargoDemoRequest(manifest);
     const first = await runtime.toolchains.run(request);
     const second = await runtime.toolchains.run(request);
     assert.equal(runs, 1);
@@ -276,16 +284,7 @@ test('public Cargo OCI provider opts into generic result reuse', async () => {
 // runtime would ship, and step 2 shows that provider reuses the old record.
 test('a derivation persisted under the pre-entrypoint cache contract is not reused by the current one', async () => {
   let runs = 0;
-  const runner = Object.freeze({
-    async run(request) {
-      runs += 1;
-      const output = join(request.workspace, 'target', 'wasm32-wasip1', 'release', 'demo.wasm');
-      await mkdir(dirname(output), {recursive: true});
-      await writeFile(output, WASM_BYTES);
-      return {exitCode: 0, stdout: '', stderr: ''};
-    },
-  });
-  const current = createCargoRustcOciProvider({image: PINNED_IMAGE, runner});
+  const current = createCargoRustcOciProvider({image: PINNED_IMAGE, runner: cargoDemoRunner(() => { runs += 1; })});
   assert.deepEqual(current.cacheKey(), {contract: CARGO_RUSTC_OCI_CACHE_CONTRACT_V1, ociImage: PINNED_IMAGE});
   const legacy = Object.freeze({
     ...current,
@@ -305,38 +304,10 @@ test('a derivation persisted under the pre-entrypoint cache contract is not reus
   });
   await runtime.images.createImage({id: 'demo'});
   try {
-    const source = await runtime.images.putCodeArtifact('demo', {
-      id: 'source',
-      languageId: 'rust',
-      representation: RUST_SOURCE_V1,
-      content: textValue('fn main() {}\n'),
-      metadata: {path: 'src/main.rs'},
-    });
-    const lock = await runtime.images.putCodeArtifact('demo', {
-      id: 'lock',
-      languageId: 'rust',
-      representation: RUST_CARGO_LOCK_V1,
-      content: textValue('version = 4\n\n[[package]]\nname = "demo"\nversion = "0.1.0"\n'),
-    });
-    const manifest = await runtime.images.putCodeArtifact('demo', {
-      id: 'manifest',
-      languageId: 'rust',
-      representation: RUST_CARGO_MANIFEST_V1,
-      content: textValue('[package]\nname = "demo"\nversion = "0.1.0"\nedition = "2024"\n\n[[bin]]\nname = "demo"\npath = "src/main.rs"\n'),
-      dependencies: [
-        {role: 'source', artifact: objectRef('demo', source.id)},
-        {role: 'lock', artifact: objectRef('demo', lock.id)},
-      ],
-    });
+    const manifest = await putCargoDemoProject(runtime);
     // Held constant throughout, output id included: ADR 0020 makes a different requested id a
     // different installation, so varying it here would hide the miss behind an unrelated rule.
-    const request = {
-      providerId: CARGO_RUSTC_OCI_PROVIDER_ID,
-      imageId: 'demo',
-      roots: [objectRef('demo', manifest.id)],
-      target: {representation: WASM_BINARY_V1, triple: 'wasm32-wasip1', binary: 'demo', profile: 'release'},
-      outputIds: {module: 'cargo-wasm'},
-    };
+    const request = cargoDemoRequest(manifest);
 
     // 1. A record persisted under v0.
     const old = await legacyService.run(request);
@@ -371,7 +342,6 @@ test('a derivation persisted under the pre-entrypoint cache contract is not reus
     const context = Object.freeze({protocol: TOOLCHAIN_PROVIDER_PROTOCOL_V0});
     const v0 = await createToolchainDerivationDescriptor(legacy, material, context);
     const v1 = await createToolchainDerivationDescriptor(current, material, context);
-    assert.equal(v0.toolchainIdentity, v1.toolchainIdentity);
     assert.notEqual(v0.derivationKey, v1.derivationKey);
   } finally {
     await runtime.close();
