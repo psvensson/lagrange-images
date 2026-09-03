@@ -184,14 +184,14 @@ async function authorMixedProject(runtime) {
     representation: CUIS_IMAGE_V1,
     content: bytesValue(Buffer.from('fake-cuis-image')),
     languageId: 'smalltalk',
-    metadata: {fileName: 'Mixed.image'},
+    logicalPath: 'Mixed.image',
   });
   const cuisPackage = await images.putCodeArtifact(STUDIO, {
     id: 'cuis-package',
     representation: CUIS_PACKAGE_V1,
     content: textValue("'From Cuis'!\n!classDefinition: #LagrangeMixedProof!"),
     languageId: 'smalltalk',
-    metadata: {fileName: 'LagrangeMixedProof.pck.st'},
+    logicalPath: 'LagrangeMixedProof.pck.st',
   });
   const cuisDefinition = await images.putCodeArtifact(STUDIO, {
     id: 'cuis-definition',
@@ -253,12 +253,7 @@ async function invokeText(runtime, blockRef, text) {
   return await runtime.executor.execute(activation);
 }
 
-// Skipped pending lagrange-images-9kg: the portable graph bundle strips CodeArtifact.metadata
-// (ADR 0074 §4), so a captured Cuis runtime image loses its load-bearing `fileName` and cannot
-// start after managed install into a fresh image. The Project membership arrow itself is not the
-// blocker — this proof is the falsifying evidence recorded on that bead, kept executable so it
-// flips green the moment the bundle carries semantic metadata faithfully.
-test('one durable Project carries Smalltalk, Cuis and Rust Component members through capture, managed install, restart and fresh-runtime execution', {timeout: 120_000, skip: 'blocked on lagrange-images-9kg: portable bundle drops load-bearing artifact metadata'}, async () => {
+test('one durable Project carries Smalltalk, Cuis and Rust Component members through capture, managed install, restart and fresh-runtime execution', {timeout: 120_000}, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lagrange-mixed-project-'));
   const filename = join(directory, 'image.sqlite');
   const INPUT = '  HÄLLO   Wörld  ';

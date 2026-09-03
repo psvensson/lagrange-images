@@ -45,6 +45,7 @@ a green `npm test` is **not** evidence that the foreign lanes are healthy.
 | --- | --- | --- |
 | `test/opensmalltalk-cuis-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | live Cuis image through `ForeignRuntimeService` |
 | `test/opensmalltalk-cuis-toolchain-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | Cuis toolchain build + mixed Lagrange-WASM program |
+| `test/mixed-language-project-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | one durable Project spanning native Smalltalk, a live Cuis VM and a real Rust Component, captured/installed/recovered |
 | `test/lagrange-backend-real.test.js` | `LAGRANGE_IMAGES_REAL_LAGRANGE=1` | schema and atomic transactions on real Lagrange |
 | `test/cargo-rustc-oci-real.test.js` | `LAGRANGE_CARGO_OCI_INTEGRATION=1` | real Cargo/rustc in a digest-pinned image, closed inputs, executable output |
 
