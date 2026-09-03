@@ -130,7 +130,7 @@ pooled instance != activation state
 - Keep Rust/Cargo semantics inside `cargo-rustc-oci-provider.js`; do not teach generic `ToolchainService` about Cargo, source paths, Rust targets, vendor layouts or containers.
 - OCI build images must be digest-pinned (`@sha256:...`). Tags alone are not reproducible provider identity.
 - A Cargo invocation has exactly one `rust/cargo-manifest-v1` root, exactly one `rust/cargo-lock-v1`, and one or more `rust/source-v1` artifacts in the explicit dependency closure.
-- `rust/source-v1` uses `metadata.path` only as a non-reference portable project path. Reject absolute paths, backslashes, empty segments and `.`/`..` traversal.
+- A code artifact's materialization-relative path is the canonical `logicalPath` field (ADR 0079), NOT `metadata` — `metadata` is stripped, non-identity provenance (ADR 0074) and would not survive a portable release. `rust/source-v1`, Cargo vendor files and every Cuis image/changes/sources/package name their file through `logicalPath`; the CodeArtifact owner rejects absolute paths, backslashes, empty segments and `.`/`..` traversal, and consumers apply their own stricter rules (a Cuis name is a single-segment path with a required extension).
 - Root-package source paths must not overlap `Cargo.toml`, `Cargo.lock`, `.cargo/...` or `vendor/...`; those paths belong to their explicit representations.
 - Unknown dependency representations fail explicitly. Do not silently ignore imported crates/libraries the provider cannot materialize.
 - Cargo builds stay closed-input: `cargo build --frozen` plus OCI network `none`. Do not enable registry/network fetches to make dependencies convenient.

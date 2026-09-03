@@ -31,16 +31,16 @@ const CLUSTER = [
   {fileName: 'Compression.pck.st', env: 'LAGRANGE_CUIS_COMPRESSION_PACKAGE_PATH', blob: '243d8265b411fc36a72dd101f21a18e7c94b2d87'},
 ];
 
-async function put(runtime, id, representation, content, {metadata = {}, dependencies = []} = {}) {
+async function put(runtime, id, representation, content, {metadata = {}, dependencies = [], logicalPath = null} = {}) {
   return await runtime.images.putCodeArtifact('build-image', {
-    id, languageId: 'smalltalk', representation, content, metadata, dependencies,
+    id, languageId: 'smalltalk', representation, content, ...(logicalPath ? {logicalPath} : {}), metadata, dependencies,
   });
 }
 
 async function buildCluster(runtime, {stem}) {
-  const baseImage = await put(runtime, `bi-${stem}`, CUIS_IMAGE_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_IMAGE_PATH)), {metadata: {fileName: 'Cuis7.9-8090.image'}});
-  const baseChanges = await put(runtime, `bc-${stem}`, CUIS_CHANGES_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_CHANGES_PATH)), {metadata: {fileName: 'Cuis7.9-8090.changes'}});
-  const baseSources = await put(runtime, `bs-${stem}`, CUIS_SOURCES_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_SOURCES_PATH)), {metadata: {fileName: 'Cuis7.8.sources'}});
+  const baseImage = await put(runtime, `bi-${stem}`, CUIS_IMAGE_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_IMAGE_PATH)), {logicalPath: 'Cuis7.9-8090.image'});
+  const baseChanges = await put(runtime, `bc-${stem}`, CUIS_CHANGES_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_CHANGES_PATH)), {logicalPath: 'Cuis7.9-8090.changes'});
+  const baseSources = await put(runtime, `bs-${stem}`, CUIS_SOURCES_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_SOURCES_PATH)), {logicalPath: 'Cuis7.8.sources'});
   const deps = [
     {role: 'base-image', artifact: objectRef('build-image', baseImage.id)},
     {role: 'base-changes', artifact: objectRef('build-image', baseChanges.id)},
@@ -48,7 +48,7 @@ async function buildCluster(runtime, {stem}) {
   ];
   for (const spec of CLUSTER) {
     const pkg = await put(runtime, `p-${stem}-${spec.fileName}`, CUIS_PACKAGE_V1, textValue(await readFile(process.env[spec.env], 'utf8')), {
-      metadata: {fileName: spec.fileName, identity: `cuis-package/${spec.fileName.replace(/\.pck\.st$/, '')}/${CUIS_COMMIT}/gitblob:${spec.blob}`},
+      logicalPath: spec.fileName, metadata: {identity: `cuis-package/${spec.fileName.replace(/\.pck\.st$/, '')}/${CUIS_COMMIT}/gitblob:${spec.blob}`},
     });
     deps.push({role: 'package', artifact: objectRef('build-image', pkg.id)});
   }

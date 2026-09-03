@@ -76,15 +76,15 @@ async function proofRuntime(invocations) {
 // lock, source, vendor config and each vendored file hang off it as explicit dependency edges, so
 // the closure ToolchainService resolves is the whole build input.
 async function installProofGraph(runtime, fixture, {vendored = true} = {}) {
-  const put = async (id, representation, content, metadata) => await runtime.images.putCodeArtifact(IMAGE_ID, {
+  const put = async (id, representation, content, logicalPath) => await runtime.images.putCodeArtifact(IMAGE_ID, {
     id,
     languageId: 'rust',
     representation,
     content,
-    ...(metadata ? {metadata} : {}),
+    ...(logicalPath ? {logicalPath} : {}),
   });
 
-  const source = await put('proof-source', RUST_SOURCE_V1, textValue(fixture.sourceText), {path: fixture.sourcePath});
+  const source = await put('proof-source', RUST_SOURCE_V1, textValue(fixture.sourceText), fixture.sourcePath);
   const lock = await put('proof-lock', RUST_CARGO_LOCK_V1, textValue(fixture.lockText));
   const dependencies = [
     {role: 'source', artifact: objectRef(IMAGE_ID, source.id)},
@@ -95,7 +95,7 @@ async function installProofGraph(runtime, fixture, {vendored = true} = {}) {
     dependencies.push({role: 'cargo-config', artifact: objectRef(IMAGE_ID, config.id)});
     for (const [index, file] of fixture.vendorFiles.entries()) {
       const content = file.bytes === undefined ? textValue(file.text) : bytesValue(file.bytes);
-      const artifact = await put(`proof-vendor-${index}`, RUST_CARGO_VENDOR_FILE_V1, content, {path: file.path});
+      const artifact = await put(`proof-vendor-${index}`, RUST_CARGO_VENDOR_FILE_V1, content, file.path);
       dependencies.push({role: 'vendor', artifact: objectRef(IMAGE_ID, artifact.id)});
     }
   }

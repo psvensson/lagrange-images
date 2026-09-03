@@ -76,12 +76,13 @@ class FakeCuisRunner {
   }
 }
 
-async function put(runtime, imageId, id, representation, content, {languageId = null, metadata = {}, dependencies = [], derivedFrom = []} = {}) {
+async function put(runtime, imageId, id, representation, content, {languageId = null, metadata = {}, dependencies = [], derivedFrom = [], logicalPath = null} = {}) {
   return await runtime.images.putCodeArtifact(imageId, {
     id,
     languageId,
     representation,
     content,
+    ...(logicalPath ? {logicalPath} : {}),
     metadata,
     dependencies,
     derivedFrom,
@@ -148,16 +149,16 @@ test('artifact-backed Cuis provider materializes a durable runtime definition wi
 
     await runtime.images.createImage({id: 'runtime-image'});
     const image = await put(runtime, 'runtime-image', 'cuis-image', CUIS_IMAGE_V1, bytesValue(Buffer.from('fake-image')), {
-      languageId: 'smalltalk', metadata: {fileName: 'Derived.image'},
+      languageId: 'smalltalk', logicalPath: 'Derived.image',
     });
     const changes = await put(runtime, 'runtime-image', 'cuis-changes', CUIS_CHANGES_V1, textValue('fake changes'), {
-      languageId: 'smalltalk', metadata: {fileName: 'Derived.changes'},
+      languageId: 'smalltalk', logicalPath: 'Derived.changes',
     });
     const sources = await put(runtime, 'runtime-image', 'cuis-sources', CUIS_SOURCES_V1, bytesValue(Buffer.from('fake sources')), {
-      languageId: 'smalltalk', metadata: {fileName: 'Cuis.sources'},
+      languageId: 'smalltalk', logicalPath: 'Cuis.sources',
     });
     const pkg = await put(runtime, 'runtime-image', 'json-package', CUIS_PACKAGE_V1, textValue("'fake package'!"), {
-      languageId: 'smalltalk', metadata: {fileName: 'JSON.pck.st', identity: 'cuis-package/JSON/test'},
+      languageId: 'smalltalk', logicalPath: 'JSON.pck.st', metadata: {identity: 'cuis-package/JSON/test'},
     });
     const definition = await put(runtime, 'runtime-image', 'cuis-runtime', CUIS_RUNTIME_DEFINITION_V1, textValue(CUIS_RUNTIME_DEFINITION_CONTRACT_V0), {
       languageId: 'smalltalk',

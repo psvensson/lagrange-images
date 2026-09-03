@@ -42,6 +42,28 @@ function normalizeReferenceList(values, label) {
   }));
 }
 
+// The materialization-relative path at which an artifact's bytes are laid down when a
+// consumer materializes it (a Cargo source's `src/main.rs`, a Cuis image's `Mixed.image`).
+// This is SEMANTIC CONTENT, not provenance: two artifacts with identical bytes at different
+// logical paths are different build/runtime inputs, so the CodeArtifact owner keeps it as a
+// canonical field that enters contentIdentity — never in `metadata`, which ADR 0074 defines as
+// stripped, non-identity provenance. Consumers (the Cargo and Cuis providers) read it here and
+// apply their own stricter rules (a Cuis name is a single-segment path with a required
+// extension; a Cargo path may nest). Absent is `null`.
+function normalizeLogicalPath(value, label = 'code artifact logicalPath') {
+  if (value === null || value === undefined) return null;
+  const path = requiredText(value, label);
+  if (path.includes('\\') || path.includes('\0')) {
+    throw new TypeError(`${label} must be a portable path without backslashes or NUL`);
+  }
+  if (path.startsWith('/')) throw new TypeError(`${label} must be relative, not absolute`);
+  const segments = path.split('/');
+  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
+    throw new TypeError(`${label} must not contain empty, . or .. segments`);
+  }
+  return path;
+}
+
 function normalizeArtifactDependencies(values, {imageId = null, artifactId = null} = {}) {
   if (!Array.isArray(values)) throw new TypeError('code artifact dependencies must be an array');
   const seen = new TupleSet(3);
@@ -65,6 +87,7 @@ function createCodeArtifactRecord({
   languageId = null,
   representation,
   content,
+  logicalPath = null,
   dependencies = [],
   derivedFrom = [],
   metadata = {},
@@ -79,6 +102,7 @@ function createCodeArtifactRecord({
     languageId: languageId === null ? null : requiredText(languageId, 'code artifact languageId'),
     representation: requiredText(representation, 'code artifact representation'),
     content: canonicalizeValue(content),
+    logicalPath: normalizeLogicalPath(logicalPath),
     dependencies: normalizeArtifactDependencies(dependencies, {imageId: recordImageId, artifactId: recordId}),
     derivedFrom: normalizeReferenceList(derivedFrom, 'code artifact derivedFrom'),
     metadata: normalizeMetadata(metadata, 'code artifact metadata'),
@@ -212,6 +236,7 @@ export {
   assertLexicalEnvironmentRecord,
   createBlockRecord,
   createCodeArtifactRecord,
+  normalizeLogicalPath,
   createLexicalEnvironmentRecord,
   normalizeArtifactDependencies,
 };

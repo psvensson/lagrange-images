@@ -53,7 +53,7 @@ async function putCargoDemoProject(runtime) {
     languageId: 'rust',
     representation: RUST_SOURCE_V1,
     content: textValue('fn main() {}\n'),
-    metadata: {path: 'src/main.rs'},
+    logicalPath: 'src/main.rs',
   });
   const lock = await runtime.images.putCodeArtifact('demo', {
     id: 'lock',
@@ -220,7 +220,7 @@ test('toolchain derivation key changes with build-relevant artifact bytes and me
     representation: 'rust/cargo-vendor-file-v1',
     content: bytesValue(new Uint8Array([1, 2, 3])),
     dependencies: [],
-    metadata: {path: 'vendor/pkg/data.bin'},
+    logicalPath: 'vendor/pkg/data.bin',
   };
   const makeRequest = (overrides = {}) => {
     const current = {...artifact, ...overrides};
@@ -242,7 +242,7 @@ test('toolchain derivation key changes with build-relevant artifact bytes and me
     content: bytesValue(new Uint8Array([1, 2, 4])),
   }), context);
   const changedMetadata = await createToolchainDerivationDescriptor(provider, makeRequest({
-    metadata: {path: 'vendor/pkg/other.bin'},
+    logicalPath: 'vendor/pkg/other.bin',
   }), context);
 
   assert.notEqual(first.derivationKey, changedBytes.derivationKey);

@@ -198,7 +198,7 @@ package basename != package identity
 package identity != provider identity
 ```
 
-Host directory paths remain transient. The safe package basename is preserved because Cuis package tooling treats the package filename as meaningful. Runtime metadata records immutable identity plus the guest-visible basename.
+Host directory paths remain transient. The safe package basename is preserved because Cuis package tooling treats the package filename as meaningful. That guest-visible basename is the artifact's canonical `logicalPath` (ADR 0079), so it survives a portable release; runtime metadata records immutable package identity (provenance).
 
 Provider-owned bridge/control-plane code is established before guest packages are installed. This avoids making provider bootstrap dependent on application package side effects.
 

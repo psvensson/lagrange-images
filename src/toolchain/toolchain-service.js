@@ -1,7 +1,7 @@
 import {TupleMap, TupleSet} from '../support/tuple-map.js';
 import {randomUUID} from 'node:crypto';
 import {normalizeDerivationKeyMaterial} from '../compilation/derivation-cache.js';
-import {normalizeArtifactDependencies} from '../execution/model.js';
+import {normalizeArtifactDependencies, normalizeLogicalPath} from '../execution/model.js';
 import {normalizeMetadata} from '../object/model.js';
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
 import {createToolchainDerivationDescriptor} from './derivation-cache.js';
@@ -67,6 +67,10 @@ function toolchainArtifactSnapshot(artifact) {
     languageId: artifact.languageId ?? null,
     representation: artifact.representation,
     content: structuredClone(artifact.content),
+    // logicalPath is semantic input a provider materializes from (a Rust source's path, a Cuis
+    // image's name), so the build-relevant snapshot carries it — like every other snapshot field
+    // (metadata included, per ADR 0020), it participates in the derivation key.
+    logicalPath: artifact.logicalPath ?? null,
     dependencies: structuredClone(artifact.dependencies ?? []),
     metadata: structuredClone(artifact.metadata ?? {}),
   });
@@ -112,7 +116,7 @@ function normalizeProviderOutput(output, index) {
   if (!output || typeof output !== 'object' || Array.isArray(output)) {
     throw new TypeError(`toolchain output ${index} must be an object`);
   }
-  const allowed = new Set(['name', 'languageId', 'representation', 'content', 'dependencies', 'metadata']);
+  const allowed = new Set(['name', 'languageId', 'representation', 'content', 'logicalPath', 'dependencies', 'metadata']);
   const extra = Object.keys(output).filter((key) => !allowed.has(key));
   if (extra.length) throw new TypeError(`unknown toolchain output ${index} fields: ${extra.join(', ')}`);
   return Object.freeze({
@@ -122,6 +126,7 @@ function normalizeProviderOutput(output, index) {
       : requiredText(output.languageId, `toolchain output ${index} languageId`),
     representation: requiredText(output.representation, `toolchain output ${index} representation`),
     content: canonicalizeValue(output.content),
+    logicalPath: normalizeLogicalPath(output.logicalPath ?? null, `toolchain output ${index} logicalPath`),
     dependencies: normalizeArtifactDependencies(output.dependencies ?? []),
     metadata: normalizeMetadata(output.metadata ?? {}, `toolchain output ${index} metadata`),
   });
@@ -343,6 +348,7 @@ class ToolchainService {
         languageId: output.languageId,
         representation: output.representation,
         content: output.content,
+        logicalPath: output.logicalPath,
         dependencies: output.dependencies,
         derivedFrom: provenance,
         metadata: {
