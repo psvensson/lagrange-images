@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 import {
+  CARGO_RUSTC_OCI_CACHE_CONTRACT_V0,
+  CARGO_RUSTC_OCI_CACHE_CONTRACT_V1,
   CARGO_RUSTC_OCI_PROVIDER_ID,
   RUST_CARGO_LOCK_V1,
   RUST_CARGO_MANIFEST_V1,
@@ -11,6 +13,8 @@ import {
   WASM_BINARY_V1,
   bytesValue,
   createCargoRustcOciProvider,
+  ToolchainProviderRegistry,
+  ToolchainService,
   createRuntime,
   createToolchainDerivationDescriptor,
   objectRef,
@@ -257,6 +261,118 @@ test('public Cargo OCI provider opts into generic result reuse', async () => {
     assert.equal(second.reused, true);
     assert.equal(second.outputs[0].artifact.id, 'cargo-wasm');
     assert.deepEqual(second.diagnostics, []);
+  } finally {
+    await runtime.close();
+  }
+});
+
+// ADR 0078. Before ADR 0077 the image's ENTRYPOINT took part in choosing the container program;
+// after it the requested program is authoritative. Those are two different computations, so a
+// derivation persisted under the first must not satisfy a lookup for the second — otherwise the
+// cache contract identifier names results of two execution semantics at once.
+//
+// `legacy` is the public provider with exactly one thing reverted: the contract string. It is the
+// A in the A/B and it is also the falsifier — if the bump were undone, this is the provider the
+// runtime would ship, and step 2 shows that provider reuses the old record.
+test('a derivation persisted under the pre-entrypoint cache contract is not reused by the current one', async () => {
+  let runs = 0;
+  const runner = Object.freeze({
+    async run(request) {
+      runs += 1;
+      const output = join(request.workspace, 'target', 'wasm32-wasip1', 'release', 'demo.wasm');
+      await mkdir(dirname(output), {recursive: true});
+      await writeFile(output, WASM_BYTES);
+      return {exitCode: 0, stdout: '', stderr: ''};
+    },
+  });
+  const current = createCargoRustcOciProvider({image: PINNED_IMAGE, runner});
+  assert.deepEqual(current.cacheKey(), {contract: CARGO_RUSTC_OCI_CACHE_CONTRACT_V1, ociImage: PINNED_IMAGE});
+  const legacy = Object.freeze({
+    ...current,
+    cacheKey() { return {contract: CARGO_RUSTC_OCI_CACHE_CONTRACT_V0, ociImage: PINNED_IMAGE}; },
+  });
+  assert.equal(legacy.identity, current.identity, 'only the cache contract differs');
+
+  const runtime = await createRuntime({
+    backend: {mode: 'mock'},
+    toolchainProviders: [[CARGO_RUSTC_OCI_PROVIDER_ID, current]],
+  });
+  // Same image service, same provider id, different cache material: the exact situation of a
+  // store written before the bump and read after it.
+  const legacyService = new ToolchainService({
+    images: runtime.images,
+    providers: new ToolchainProviderRegistry([[CARGO_RUSTC_OCI_PROVIDER_ID, legacy]]),
+  });
+  await runtime.images.createImage({id: 'demo'});
+  try {
+    const source = await runtime.images.putCodeArtifact('demo', {
+      id: 'source',
+      languageId: 'rust',
+      representation: RUST_SOURCE_V1,
+      content: textValue('fn main() {}\n'),
+      metadata: {path: 'src/main.rs'},
+    });
+    const lock = await runtime.images.putCodeArtifact('demo', {
+      id: 'lock',
+      languageId: 'rust',
+      representation: RUST_CARGO_LOCK_V1,
+      content: textValue('version = 4\n\n[[package]]\nname = "demo"\nversion = "0.1.0"\n'),
+    });
+    const manifest = await runtime.images.putCodeArtifact('demo', {
+      id: 'manifest',
+      languageId: 'rust',
+      representation: RUST_CARGO_MANIFEST_V1,
+      content: textValue('[package]\nname = "demo"\nversion = "0.1.0"\nedition = "2024"\n\n[[bin]]\nname = "demo"\npath = "src/main.rs"\n'),
+      dependencies: [
+        {role: 'source', artifact: objectRef('demo', source.id)},
+        {role: 'lock', artifact: objectRef('demo', lock.id)},
+      ],
+    });
+    // Held constant throughout, output id included: ADR 0020 makes a different requested id a
+    // different installation, so varying it here would hide the miss behind an unrelated rule.
+    const request = {
+      providerId: CARGO_RUSTC_OCI_PROVIDER_ID,
+      imageId: 'demo',
+      roots: [objectRef('demo', manifest.id)],
+      target: {representation: WASM_BINARY_V1, triple: 'wasm32-wasip1', binary: 'demo', profile: 'release'},
+      outputIds: {module: 'cargo-wasm'},
+    };
+
+    // 1. A record persisted under v0.
+    const old = await legacyService.run(request);
+    assert.equal(runs, 1);
+    assert.equal(old.reused, false);
+    const stored = await runtime.images.getCodeArtifact('demo', 'cargo-wasm');
+    assert.equal(stored.metadata.toolchainDerivationKey, old.derivationKey);
+
+    // 2. Control and falsifier in one: under v0 that record is admissible. A provider differing
+    //    from the shipped one only by the reverted contract string reuses it.
+    const oldAgain = await legacyService.run(request);
+    assert.equal(runs, 1);
+    assert.equal(oldAgain.reused, true);
+    assert.equal(oldAgain.outputs[0].artifact.id, 'cargo-wasm');
+
+    // 3. Under v1 the identical request does not find it. The provider runs again, and because the
+    //    caller asked for the id the v0 record already holds, the service refuses to overwrite —
+    //    the old result is neither reused nor silently replaced.
+    await assert.rejects(runtime.toolchains.run(request), /toolchain output already exists: module -> demo\/cargo-wasm/);
+    assert.equal(runs, 2);
+
+    // 4. The two namespaces really are distinct keys over identical request material.
+    const material = Object.freeze({
+      protocol: TOOLCHAIN_PROVIDER_PROTOCOL_V0,
+      providerId: CARGO_RUSTC_OCI_PROVIDER_ID,
+      toolchainIdentity: current.identity,
+      roots: Object.freeze([]),
+      artifacts: Object.freeze([]),
+      target: Object.freeze(request.target),
+      options: Object.freeze({}),
+    });
+    const context = Object.freeze({protocol: TOOLCHAIN_PROVIDER_PROTOCOL_V0});
+    const v0 = await createToolchainDerivationDescriptor(legacy, material, context);
+    const v1 = await createToolchainDerivationDescriptor(current, material, context);
+    assert.equal(v0.toolchainIdentity, v1.toolchainIdentity);
+    assert.notEqual(v0.derivationKey, v1.derivationKey);
   } finally {
     await runtime.close();
   }
