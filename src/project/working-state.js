@@ -1,6 +1,7 @@
 import {isObjectRef, objectRef, textValue} from '../value/index.js';
 import {SHAPE_INDEXED} from '../object/model.js';
 import {OBJECT_READ_OPERATION, objectResource} from '../authority/object-resource.js';
+import {objectVersionToken} from '../object/version-token.js';
 import {normalizeProjectDescriptor} from './model.js';
 
 // Durable Project working state: the image-level Project library/service
@@ -25,9 +26,19 @@ import {normalizeProjectDescriptor} from './model.js';
 //
 // This module owns only the storage/read translation. The pure Project model
 // (`src/project/model.js`, ADR 0073) remains the SOLE owner of descriptor /
-// release / deployment semantics: `readProjectDescriptor` hands the assembled
+// release / deployment semantics: `projectStateFromRecord` hands the assembled
 // record straight to `normalizeProjectDescriptor`, so duplicate-key, shape and
 // canonicalization rules live in exactly one place.
+//
+// PROJECT VERSION TOKEN (ADR 0080). A version-aware read returns the canonical
+// descriptor together with an opaque version token, and both originate from the
+// SAME Project-object record obtained by ONE Project-object read
+// (`projectStateFromRecord` is the single assembly point). The token is the
+// existing object-scoped `objectVersionToken` of the Project OBJECT ONLY — not
+// of everything reachable through the descriptor: adding a member rewrites the
+// Project's indexed linkage set (token changes), retargeting an existing member
+// rewrites only the member record (token unchanged while the descriptor's
+// target did change). Backing `_version` never escapes.
 //
 // Authority: Project membership conveys NO authority over the referenced object
 // (ADR 0073). These are plain graph reads/writes; no authorization is added or
@@ -230,18 +241,33 @@ function sameRefValue(a, b) {
   return isObjectRef(a) && isObjectRef(b) && a.imageId === b.imageId && a.objectId === b.objectId;
 }
 
-// Read a durable working Project back into the canonical Project descriptor. The
-// assembled record is handed unchanged to `normalizeProjectDescriptor`, so the
-// pure model owns every descriptor rule (key uniqueness, sorting, ref and shape
-// checks). A missing Project is an error; a member ref that dangles surfaces the
-// graph's own dangling-edge outcome rather than a Project-specific one.
-async function readProjectDescriptor({images, imageId, projectId} = {}) {
-  requiredText(imageId, 'imageId');
-  requiredText(projectId, 'projectId');
-  const idRef = projectObjectId(projectId);
-  const project = await images.getObject(imageId, idRef);
-  if (!project) throw new TypeError(`durable Project not found: ${idRef}`);
+// The ONE validation of an object occupying `project/<projectId>`: it must be
+// the expected Project representation (Shape lagrange-project/project/v1) and
+// carry the expected stable project id in its private slot. Any other occupant
+// of the id is an integrity conflict, never silently read as a Project.
+function assertProjectRecord(record, projectId, idRef) {
+  if (!record) throw new TypeError(`durable Project not found: ${idRef}`);
+  if (
+    !isObjectRef(record.shape) || record.shape.objectId !== PROJECT_SHAPE_ID ||
+    record.slots?.[SLOT.projectId]?.value !== projectId
+  ) {
+    throw new TypeError(`object ${idRef} is not the expected durable Project representation`);
+  }
+  return record;
+}
 
+// THE single Project-state assembly: from ONE already-read (and validated)
+// Project record to `{descriptor, versionToken}`. Every piece of the descriptor's
+// Project state (stable id, name, namespace, member linkage) AND the token come
+// from this one `project` record; the Project object is never reread here. The
+// backing member records are read while assembling (they are the Project's own
+// storage representation), and the assembled record is handed unchanged to
+// `normalizeProjectDescriptor`, so the pure model owns every descriptor rule
+// (key uniqueness, sorting, ref and shape checks). A member ref that dangles
+// surfaces the graph's own dangling-edge outcome rather than a Project-specific
+// one. The token is `objectVersionToken` of the Project object at the version of
+// this record (ADR 0042 decision 5): opaque, object-scoped, never raw `_version`.
+async function projectStateFromRecord({images, imageId, project}) {
   const memberRefs = Array.isArray(project.indexed) ? project.indexed : [];
   const members = [];
   for (const ref of memberRefs) {
@@ -255,7 +281,7 @@ async function readProjectDescriptor({images, imageId, projectId} = {}) {
   }
 
   const namespace = project.slots[SLOT.namespace];
-  return normalizeProjectDescriptor({
+  const descriptor = normalizeProjectDescriptor({
     format: 'lagrange-project/v1',
     projectId: project.slots[SLOT.projectId].value,
     name: project.slots[SLOT.name].value,
@@ -263,10 +289,38 @@ async function readProjectDescriptor({images, imageId, projectId} = {}) {
     namespace: isObjectRef(namespace) && namespace.objectId !== PROJECT_NONE_ID ? namespace : null,
     members,
   });
+  return Object.freeze({
+    descriptor,
+    versionToken: objectVersionToken(imageId, project.id, project._version),
+  });
 }
 
-// The AUTHORIZED semantic ProjectDescriptor read seam. This is the single
-// authority-respecting way to read a durable Project as a semantic unit.
+// Read the Project object EXACTLY ONCE, validate it as the expected Project
+// representation for `projectId`, and assemble `{descriptor, versionToken}`
+// from that one record. A missing Project is an error.
+async function readProjectState({images, imageId, projectId} = {}) {
+  requiredText(imageId, 'imageId');
+  requiredText(projectId, 'projectId');
+  const idRef = projectObjectId(projectId);
+  const project = assertProjectRecord(await images.getObject(imageId, idRef), projectId, idRef);
+  return projectStateFromRecord({images, imageId, project});
+}
+
+// Read a durable working Project back into the canonical Project descriptor:
+// the versioned read with the token discarded (one implementation, not two).
+async function readProjectDescriptor(args) {
+  return (await readProjectState(args)).descriptor;
+}
+
+function assertRequire(require, label) {
+  if (typeof require !== 'function') {
+    throw new TypeError(`${label} requires a require(demand) authority-check function`);
+  }
+  return require;
+}
+
+// The AUTHORIZED version-aware semantic Project read seam (ADR 0080): the
+// authoritative internal operation behind every authorized Project read.
 //
 // `require` is the caller-supplied authority check (a closure over an issued,
 // LIVE authority context — e.g. `(demand) => authorityService.require(context,
@@ -277,34 +331,50 @@ async function readProjectDescriptor({images, imageId, projectId} = {}) {
 //      Project exists (no-existence-oracle — the same property as
 //      image-object-read-binding/v1). The Project object id is derived HERE
 //      (projectObjectId), so the caller never builds a storage id.
-//   2. Delegates assembly + canonicalization to readProjectDescriptor (which
-//      reads the Project + its backing member records and hands the record to
-//      normalizeProjectDescriptor). The single require on the Project object IS
-//      the authority boundary (see the unit-level rule above): the backing
-//      member records are read internally as the Project's own storage, with NO
-//      per-member authority and NO grants created.
+//   2. Reads the Project object exactly once (readProjectState), validates it as
+//      the expected Project representation, and assembles BOTH the canonical
+//      descriptor and the opaque Project version token from that ONE record. The
+//      single require on the Project object IS the authority boundary (see the
+//      unit-level rule above): the backing member records are read internally
+//      as the Project's own storage, with NO per-member authority and NO grants
+//      created.
 //
-// The result is the canonical descriptor {format, projectId, name, namespace,
-// members:[{key, role, target}]} — no backing ids, Shape ids, or slot ids escape.
-// A dangling member ref surfaces a distinct TypeError to an AUTHORIZED reader
-// (the no-existence-oracle covers the Project object; a corrupt Project is a
-// separate integrity error, correctly disclosed to one who may read it).
-// TOCTOU note: the require check and the subsequent read are two reads (the
-// Project could change between); for a read-only consumer this is benign.
+// The result is a frozen `{descriptor, versionToken}`: the canonical descriptor
+// {format, projectId, name, namespace, members:[{key, role, target}]} — no
+// backing ids, Shape ids, or slot ids escape — and the opaque, object-scoped
+// version token of the Project OBJECT (scope: the Project object only, see the
+// module header). A dangling member ref surfaces a distinct TypeError to an
+// AUTHORIZED reader (the no-existence-oracle covers the Project object; a
+// corrupt Project is a separate integrity error, correctly disclosed to one who
+// may read it).
+// TOCTOU note: the require check and the subsequent read are two steps (the
+// Project could change between); for a reader this is benign — the token
+// describes exactly the record the descriptor was assembled from, and a later
+// conditional mutation supplying that token is caught by the storage CAS.
+async function authorizedReadProject({images, imageId, projectId, require} = {}) {
+  requiredText(imageId, 'imageId');
+  requiredText(projectId, 'projectId');
+  assertRequire(require, 'authorizedReadProject');
+  require({operation: OBJECT_READ_OPERATION, resource: objectResource(imageId, projectObjectId(projectId))});
+  return readProjectState({images, imageId, projectId});
+}
+
+// The AUTHORIZED descriptor-only read: `authorizedReadProject` with the token
+// discarded. Behavior-identical to the versioned seam (same authorization
+// ordering, same single Project-object read, same canonical descriptor); it
+// exists so read-only consumers keep a stable return shape.
 async function authorizedReadProjectDescriptor({images, imageId, projectId, require} = {}) {
   requiredText(imageId, 'imageId');
   requiredText(projectId, 'projectId');
-  if (typeof require !== 'function') {
-    throw new TypeError('authorizedReadProjectDescriptor requires a require(demand) authority-check function');
-  }
-  require({operation: OBJECT_READ_OPERATION, resource: objectResource(imageId, projectObjectId(projectId))});
-  return readProjectDescriptor({images, imageId, projectId});
+  assertRequire(require, 'authorizedReadProjectDescriptor');
+  return (await authorizedReadProject({images, imageId, projectId, require})).descriptor;
 }
 
 export {
   PROJECT_MEMBER_SHAPE_ID,
   PROJECT_SHAPE_ID,
   addProjectMember,
+  authorizedReadProject,
   authorizedReadProjectDescriptor,
   createProject,
   projectMemberObjectId,

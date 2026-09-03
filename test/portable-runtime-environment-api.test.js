@@ -18,6 +18,7 @@ import {objectResource, parseObjectResource} from '../src/authority/object-resou
 import {objectVersionToken} from '../src/object/version-token.js';
 import {
   addProjectMember,
+  authorizedReadProject,
   authorizedReadProjectDescriptor,
   createProject,
   projectObjectId,
@@ -47,6 +48,7 @@ const owned = Object.freeze({
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
+  authorizedReadProject,
   authorizedReadProjectDescriptor,
   createProject,
   addProjectMember,
