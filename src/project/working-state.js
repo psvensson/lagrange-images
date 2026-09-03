@@ -1,7 +1,7 @@
 import {isObjectRef, objectRef, textValue} from '../value/index.js';
 import {SHAPE_INDEXED} from '../object/model.js';
-import {OBJECT_READ_OPERATION, objectResource} from '../authority/object-resource.js';
-import {objectVersionToken} from '../object/version-token.js';
+import {OBJECT_READ_OPERATION, OBJECT_WRITE_OPERATION, objectResource} from '../authority/object-resource.js';
+import {objectVersionToken, parseObjectVersionToken, putObjectAtExpectedVersion} from '../object/version-token.js';
 import {normalizeProjectDescriptor} from './model.js';
 
 // Durable Project working state: the image-level Project library/service
@@ -383,12 +383,60 @@ async function authorizedReadProjectDescriptor({images, imageId, projectId, requ
   return (await authorizedReadProject({images, imageId, projectId, require})).descriptor;
 }
 
+// The AUTHORIZED Project rename (ADR 0080 decision 5): the first Project
+// semantic mutation, and deliberately the ONLY one — not a generic slot or
+// semantic-write lane. Ordering:
+//   1. Validate every non-storage input first: ids, the new name, the mandatory
+//      expected token (it must be a well-formed opaque token issued for THIS
+//      Project object — checked purely over caller-supplied input, disclosing
+//      nothing), and the require function.
+//   2. Require `object/write` on the Project object BEFORE any existence read:
+//      a denied caller learns AuthorityError whether or not the Project exists.
+//   3. Only then read the Project object (once) and validate it as the expected
+//      Project representation with the expected stable id. This read is
+//      read-for-write; nothing from it reaches the caller.
+//   4. Translate the semantic field `name` to its private slot HERE (no caller
+//      sees a slot id) and persist through the one conditional-persistence seam
+//      with the caller's expected version as a REAL storage precondition: the
+//      backend CAS, not a JavaScript compare, decides — a change between the
+//      validation read and the write is caught atomically.
+// A stale token surfaces as the existing opaque ObjectMutationConflictError
+// (no actual/current version, no replacement token, no cause): the caller
+// learns only that its expected state is stale and must perform a new
+// authorized read. Success returns the NEW opaque Project token (frozen
+// `{versionToken}`) — the Project object's version, so an outstanding token is
+// invalidated by any Project-object write (rename, member add) and by nothing
+// else (a member retarget rewrites only the member record).
+async function authorizedRenameProject({images, imageId, projectId, name, expectedVersionToken, require} = {}) {
+  requiredText(imageId, 'imageId');
+  requiredText(projectId, 'projectId');
+  requiredText(name, 'Project name');
+  requiredText(expectedVersionToken, 'expectedVersionToken');
+  assertRequire(require, 'authorizedRenameProject');
+  const idRef = projectObjectId(projectId);
+  const expectedVersion = parseObjectVersionToken(expectedVersionToken, imageId, idRef);
+
+  require({operation: OBJECT_WRITE_OPERATION, resource: objectResource(imageId, idRef)});
+
+  const project = assertProjectRecord(await images.getObject(imageId, idRef), projectId, idRef);
+  const stored = await putObjectAtExpectedVersion(images, imageId, {
+    id: idRef,
+    shape: project.shape,
+    behavior: null,
+    slots: {...project.slots, [SLOT.name]: textValue(name)},
+    indexed: Array.isArray(project.indexed) ? project.indexed : [],
+    metadata: project.metadata ?? {project: 'working-state'},
+  }, expectedVersion);
+  return Object.freeze({versionToken: objectVersionToken(imageId, idRef, stored._version)});
+}
+
 export {
   PROJECT_MEMBER_SHAPE_ID,
   PROJECT_SHAPE_ID,
   addProjectMember,
   authorizedReadProject,
   authorizedReadProjectDescriptor,
+  authorizedRenameProject,
   createProject,
   projectMemberObjectId,
   projectObjectId,

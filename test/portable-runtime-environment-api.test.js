@@ -20,6 +20,7 @@ import {
   addProjectMember,
   authorizedReadProject,
   authorizedReadProjectDescriptor,
+  authorizedRenameProject,
   createProject,
   projectObjectId,
 } from '../src/project/working-state.js';
@@ -50,6 +51,7 @@ const owned = Object.freeze({
   normalizeTypeDeclarations,
   authorizedReadProject,
   authorizedReadProjectDescriptor,
+  authorizedRenameProject,
   createProject,
   addProjectMember,
   projectObjectId,
