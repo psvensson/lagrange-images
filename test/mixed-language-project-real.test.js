@@ -2,9 +2,12 @@
 //
 // test/mixed-language-project.test.js proves the whole path with a real Rust Component and the
 // full Cuis materialization, faking only the VM subprocess. This is its real-lane sibling — the
-// same durable Project (native Smalltalk entry + Cuis runtime + real Rust Component), but the Cuis
-// lane runs a real OpenSmalltalkVM through the stdio bridge, and the whole thing is captured,
-// managed-installed, recovered after a real backend restart, and executed from the declared graph.
+// same durable-Project SHAPE (native Smalltalk entry + Cuis runtime + real Rust Component behind
+// one shared interface), but the Cuis lane runs a real OpenSmalltalkVM through the stdio bridge.
+// It differs from the faked sibling on purpose: the runtime definition carries a bootable image +
+// changes + sources (not a synthetic package member), because a live VM must actually boot. The
+// whole Project is captured, managed-installed, recovered after a real backend restart, and
+// executed from the declared graph.
 //
 // It skips unless LAGRANGE_OPENSMALLTALK_INTEGRATION=1; the pinned VM + Cuis assets come from
 // scripts/integration-setup.sh via scripts/integration-env.sh, and it runs in the
@@ -39,6 +42,7 @@ import {
   textValue,
 } from '../src/runtime.js';
 import {readProjectDescriptor} from '../src/project/working-state.js';
+import {invokeText, normalizeSpec} from './support/mixed-language-project.js';
 import {installManagedProjectRelease} from '../src/project/managed-installation.js';
 import {readManagedProjectInstallation} from '../src/project/installation-state.js';
 import {LagrangeBackend} from '../src/backend/lagrange-backend.js';
@@ -55,7 +59,7 @@ const PROJECT_ID = 'project:mixed-app-real';
 const STUDIO = 'studio';
 const PROD = 'prod';
 const INPUT = '  HÄLLO   Wörld  ';
-const EXPECTED = INPUT.toLowerCase().replace(/[\t\n\v\f\r ]+/g, ' ').trim();
+const EXPECTED = normalizeSpec(INPUT);
 
 // A full runtime over a restartable sqlite backend, wired to a real OpenSmalltalkVM. Everything
 // here is composition-root wiring; nothing durable.
@@ -144,11 +148,6 @@ async function authorMixedProject(runtime, {imagePath, changesPath, sourcesPath}
     await addProjectMember({images, imageId: STUDIO, projectId: PROJECT_ID, key, role, target});
   }
   return {memberKeys: members.map(([key]) => key)};
-}
-
-async function invokeText(runtime, blockRef, text) {
-  const activation = await runtime.invocations.invokeBlock(blockRef, [textValue(text)]);
-  return await runtime.executor.execute(activation);
 }
 
 test('one durable Project spans native Smalltalk, a live Cuis VM and a real Rust Component through capture, install, restart and fresh-runtime execution', {

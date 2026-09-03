@@ -48,6 +48,7 @@ import {
   textValue,
 } from '../src/runtime.js';
 import {readProjectDescriptor} from '../src/project/working-state.js';
+import {invokeText, normalizeSpec} from './support/mixed-language-project.js';
 import {installManagedProjectRelease} from '../src/project/managed-installation.js';
 import {readManagedProjectInstallation} from '../src/project/installation-state.js';
 import {LagrangeBackend} from '../src/backend/lagrange-backend.js';
@@ -61,10 +62,6 @@ const COMPONENT_PATH = join(
 const PROJECT_ID = 'project:mixed-app';
 const STUDIO = 'studio';
 const PROD = 'prod';
-
-function normalizeSpec(text) {
-  return text.toLowerCase().replace(/[\t\n\v\f\r ]+/g, ' ').trim();
-}
 
 // The same fake stdio bridge the fast two-lane proof uses: text/normalize over the real
 // percent-encoded wire tokens, so the artifact-backed provider's whole materialization and
@@ -246,11 +243,6 @@ async function authorMixedProject(runtime) {
     await addProjectMember({images, imageId: STUDIO, projectId: PROJECT_ID, key, role, target});
   }
   return {memberKeys: members.map(([key]) => key)};
-}
-
-async function invokeText(runtime, blockRef, text) {
-  const activation = await runtime.invocations.invokeBlock(blockRef, [textValue(text)]);
-  return await runtime.executor.execute(activation);
 }
 
 test('one durable Project carries Smalltalk, Cuis and Rust Component members through capture, managed install, restart and fresh-runtime execution', {timeout: 120_000}, async () => {
