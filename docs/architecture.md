@@ -250,6 +250,18 @@ A build root explicitly depends on its base image/support files/packages, and `T
 
 Real CI launches the derived image without reinstalling the upstream JSON package and requires package code to execute.
 
+The package-depth proof now builds a real six-package upstream cluster containing a dependency
+diamond. Inputs are declared in anti-dependency order, so successful installation demonstrates that
+Cuis resolves the packages' own `!requires:` graph rather than trusting caller order. A fresh runtime
+performs cross-package Compression and WeakDictionaries behavior with no runtime package injection;
+a separate unsatisfied-requirement case must fail with the real guest diagnostic.
+
+The same toolchain can emit a byte-deterministic `smalltalk/cuis-semantic-export-v1` artifact. It
+contains semantic Package/Class/Method identities, requirements, superclass relationships, selectors
+and normalized source — never Spur oops. A separate language-owned translator turns that manifest
+into ordinary `CuisExportPackage`/`CuisExportClass`/`CuisExportMethod` image objects through the
+authorized atomic creation batch.
+
 ## 11. Foreign runtime lifecycle
 
 Long-lived external runtimes remain separate from build/toolchain processes:
@@ -288,7 +300,10 @@ smalltalk/cuis-runtime-definition-v1
    -> canonical Value
 ```
 
-The bridge `lagrange-cuis-stdio/v0` is deliberately whitelisted. Current proof services include `proof/add`, `proof/factorial` and package-backed `json/package-proof`. It exposes no arbitrary `perform:`, source eval or oop lookup.
+The bridge `lagrange-cuis-stdio/v1` is deliberately whitelisted. It transports canonical boolean,
+integer, float64, text and bytes Values. Current proof services include `proof/add`,
+`proof/factorial`, package-backed `json/package-proof` and multi-package
+`cluster/package-proof`. It exposes no arbitrary `perform:`, source eval or oop lookup.
 
 A dedicated PR-only CI job downloads pinned OpenSmalltalkVM/Cuis/package inputs and proves toolchain, package, callable-runtime and mixed resumable-WASM execution together.
 
@@ -314,13 +329,24 @@ The substrate has now been pressured by:
 - a real long-lived image runtime;
 - an unchanged upstream Cuis package;
 - a toolchain-produced runnable Cuis image;
+- a real six-package Cuis dependency DAG, resolved by Cuis and exercised from a fresh derived image;
+- deterministic semantic Cuis package/class/method export and atomic materialization as ordinary
+  image objects, without exposing heap identity;
 - durable artifact-backed runtime definitions and callable foreign-runtime Blocks;
 - mixed Symmetric Smalltalk composition over foreign WASM and live Cuis;
 - the same mixed semantic program running through neutral and resumable Lagrange-WASM execution;
 - multiple sequential non-tail WASM effects and non-tail closure creation in shared modules;
+- durable Project working state, stable-current graph-backed Project releases and atomic fresh-copy
+  target installation with new target identities;
+- a Node-independent portable runtime closure, deterministic source artifact and public bindings for
+  portable Object Environment adapter composition;
 - the public Lagrange application-session seam with atomic image state/history,
   real-package compatibility and file-backed mapping restart coverage.
 
-Project semantic/model pressure remains here; Project browsing/collaboration and graphical-environment pressure belongs in Lagrange Object Environment. Missing generic primitives discovered there should feed back here through the public boundary.
+Managed Project installation remains the immediate substrate gap: ADR 0076 has decided the durable
+head/snapshot/member representation and one-batch idempotent protocol, but its three implementation
+slices are still pending. Project browsing/collaboration and graphical-environment pressure belongs
+in Lagrange Object Environment. Missing generic primitives discovered there should feed back here
+through the public boundary.
 
 See [docs/README.md](README.md), [object-environment-boundary.md](object-environment-boundary.md) and [decisions/README.md](decisions/README.md).
