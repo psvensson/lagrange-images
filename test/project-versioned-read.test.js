@@ -45,13 +45,15 @@ const readGrant = (imageId, projectId) => [{
 }];
 
 // A transparent images facade that lets a test observe (and, optionally,
-// interfere with) every getObject. Everything else passes straight through.
+// interfere with) every record read — getObject AND the lower getRecord, so an
+// implementation that rereads the Project through either lane is counted.
+// Everything else passes straight through.
 function observedImages(images, {onGetObject}) {
   return new Proxy(images, {
     get(target, property) {
-      if (property === 'getObject') {
+      if (property === 'getObject' || property === 'getRecord') {
         return async (imageId, objectId) => {
-          const record = await target.getObject(imageId, objectId);
+          const record = await target[property](imageId, objectId);
           return onGetObject({imageId, objectId, record}) ?? record;
         };
       }
@@ -166,7 +168,7 @@ test('SHAPE: frozen {descriptor, versionToken}; the descriptor is the exact cano
     assert.ok(versionToken.startsWith(`${OBJECT_VERSION_TOKEN_V0}:`), 'the existing object-version/v0 convention, no new token representation');
     const version = await backingVersion(runtime, 'img', projectId);
     assert.notEqual(versionToken, String(version), 'not the raw backend version');
-    assert.ok(!JSON.stringify(result).includes('_version'), 'backing _version never escapes');
+    assert.ok(!Object.hasOwn(result, '_version') && !Object.hasOwn(descriptor, '_version'), 'backing _version never escapes as a field');
     // Opaque-but-well-formed: it round-trips through the token owner for exactly this Project object.
     assert.equal(parseObjectVersionToken(versionToken, 'img', projectObjectId(projectId)), version);
     // Scoped to the Project object: it is not a token for any other object.
@@ -237,7 +239,7 @@ test('VALIDATION: an object occupying project/<id> that is not the expected Proj
     });
     await assert.rejects(
       authorizedReadProject({images: runtime.images, imageId: 'img', projectId: squatterId, require: requireFor(runtime, readGrant('img', squatterId))}),
-      /not the expected durable Project representation/,
+      /not the expected Project representation/,
     );
     // (b) the right Shape but the wrong stable project id inside.
     const projectId = await seedProject(runtime, 'img2');
@@ -250,7 +252,7 @@ test('VALIDATION: an object occupying project/<id> that is not the expected Proj
     }, {expectedVersion: record._version});
     await assert.rejects(
       authorizedReadProject({images: runtime.images, imageId: 'img2', projectId, require: requireFor(runtime, readGrant('img2', projectId))}),
-      /not the expected durable Project representation/,
+      /not the expected Project representation/,
     );
     // (c) an AUTHORIZED reader of a MISSING Project still learns not-found (the
     // lane is no oracle only to the DENIED).

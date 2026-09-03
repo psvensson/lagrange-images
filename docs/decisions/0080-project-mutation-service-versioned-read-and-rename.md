@@ -89,7 +89,10 @@ object and `_version` never escapes; the descriptor-only seam returns a deep-equ
 the same ordering; member add changes the token while member retarget does not; a non-Project
 occupant or mismatched stable id is refused; revocation fails closed.
 `test/project-authorized-read.test.js` and `test/project-working-state.test.js` are unchanged and
-green (behavior-identical descriptor read). Slice B adds its own proofs and promotes this ADR to
+green. For a valid Project the descriptor-only reads are behavior-identical; they are stricter only
+for a malformed occupant of `project/<id>` (wrong Shape, or a stored project-id differing from the
+requested one — previously that value leaked through as the descriptor's `projectId`) and for a
+record lacking a backend `_version` (the token is always derived, even when discarded). Slice B adds its own proofs and promotes this ADR to
 `implemented`.
 
 ## Not in scope

@@ -251,7 +251,7 @@ function assertProjectRecord(record, projectId, idRef) {
     !isObjectRef(record.shape) || record.shape.objectId !== PROJECT_SHAPE_ID ||
     record.slots?.[SLOT.projectId]?.value !== projectId
   ) {
-    throw new TypeError(`object ${idRef} is not the expected durable Project representation`);
+    throw new TypeError(`durable Project ${projectId} is not the expected Project representation`);
   }
   return record;
 }
@@ -267,7 +267,9 @@ function assertProjectRecord(record, projectId, idRef) {
 // surfaces the graph's own dangling-edge outcome rather than a Project-specific
 // one. The token is `objectVersionToken` of the Project object at the version of
 // this record (ADR 0042 decision 5): opaque, object-scoped, never raw `_version`.
-async function projectStateFromRecord({images, imageId, project}) {
+// Its scope is `idRef` — the very object id the caller was authorized for — so
+// authorization resource and token scope are identical by construction.
+async function projectStateFromRecord({images, imageId, idRef, project}) {
   const memberRefs = Array.isArray(project.indexed) ? project.indexed : [];
   const members = [];
   for (const ref of memberRefs) {
@@ -291,7 +293,7 @@ async function projectStateFromRecord({images, imageId, project}) {
   });
   return Object.freeze({
     descriptor,
-    versionToken: objectVersionToken(imageId, project.id, project._version),
+    versionToken: objectVersionToken(imageId, idRef, project._version),
   });
 }
 
@@ -303,11 +305,16 @@ async function readProjectState({images, imageId, projectId} = {}) {
   requiredText(projectId, 'projectId');
   const idRef = projectObjectId(projectId);
   const project = assertProjectRecord(await images.getObject(imageId, idRef), projectId, idRef);
-  return projectStateFromRecord({images, imageId, project});
+  return projectStateFromRecord({images, imageId, idRef, project});
 }
 
 // Read a durable working Project back into the canonical Project descriptor:
 // the versioned read with the token discarded (one implementation, not two).
+// For a valid Project this is behavior-identical to the pre-ADR-0080 read; it is
+// stricter only for a malformed occupant of `project/<id>` (wrong Shape, or a
+// stored project-id that differs from the requested one, which previously
+// leaked through as the descriptor's projectId) and for a record without a
+// backend `_version` (the token is always derived, even when discarded).
 async function readProjectDescriptor(args) {
   return (await readProjectState(args)).descriptor;
 }
