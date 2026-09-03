@@ -12,6 +12,7 @@ npm run test:fast         # the same, minus the exhaustive recovery sweeps (what
 npm run test:recovery     # only those sweeps (what CI's recovery-test runs)
 npm run demo              # examples/graph-demo.js, also run by CI
 npm run test:integration  # the real proofs; needs scripts/integration-setup.sh first
+npm run test:cargo-oci    # the real Cargo/rustc OCI proof; needs scripts/cargo-oci-setup.sh first
 ```
 
 ### CI splits the suite; `npm test` does not
@@ -35,9 +36,9 @@ write, both failure modes, nothing sampled; only the installs under test repeat 
 
 ### `npm test` skipping is not the same as passing
 
-`npm test` reports something like `# skipped 3`. Those skips are the tests that exercise a
-real OpenSmalltalkVM and a real Lagrange backend — that is, the ones that prove the
-foreign boundaries actually work. They skip silently when their environment is absent, so
+`npm test` reports a handful of skips. Those skips are the tests that exercise a real
+OpenSmalltalkVM, a real Lagrange backend and a real Cargo/rustc container — that is, the ones that
+prove the foreign boundaries actually work. They skip silently when their environment is absent, so
 a green `npm test` is **not** evidence that the foreign lanes are healthy.
 
 | Gated test | Environment | Proves |
@@ -45,9 +46,10 @@ a green `npm test` is **not** evidence that the foreign lanes are healthy.
 | `test/opensmalltalk-cuis-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | live Cuis image through `ForeignRuntimeService` |
 | `test/opensmalltalk-cuis-toolchain-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | Cuis toolchain build + mixed Lagrange-WASM program |
 | `test/lagrange-backend-real.test.js` | `LAGRANGE_IMAGES_REAL_LAGRANGE=1` | schema and atomic transactions on real Lagrange |
+| `test/cargo-rustc-oci-real.test.js` | `LAGRANGE_CARGO_OCI_INTEGRATION=1` | real Cargo/rustc in a digest-pinned image, closed inputs, executable output |
 
-If you changed anything under `src/foreign-runtime/`, `src/wasm/` or `src/backend/`, run
-the matching real proof before claiming the change works.
+If you changed anything under `src/foreign-runtime/`, `src/wasm/`, `src/toolchain/` or
+`src/backend/`, run the matching real proof before claiming the change works.
 
 ### Setting up the integration assets
 
@@ -67,6 +69,24 @@ If a download fails persistently, curl's own message is the diagnostic.
 The Lagrange backend proof needs a checkout of `psvensson/lagrange` linked as
 `node_modules/lagrange-server`; see the `lagrange-backend-integration` job in
 `.github/workflows/test.yml`.
+
+### Setting up the Cargo/rustc toolchain image
+
+```sh
+scripts/cargo-oci-setup.sh   # ~330 MB, digest-pinned, idempotent; needs Docker or Podman
+npm run test:cargo-oci
+```
+
+The pin lives in `scripts/cargo-oci-setup.sh`, which CI calls too. `scripts/cargo-oci-env.sh`
+reads back the reference that script actually pulled rather than repeating it, so the proof cannot
+run against a digest nobody fetched. Set `LAGRANGE_OCI_CLI=podman` to use Podman.
+
+The image is amd64-only (see ADR 0077 for why it is that image). On an arm64 workstation the
+proof needs an emulation-capable engine; otherwise read the `cargo-rustc-oci-integration` CI lane
+instead of running it locally.
+
+Builds themselves are fast — a few hundred milliseconds each once the image is local — so a
+failure that takes minutes is a pull or a container-start problem, not the compiler.
 
 ## Debugging a foreign runtime that produces no output
 
@@ -146,6 +166,12 @@ spelling it twice.
 
 **A hanging test is usually a foreign process, not a deadlock in JavaScript.** Check for a
 stray `squeak` process before assuming the runtime is at fault.
+
+**A toolchain image's own `ENTRYPOINT` is not yours.** `buildOciRunArgs` always passes the program
+as an explicit `--entrypoint` (ADR 0077). Without it, an image that declares an entrypoint runs
+*that* with `cargo build ...` as its arguments, and the build fails in whatever way that program
+happens to fail — usually nothing that mentions Cargo. If a real OCI build produces a baffling
+error, check the argv before the compiler.
 
 **Running the Cuis proofs dirties the working tree.** The VM writes a `UserChanges/`
 directory beside its working directory and appends to the `.changes` file. Both are

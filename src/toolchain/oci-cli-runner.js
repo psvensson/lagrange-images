@@ -55,16 +55,23 @@ function buildOciRunArgs({
   const env = normalizeEnvironment(environment);
   if (user !== null) requiredText(user, 'OCI container user');
 
+  // The executed program is always stated as an explicit --entrypoint rather than left to the
+  // image's own ENTRYPOINT. A toolchain image's declared entrypoint is undeclared build input:
+  // it can wrap, rewrite or ignore the command the provider asked for. Overriding it keeps the
+  // program part of the closed contract, and lets any digest-pinned image that merely *contains*
+  // Cargo/rustc serve as a toolchain regardless of what it was originally packaged to run.
+  const [program, ...programArguments] = containerCommand;
   const args = [
     'run',
     '--rm',
     '--network', networkMode,
     '--mount', `type=bind,src=${hostWorkspace},dst=${workdir}`,
     '--workdir', workdir,
+    '--entrypoint', program,
   ];
   if (user !== null) args.push('--user', user);
   for (const [key, value] of Object.entries(env)) args.push('--env', `${key}=${value}`);
-  args.push(pinnedImage, ...containerCommand);
+  args.push(pinnedImage, ...programArguments);
   return Object.freeze(args);
 }
 
