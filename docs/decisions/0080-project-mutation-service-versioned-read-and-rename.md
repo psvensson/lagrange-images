@@ -1,6 +1,7 @@
 # ADR 0080: Project mutation service — version-aware read, replay identity and rename
 
-Status: accepted — the version-aware authorized read is built (slice A); the replay-identity rule and `authorizedRenameProject` are decided and land as slice B.
+Status: implemented
+Proven by: test/project-versioned-read.test.js, test/project-rename.test.js, test/project-working-state.test.js, test/image-mutation.test.js
 
 ## Problem
 
@@ -48,7 +49,7 @@ reject or silently restore an old name. A mutable field must not be an undeclare
    "read once, validate, assemble" operation; there is no caching and no generic versioned-read
    framework — common provenance is the point, not read optimization.
 
-4. **Replay identity (decided; slice B).** `projectId` is creation identity; `name` and `namespace`
+4. **Replay identity (slice B).** `projectId` is creation identity; `name` and `namespace`
    are mutable Project state. `createProject` becomes create-or-return-by-stable-id: absent
    `project/<projectId>` -> create with the supplied initial mutable state; an existing valid Project
    with that stable id -> return it **without** touching its current mutable state; a replayed old
@@ -57,7 +58,7 @@ reject or silently restore an old name. A mutable field must not be an undeclare
    representation with the expected stable id is still a conflict. No `originalName`, creation
    fingerprint or other immutable copy of initial mutable state is persisted.
 
-5. **First-class rename (decided; slice B).** `authorizedRenameProject({images, imageId, projectId,
+5. **First-class rename (slice B).** `authorizedRenameProject({images, imageId, projectId,
    name, expectedVersionToken, require}) -> {versionToken}`: validate all non-storage inputs
    (including the mandatory opaque expected token) first; require `object/write` on the Project
    object before any existence read; only then read and validate the Project record; translate the
@@ -73,10 +74,19 @@ reject or silently restore an old name. A mutable field must not be an undeclare
   versioned read, the one-record provenance, field-to-slot translation and rename semantics.
 - `src/project/model.js` remains the sole owner of descriptor semantics (the token is not a
   descriptor field; `normalizeProjectDescriptor` asserts exact keys).
-- `src/object/version-token.js` remains the sole token representation; the image/object conditional
-  put remains the sole CAS. Authorization remains the caller-supplied check-only `require`.
-- `src/portable-runtime.js` re-exports `authorizedReadProject` as an exact owner identity so the
-  Object Environment's pinned artifact can consume it.
+- `src/object/version-token.js` remains the sole token representation and, from slice B, owns the
+  sole conditional-persistence translation `putObjectAtExpectedVersion` (backend `VersionConflictError`
+  -> opaque `ObjectMutationConflictError`, no cause), shared by the mutation binding and the Project
+  rename so two lanes cannot drift; `OBJECT_WRITE_OPERATION` moves next to `OBJECT_READ_OPERATION` in
+  the authority resource module. Authorization remains the caller-supplied check-only `require`.
+- `src/portable-runtime.js` re-exports `authorizedReadProject` and `authorizedRenameProject` as exact
+  owner identities so the Object Environment's pinned artifact can consume them.
+  `putObjectAtExpectedVersion` reaches the Node root's surface through the object barrel (it adds
+  nothing over `images.putObject` but the translation) and is not on the portable root.
+- `createProject` inserts with `expectedVersion: 0` (insert-only) and, on a version conflict, falls
+  into the same read-validate-return path, so a delayed or concurrent replay cannot overwrite a
+  Project that meanwhile came to exist (restoring an old name or wiping member linkage). The
+  rename lane parses the expected token before authorization as static input; the fetch is last.
 
 ## Proof (slice A)
 
@@ -92,8 +102,29 @@ occupant or mismatched stable id is refused; revocation fails closed.
 green. For a valid Project the descriptor-only reads are behavior-identical; they are stricter only
 for a malformed occupant of `project/<id>` (wrong Shape, or a stored project-id differing from the
 requested one — previously that value leaked through as the descriptor's `projectId`) and for a
-record lacking a backend `_version` (the token is always derived, even when discarded). Slice B adds its own proofs and promotes this ADR to
-`implemented`.
+record lacking a backend `_version` (the token is always derived, even when discarded).
+
+## Proof (slice B)
+
+`test/project-working-state.test.js` (replay identity): create P(name=A) -> rename -> create
+P(name=A) leaves P named B and writes nothing; a later create with different initial state neither
+renames, re-namespaces nor rejects; input shape is still validated and a foreign occupant or
+mismatched stored id is still a conflict; a delayed create whose existence read predates the
+Project loses the insert-only CAS and neither restores the initial name nor wipes the member
+linkage; two concurrent creates for one stable id both return the ref with exactly one insert.
+`test/project-rename.test.js`: denied existing and denied missing rename indistinguishable with
+zero storage access (an `object/read` grant alone does not suffice); missing, malformed or
+foreign-object expected tokens and other static arguments are rejected before authorization and
+before storage; success changes the name, returns the new Project token equal to a fresh
+authorized read's, and the old token is stale immediately; a stale token refuses the mutation with
+the existing opaque conflict carrying no actual/current version, token, cause or slot id; member
+add invalidates an outstanding rename token while member retarget does not; a competing
+Project write injected between the validation read and the write is refused by the storage CAS
+(the write's precondition is asserted equal to the caller's token version; a read-compare-write implementation fails this); replay of the original create after a rename
+preserves the renamed value; the owner's export surface has no slot or generic mutation API and
+extra slot-like arguments are ignored. Deliberate breaks (read-compare-write; require after the
+read) each turn the intended test red. `test/image-mutation.test.js` keeps the shared conflict
+translation's no-leak contract green for the binding lane.
 
 ## Not in scope
 

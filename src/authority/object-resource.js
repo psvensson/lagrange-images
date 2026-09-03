@@ -16,6 +16,8 @@ import {base64urlDecode, base64urlEncode, utf8DecodeLossy, utf8Encode} from '../
 // how the collision returns.
 const OBJECT_RESOURCE_V0 = 'object-resource/v0';
 const OBJECT_READ_OPERATION = 'object/read';
+// ADR 0042: the object-scoped write operation (the read's mutation counterpart).
+const OBJECT_WRITE_OPERATION = 'object/write';
 const OBJECT_RESOURCE_SEPARATOR = '.';
 
 function requiredText(value, label) {
@@ -56,6 +58,7 @@ function parseObjectResource(resource) {
 export {
   OBJECT_READ_OPERATION,
   OBJECT_RESOURCE_V0,
+  OBJECT_WRITE_OPERATION,
   objectResource,
   parseObjectResource,
 };

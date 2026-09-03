@@ -470,7 +470,7 @@ pooled instance != activation state
 - `object/write` authorizes causing a mutation; `object/read` authorizes observing state. The host-internal read-for-write a partial mutation needs is not `object/read`, so a write-only capability is real (ADR 0042).
 - Optimistic-concurrency tokens are opaque and **object-scoped**. Build them only with `objectVersionToken()`; an unscoped token would succeed against a different object at the same version. Callers may compare and round-trip tokens, never interpret them.
 - Never propagate the backend `VersionConflictError` outward — it carries `expectedVersion`, `actualVersion`, `collection` and `key`. Translate it, and do not attach it as `cause`.
-- Authorize, then validate the token, then fetch. A caller without authority must learn nothing, including whether the object exists.
+- Authorize, then validate the token, then fetch. A caller without authority must learn nothing, including whether the object exists. (The Project rename lane, ADR 0080, treats the expected token as static input validated together with the other non-storage arguments *before* authorization — the parse is purely over caller-supplied ids and discloses nothing; the fetch still comes last.)
 - A mutation never follows or writes through a ref, and v1 cannot create a graph edge at all. Future edge mutation is not assumed to fall under `object/write`.
 - `drop` is never a commit.
 

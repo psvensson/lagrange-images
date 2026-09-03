@@ -98,6 +98,7 @@ import {
   addProjectMember,
   authorizedReadProject,
   authorizedReadProjectDescriptor,
+  authorizedRenameProject,
   createProject,
   projectObjectId,
 } from './project/working-state.js';
@@ -256,12 +257,14 @@ export {
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
-  // The authorized Project reads (version-aware and descriptor-only) are the
-  // Object Environment's production seams. The other three bindings are bounded
-  // host/control-plane setup helpers used by the native acceptance composition.
-  // All five are exact owner-function identities, never portable-runtime wrappers.
+  // The authorized Project reads (version-aware and descriptor-only) and the
+  // authorized Project rename are the Object Environment's production seams.
+  // The other three bindings are bounded host/control-plane setup helpers used
+  // by the native acceptance composition. All six are exact owner-function
+  // identities, never portable-runtime wrappers.
   authorizedReadProject,
   authorizedReadProjectDescriptor,
+  authorizedRenameProject,
   createProject,
   addProjectMember,
   projectObjectId,
