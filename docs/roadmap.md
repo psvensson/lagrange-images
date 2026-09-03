@@ -23,7 +23,7 @@ The substrate already proves:
   six-package dependency-DAG proofs
 - deterministic Cuis package/class/method semantic export and atomic ordinary-object materialization
 - mixed image-native/foreign-WASM/live-Cuis composition
-- durable Project working state plus graph-backed portable releases and unmanaged fresh-copy install
+- durable Project working state plus graph-backed portable releases, managed install/restart recovery, and one durable Project spanning native Smalltalk, live Cuis and a real Rust Component
 - Node-independent portable runtime closure, deterministic source artifact and public Environment
   composition bindings
 
@@ -198,9 +198,9 @@ Project remains an image-level concept because it is useful without a graphical 
 
 - [x] Project objects and relationships over ordinary image objects/refs (`src/project/working-state.js`, PR #156, ADR 0073; durable Project/member objects, member key as identity, `readProjectDescriptor` feeding the pure model)
 - [ ] code + notes + tests + data + work items
-- [ ] first-class package/binary/component/runtime relationships
-- [ ] manifest/lock/runtime-image artifacts as Project members
-- [ ] Projects mixing image-native and OpenSmalltalkVM-backed code through explicit interfaces
+- [x] first-class package/binary/component/runtime relationships: heterogeneous language targets are ordinary Project members ({key, role, target}); membership is organization only (docs/ownership.md, bead lagrange-images-gxa)
+- [x] manifest/lock/runtime-image artifacts as Project members: a Cuis runtime definition + package and a Rust-derived Component are captured, installed and recovered as members (test/mixed-language-project.test.js)
+- [x] Projects mixing image-native and OpenSmalltalkVM-backed code through explicit interfaces: one durable Project (native Symmetric Smalltalk entry + live-materialized Cuis lane + real Rust Component behind shared callable interfaces) survives capture -> managed install -> restart and executes cross-language from the declared graph alone (bead lagrange-images-gxa)
 - [ ] nested/related Project and namespace conventions
 - [ ] branch/working-frontier semantics
 - [ ] object/Project diff representation
