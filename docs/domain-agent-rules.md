@@ -141,6 +141,7 @@ pooled instance != activation state
 - Vendor file content may be text or bytes. Do not force package assets into UTF-8 source form.
 - New providers use stable identity `cargo-rustc-oci/v1/<image-digest>` because vendored dependency support changed the input contract. Preserve the older v0 constant only as historical identity.
 - The public Cargo provider factory opts into generic toolchain result reuse. Its provider-specific cache material includes the full digest-pinned image reference because that full reference is also observable output metadata.
+- A provider's cache contract names the computation a derivation stands for. Whenever what the provider executes for identical inputs changes (runner semantics, program selection, output extraction), bump the contract version (`cargo-rustc-oci-cache/v1` after ADR 0077, ADR 0078). Do not mix argv or other host-specific material into the derivation key instead.
 - The pinned image must already contain Cargo/rustc and the requested target. Do not mutate/install the toolchain during a build unless a later explicit toolchain contract requires it.
 - OCI runner argv is constructed without a shell. Keep the temporary workspace bind mount, explicit workdir/network and host uid/gid behavior where available.
 - The executed program is always an explicit `--entrypoint`. An image's declared `ENTRYPOINT` is undeclared build input; never let it decide, wrap or prefix what a build runs.
