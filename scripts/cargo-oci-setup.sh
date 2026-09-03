@@ -29,7 +29,10 @@ CARGO_OCI_IMAGE_TAG=cosmwasm/optimizer:0.17.0
 CARGO_OCI_IMAGE_DIGEST=sha256:7e0b9229c1a4118d0c9a2af2e7f5d95a91f264c26a2ce5681c779926e74d7f85
 
 OCI_CLI="${LAGRANGE_OCI_CLI:-docker}"
-IMAGE="${CARGO_OCI_IMAGE_TAG%%:*}@${CARGO_OCI_IMAGE_DIGEST}"
+# `%` (shortest suffix), not `%%`: a registry-qualified or port-bearing pin such as
+# registry.example:5000/rust/tc:1.90 contains more than one colon, and `%%` would strip from the
+# first one and pull a different repository entirely.
+IMAGE="${CARGO_OCI_IMAGE_TAG%:*}@${CARGO_OCI_IMAGE_DIGEST}"
 
 if ! command -v "$OCI_CLI" >/dev/null 2>&1; then
   echo "no OCI CLI on PATH: $OCI_CLI (set LAGRANGE_OCI_CLI=podman to use Podman)" >&2
@@ -56,6 +59,11 @@ done
 
 mkdir -p .integration/cargo-oci
 printf '%s\n' "$IMAGE" > .integration/cargo-oci/image
+# The engine is recorded for the same reason the reference is: the image now exists in *this*
+# CLI's store and nowhere else. Without this, `LAGRANGE_OCI_CLI=podman scripts/cargo-oci-setup.sh`
+# would pull into Podman and leave the proof defaulting back to Docker, which fails with a missing
+# image after a setup that reported success.
+printf '%s\n' "$OCI_CLI" > .integration/cargo-oci/cli
 
 echo
 echo "Cargo/rustc OCI toolchain ready: $IMAGE"
