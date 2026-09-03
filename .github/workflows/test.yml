@@ -77,6 +77,25 @@ jobs:
         env:
           LAGRANGE_IMAGES_REAL_LAGRANGE: '1'
 
+  # The Cargo/rustc OCI boundary's only real proof (ADR 0077). Everything else about that provider
+  # is tested through a fake runner, so without this job nothing in CI shows that a real compiler
+  # accepts the graph the provider materializes, or that what comes back executes.
+  cargo-rustc-oci-integration:
+    runs-on: ubuntu-latest
+    # 15 min: a cold runner pulls the pinned toolchain image (~330 MB) before the first build; the
+    # builds themselves are seconds, and the pull retries a rate-limited registry up to three times.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts
+      - name: Pull the pinned Cargo/rustc toolchain image
+        run: scripts/cargo-oci-setup.sh
+      - name: Compile and execute a closed Rust graph through real Cargo/rustc
+        run: npm run test:cargo-oci
+
   opensmalltalk-cuis-integration:
     runs-on: ubuntu-latest
     # 20 min: the semantic-export tests add three full 6-package cluster builds (structural +

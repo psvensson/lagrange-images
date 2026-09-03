@@ -15,7 +15,8 @@ The substrate already proves:
 - Symmetric Smalltalk with mutable lexical state, object/class model, control flow, allocation, indexed Arrays, hashed Dictionary/MethodDictionary, conditions/non-local return, globals and a canonical standard image
 - neutral + hybrid resumable Lagrange-WASM execution
 - explicit artifact dependency/provenance graphs and toolchain providers
-- Cargo/rustc closed-input builds and deterministic toolchain reuse
+- Cargo/rustc closed-input builds and deterministic toolchain reuse, proven end to end by a real
+  digest-pinned compiler lane in CI
 - raw/callable/Component WASM lanes with structured interface values
 - transient execution authority, capability-aware imports, authorized object projection/mutation and activation-scoped resource handles
 - long-lived foreign-runtime lifecycle with real OpenSmalltalkVM/Cuis runtime, toolchain and
@@ -129,7 +130,10 @@ Inspecting and navigating those structures belongs to Lagrange Object Environmen
 
 ### Generic import/toolchain work
 
-- [ ] real pinned-OCI Cargo integration proof in CI
+- [x] real pinned-OCI Cargo integration proof in CI: the required `cargo-rustc-oci-integration`
+      lane compiles a closed vendored Rust graph with real Cargo/rustc in a digest-pinned image
+      with the network off, and executes the resulting WASM through the scalar callable lane
+      (Bead lagrange-images-1h9, ADR 0077)
 - [ ] crates.io `.crate` importer -> explicit package/vendor artifacts
 - [ ] git/private-registry dependency import conventions
 - [ ] indexed durable lookup for derivation keys

@@ -415,12 +415,14 @@ test('OCI CLI runner builds Docker/Podman-style run arguments without a shell', 
     environment: {HOME: '/tmp/home', CARGO_HOME: '/tmp/cargo'},
     command: ['cargo', 'build', '--frozen'],
   });
+  // The program is an explicit --entrypoint, not the image's declared ENTRYPOINT: a toolchain
+  // image that ships an entrypoint of its own must not get to wrap or replace the build command.
   assert.deepEqual(args, [
     'run', '--rm', '--network', 'none',
     '--mount', 'type=bind,src=/tmp/workspace,dst=/workspace',
-    '--workdir', '/workspace', '--user', '1000:1000',
+    '--workdir', '/workspace', '--entrypoint', 'cargo', '--user', '1000:1000',
     '--env', 'CARGO_HOME=/tmp/cargo', '--env', 'HOME=/tmp/home',
-    PINNED_IMAGE, 'cargo', 'build', '--frozen',
+    PINNED_IMAGE, 'build', '--frozen',
   ]);
 
   let observed = null;

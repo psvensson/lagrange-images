@@ -143,6 +143,8 @@ pooled instance != activation state
 - The public Cargo provider factory opts into generic toolchain result reuse. Its provider-specific cache material includes the full digest-pinned image reference because that full reference is also observable output metadata.
 - The pinned image must already contain Cargo/rustc and the requested target. Do not mutate/install the toolchain during a build unless a later explicit toolchain contract requires it.
 - OCI runner argv is constructed without a shell. Keep the temporary workspace bind mount, explicit workdir/network and host uid/gid behavior where available.
+- The executed program is always an explicit `--entrypoint`. An image's declared `ENTRYPOINT` is undeclared build input; never let it decide, wrap or prefix what a build runs.
+- The Cargo/rustc boundary is proven by a real compiler, not only by an injected runner. Keep `test/cargo-rustc-oci-real.test.js` and its required CI lane green when changing provider materialization, argv or output extraction.
 - Temporary workspaces are build machinery and must be removed in a `finally` path.
 - Cargo-produced bytes are stored as `wasm-binary/v1`, not `wasm-module/v1`. The latter is reserved for the current Lagrange Value-handle/import/effect ABI.
 - Raw `wasm-binary/v1` may only enter ordinary activation through an explicit callable/component interface contract. Never relabel it as `wasm-module/v1` merely because the header validates.
