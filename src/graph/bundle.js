@@ -490,8 +490,25 @@ function rewritePortableValue(value, targetRefs, resolvedBindings) {
   return value ?? null;
 }
 
-async function importGraphBundle({images, targetImageId, bundle, externalBindings = {}, expectedContentIdentity, crypto} = {}) {
-  if (!images || typeof images.createRecords !== 'function') importFail('images must be a GraphImageService');
+// Freeze the fresh preparation result recursively. The plan contains only arrays,
+// plain records and canonical Values constructed by this owner; it never freezes
+// caller-owned bundle or binding objects.
+function deepFreeze(value) {
+  if (value && typeof value === 'object') {
+    for (const entry of Object.values(value)) deepFreeze(entry);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+// Prepare the complete target-side graph without publishing it (ADR 0076
+// Decision 4). This is the sole owner of bundle validation, content-identity
+// verification, external resolution, target-id minting and portable ref
+// rewriting for BOTH standalone and managed installation. The returned record
+// inputs may be appended to another owner-created batch, but never reinterpreted,
+// filtered, reordered or rewritten.
+async function prepareGraphBundleImport({images, targetImageId, bundle, externalBindings = {}, expectedContentIdentity, crypto} = {}) {
+  if (!images || typeof images.getRecord !== 'function') importFail('images must be a GraphImageService');
   if (typeof targetImageId !== 'string' || targetImageId.length === 0) importFail('targetImageId must be non-empty text');
 
   // (2) Validate the ENTIRE bundle — structure AND closure completeness — BEFORE
@@ -574,7 +591,7 @@ async function importGraphBundle({images, targetImageId, bundle, externalBinding
   // (7) Rewrite every record generically, in canonical localId order. One
   // structural transform for every kind; {kind, ...portableFields} becomes
   // {kind, id: freshId, ...rewrittenFields} — the createRecords input shape.
-  const candidates = localIds.map((localId) => {
+  const recordInputs = localIds.map((localId) => {
     const {kind, ...portableFields} = bundle.records[localId];
     return {
       kind,
@@ -583,24 +600,40 @@ async function importGraphBundle({images, targetImageId, bundle, externalBinding
     };
   });
 
+  // Expose only semantic roots. The complete localId -> target ref table is
+  // transient implementation state and is not persisted or returned.
+  const roots = {};
+  for (const [rootKey, localId] of Object.entries(bundle.roots)) {
+    roots[rootKey] = targetRefs[localId];
+  }
+
+  return deepFreeze({roots, recordInputs, contentIdentity: actualContentIdentity});
+}
+
+async function importGraphBundle({images, targetImageId, bundle, externalBindings = {}, expectedContentIdentity, crypto} = {}) {
+  if (!images || typeof images.createRecords !== 'function') importFail('images must be a GraphImageService');
+
+  const plan = await prepareGraphBundleImport({
+    images,
+    targetImageId,
+    bundle,
+    externalBindings,
+    expectedContentIdentity,
+    crypto,
+  });
+
   // (8) Publish ONCE. If createRecords refuses (wrong-kind relationship,
   // collision, malformed reconstructed record, backend failure), its proven
   // all-or-none atomicity is the whole failure story — the importer performs no
   // prior put, no cleanup transaction, no rollback and no selective id
   // regeneration inside a partly-rewritten graph.
   try {
-    await images.createRecords(targetImageId, candidates);
+    await images.createRecords(targetImageId, plan.recordInputs);
   } catch (error) {
     importFail(`graph bundle import publication failed: ${error.message}`, {cause: error});
   }
 
-  // (9) Return only semantic roots. The complete localId -> target ref table is
-  // transient implementation state and is not persisted or returned.
-  const roots = {};
-  for (const [rootKey, localId] of Object.entries(bundle.roots)) {
-    roots[rootKey] = targetRefs[localId];
-  }
-  return {roots, contentIdentity: actualContentIdentity};
+  return {roots: plan.roots, contentIdentity: plan.contentIdentity};
 }
 
 export {
@@ -612,4 +645,5 @@ export {
   defaultReferencePolicy,
   exportGraphBundle,
   importGraphBundle,
+  prepareGraphBundleImport,
 };

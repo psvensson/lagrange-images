@@ -270,8 +270,9 @@ out of release identity.
 bundle atomically with fresh target identities, and returns a canonical target-specific
 `ProjectInstallation/v1`. It is intentionally an unmanaged fresh-copy operation: a second call makes
 a second copy, and the returned descriptor is not yet durable installation state. ADR 0076 has
-decided, but not yet implemented, the stable-head/snapshot/member representation and single-batch
-managed installer that will close that crash/recovery window.
+decided the stable-head/snapshot/member representation and single-batch managed installer that will
+close that crash/recovery window. Its effect-free, deeply frozen `prepareGraphBundleImport()` seam
+is implemented; the durable installation-state translator and managed coordinator remain pending.
 
 ## Portable runtime delivery
 
