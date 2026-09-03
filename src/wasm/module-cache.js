@@ -1,10 +1,11 @@
 import {TupleMap} from '../support/tuple-map.js';
-import {assertWasmModuleArtifact} from '../code/wasm-artifacts.js';
 
 // A tuple key, not a joined string: image and object ids are arbitrary non-empty text, so
-// no separator is safe to join on. See src/support/tuple-map.js.
+// no separator is safe to join on. See src/support/tuple-map.js. The key is the module artifact's
+// identity and is version-agnostic (v1 or v2) — the caller supplies the raw bytes to compile.
 function moduleCacheKey(artifact) {
-  assertWasmModuleArtifact(artifact);
+  if (!artifact || artifact.kind !== 'code-artifact') throw new TypeError('module cache key requires a code-artifact');
+  if (typeof artifact.imageId !== 'string' || typeof artifact.id !== 'string') throw new TypeError('module cache key requires imageId and id');
   return [artifact.imageId, artifact.id];
 }
 
@@ -19,7 +20,7 @@ class WasmModuleCache {
     this.failures = 0;
   }
 
-  async get(moduleArtifact) {
+  async get(moduleArtifact, bytes) {
     const key = moduleCacheKey(moduleArtifact);
     const existing = this.entries.get(key);
     if (existing) {
@@ -29,10 +30,10 @@ class WasmModuleCache {
 
     this.misses += 1;
     this.compilations += 1;
-    const bytes = Buffer.from(moduleArtifact.content.base64, 'base64');
+    const moduleBytes = bytes ?? Buffer.from(moduleArtifact.content.base64, 'base64');
     let pending;
     pending = Promise.resolve()
-      .then(() => this.compile(bytes))
+      .then(() => this.compile(moduleBytes))
       .then((module) => {
         if (!(module instanceof WebAssembly.Module)) {
           throw new TypeError('WASM module cache compiler must return a WebAssembly.Module');

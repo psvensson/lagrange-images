@@ -6,6 +6,7 @@ import {canonicalizeValue, isObjectRef, isReference} from '../value/index.js';
 import {ValueHandleArena, WASM_IMPORT_MODULE, WASM_VALUE_HANDLE_ABI_V1} from './abi.js';
 import {readCellThrough, writeCellThrough} from './cell-access.js';
 import {WasmModuleCache} from './module-cache.js';
+import {readModuleContract} from './module-contract.js';
 import {WASM_INSTANCE_REUSE_STATELESS_V0, WasmInstancePool} from './instance-pool.js';
 
 // The lagrange-value-handle/v1 executor. Separate from the v0 one on purpose: every metadata
@@ -154,8 +155,8 @@ function normalizeModuleFunctions(value, sendSites, closureSites) {
   }));
 }
 
-function activeFunctionDescriptor(code, moduleArtifact, sendSites, closureSites) {
-  const functions = normalizeModuleFunctions(moduleArtifact.metadata?.functions, sendSites, closureSites);
+function activeFunctionDescriptor(code, moduleFunctions, sendSites, closureSites) {
+  const functions = normalizeModuleFunctions(moduleFunctions, sendSites, closureSites);
   if (functions) {
     const descriptor = functions.find(({entry}) => entry === code.metadata.entry);
     if (!descriptor) throw new TypeError(`WASM function entry not described by module: ${code.metadata.entry}`);
@@ -401,16 +402,18 @@ function createWasmFunctionV1CellExecutor({
 
       const moduleRef = canonicalizeValue(code.content);
       const moduleArtifact = await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
-      assertWasmModuleArtifact(moduleArtifact);
-      if (moduleArtifact.metadata?.abi !== WASM_VALUE_HANDLE_ABI_V1) {
+      const contract = await readModuleContract(moduleArtifact, {
+        resolveImplementation: (ref) => context.images.getCodeArtifact(ref.imageId, ref.objectId),
+      });
+      if (contract.abi !== WASM_VALUE_HANDLE_ABI_V1) {
         throw new TypeError(`WASM module ABI does not match ${WASM_VALUE_HANDLE_ABI_V1}`);
       }
-      const literals = normalizeLiterals(moduleArtifact.metadata?.literals ?? []);
-      const sendSites = normalizeSendSites(moduleArtifact.metadata?.sendSites ?? []);
-      const closureSites = normalizeClosureSites(moduleArtifact.metadata?.closureSites ?? []);
-      const descriptor = activeFunctionDescriptor(code, moduleArtifact, sendSites, closureSites);
+      const literals = normalizeLiterals(contract.literals);
+      const sendSites = normalizeSendSites(contract.sendSites);
+      const closureSites = normalizeClosureSites(contract.closureSites);
+      const descriptor = activeFunctionDescriptor(code, contract.functions, sendSites, closureSites);
       const closurePrototypes = normalizeClosurePrototypes(code, descriptor, closureSites);
-      const compiledModule = await moduleCache.get(moduleArtifact);
+      const compiledModule = await moduleCache.get(moduleArtifact, contract.bytes);
 
       // Only temporaries: this activation declares the cells it owns. A cell capture already
       // exists in the frame that declared it, and declaring one here would shadow it with a fresh
