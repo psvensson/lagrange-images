@@ -1,6 +1,7 @@
 # ADR 0076: durable managed Project installation — atomic first install, lost-ack idempotency, head + immutable snapshot state
 
-Status: accepted — decision; prepared-import and installation-state slices implemented, managed-coordinator slice pending
+Status: implemented
+Proven by: test/graph-bundle-import.test.js, test/project-installation-state.test.js, test/project-managed-installation.test.js, test/project-release-installation.test.js
 
 ADR 0073 decided the ProjectInstallation/v1 semantics and explicitly deferred its durable storage
 ("durable storage of this descriptor as ordinary image objects remains follow-up work"). ADR 0075
@@ -71,7 +72,7 @@ ONE current managed installation per `(targetImageId, projectId)`.
 `installProjectRelease` keeps its proven contract: untracked fresh-copy materialization, no
 durable installation state, install-twice means two copies. It is NOT silently redefined.
 
-New managed lifecycle API (`installManagedProjectRelease` pending; durable read implemented):
+Managed lifecycle API (`installManagedProjectRelease` and durable read implemented):
 
 ```text
 installManagedProjectRelease({images, targetImageId, release, material, crypto})
@@ -158,9 +159,9 @@ Exactly one owner per concern; the new interaction has exactly one owner.
 | --- | --- | --- |
 | ProjectInstallation/v1 semantics (canonicalization, validation, member ordering) | Project model (`src/project/model.js`) | current, unchanged |
 | ProjectInstallation/v1 <-> ordinary target-Image installation objects | **Project installation-state translator (`src/project/installation-state.js`)** | current, implemented |
-| bundle localId -> fresh target identity; portable ref -> target ref; durable graph candidates | Graph bundle model (`src/graph/bundle.js`) | current; gains a preparation seam (below) |
+| bundle localId -> fresh target identity; portable ref -> target ref; durable graph candidates | Graph bundle model (`src/graph/bundle.js`) | current; preparation seam implemented (below) |
 | N prepared candidates -> one atomic commit | `ImageService.createRecords` | current, unchanged |
-| managed first-install sequencing: preflight -> prepare -> canonical installation -> installation record specs -> ONE createRecords -> idempotent return/conflict | **managed installation coordinator (`src/project/managed-installation.js`)** | NEW, pending |
+| managed first-install sequencing: preflight -> prepare -> canonical installation -> installation record specs -> ONE createRecords -> idempotent return/conflict | **managed installation coordinator (`src/project/managed-installation.js`)** | current, implemented |
 
 The installation-state translator owns the well-known Shape ids, the deterministic head id,
 `materializeInstallationRecords({installation, crypto}) -> record specs` (from an ALREADY
@@ -168,7 +169,7 @@ canonical ProjectInstallation), `readManagedProjectInstallation` assembly (ordin
 `normalizeProjectInstallation`), and the corruption taxonomy (Decision 10). It does NOT decide
 releaseId, plan upgrade, import graph material, or own transaction/recovery sequencing.
 
-The graph bundle owner gains (Q6 — validated against the staged importer on current HEAD):
+The graph bundle owner has (Q6 — validated against the staged importer on current HEAD):
 
 ```text
 prepareGraphBundleImport({images, targetImageId, bundle, externalBindings, expectedContentIdentity, crypto})
@@ -462,7 +463,7 @@ structurally rather than by apology, retry hint or post-hoc scan.
 - **`ensureProjectInstallation` naming.** Rejected for hiding the first-install effect; the
   three-outcome contract is stated explicitly on `installManagedProjectRelease`.
 
-## First implementation slice (recommended)
+## First implementation slice (implemented)
 
 1. **Prepared-import seam (implemented)** in `src/graph/bundle.js`: extract `prepareGraphBundleImport`;
    re-implement `importGraphBundle` as prepare + one `createRecords`; frozen plan; no behavior
@@ -473,13 +474,13 @@ structurally rather than by apology, retry hint or post-hoc scan.
    `materializeInstallationRecords` (from canonical descriptor only);
    `readManagedProjectInstallation` with the Decision 10 corruption taxonomy, proven by real
    restart recovery on the Lagrange backend.
-3. **Managed coordinator** `src/project/managed-installation.js`: `installManagedProjectRelease`
+3. **Managed coordinator (implemented)** `src/project/managed-installation.js`: `installManagedProjectRelease`
    with the three-outcome contract and the Decision 5 sequencing; proofs for every adversarial
    scenario 1-18, with falsifiers: state-persisted-after-import (crash-window proof red),
    non-deterministic head id (duplicate-graph proof red), loser-does-not-reread (conflict proof
    red), members-not-in-same-batch (head-without-graph / graph-without-head red),
    scan-based recovery (guardrail review, not a test).
 
-Ownership/map consequences: add the two NEW owner rows from Decision 4 to `docs/ownership.md`
-(marked pending implementation), extend the graph bundle owner's row with the preparation seam,
-and mark ADR 0073's "durable storage ... remains follow-up work" deferral as decided-here.
+Ownership/map consequences: the two owner rows from Decision 4 are current in `docs/ownership.md`,
+the graph bundle owner's row includes the preparation seam, and ADR 0073's "durable storage ...
+remains follow-up work" deferral is implemented here.

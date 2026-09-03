@@ -343,11 +343,13 @@ The substrate has now been pressured by:
 - the public Lagrange application-session seam with atomic image state/history,
   real-package compatibility and file-backed mapping restart coverage.
 
-Managed Project installation remains the immediate substrate gap: ADR 0076 has decided the durable
-head/snapshot/member representation and one-batch idempotent protocol. The graph owner's effect-free
-prepared-import seam and the durable installation-state translator are implemented; the managed
-coordinator is still pending. Project browsing/collaboration and graphical-environment pressure
-belongs in Lagrange Object Environment. Missing generic primitives discovered there should feed
-back here through the public boundary.
+Managed Project installation is implemented through the owners decided by ADR 0076: the graph
+owner prepares an effect-free frozen import plan, the installation-state translator owns the
+stable-head/snapshot/member representation and recovery, and the managed coordinator commits both
+sets of candidates in one insert-only batch. Same-release retries are write-free and preserve the
+existing target refs; different releases require future upgrade handling. Project browsing,
+collaboration and graphical-environment pressure belongs in Lagrange Object Environment. Missing
+generic primitives discovered there should feed back here through the public boundary; managed
+upgrade execution remains recorded pressure rather than a speculative substrate widening.
 
 See [docs/README.md](README.md), [object-environment-boundary.md](object-environment-boundary.md) and [decisions/README.md](decisions/README.md).

@@ -2,7 +2,8 @@
 
 Status: accepted — investigation outcome; **stable-session prerequisite + graph release
 materializer + ProjectReleaseMaterial/v1 + the installation coordinator implemented;
-durable/idempotent installation storage, crash recovery and reconciliation execution remain pending**
+durable/idempotent managed installation storage and crash recovery are implemented by ADR 0076;
+upgrade/reconciliation execution remains pending**
 Proven by: test/stable-current-read-session.test.js, test/project-release-capture.test.js,
 test/graph-project-release.test.js, test/project-release-installation.test.js
 
@@ -254,16 +255,17 @@ CANNOT fail for a semantic mismatch. Everything validatable is validated before 
 effect — the same discipline the bundle importer itself uses. The graph importer never learns what
 a Project is; the Project installer owns the semantic member-key -> target mapping.
 
-Durable/idempotent installation storage, recovery and drift/reconciliation execution remain later
-work (ADR 0073 deferrals unchanged). The implemented coordinator deliberately persists NOTHING:
+This coordinator deliberately persists NOTHING: durable/idempotent managed installation storage
+and recovery belong to ADR 0076, while drift/reconciliation execution remains later work. The
+implemented ADR 0075 coordinator keeps its unmanaged contract:
 the target Image holds exactly the imported graph (one history event per imported record), and a
 second install of the same release is a second fresh copy, not hidden reconciliation. The
 recorded crash window: between the importer's atomic `createRecords` commit and the caller
 persisting the returned `ProjectInstallation/v1` descriptor, a crash leaves an installed graph
 with no durable descriptor — the pressure the durable-storage slice must close. The coordinator
-documents this window and never works around it locally. **Update:** the durable managed-installation
-protocol that closes this window is decided in ADR 0076 (ONE atomic graph + installation-state
-batch, stable head commit point, lost-ack idempotency by stable key).
+documents this window and never works around it locally. **Update:** ADR 0076 implements the durable
+managed-installation protocol that closes this window (ONE atomic graph + installation-state batch,
+stable head commit point, lost-ack idempotency by stable key).
 
 ## Decision 9 — selection boundary: reachability is not membership
 

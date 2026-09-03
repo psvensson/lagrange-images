@@ -1,6 +1,6 @@
 # ADR 0073: Project release and installation boundary
 
-Status: accepted — first semantic contracts implemented in `src/project/model.js`; durable Project storage, materialization/deployment and Git sync remain follow-up work
+Status: accepted — semantic contracts, durable working state, portable release materialization and managed first installation implemented; upgrade execution and Git sync remain follow-up work
 
 ## Problem
 
@@ -232,7 +232,7 @@ After a materializer creates or resolves selected members in target Image `T`, t
 
 Every target ref belongs to `T`. The record maps portable Project member identity onto target-local
 object identity. Target refs never become Project identity. Durable storage of this descriptor as
-ordinary image objects was follow-up work and is now decided: ADR 0076 (stable head + immutable
+ordinary image objects was follow-up work and is now implemented by ADR 0076 (stable head + immutable
 snapshot + member records, committed atomically with the imported graph).
 
 ### Upgrade v1 is pure reconciliation planning

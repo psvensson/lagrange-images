@@ -24,15 +24,14 @@ import {validateProjectReleaseMaterialForRelease} from './graph-release-material
 // reconciliation/idempotency. It issues no grants and infers no authority from
 // Project membership/material — a host-level substrate seam only.
 //
-// KNOWN CRASH WINDOW (deliberately NOT solved here): this slice does NOT persist
+// UNMANAGED CONTRACT (deliberately NOT solved inside this owner): this API does NOT persist
 // the returned ProjectInstallation. A process crash after importGraphBundle's
-// commit but before some future owner durably records the returned descriptor can
-// leave a fresh imported graph that is no longer associated with managed
-// installation state. That pressure belongs to the NEXT slice — durable/idempotent
-// ProjectInstallation storage + recovery/reconciliation ownership — and must not
-// be worked around locally (no installation JSON in the bundle, no importer
-// callback, no ad-hoc durable installation object, no Project-model-spanning
-// transaction, no delete-on-failure).
+// commit leaves a fresh imported graph that is not associated with managed
+// installation state. ADR 0076's separate installManagedProjectRelease sibling
+// closes that window with its own one-batch graph + state protocol. This fresh-copy
+// owner must not imitate it locally (no installation JSON in the bundle, importer
+// callback, ad-hoc durable installation object, Project-model-spanning transaction,
+// or delete-on-failure).
 
 class ProjectReleaseInstallationError extends Error {
   constructor(message, details = {}) {
