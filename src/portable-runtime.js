@@ -96,6 +96,7 @@ import {objectResource, parseObjectResource} from './authority/object-resource.j
 import {objectVersionToken} from './object/version-token.js';
 import {
   addProjectMember,
+  authorizedReadProject,
   authorizedReadProjectDescriptor,
   createProject,
   projectObjectId,
@@ -255,10 +256,11 @@ export {
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
-  // The authorized Project descriptor read is the Object Environment's
-  // production seam. The other three bindings are bounded host/control-plane
-  // setup helpers used by the native acceptance composition. All four are
-  // exact owner-function identities, never portable-runtime wrappers.
+  // The authorized Project reads (version-aware and descriptor-only) are the
+  // Object Environment's production seams. The other three bindings are bounded
+  // host/control-plane setup helpers used by the native acceptance composition.
+  // All five are exact owner-function identities, never portable-runtime wrappers.
+  authorizedReadProject,
   authorizedReadProjectDescriptor,
   createProject,
   addProjectMember,

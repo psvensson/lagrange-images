@@ -78,6 +78,7 @@ async function runPortableAcceptance(load) {
   results.hasCreateRuntimeCore = typeof portable.createRuntimeCore === 'function';
   results.hasCreatePortableCodeExecutorRegistry =
     typeof portable.createPortableCodeExecutorRegistry === 'function';
+  results.hasAuthorizedReadProject = typeof portable.authorizedReadProject === 'function';
   results.hasAuthorizedReadProjectDescriptor =
     typeof portable.authorizedReadProjectDescriptor === 'function';
   results.hasCreateProject = typeof portable.createProject === 'function';
@@ -85,6 +86,8 @@ async function runPortableAcceptance(load) {
   results.hasProjectObjectId = typeof portable.projectObjectId === 'function';
   assert(results.hasCreatePortableRuntime, 'entry must expose createPortableRuntime');
   assert(results.hasSetDefaultCryptoProvider, 'entry must expose setDefaultCryptoProvider');
+  assert(results.hasAuthorizedReadProject,
+    'entry must expose the version-aware authorized Project read seam');
   assert(results.hasAuthorizedReadProjectDescriptor,
     'entry must expose the authorized Project descriptor read seam');
   assert(results.hasCreateProject && results.hasAddProjectMember && results.hasProjectObjectId,
