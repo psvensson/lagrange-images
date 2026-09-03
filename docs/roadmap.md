@@ -18,8 +18,13 @@ The substrate already proves:
 - Cargo/rustc closed-input builds and deterministic toolchain reuse
 - raw/callable/Component WASM lanes with structured interface values
 - transient execution authority, capability-aware imports, authorized object projection/mutation and activation-scoped resource handles
-- long-lived foreign-runtime lifecycle with real OpenSmalltalkVM/Cuis runtime/toolchain/package proofs
+- long-lived foreign-runtime lifecycle with real OpenSmalltalkVM/Cuis runtime, toolchain and
+  six-package dependency-DAG proofs
+- deterministic Cuis package/class/method semantic export and atomic ordinary-object materialization
 - mixed image-native/foreign-WASM/live-Cuis composition
+- durable Project working state plus graph-backed portable releases and unmanaged fresh-copy install
+- Node-independent portable runtime closure, deterministic source artifact and public Environment
+  composition bindings
 
 ## 1. Symmetric Smalltalk substrate
 
@@ -99,8 +104,11 @@ Do not conflate compiler-generated resumption with durable continuation state, r
 
 Runtime/toolchain:
 
-- [ ] explicit dependency graph/order for several Cuis packages
-- [ ] prove a larger third-party package with real dependencies
+- [x] explicit dependency graph/order for several Cuis packages: the six-package upstream cluster is
+      declared in anti-dependency order, Cuis resolves its real `!requires:` DAG (including a diamond),
+      and an unsatisfied synthetic requirement produces an explicit failure diagnostic
+- [x] prove a larger third-party package with real dependencies: the fresh derived image performs
+      Compression and WeakDictionaries behavior without runtime package injection
 - [ ] snapshot byte reproducibility/normalization investigation
 - [ ] opt into toolchain result reuse only if snapshot determinism is demonstrated
 - [ ] richer explicit Cuis service interfaces without ambient eval
@@ -173,7 +181,7 @@ Authority remains transient execution context. Identity/contact pickers and invi
 - [ ] logical snapshot/revision frontiers (first current-Image frontier primitive exists — `GraphImageService.frontier()` via the backend `streamHead` seam, PR #158, ADR 0071; snapshot/compaction/revision-aware reads below remain open)
 - [ ] revision-aware reads
 - [ ] indexed graph reachability and derivation lookup
-- [x] export/import graph format — first complete substrate level (ADR 0074, `src/graph/bundle.js`): `exportGraphBundle` (closure, bundle-local identity, internal/external ref rule, deterministic canonical `contentIdentity`, cycles + shared refs, frontier/authority outside the bundle) and `importGraphBundle` (whole-bundle validation + closure completeness via `assertGraphBundleV1`, `expectedContentIdentity` verification before any minting/publication, explicit external bindings — pinned PinnedRef preserved, unpinned existing-target ObjectRef verified, two-phase up-front target-id minting via the active crypto provider, generic ref rewriting, ONE `ImageService.createRecords` atomic publication; fresh-copy semantics, no reconciliation). Still NOT claimed: authorized export/import lane, Project release installation/materialization, reconciliation/dedup, historical portability, retained pins.
+- [x] export/import graph format — first complete substrate level (ADR 0074, `src/graph/bundle.js`): `exportGraphBundle` (closure, bundle-local identity, internal/external ref rule, deterministic canonical `contentIdentity`, cycles + shared refs, frontier/authority outside the bundle) and `importGraphBundle` (whole-bundle validation + closure completeness via `assertGraphBundleV1`, `expectedContentIdentity` verification before any minting/publication, explicit external bindings — pinned PinnedRef preserved, unpinned existing-target ObjectRef verified, two-phase up-front target-id minting via the active crypto provider, generic ref rewriting, ONE `ImageService.createRecords` atomic publication; fresh-copy semantics, no reconciliation). Project release materialization and fresh-copy installation now consume this owner as described below. Still NOT claimed by the generic bundle layer: an authorized export/import lane, reconciliation/dedup, historical portability or retained pins.
 - [x] portable Project release materialization — first portable level IMPLEMENTED (ADR 0075): `captureCurrentGraphProjectRelease(...) -> {release, provenance, material}` — ONE multi-root bundle per release (roots = selected member keys; sharing/cycles across members preserved); manifest v1 per-member contentIdentity = whole-bundle hash (coarse-but-truthful, sharing-topology-safe); fully-closed material (internalize-all unpinned, reachable pinned ref => `ProjectGraphReleaseMaterializationError`; empty externals proves source identity cannot enter releaseId — same releaseId from different development Images); capture coordinator's stable-current read session shared by BOTH capture paths (direct path behavior-unchanged); one immutable `lagrange-project-release-material/v1` package (intrinsic + release-linkage validation incl. root-keys === member-keys); and the first end-to-end portable install: `installProjectRelease({images, targetImageId, release, material}) -> ProjectInstallation/v1` (`src/project/release-installation.js`, ADR 0075 Decision 8) — linked preflight through the single `validateProjectReleaseMaterialForRelease` owner, ONE `importGraphBundle` with `expectedContentIdentity` (cross-member sharing/cycles survive; a second install is a deliberate fresh copy, NOT reconciliation), model-owned canonical descriptor. NOT deployment: nothing durable is persisted beyond the imported graph, no installation lookup/reconciliation/recovery (the import-committed/descriptor-unpersisted crash window is recorded pressure for the next slice); durable installation storage/reconciliation executor and semantic external requirements (manifest v2 precision) remain deferred by evidence)
 - [x] durable managed Project installation — protocol DECIDED (ADR 0076, decision-only): ONE current managed installation per `(targetImageId, projectId)`; ordinary target-Image state (stable deterministic head -> immutable snapshot -> member records — member records forced by the tagged-scalar Value domain); graph candidates + installation records in ONE insert-only `createRecords` batch so the head IS the commit point and the PR #172 crash window is structurally closed; lost-ack idempotency via stable key + content-derived releaseId (no idempotency key); concurrency decided by insert-only head conflict (one winner, loser re-reads: same release -> winner's descriptor, different release -> explicit upgrade-required conflict); restart recovery reads ONLY durable installation state; corruption surfaced, never repaired; `installProjectRelease` stays the unmanaged fresh-copy API. FIRST IMPLEMENTATION SLICE (recommended, unbuilt): (1) `prepareGraphBundleImport` seam in the graph bundle owner (`importGraphBundle` refactored onto it, behavior-unchanged), (2) `src/project/installation-state.js` translator (well-known Shapes, deterministic head id, materialize/read + corruption taxonomy), (3) `src/project/managed-installation.js` coordinator (`installManagedProjectRelease` three-outcome contract). NEXT PRESSURE RECORDED, NOT SOLVED: upgrade execution = fresh graph/snapshot + ONE expected-version head CAS (createRecords is insert-only; the minimal widening is deliberately deferred); semantic external requirements and manifest v2 precision unchanged
 - [ ] garbage-collection rules respecting history and pinned refs

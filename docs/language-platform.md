@@ -153,16 +153,18 @@ ForeignRuntimeService
 The bridge remains intentionally tiny:
 
 ```text
-lagrange-cuis-stdio/v0
+lagrange-cuis-stdio/v1
 
 proof/add
 proof/factorial
 json/package-proof
+cluster/package-proof
 ```
 
 The bridge is compiled in the pristine image before guest packages are loaded. It then keeps one service object alive while several calls arrive over stdin/stdout.
 
-Only integer and boolean Values are transported in v0.
+V1 transports canonical boolean, integer, float64, text and bytes Values. The additional value kinds
+do not widen the service namespace: every operation remains explicitly allowlisted.
 
 There is deliberately no:
 
@@ -214,6 +216,24 @@ parse nested JSON
 
 Normal bridge calls are exercised before and after the package call, proving that package installation participates in the same persistent managed runtime rather than replacing its lifecycle.
 
+### Multi-package dependency proof
+
+The next package-depth step is also complete. A real upstream six-package cluster exercises this
+dependency graph:
+
+```text
+ExtendedClipboard -> FFI + Graphics-Files-Additional
+FFI               -> WeakDictionaries + Alien-Core
+Alien-Core        -> WeakDictionaries
+Graphics-Files-Additional -> Compression
+```
+
+The package artifacts are deliberately declared in anti-dependency order. Cuis resolves their own
+`!requires:` relationships, and a fresh runtime built entirely from the resulting artifact graph
+performs real Compression and WeakDictionaries behavior without runtime package injection. A
+separate build names a provably absent requirement and must fail with the guest's explicit
+diagnostic, so success cannot mean merely saving a broken image.
+
 ### Real Smalltalk toolchain
 
 The same mature environment now also implements a real `ToolchainService` provider:
@@ -245,18 +265,26 @@ The authoritative integration proof does not stop after saving bytes. It launche
 
 The toolchain provider does not implement `cacheKey()` yet. Closed inputs are established, but Cuis snapshot byte determinism has not. Reuse will be enabled only after reproducible snapshot bytes or a safe normalization contract are demonstrated.
 
-### What package/toolchain work comes next
+### Structured semantic export
 
-The next useful compatibility pressure is no longer another single-file package. It should be a multi-package or larger third-party Cuis project so we learn real dependency ordering, Feature requirements, package support files and failure diagnostics.
-
-After that, the same environment can start exporting structured semantic information:
+The same environment now exports structured semantic information as a deterministic
+`smalltalk/cuis-semantic-export-v1` artifact:
 
 ```text
+packages / requirements
 classes / inheritance
-methods / selectors
-CompiledMethods / bytecodes / literals
-package/source relationships
+methods / selectors / normalized source
 ```
+
+The export uses semantic package-scoped identities and is byte-identical across equivalent builds.
+It carries no Spur oop or raw heap identity. A second stage translates the manifest into ordinary
+image objects representing Cuis packages/classes/methods through one authorized atomic creation
+batch. Those representation objects do not become native Symmetric Smalltalk classes.
+
+Bytecodes, literals, class comments, instance-variable definitions, live editing and repeat-import
+reconciliation remain later pressure. Package work should now be driven by broader ecosystem inputs,
+package-specific support files or a concrete service/interface need rather than another proof of the
+already-established dependency DAG.
 
 ### Heap boundary
 
@@ -385,12 +413,16 @@ language-neutral foreign-runtime lifecycle
 real persistent OpenSmalltalkVM/Cuis runtime
 unchanged upstream Cuis package loading + execution
 real Cuis ToolchainService build -> fresh runnable package-bearing image
+real six-package Cuis dependency DAG -> fresh runtime cross-package behavior
+deterministic Cuis Package/Class/Method export -> ordinary image objects
+durable Project working state -> portable graph-backed release -> fresh target install
+portable runtime closure -> deterministic source artifact -> public Environment adapter bindings
 ```
 
 The next multilingual proofs should be concrete rather than generic:
 
-- a larger/multi-package Cuis project;
-- structured OpenSmalltalkVM class/method/package export;
+- relate exported Cuis structures into mixed-language Projects and define repeat-import reconciliation;
+- broaden Cuis ecosystem inputs or services only under concrete package/interface pressure;
 - a mixed native/compatible Smalltalk project;
 - richer Component/WIT-style interfaces;
 - Java/JAR integration;

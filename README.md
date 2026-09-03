@@ -50,6 +50,10 @@ source / IR / JAR / runtime image / manifest / lock / package / WASM
 - message dispatch and transient activation execution
 - executable Symmetric Smalltalk seed with lexical nested Blocks
 - mixed Block composition across image-native Smalltalk, foreign WASM and live foreign runtimes
+- durable Project working state over ordinary image objects, plus portable graph-backed releases and
+  fresh target-Image installation
+- a host-portable runtime composition root, packaged as a deterministic source artifact with the
+  public bindings a portable Object Environment adapter needs
 
 ### Image-native compilation and Lagrange WASM
 
@@ -154,7 +158,22 @@ The first real provider is OpenSmalltalkVM + Cuis. `createArtifactBackedOpenSmal
 
 The unchanged-package proof uses upstream `JSON.pck.st`. The real toolchain derives a new Cuis image containing JSON, and the artifact-backed runtime launches that derived image **without reinstalling the package**.
 
-The bridge protocol, `lagrange-cuis-stdio/v0`, remains deliberately narrow. It exports named proof services such as `proof/add`, recursive `proof/factorial` and package-backed `json/package-proof`; it is not remote Smalltalk eval or arbitrary `perform:`.
+The deeper compatibility proof builds a six-package upstream Cuis cluster whose declared inputs are
+deliberately listed before their requirements. Cuis resolves the real `!requires:` dependency DAG,
+the fresh derived runtime performs cross-package Compression and WeakDictionaries behavior without
+runtime package injection, and an unsatisfied requirement fails with the guest's explicit diagnostic
+rather than producing a falsely successful image.
+
+The current bridge protocol, `lagrange-cuis-stdio/v1`, remains deliberately narrow. It transports
+the canonical boolean, integer, float64, text and bytes Values and exports only named services such
+as `proof/add`, recursive `proof/factorial`, package-backed `json/package-proof` and
+`cluster/package-proof`; it is not remote Smalltalk eval or arbitrary `perform:`.
+
+The same multi-package toolchain stage can emit a deterministic
+`smalltalk/cuis-semantic-export-v1` artifact containing semantic package requirements, classes,
+superclasses, methods, selectors and source. A separate Cuis-owned translator materializes that
+manifest as ordinary `CuisExportPackage`/`CuisExportClass`/`CuisExportMethod` image objects through
+the authorized atomic creation batch. Semantic names cross the boundary; Spur oops never do.
 
 A separate PR-only CI job downloads and verifies the pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur runtime, Cuis 7.9-8090 image and pinned upstream JSON package. It now proves the toolchain-produced image and the mixed program through the **resumable Lagrange-WASM** orchestration lane.
 
@@ -225,7 +244,10 @@ Cuis/Squeak-compatible Smalltalk
   -> later optional structured migration or WASM-hosted runtime
 ```
 
-The compatibility path has now proved a pinned Cuis runtime, unchanged upstream package execution, a real `ToolchainService` build producing a runnable package-bearing image, durable runtime definitions, callable Blocks, and composition from Symmetric Smalltalk alongside foreign WASM.
+The compatibility path has now proved a pinned Cuis runtime, unchanged upstream package execution,
+a real multi-package dependency DAG, semantic package/class/method export and materialization, a
+`ToolchainService` build producing a runnable package-bearing image, durable runtime definitions,
+callable Blocks, and composition from Symmetric Smalltalk alongside foreign WASM.
 
 Compiled libraries and runtime images can remain compiled artifacts when useful. A JAR need not be decompiled; a WASM component need not become source; a compatible Smalltalk runtime image may remain an external runtime artifact.
 
@@ -236,6 +258,29 @@ See ADRs [0022](docs/decisions/0022-opensmalltalkvm-compatibility-direction.md),
 External providers opt in explicitly with `cacheKey(request, context)`. The derivation key covers provider identity, target/options and the complete explicit build-relevant artifact graph.
 
 The current cache is conservative: reuse is tied to the same explicit input artifact identities so `derivedFrom` provenance remains truthful. Cross-install content-addressed reuse needs a later installation/provenance wrapper.
+
+## Project release and installation
+
+Project working state is stored as ordinary image objects and refs. A stable-current release capture
+can turn an explicitly selected Project subset into one fully closed, content-addressed multi-root
+graph bundle, preserving cycles and sharing while keeping source ObjectRefs and frontier provenance
+out of release identity.
+
+`installProjectRelease()` validates the linked release/material before effect, imports the whole
+bundle atomically with fresh target identities, and returns a canonical target-specific
+`ProjectInstallation/v1`. It is intentionally an unmanaged fresh-copy operation: a second call makes
+a second copy, and the returned descriptor is not yet durable installation state. ADR 0076 has
+decided, but not yet implemented, the stable-head/snapshot/member representation and single-batch
+managed installer that will close that crash/recovery window.
+
+## Portable runtime delivery
+
+`src/portable-runtime.js` is the Node-independent composition root for the portable Images subset.
+Its statically walked module closure excludes Node-only imports and is packaged verbatim as the
+deterministic `lagrange-images-portable-runtime/v1` source artifact. Portable hosts install their own
+synchronous crypto provider through the public root. That same root now re-exports the exact existing
+owner functions required to construct Object Environment's `ImageClientAdapter`, without wrappers or
+private `src/...` imports.
 
 ## Core invariants
 
