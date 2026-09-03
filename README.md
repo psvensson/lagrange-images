@@ -269,10 +269,13 @@ out of release identity.
 `installProjectRelease()` validates the linked release/material before effect, imports the whole
 bundle atomically with fresh target identities, and returns a canonical target-specific
 `ProjectInstallation/v1`. It is intentionally an unmanaged fresh-copy operation: a second call makes
-a second copy, and the returned descriptor is not yet durable installation state. ADR 0076 has
-decided the stable-head/snapshot/member representation and single-batch managed installer that will
-close that crash/recovery window. Its effect-free, deeply frozen `prepareGraphBundleImport()` seam
-and durable installation-state translator are implemented; the managed coordinator remains pending.
+a second copy, and the returned descriptor is not durable installation state.
+`installManagedProjectRelease()` is its durable sibling: it validates before effect, prepares the
+same graph import, and commits the graph plus stable-head/snapshot/member installation state in one
+insert-only batch. A same-release retry returns the existing target refs without writes; a different
+release refuses for explicit future upgrade handling. `readManagedProjectInstallation()` recovers
+that descriptor from the deterministic head after restart. Upgrade execution remains deliberately
+deferred to concrete pressure.
 
 ## Portable runtime delivery
 
