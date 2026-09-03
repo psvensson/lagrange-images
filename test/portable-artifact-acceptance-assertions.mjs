@@ -78,8 +78,17 @@ async function runPortableAcceptance(load) {
   results.hasCreateRuntimeCore = typeof portable.createRuntimeCore === 'function';
   results.hasCreatePortableCodeExecutorRegistry =
     typeof portable.createPortableCodeExecutorRegistry === 'function';
+  results.hasAuthorizedReadProjectDescriptor =
+    typeof portable.authorizedReadProjectDescriptor === 'function';
+  results.hasCreateProject = typeof portable.createProject === 'function';
+  results.hasAddProjectMember = typeof portable.addProjectMember === 'function';
+  results.hasProjectObjectId = typeof portable.projectObjectId === 'function';
   assert(results.hasCreatePortableRuntime, 'entry must expose createPortableRuntime');
   assert(results.hasSetDefaultCryptoProvider, 'entry must expose setDefaultCryptoProvider');
+  assert(results.hasAuthorizedReadProjectDescriptor,
+    'entry must expose the authorized Project descriptor read seam');
+  assert(results.hasCreateProject && results.hasAddProjectMember && results.hasProjectObjectId,
+    'entry must expose the bounded Project acceptance/control-plane setup helpers');
 
   // (1) no provider installed yet -> the existing explicit refusal.
   let refusal = null;
