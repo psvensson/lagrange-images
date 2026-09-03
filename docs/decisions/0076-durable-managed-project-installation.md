@@ -1,6 +1,6 @@
 # ADR 0076: durable managed Project installation — atomic first install, lost-ack idempotency, head + immutable snapshot state
 
-Status: accepted — decision; **implementation pending** (first slice recommended in the final section)
+Status: accepted — decision; prepared-import seam implemented, installation-state and managed-coordinator slices pending
 
 ADR 0073 decided the ProjectInstallation/v1 semantics and explicitly deferred its durable storage
 ("durable storage of this descriptor as ordinary image objects remains follow-up work"). ADR 0075
@@ -464,7 +464,7 @@ structurally rather than by apology, retry hint or post-hoc scan.
 
 ## First implementation slice (recommended)
 
-1. **Prepared-import seam** in `src/graph/bundle.js`: extract `prepareGraphBundleImport`;
+1. **Prepared-import seam (implemented)** in `src/graph/bundle.js`: extract `prepareGraphBundleImport`;
    re-implement `importGraphBundle` as prepare + one `createRecords`; frozen plan; no behavior
    change (existing import proofs stay green; new proofs: plan immutability, no durable effect,
    no localId leakage, standalone/managed consume the same owner).

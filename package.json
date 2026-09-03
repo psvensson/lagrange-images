@@ -14,7 +14,7 @@
     "./execution": "./src/execution/model.js",
     "./executor": "./src/execution/executor.js",
     "./foreign-runtime": "./src/foreign-runtime/index.js",
-    "./graph": "./src/graph/references.js",
+    "./graph": "./src/graph/index.js",
     "./language": "./src/language/index.js",
     "./object": "./src/object/index.js",
     "./project": "./src/project/index.js",

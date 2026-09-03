@@ -13,8 +13,10 @@ import {createSqliteApplicationRuntime} from './support/sqlite-application-runti
 import {
   exportGraphBundle,
   importGraphBundle,
+  prepareGraphBundleImport,
   GraphBundleImportError,
 } from '../src/graph/bundle.js';
+import {getDefaultCryptoProvider} from '../src/support/default-crypto.js';
 import {
   integerValue,
   objectRef,
@@ -38,6 +40,32 @@ async function withRuntime(body) {
 const recordsCreated = async (runtime, imageId) => await runtime.images.listRecords(imageId);
 const eventsOf = async (runtime, imageId) =>
   (await runtime.images.history(imageId)).filter((e) => e.type !== 'image.created');
+
+function assertDeeplyFrozen(value) {
+  if (!value || typeof value !== 'object') return;
+  assert.ok(Object.isFrozen(value), 'every prepared-plan object and array is frozen');
+  for (const entry of Object.values(value)) assertDeeplyFrozen(entry);
+}
+
+function assertNoPortableReferences(value) {
+  if (!value || typeof value !== 'object') return;
+  assert.notEqual(value.kind, 'local-ref', 'bundle-local refs do not escape the prepared plan');
+  assert.notEqual(value.kind, 'external-ref', 'portable external refs are resolved in the prepared plan');
+  assert.equal(Object.hasOwn(value, 'localId'), false, 'bundle localId fields do not escape the prepared plan');
+  for (const entry of Object.values(value)) assertNoPortableReferences(entry);
+}
+
+function deterministicImportCrypto(ids) {
+  const real = getDefaultCryptoProvider();
+  let next = 0;
+  return {
+    sha256: (bytes) => real.sha256(bytes),
+    uuid: () => {
+      assert.ok(next < ids.length, 'test supplied enough deterministic target ids');
+      return ids[next++];
+    },
+  };
+}
 
 // A fully internal heterogeneous graph: Shape + Object(+child) + CodeArtifact
 // (with a fresh dependency) + LexicalEnvironment + Block closure.
@@ -476,7 +504,65 @@ test('22. Restart: heterogeneous bundle imported into the real Lagrange backend 
   }
 });
 
-test('23. Portable closure: src/graph/bundle.js static import closure remains node:*-free', () => {
+test('23. Prepared import is effect-free, deeply frozen, localId-free, and shared by standalone import', async () => {
+  await withRuntime(async (runtime) => {
+    await seedInternalGraph(runtime, 'src');
+    const {bundle, contentIdentity} = await exportGraphBundle({
+      images: runtime.images,
+      roots: {block: objectRef('src', 'block')},
+    });
+    await runtime.images.createImage({id: 'dst'});
+
+    const targetIds = Object.keys(bundle.records).map((_, index) => `prepared-target-${index}`);
+    const realCreate = runtime.images.createRecords.bind(runtime.images);
+    let createCalls = 0;
+    let publishedInputs;
+    runtime.images.createRecords = async (imageId, inputs) => {
+      createCalls += 1;
+      publishedInputs = inputs;
+      return realCreate(imageId, inputs);
+    };
+
+    const plan = await prepareGraphBundleImport({
+      images: runtime.images,
+      targetImageId: 'dst',
+      bundle,
+      expectedContentIdentity: contentIdentity,
+      crypto: deterministicImportCrypto(targetIds),
+    });
+
+    assert.deepEqual(Object.keys(plan).sort(), ['contentIdentity', 'recordInputs', 'roots']);
+    assert.equal(plan.contentIdentity, contentIdentity);
+    assert.equal(createCalls, 0, 'preparation performs no createRecords publication');
+    assert.deepEqual(await recordsCreated(runtime, 'dst'), [], 'preparation writes no target records');
+    assert.deepEqual(await eventsOf(runtime, 'dst'), [], 'preparation appends no target history');
+    assertDeeplyFrozen(plan);
+    assertNoPortableReferences(plan);
+    const localIds = new Set(Object.keys(bundle.records));
+    for (const input of plan.recordInputs) assert.equal(localIds.has(input.id), false, 'localId is never a target record id');
+    for (const root of Object.values(plan.roots)) assert.equal(localIds.has(root.objectId), false, 'localId is never a root id');
+    assert.throws(() => plan.recordInputs.push({}), TypeError, 'the prepared record list cannot be mutated');
+    assert.throws(() => { plan.roots.block.objectId = 'changed'; }, TypeError, 'nested prepared refs cannot be mutated');
+
+    const imported = await importGraphBundle({
+      images: runtime.images,
+      targetImageId: 'dst',
+      bundle,
+      expectedContentIdentity: contentIdentity,
+      crypto: deterministicImportCrypto(targetIds),
+    });
+    assert.equal(createCalls, 1, 'standalone import adds exactly one publication after preparation');
+    assert.deepEqual(publishedInputs, plan.recordInputs, 'standalone import publishes the graph owner\'s prepared inputs unchanged');
+    assert.deepEqual(imported, {roots: plan.roots, contentIdentity: plan.contentIdentity});
+  });
+});
+
+test('24. The graph package entrypoint exposes the prepared-import owner', async () => {
+  const graph = await import('lagrange-images/graph');
+  assert.equal(graph.prepareGraphBundleImport, prepareGraphBundleImport);
+});
+
+test('25. Portable closure: src/graph/bundle.js static import closure remains node:*-free', () => {
   const seen = new Set();
   const bad = new Set();
   const walk = (file) => {
