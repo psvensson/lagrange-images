@@ -134,8 +134,11 @@ function requireUnpinnedRef(value, label) {
 
 // Create a durable working Project. Stable `projectId` (opaque text per ADR 0073;
 // the caller supplies the semantic id, e.g. from `createProjectId()`), a display
-// `name`, an optional `namespace` ref, and an empty member set. Idempotent on
-// exact replay; a conflicting existing Project is an error.
+// `name`, an optional `namespace` ref, and an empty member set. Create-or-return
+// by stable id: `name`/`namespace` are INITIAL mutable state used only when the
+// Project does not exist yet; an existing valid Project with this stable id is
+// returned unchanged (see the replay-identity note below); a foreign occupant of
+// the id is an error.
 async function createProject({images, imageId, projectId, name, namespace = null} = {}) {
   requiredText(imageId, 'imageId');
   requiredText(projectId, 'projectId');
@@ -146,11 +149,14 @@ async function createProject({images, imageId, projectId, name, namespace = null
   const id = projectObjectId(projectId);
   const existing = await images.getObject(imageId, id);
   if (existing) {
-    // Replay-safe: an identical Project is returned; any divergence is a conflict.
-    const same =
-      existing.slots?.[SLOT.projectId]?.value === projectId &&
-      existing.slots?.[SLOT.name]?.value === name;
-    if (!same) throw new TypeError(`durable Project ${id} already exists with different identity`);
+    // REPLAY IDENTITY (ADR 0080 decision 4): `projectId` is the creation identity;
+    // `name` and `namespace` are mutable Project state and therefore cannot also
+    // be replay identity. A valid Project already at this stable id is returned
+    // AS IT CURRENTLY IS — its mutable state is neither compared to the request
+    // (a replay after a rename must not reject) nor reset from it (a replay must
+    // not restore an old name). Only an occupant that is not the expected Project
+    // representation with this stable id is a conflict.
+    assertProjectRecord(existing, projectId, id);
     return objectRef(imageId, id);
   }
   await images.putObject(imageId, {
