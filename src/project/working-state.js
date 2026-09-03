@@ -147,30 +147,41 @@ async function createProject({images, imageId, projectId, name, namespace = null
   const {projectShapeRef} = await ensureShapes(images, imageId);
 
   const id = projectObjectId(projectId);
+  // REPLAY IDENTITY (ADR 0080 decision 4): `projectId` is the creation identity;
+  // `name` and `namespace` are mutable Project state and therefore cannot also
+  // be replay identity. A valid Project already at this stable id is returned
+  // AS IT CURRENTLY IS — its mutable state is neither compared to the request
+  // (a replay after a rename must not reject) nor reset from it (a replay must
+  // not restore an old name). Only an occupant that is not the expected Project
+  // representation with this stable id is a conflict.
   const existing = await images.getObject(imageId, id);
   if (existing) {
-    // REPLAY IDENTITY (ADR 0080 decision 4): `projectId` is the creation identity;
-    // `name` and `namespace` are mutable Project state and therefore cannot also
-    // be replay identity. A valid Project already at this stable id is returned
-    // AS IT CURRENTLY IS — its mutable state is neither compared to the request
-    // (a replay after a rename must not reject) nor reset from it (a replay must
-    // not restore an old name). Only an occupant that is not the expected Project
-    // representation with this stable id is a conflict.
     assertProjectRecord(existing, projectId, id);
     return objectRef(imageId, id);
   }
-  await images.putObject(imageId, {
-    id,
-    shape: projectShapeRef,
-    behavior: null,
-    slots: {
-      [SLOT.projectId]: textValue(projectId),
-      [SLOT.name]: textValue(name),
-      [SLOT.namespace]: namespace ?? objectRef(imageId, PROJECT_NONE_ID),
-    },
-    indexed: [],
-    metadata: {project: 'working-state'},
-  });
+  // Insert-only (expectedVersion 0): the create commits only if the id is STILL
+  // absent. A concurrent or delayed replay whose existence read raced this put
+  // therefore cannot overwrite a Project that meanwhile came to exist (restoring
+  // an old name, or wiping its member linkage); it loses the CAS and falls into
+  // the same return-as-it-currently-is path.
+  try {
+    await images.putObject(imageId, {
+      id,
+      shape: projectShapeRef,
+      behavior: null,
+      slots: {
+        [SLOT.projectId]: textValue(projectId),
+        [SLOT.name]: textValue(name),
+        [SLOT.namespace]: namespace ?? objectRef(imageId, PROJECT_NONE_ID),
+      },
+      indexed: [],
+      metadata: {project: 'working-state'},
+    }, {expectedVersion: 0});
+  } catch (error) {
+    if (error?.name !== 'VersionConflictError') throw error;
+    const raced = await images.getObject(imageId, id);
+    assertProjectRecord(raced, projectId, id);
+  }
   return objectRef(imageId, id);
 }
 
@@ -407,6 +418,10 @@ async function authorizedReadProjectDescriptor({images, imageId, projectId, requ
 // `{versionToken}`) — the Project object's version, so an outstanding token is
 // invalidated by any Project-object write (rename, member add) and by nothing
 // else (a member retarget rewrites only the member record).
+// A same-name rename is NOT refused here: refusing would need a JavaScript
+// compare in the path that is deliberately pure CAS, and would break idempotent
+// retry after a lost response (the caller re-sends with its token and needs the
+// resulting token back). Filtering no-ops is a concern above this seam.
 async function authorizedRenameProject({images, imageId, projectId, name, expectedVersionToken, require} = {}) {
   requiredText(imageId, 'imageId');
   requiredText(projectId, 'projectId');

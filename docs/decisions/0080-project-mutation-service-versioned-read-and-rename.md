@@ -79,8 +79,14 @@ reject or silently restore an old name. A mutable field must not be an undeclare
   -> opaque `ObjectMutationConflictError`, no cause), shared by the mutation binding and the Project
   rename so two lanes cannot drift; `OBJECT_WRITE_OPERATION` moves next to `OBJECT_READ_OPERATION` in
   the authority resource module. Authorization remains the caller-supplied check-only `require`.
-- `src/portable-runtime.js` re-exports `authorizedReadProject` as an exact owner identity so the
-  Object Environment's pinned artifact can consume it.
+- `src/portable-runtime.js` re-exports `authorizedReadProject` and `authorizedRenameProject` as exact
+  owner identities so the Object Environment's pinned artifact can consume them.
+  `putObjectAtExpectedVersion` reaches the Node root's surface through the object barrel (it adds
+  nothing over `images.putObject` but the translation) and is not on the portable root.
+- `createProject` inserts with `expectedVersion: 0` (insert-only) and, on a version conflict, falls
+  into the same read-validate-return path, so a delayed or concurrent replay cannot overwrite a
+  Project that meanwhile came to exist (restoring an old name or wiping member linkage). The
+  rename lane parses the expected token before authorization as static input; the fetch is last.
 
 ## Proof (slice A)
 
@@ -103,7 +109,9 @@ record lacking a backend `_version` (the token is always derived, even when disc
 `test/project-working-state.test.js` (replay identity): create P(name=A) -> rename -> create
 P(name=A) leaves P named B and writes nothing; a later create with different initial state neither
 renames, re-namespaces nor rejects; input shape is still validated and a foreign occupant or
-mismatched stored id is still a conflict.
+mismatched stored id is still a conflict; a delayed create whose existence read predates the
+Project loses the insert-only CAS and neither restores the initial name nor wipes the member
+linkage; two concurrent creates for one stable id both return the ref with exactly one insert.
 `test/project-rename.test.js`: denied existing and denied missing rename indistinguishable with
 zero storage access (an `object/read` grant alone does not suffice); missing, malformed or
 foreign-object expected tokens and other static arguments are rejected before authorization and
@@ -112,7 +120,7 @@ authorized read's, and the old token is stale immediately; a stale token refuses
 the existing opaque conflict carrying no actual/current version, token, cause or slot id; member
 add invalidates an outstanding rename token while member retarget does not; a competing
 Project write injected between the validation read and the write is refused by the storage CAS
-(a read-compare-write implementation fails this); replay of the original create after a rename
+(the write's precondition is asserted equal to the caller's token version; a read-compare-write implementation fails this); replay of the original create after a rename
 preserves the renamed value; the owner's export surface has no slot or generic mutation API and
 extra slot-like arguments are ignored. Deliberate breaks (read-compare-write; require after the
 read) each turn the intended test red. `test/image-mutation.test.js` keeps the shared conflict

@@ -13,6 +13,7 @@ import {
   objectResource,
   objectRef,
   objectVersionToken,
+  parseObjectVersionToken,
   projectObjectId,
   textValue,
 } from '../src/runtime.js';
@@ -242,7 +243,8 @@ test('RACE: a Project change after the validation read but before the write is c
       ObjectMutationConflictError,
     );
     assert.ok(interfered, 'the competitor wrote between the validation read and the write');
-    assert.ok(putOptions && Number.isSafeInteger(putOptions.expectedVersion), 'the write carried a real expectedVersion precondition');
+    assert.equal(putOptions?.expectedVersion, parseObjectVersionToken(token, 'img', projectRecordId),
+      'the write\'s precondition is the CALLER\'S expected version, not the version of the record just read');
     assert.equal(await nameOf(runtime, 'img', projectId), 'Competitor', 'the competitor\'s write survives; the stale rename is refused');
   });
 });

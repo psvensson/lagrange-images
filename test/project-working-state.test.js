@@ -267,3 +267,56 @@ test('REPLAY: the request shape is still validated, and a foreign occupant of pr
     );
   });
 });
+
+test('REPLAY RACE: a delayed create whose existence read predates the Project cannot overwrite it (insert-only CAS)', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'img');
+    const projectId = createProjectId();
+    // Warm the Shapes so the delayed create's only storage step after its
+    // existence read is the Project put itself.
+    await createProject({images: runtime.images, imageId: 'img', projectId: createProjectId(), name: 'warm'});
+    let released = false;
+    // A facade that lets the delayed create's existence read observe "absent",
+    // then stalls it until the real create + a member add + a rename have landed.
+    const images = new Proxy(runtime.images, {
+      get(target, property) {
+        if (property === 'getObject') {
+          return async (imageId, objectId) => {
+            const record = await target.getObject(imageId, objectId);
+            if (objectId === projectObjectId(projectId) && !record && !released) {
+              await createProject({images: runtime.images, imageId: 'img', projectId, name: 'A'});
+              await addProjectMember({images: runtime.images, imageId: 'img', projectId, key: 'k', role: 'source', target: objectRef('img', 'one')});
+              await renameInStorage(runtime, 'img', projectId, 'B');
+              released = true;
+            }
+            return record;
+          };
+        }
+        const value = target[property];
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const ref = await createProject({images, imageId: 'img', projectId, name: 'A'});
+    assert.ok(released, 'the competing create/add/rename ran between the existence read and the put');
+    assert.equal(ref.objectId, projectObjectId(projectId));
+    const descriptor = await readProjectDescriptor({images: runtime.images, imageId: 'img', projectId});
+    assert.equal(descriptor.name, 'B', 'the delayed create did not restore the initial name');
+    assert.deepEqual(descriptor.members.map(({key}) => key), ['k'], 'nor wipe the member linkage');
+  });
+});
+
+test('REPLAY RACE: two concurrent creates for one stable id both succeed and exactly one initial state wins', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'img');
+    await createProject({images: runtime.images, imageId: 'img', projectId: createProjectId(), name: 'warm'});
+    const projectId = createProjectId();
+    const [a, b] = await Promise.all([
+      createProject({images: runtime.images, imageId: 'img', projectId, name: 'A'}),
+      createProject({images: runtime.images, imageId: 'img', projectId, name: 'B'}),
+    ]);
+    assert.deepEqual(a, b);
+    const record = await runtime.images.getObject('img', projectObjectId(projectId));
+    assert.equal(record._version, 1, 'exactly one insert committed; the loser wrote nothing');
+    assert.ok(['A', 'B'].includes((await readProjectDescriptor({images: runtime.images, imageId: 'img', projectId})).name));
+  });
+});
