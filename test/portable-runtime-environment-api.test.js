@@ -1,0 +1,63 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {resolve, dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
+
+import * as portable from '../src/portable-runtime.js';
+import {installSmalltalkKernel, findSmalltalkKernel} from '../src/language/smalltalk-kernel.js';
+import {defineClass} from '../src/language/smalltalk-class-builder.js';
+import {installCallableInterfaceV2} from '../src/callable/interface-v2-artifacts.js';
+import {installImageCreationBinding} from '../src/callable/image-creation-binding.js';
+import {installImageMutationBinding} from '../src/callable/image-mutation-binding.js';
+import {installImageObjectReadBinding} from '../src/callable/image-object-read-binding.js';
+import {installImageObservationBinding} from '../src/callable/image-observation-binding.js';
+import {packCompositeValue, unpackCompositeValue} from '../src/callable/composite-codec.js';
+import {normalizeTypeDeclarations} from '../src/callable/type-grammar.js';
+import {objectRef, referencesOfValue, textValue} from '../src/value/scalars.js';
+import {objectResource, parseObjectResource} from '../src/authority/object-resource.js';
+import {objectVersionToken} from '../src/object/version-token.js';
+import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
+import {createNodeSourceReader} from '../src/portable-artifact/node-source-reader.js';
+
+// Public portable Object Environment composition seam (Bead 6sv).
+//
+// Each export is the identical function its semantic module owns. The portable
+// root selects a bounded public surface; it neither wraps nor reimplements one.
+const owned = Object.freeze({
+  installSmalltalkKernel,
+  findSmalltalkKernel,
+  defineClass,
+  installCallableInterfaceV2,
+  installImageCreationBinding,
+  installImageMutationBinding,
+  installImageObjectReadBinding,
+  installImageObservationBinding,
+  objectRef,
+  textValue,
+  referencesOfValue,
+  objectResource,
+  parseObjectResource,
+  objectVersionToken,
+  packCompositeValue,
+  unpackCompositeValue,
+  normalizeTypeDeclarations,
+});
+
+test('portable-runtime exposes the exact Object Environment composition owner bindings', () => {
+  for (const [name, owner] of Object.entries(owned)) {
+    assert.equal(typeof portable[name], 'function', `required public export ${name}`);
+    assert.equal(portable[name], owner, `${name} must be a re-export, never a wrapper`);
+  }
+});
+
+test('the bounded public seam does not broaden the portable static closure', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const repo = resolve(here, '..');
+  const {modules, violations} = collectStaticModuleClosure({
+    entry: 'src/portable-runtime.js',
+    readSource: createNodeSourceReader(repo),
+  });
+
+  assert.equal(modules.length, 107, 'all exposed owners must already be in the reviewed closure');
+  assert.deepEqual(violations, [], 'the portable closure remains closed and Node-free');
+});
