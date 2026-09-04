@@ -953,9 +953,9 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
 
   // Class-hierarchy introspection: register the CLASS object's superclass edge (never the
   // metaclass's derived one) in the superclass's durable subclass registry, and ensure this
-  // class's own empty registry. Lazy and tolerant — bootstrap classes are defined before the
-  // registry's Shape exists, and a foreign squatter on the deterministic id is left alone;
-  // absence reads as empty, so this converges on retry rather than failing the definition.
+  // class's own empty registry. The registry Shape is ensured lazily for bootstrap, while the
+  // registry owner validates every deterministic-id occupant and classifies one lost append CAS;
+  // malformed or divergent state is a Smalltalk-domain conflict and is never overwritten.
   await maintainSubclassRegistries({
     images,
     imageId,

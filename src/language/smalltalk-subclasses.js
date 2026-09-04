@@ -27,6 +27,19 @@ const SUBCLASS_REGISTRY_SHAPE_ID = 'smalltalk/subclass-registry-shape/v1';
 const SUBCLASSES_OF_BLOCK_ID = 'smalltalk/primitive/subclasses-of';
 const SUBCLASSES_OF_CAPTURE = Object.freeze({id: SUBCLASSES_OF_BLOCK_ID, name: 'primitiveSubclassesOf'});
 
+class SmalltalkSubclassRegistryConflictError extends TypeError {
+  constructor(registryRef, subclassRef = null) {
+    super(
+      `subclass registry ${registryRef.imageId}/${registryRef.objectId} changed or is malformed; `
+      + 'refusing to overwrite it',
+    );
+    this.name = 'SmalltalkSubclassRegistryConflictError';
+    this.imageId = registryRef.imageId;
+    this.objectId = registryRef.objectId;
+    this.subclassRef = subclassRef;
+  }
+}
+
 function subclassRegistryId(className) {
   return `smalltalk/subclasses/${className}`;
 }
@@ -50,31 +63,90 @@ async function ensureRegistryShape(images, imageId) {
 async function ensureSubclassRegistry({images, imageId, className}) {
   const shapeRef = await ensureRegistryShape(images, imageId);
   const id = subclassRegistryId(className);
+  const ref = objectRef(imageId, id);
+  const conflict = () => new SmalltalkSubclassRegistryConflictError(ref);
   // The empty registry is only a SEED: the record is appended to afterwards under its own CAS, so
   // a present (or concurrently created) registry is adopted as it is — never overwritten by a
   // late creator, and never compared for identity (ensure owner, seed mode).
   const record = await ensureObject(images, imageId, {
     id, shape: shapeRef, behavior: null, slots: {}, indexed: [], metadata: {smalltalk: 'subclass-registry'},
-  }, {seed: true});
-  return {ref: objectRef(imageId, id), record};
+  }, {seed: true, conflict});
+  const members = subclassRegistryMembers(record, ref);
+  return {ref, record, members};
+}
+
+// The indexed member set is the only mutable part of a registry. Seed admission deliberately
+// adopts an already-present record, so this owner must validate every immutable field and the set
+// invariant before it interprets that record as subclass state.
+function subclassRegistryMembers(record, registryRef) {
+  const conflict = () => new SmalltalkSubclassRegistryConflictError(registryRef);
+  if (
+    !record
+    || record.kind !== 'object'
+    || record.imageId !== registryRef.imageId
+    || record.id !== registryRef.objectId
+    || !isObjectRef(record.shape)
+    || record.shape.imageId !== registryRef.imageId
+    || record.shape.objectId !== SUBCLASS_REGISTRY_SHAPE_ID
+    || record.behavior !== null
+    || !record.slots
+    || typeof record.slots !== 'object'
+    || Array.isArray(record.slots)
+    || Object.keys(record.slots).length !== 0
+    || !record.metadata
+    || record.metadata.smalltalk !== 'subclass-registry'
+    || Object.keys(record.metadata).length !== 1
+    || !Array.isArray(record.indexed)
+  ) {
+    throw conflict();
+  }
+
+  const seen = new Set();
+  for (const member of record.indexed) {
+    if (!isObjectRef(member) || member.imageId !== registryRef.imageId) throw conflict();
+    const key = member.objectId;
+    if (seen.has(key)) throw conflict();
+    seen.add(key);
+  }
+  return record.indexed;
 }
 
 // Membership-guarded append: replaying `defineClass` never duplicates an entry.
 async function appendSubclass({images, imageId, superclassName, subclassRef}) {
-  const {record} = await ensureSubclassRegistry({images, imageId, className: superclassName});
-  const current = Array.isArray(record.indexed) ? record.indexed : [];
+  const {ref: registryRef, record, members: current} = await ensureSubclassRegistry({
+    images, imageId, className: superclassName,
+  });
   const present = current.some(
     (ref) => isObjectRef(ref) && ref.imageId === subclassRef.imageId && ref.objectId === subclassRef.objectId,
   );
   if (present) return;
-  await images.putObject(imageId, {
-    id: record.id,
-    shape: record.shape,
-    behavior: null,
-    slots: record.slots ?? {},
-    indexed: [...current, subclassRef],
-    metadata: record.metadata ?? {smalltalk: 'subclass-registry'},
-  }, {expectedVersion: record._version});
+  try {
+    await images.putObject(imageId, {
+      id: record.id,
+      shape: record.shape,
+      behavior: null,
+      slots: record.slots,
+      indexed: [...current, subclassRef],
+      metadata: record.metadata,
+    }, {expectedVersion: record._version});
+  } catch (error) {
+    if (error?.name !== 'VersionConflictError') throw error;
+
+    // The CAS remains authoritative. Classify its winner once, by this owner's set semantics:
+    // another contender adding the same ref completed our request, while every other winner is a
+    // domain conflict. There is no second write and therefore no unbounded retry or overwrite.
+    const winner = await images.getObject(registryRef.imageId, registryRef.objectId);
+    let winnerMembers;
+    try {
+      winnerMembers = subclassRegistryMembers(winner, registryRef);
+    } catch {
+      throw new SmalltalkSubclassRegistryConflictError(registryRef, subclassRef);
+    }
+    if (winnerMembers.some(
+      (ref) => ref.imageId === subclassRef.imageId && ref.objectId === subclassRef.objectId,
+    )) return;
+    throw new SmalltalkSubclassRegistryConflictError(registryRef, subclassRef);
+  }
 }
 
 // `defineClass` calls this for every class it defines. It registers the CLASS
@@ -167,6 +239,7 @@ async function installSmalltalkSubclassProtocol({images, compilation, imageId, l
 
 export {
   SUBCLASS_REGISTRY_SHAPE_ID,
+  SmalltalkSubclassRegistryConflictError,
   installSmalltalkSubclassProtocol,
   maintainSubclassRegistries,
   subclassRegistryId,
