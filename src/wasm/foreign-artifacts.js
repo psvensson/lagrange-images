@@ -1,10 +1,9 @@
 import {randomUUID} from 'node:crypto';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
+import {WASM_BINARY_V1, WASM_IMPLEMENTATION_DEPENDENCY_ROLE, assertWasmBinaryArtifact} from '../code/wasm-artifacts.js';
 
-const WASM_BINARY_V1 = 'wasm-binary/v1';
 const WASM_CALLABLE_INTERFACE_V1 = 'wasm-callable-interface/v1';
 const WASM_SCALAR_CALL_V0 = 'wasm-scalar-call/v0';
-const WASM_IMPLEMENTATION_DEPENDENCY_ROLE = 'implementation';
 const WASM_SCALAR_TYPES = Object.freeze(['boolean', 'i32', 'i64', 'f32', 'f64']);
 
 function requiredText(value, label) {
@@ -78,14 +77,6 @@ function parseWasmCallableInterfaceArtifact(artifact) {
     descriptor,
     implementation: normalizeObjectRef(dependencies[0].artifact, 'WASM callable implementation'),
   });
-}
-
-function assertWasmBinaryArtifact(artifact) {
-  if (!artifact || artifact.kind !== 'code-artifact' || artifact.representation !== WASM_BINARY_V1) {
-    throw new TypeError(`artifact must be ${WASM_BINARY_V1}`);
-  }
-  if (artifact.content?.kind !== 'bytes') throw new TypeError('WASM binary content must be a bytes Value');
-  return artifact;
 }
 
 function assertImages(images) {

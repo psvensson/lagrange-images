@@ -81,6 +81,27 @@ async function ensureCodeArtifact(images, imageId, desired, {conflict = defaultC
   return existing;
 }
 
+// Ensure-exact-or-create for a SMALL GRAPH of code artifacts that must become durable together
+// (ADR 0080-adjacent; ygi): all absent -> ONE insert-only createRecords batch (so no member is ever
+// visible without the others); all present and identical -> reuse, write nothing; anything else
+// (a partial graph, or a differing member) -> fail, overwrite nothing. The atomicity envelope is
+// ImageService.createRecords' — this owner adds only the convergence rule.
+async function ensureCodeArtifacts(images, imageId, desiredList, {conflict = defaultConflict} = {}) {
+  if (!Array.isArray(desiredList) || desiredList.length === 0) throw new TypeError('ensureCodeArtifacts requires a non-empty list');
+  const existing = [];
+  for (const desired of desiredList) existing.push(await images.getCodeArtifact(imageId, desired.id));
+  if (existing.every((record) => !record)) {
+    if (typeof images.createRecords !== 'function') throw new TypeError('ensureCodeArtifacts requires images.createRecords');
+    return await images.createRecords(imageId, desiredList.map((desired) => ({kind: 'code-artifact', ...desired})));
+  }
+  for (const [index, desired] of desiredList.entries()) {
+    if (!existing[index] || codeArtifactProjection(desired) !== codeArtifactProjection(existing[index])) {
+      throw conflict('code artifact', imageId, desired.id);
+    }
+  }
+  return existing;
+}
+
 async function ensureBlock(images, imageId, desired, {conflict = defaultConflict} = {}) {
   const existing = await images.getBlock(imageId, desired.id);
   if (!existing) return await images.putBlock(imageId, desired);
@@ -119,6 +140,7 @@ export {
   codeArtifactProjection,
   ensureBlock,
   ensureCodeArtifact,
+  ensureCodeArtifacts,
   ensureLexicalEnvironment,
   ensureObject,
   lexicalEnvironmentProjection,

@@ -11,6 +11,7 @@ import {
 } from './encoding.js';
 import {LAGRANGE_CODE_V0, parseLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
 import {WASM_FUNCTION_V1, WASM_MODULE_V1} from '../code/wasm-artifacts.js';
+import {moduleFunctionOf, readModuleDescriptor, soleModuleEntry} from './module-contract.js';
 import {bytesValue, canonicalizeValue, isObjectRef, isReference, objectRef} from '../value/index.js';
 import {
   WASM_ENTRY_V0,
@@ -373,24 +374,11 @@ function normalizePrototypeMap(blockPrototypes) {
   return result;
 }
 
+// The module's function table is read through the canonical accessor (either durable version);
+// this is the compile-side counterpart of the executors' readModuleContract and never touches the
+// representation schema itself.
 function moduleFunctionDescriptor(moduleArtifact, entry) {
-  const functions = moduleArtifact.metadata?.functions;
-  if (Array.isArray(functions)) {
-    const descriptor = functions.find((candidate) => candidate?.entry === entry);
-    if (!descriptor) throw new TypeError(`WASM module function entry not found in metadata: ${entry}`);
-    return descriptor;
-  }
-  if (moduleArtifact.metadata?.entry !== entry) {
-    throw new TypeError(`WASM module entry does not match requested function: ${entry}`);
-  }
-  return {
-    entry,
-    memberIndex: 0,
-    parameters: moduleArtifact.metadata.parameters,
-    captures: moduleArtifact.metadata.captures ?? [],
-    sendSiteIndices: (moduleArtifact.metadata.sendSites ?? []).map((_, index) => index),
-    closureSiteIndices: (moduleArtifact.metadata.closureSites ?? []).map((_, index) => index),
-  };
+  return moduleFunctionOf(readModuleDescriptor(moduleArtifact), {entry});
 }
 
 function describeWasmFunctionArtifact({
@@ -410,7 +398,7 @@ function describeWasmFunctionArtifact({
     content: moduleRef,
     derivedFrom: [semanticRef, moduleRef, ...prototypeRefs],
     metadata: {
-      abi: moduleArtifact.metadata.abi,
+      abi: readModuleDescriptor(moduleArtifact).abi,
       entry: descriptor.entry,
       parameters: descriptor.parameters,
       captures: descriptor.captures,
@@ -435,9 +423,10 @@ async function assembleWasmFunctionArtifact({
   const normalizedModuleRef = canonicalizeValue(moduleRef);
   if (!isObjectRef(normalizedModuleRef)) throw new TypeError('moduleRef must be an unpinned object ref');
   const moduleArtifact = await images.getCodeArtifact(normalizedModuleRef.imageId, normalizedModuleRef.objectId);
-  if (!moduleArtifact || moduleArtifact.representation !== WASM_MODULE_V1) throw new TypeError(`moduleRef must reference ${WASM_MODULE_V1}`);
-  const descriptor = moduleFunctionDescriptor(moduleArtifact, requiredText(entry, 'WASM function entry'));
-  const allClosureSites = Array.isArray(moduleArtifact.metadata?.closureSites) ? moduleArtifact.metadata.closureSites : [];
+  if (!moduleArtifact) throw new TypeError('moduleRef must reference a WASM module artifact');
+  const moduleDescriptor = readModuleDescriptor(moduleArtifact);
+  const descriptor = moduleFunctionOf(moduleDescriptor, {entry: requiredText(entry, 'WASM function entry')});
+  const allClosureSites = moduleDescriptor.closureSites;
   const closureSites = descriptor.closureSiteIndices.map((siteIndex) => {
     if (!Number.isInteger(siteIndex) || siteIndex < 0 || siteIndex >= allClosureSites.length) {
       throw new TypeError(`WASM function closure site index out of range: ${siteIndex}`);
@@ -505,7 +494,7 @@ async function compileWasmFunctionArtifact({
     semanticRef,
     moduleRef: objectRef(moduleArtifact.imageId, moduleArtifact.id),
     functionId,
-    entry: moduleArtifact.metadata.entry,
+    entry: soleModuleEntry(readModuleDescriptor(moduleArtifact)),
     blockPrototypes,
   });
 }

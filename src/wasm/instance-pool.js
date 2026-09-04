@@ -1,5 +1,5 @@
 import {TupleMap} from '../support/tuple-map.js';
-import {assertWasmModuleArtifact} from '../code/wasm-artifacts.js';
+import {assertWasmModuleArtifactAnyVersion as assertWasmModuleArtifact} from './module-contract.js';
 
 const WASM_INSTANCE_REUSE_STATELESS_V0 = 'stateless-v0';
 

@@ -75,7 +75,12 @@ test('the bounded public seam does not broaden the portable static closure', () 
   const paths = modules.map(({path}) => path);
   const projectPaths = paths.filter((path) => path.startsWith('src/project/'));
 
-  assert.equal(modules.length, 109, 'Project exposure adds exactly the two reviewed owner modules');
+  // 109 after the two reviewed Project owner modules (#184); 110 after the wasm-module contract
+  // owner (src/wasm/module-contract.js, ygi) — the ONE decoder/describer of the compiled-module
+  // representation, reached from the compilation registry and the WASM producers already in the
+  // closure. It imports only value/object/code/support modules (no node:*).
+  assert.equal(modules.length, 110, 'the reviewed owner modules: two Project owners + the wasm-module contract owner');
+  assert.ok(paths.includes('src/wasm/module-contract.js'));
   assert.deepEqual(projectPaths, [
     'src/project/model.js',
     'src/project/working-state.js',

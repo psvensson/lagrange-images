@@ -19,6 +19,13 @@ import {
   lagrangeCodeV0ToWasmModuleCompiler,
 } from '../wasm/compiler.js';
 import {WASM_INSTANCE_REUSE_STATELESS_V0} from '../wasm/instance-pool.js';
+import {base64Decode} from '../support/portable-bytes.js';
+import {
+  WASM_MODULE_CONTRACT_KEYS,
+  WASM_MODULE_SEMANTIC_MIRROR_KEYS,
+  WASM_MODULE_V2,
+  describeWasmModuleV2Result,
+} from '../wasm/module-contract.js';
 import {
   isWasmTailEffectRestrictionError,
   lagrangeCodeGroupToResumableWasmModuleCompiler,
@@ -34,6 +41,46 @@ const LAGRANGE_CODE_WASM_COMPILER_ID = 'lagrange-code-v0-to-wasm-module-v1/value
 const LAGRANGE_CODE_V1_WASM_COMPILER_ID = 'lagrange-code-v1-to-wasm-module-v1/lexical-cell/compiler-v1';
 const LAGRANGE_CODE_V1_WASM_GROUP_COMPILER_ID = 'lagrange-code-v1-group-to-wasm-module-v1/lexical-cell/compiler-v1';
 const LAGRANGE_CODE_WASM_GROUP_COMPILER_ID = 'lagrange-code-group-to-wasm-module-v1/value-handle-hybrid/compiler-v3';
+// wasm-module/v2 targets (ygi). Distinct identities: the output representation is part of what a
+// derivation names, and existing v1 artifacts must never be offered as reusable v2 results.
+const LAGRANGE_CODE_WASM_V2_COMPILER_ID = 'lagrange-code-v0-to-wasm-module-v2/value-handle-hybrid/compiler-v1';
+const LAGRANGE_CODE_V1_WASM_V2_COMPILER_ID = 'lagrange-code-v1-to-wasm-module-v2/lexical-cell/compiler-v1';
+const LAGRANGE_CODE_V1_WASM_V2_GROUP_COMPILER_ID = 'lagrange-code-v1-group-to-wasm-module-v2/lexical-cell/compiler-v1';
+const LAGRANGE_CODE_WASM_V2_GROUP_COMPILER_ID = 'lagrange-code-group-to-wasm-module-v2/value-handle-hybrid/compiler-v1';
+
+// TRANSITIONAL (ygi step 2 only; deleted in step 3 when the compilers return facts directly):
+// split a v1-shaped compiler result {content: bytes, metadata: contract + mirrors + provenance}
+// into compilation FACTS {bytes, contract, metadata: provenance}. The contract keys and the
+// single-function semantic mirrors are owned by the module-contract owner; everything else the
+// compiler wrote is provenance (semanticRepresentation, groupPolicyId, physicalLayout,
+// continuations — consumed by no executor).
+function wasmModuleFactsFromV1Result(result) {
+  const md = result.metadata ?? {};
+  const contract = {};
+  const provenance = {};
+  for (const [key, value] of Object.entries(md)) {
+    if (WASM_MODULE_CONTRACT_KEYS.includes(key)) contract[key] = value;
+    else if (!WASM_MODULE_SEMANTIC_MIRROR_KEYS.includes(key)) provenance[key] = value;
+  }
+  contract.effectSites ??= [];
+  return Object.freeze({
+    languageId: result.languageId,
+    bytes: base64Decode(result.content.base64),
+    contract,
+    metadata: provenance,
+  });
+}
+
+// The ONE place a compiled WASM module's facts become the durable v2 result graph: the
+// representation owner describes the graph, the CompilationService persists it. Compilers and
+// every consumer stay unaware of the graph shape.
+function asWasmModuleV2Result(result) {
+  const facts = wasmModuleFactsFromV1Result(result);
+  return describeWasmModuleV2Result({
+    ...facts,
+    metadata: {...facts.metadata, instanceReuse: WASM_INSTANCE_REUSE_STATELESS_V0},
+  });
+}
 
 function withStatelessInstanceReuse(result) {
   return Object.freeze({
@@ -151,12 +198,54 @@ const reusableLagrangeCodeV1GroupToWasmCompiler = Object.freeze({
   },
 });
 
+const reusableLagrangeCodeV0ToWasmV2Compiler = Object.freeze({
+  identity: LAGRANGE_CODE_WASM_V2_COMPILER_ID,
+  cacheKey: reusableLagrangeCodeV0ToWasmCompiler.cacheKey,
+  async compile(request, context) {
+    return asWasmModuleV2Result(await compileWithResumableFallback(
+      request, context, lagrangeCodeV0ToWasmModuleCompiler, lagrangeCodeV0ToResumableWasmModuleCompiler,
+    ));
+  },
+});
+
+const reusableLagrangeCodeGroupToWasmV2Compiler = Object.freeze({
+  identity: LAGRANGE_CODE_WASM_V2_GROUP_COMPILER_ID,
+  cacheKey: reusableLagrangeCodeGroupToWasmCompiler.cacheKey,
+  async compile(request, context) {
+    return asWasmModuleV2Result(await compileWithResumableFallback(
+      request, context, lagrangeCodeGroupToWasmModuleCompiler, lagrangeCodeGroupToResumableWasmModuleCompiler,
+    ));
+  },
+});
+
+const reusableLagrangeCodeV1ToWasmV2Compiler = Object.freeze({
+  identity: LAGRANGE_CODE_V1_WASM_V2_COMPILER_ID,
+  cacheKey: reusableLagrangeCodeV1ToWasmCompiler.cacheKey,
+  async compile(request, context) {
+    return asWasmModuleV2Result(await compileWithV1ResumableFallback(
+      request, context, lagrangeCodeV1ToWasmModuleCompiler, lagrangeCodeV1ToResumableWasmModuleCompiler,
+    ));
+  },
+});
+
+const reusableLagrangeCodeV1GroupToWasmV2Compiler = Object.freeze({
+  identity: LAGRANGE_CODE_V1_WASM_V2_GROUP_COMPILER_ID,
+  cacheKey: reusableLagrangeCodeV1GroupToWasmCompiler.cacheKey,
+  async compile(request, context) {
+    return asWasmModuleV2Result(await compileWithV1ResumableFallback(
+      request, context, lagrangeCodeV1GroupToWasmModuleCompiler, lagrangeCodeV1GroupToResumableWasmModuleCompiler,
+    ));
+  },
+});
+
 function createDefaultCodeCompilerRegistry() {
   const registry = new CodeCompilerRegistry();
   registry.register(LAGRANGE_CODE_V0, NEUTRAL_EXPRESSION_V0, lagrangeCodeV0ToNeutralExpressionCompiler);
   registry.register(LAGRANGE_CODE_V0, WASM_MODULE_V1, reusableLagrangeCodeV0ToWasmCompiler);
+  registry.register(LAGRANGE_CODE_V0, WASM_MODULE_V2, reusableLagrangeCodeV0ToWasmV2Compiler);
   registry.register(LAGRANGE_CODE_V1, NEUTRAL_EXPRESSION_V1, lagrangeCodeV1ToNeutralExpressionCompiler);
   registry.register(LAGRANGE_CODE_V1, WASM_MODULE_V1, reusableLagrangeCodeV1ToWasmCompiler);
+  registry.register(LAGRANGE_CODE_V1, WASM_MODULE_V2, reusableLagrangeCodeV1ToWasmV2Compiler);
   return registry;
 }
 
@@ -175,6 +264,8 @@ function createDefaultCompilationGroupCompilerRegistry() {
     WASM_MODULE_V1,
     reusableLagrangeCodeV1GroupToWasmCompiler,
   );
+  registry.register(WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0, WASM_MODULE_V2, reusableLagrangeCodeGroupToWasmV2Compiler);
+  registry.register(WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1, WASM_MODULE_V2, reusableLagrangeCodeV1GroupToWasmV2Compiler);
   return registry;
 }
 
@@ -184,6 +275,10 @@ export {
   LAGRANGE_CODE_V1_WASM_GROUP_COMPILER_ID,
   LAGRANGE_CODE_WASM_COMPILER_ID,
   LAGRANGE_CODE_WASM_GROUP_COMPILER_ID,
+  LAGRANGE_CODE_V1_WASM_V2_COMPILER_ID,
+  LAGRANGE_CODE_V1_WASM_V2_GROUP_COMPILER_ID,
+  LAGRANGE_CODE_WASM_V2_COMPILER_ID,
+  LAGRANGE_CODE_WASM_V2_GROUP_COMPILER_ID,
   createDefaultCodeCompilerRegistry,
   createDefaultCompilationGroupCompilerRegistry,
 };
