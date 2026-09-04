@@ -33,7 +33,7 @@ function exactKeys(value, expected, label) {
 }
 
 function normalizeLiterals(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.literals must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract literals must be an array');
   return Object.freeze(value.map((literal) => canonicalizeValue(literal)));
 }
 
@@ -57,7 +57,7 @@ function assertNonReferenceMessage(message, index) {
 }
 
 function normalizeSendSites(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.sendSites must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract sendSites must be an array');
   return Object.freeze(value.map((site, index) => {
     exactKeys(site, ['languageId', 'message', 'arity'], `WASM send site ${index}`);
     return Object.freeze({
@@ -71,7 +71,7 @@ function normalizeSendSites(value) {
 // v1 closure sites carry a per-capture mode. This normalizer requires it: a v0-shaped site reaching
 // a v1 module is a mismatch, not something to interpret generously.
 function normalizeClosureSites(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.closureSites must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract closureSites must be an array');
   return Object.freeze(value.map((site, siteIndex) => {
     exactKeys(site, ['blockId', 'captures'], `WASM closure site ${siteIndex}`);
     requiredText(site.blockId, `WASM closure site ${siteIndex} blockId`);
@@ -127,7 +127,7 @@ function sameCellBindings(left, right) {
 function normalizeModuleFunctions(value, sendSites, closureSites) {
   if (value === undefined) return null;
   if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError('WASM module metadata.functions must be a non-empty array');
+    throw new TypeError('WASM module contract functions must be a non-empty array');
   }
   const entries = new Set();
   const memberIndices = new Set();

@@ -61,12 +61,12 @@ function normalizeIndexList(value, limit, label) {
 }
 
 function normalizeLiterals(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.literals must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract literals must be an array');
   return Object.freeze(value.map((entry) => canonicalizeValue(entry)));
 }
 
 function normalizeSendSites(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.sendSites must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract sendSites must be an array');
   return Object.freeze(value.map((site, index) => {
     exactKeys(site, ['languageId', 'message', 'arity'], `WASM send site ${index}`);
     if (typeof site.languageId !== 'string' || site.languageId.length === 0) {
@@ -83,7 +83,7 @@ function normalizeSendSites(value) {
 }
 
 function normalizeClosureSites(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.closureSites must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract closureSites must be an array');
   return Object.freeze(value.map((site, siteIndex) => {
     exactKeys(site, ['blockId', 'captures'], `WASM closure site ${siteIndex}`);
     if (typeof site.blockId !== 'string' || site.blockId.length === 0) {
@@ -108,7 +108,7 @@ function normalizeClosureSites(value) {
 }
 
 function normalizeEffectSites(value, sendSites, closureSites) {
-  if (!Array.isArray(value)) throw new TypeError('resumable WASM module metadata.effectSites must be an array');
+  if (!Array.isArray(value)) throw new TypeError('resumable WASM module contract effectSites must be an array');
   const seen = new Set();
   return Object.freeze(value.map((effect, effectIndex) => {
     exactKeys(
@@ -156,7 +156,7 @@ function normalizeEffectSites(value, sendSites, closureSites) {
 
 function normalizeModuleFunctions(value, sendSites, closureSites) {
   if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError('resumable WASM module metadata.functions must be a non-empty array');
+    throw new TypeError('resumable WASM module contract functions must be a non-empty array');
   }
   const entries = new Set();
   const memberIndices = new Set();

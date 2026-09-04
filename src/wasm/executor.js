@@ -52,12 +52,12 @@ function normalizeIndexList(value, limit, label) {
 }
 
 function normalizeLiterals(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.literals must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract literals must be an array');
   return Object.freeze(value.map((entry) => canonicalizeValue(entry)));
 }
 
 function normalizeSendSites(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.sendSites must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract sendSites must be an array');
   return Object.freeze(value.map((site, index) => {
     exactKeys(site, ['languageId', 'message', 'arity'], `WASM send site ${index}`);
     if (typeof site.languageId !== 'string' || site.languageId.length === 0) {
@@ -74,7 +74,7 @@ function normalizeSendSites(value) {
 }
 
 function normalizeClosureSites(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.closureSites must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract closureSites must be an array');
   return Object.freeze(value.map((site, siteIndex) => {
     exactKeys(site, ['blockId', 'captures'], `WASM closure site ${siteIndex}`);
     if (typeof site.blockId !== 'string' || site.blockId.length === 0) {
@@ -93,7 +93,7 @@ function normalizeClosureSites(value) {
 
 function normalizeModuleFunctions(value, sendSites, closureSites) {
   if (value === undefined) return null;
-  if (!Array.isArray(value) || value.length === 0) throw new TypeError('WASM module metadata.functions must be a non-empty array');
+  if (!Array.isArray(value) || value.length === 0) throw new TypeError('WASM module contract functions must be a non-empty array');
   const entries = new Set();
   const memberIndices = new Set();
   return Object.freeze(value.map((descriptor, index) => {
