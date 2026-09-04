@@ -271,12 +271,16 @@ local instance-variable declarations, selectors and normalized source — never 
 VM layout. Frozen v1 remains readable and is the input to the existing language-owned
 `CuisExportPackage`/`CuisExportClass`/`CuisExportMethod` inspection materializer.
 
-ADR 0085 M1 consumes v2 by a separate native-import adapter, directly rather than through those
+ADR 0085 M1/M2 consumes v2 by a separate native-import adapter, directly rather than through those
 inspection objects. The adapter preflights its schema/identity/dependency topology, maps only the exact canonical
-`cuis-class/Cuis-Base/Object` structural root, and calls the native class-declaration owner. A real
-two-runtime proof closes the Cuis build side before a provider-free native runtime constructs the
-Classes/Metaclasses/Shapes, replays without writes, allocates a native ObjectRef and persists its
-inherited/local slots as ordinary Values/refs. Method import remains M2.
+`cuis-class/Cuis-Base/Object` structural root, and calls the native class-declaration owner. For
+methods it validates canonical target/side/identity, translates the Cuis method header to the
+existing class-scoped source input, makes the Cuis implicit receiver return explicit, and delegates
+semantic compilation and installation to the native method owner in the WASM lane. A real
+two-runtime proof closes the Cuis build side before a
+provider-free native runtime constructs Classes/Metaclasses/Shapes, replays without writes,
+allocates a native ObjectRef, and mutates/reads inherited/local state through imported
+`wasm-function/v2`-backed methods. A-to-B method revision/reconciliation remains future work.
 
 ## 11. Foreign runtime lifecycle
 

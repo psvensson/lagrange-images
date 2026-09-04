@@ -1,15 +1,17 @@
 import {ensureClassFromDeclaration} from './smalltalk-class-builder.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
+import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
+import {tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
 
-// ADR 0085 M1: this adapter owns translation only. The canonical representation remains owned by
-// the OpenSmalltalk/Cuis toolchain provider; the native builder remains the sole owner of Class,
-// Metaclass, Shape and slot identity.
+// ADR 0085 M1/M2: this adapter owns translation only. The canonical representation remains owned
+// by the OpenSmalltalk/Cuis toolchain provider; native builders/compilers remain the sole owners of
+// Class, Metaclass, Shape, slot and method identity and behavior.
 const CUIS_SEMANTIC_EXPORT_V2 = 'smalltalk/cuis-semantic-export-v2';
 const CUIS_NATIVE_ROOT_OBJECT_IDENTITY = 'cuis-class/Cuis-Base/Object';
 
 class CuisNativeImportError extends TypeError {
   constructor(message, semanticIdentity = null) {
-    super(`Cuis native class import refused: ${message}`);
+    super(`Cuis native import refused: ${message}`);
     this.name = 'CuisNativeImportError';
     if (semanticIdentity !== null) this.semanticIdentity = semanticIdentity;
   }
@@ -53,6 +55,65 @@ function canonicalClassIdentity(packageName, className) {
   return `cuis-class/${packageName}/${className}`;
 }
 
+function classNameFromIdentity(identity) {
+  return identity.slice(identity.lastIndexOf('/') + 1);
+}
+
+function canonicalMethodIdentity(packageName, classIdentity, side, selector) {
+  return `cuis-method/${packageName}/${classNameFromIdentity(classIdentity)}/${side}/${selector}`;
+}
+
+// Cuis sourceCodeAt: answers a complete method definition. The native class-scoped compiler takes
+// the same method's body as a Block because selector/arity arrive separately. Standard/Cuis
+// methods implicitly answer their receiver when control reaches the end, whereas a native Block
+// answers its last expression, so make the method return rule explicit at this dialect boundary.
+// Parsing/lowering the body and binding native state remain the existing Symmetric Smalltalk
+// compiler's responsibility.
+function nativeMethodSource({identity, selector, source}) {
+  let tokens;
+  try {
+    tokens = tokenizeSymmetricSmalltalk(source);
+  } catch (error) {
+    fail(`method ${identity} source is not in the supported native Smalltalk subset: ${error.message}`, identity);
+  }
+  const parameters = [];
+  let parsedSelector = '';
+  let index = 0;
+  if (tokens[index].type === 'identifier') {
+    parsedSelector = tokens[index].value;
+    index += 1;
+  } else if (tokens[index].type === 'binary') {
+    parsedSelector = tokens[index].value;
+    index += 1;
+    if (tokens[index].type !== 'identifier') {
+      fail(`method ${identity} binary header must declare one parameter`, identity);
+    }
+    parameters.push(tokens[index].value);
+    index += 1;
+  } else if (tokens[index].type === 'keyword') {
+    while (tokens[index].type === 'keyword') {
+      parsedSelector += tokens[index].value;
+      index += 1;
+      if (tokens[index].type !== 'identifier') {
+        fail(`method ${identity} keyword part must declare a parameter`, identity);
+      }
+      parameters.push(tokens[index].value);
+      index += 1;
+    }
+  } else {
+    fail(`method ${identity} has an unsupported method header`, identity);
+  }
+  if (parsedSelector !== selector) {
+    fail(`method ${identity} source header declares ${parsedSelector}, not ${selector}`, identity);
+  }
+  const body = source.slice(tokens[index - 1].end).trim();
+  if (body.length === 0) fail(`method ${identity} has no body`, identity);
+  const parameterSource = parameters.length === 0 ? '' : ` ${parameters.map((name) => `:${name}`).join(' ')} |`;
+  const bodyTokens = tokens.slice(index, -1);
+  const statementSeparator = bodyTokens.length === 0 || bodyTokens.at(-1).type === '.' ? '' : '.';
+  return `[${parameterSource}\n${body}${statementSeparator}\nself\n]`;
+}
+
 // Validate every adapter-owned schema, identity and dependency-graph rule before the first native
 // owner call. Native declaration semantics (for example inherited-name legality) stay exclusively
 // in the class builder; this adapter does not duplicate them to promise a batch transaction it does
@@ -66,9 +127,6 @@ function importPlan(manifest) {
   if (!Array.isArray(manifest.packages)) fail('manifest packages must be an array');
   if (!Array.isArray(manifest.classes)) fail('manifest classes must be an array');
   if (!Array.isArray(manifest.methods)) fail('manifest methods must be an array');
-  if (manifest.methods.length !== 0) {
-    fail('M1 does not import methods; native method compilation belongs to M2');
-  }
 
   const packageNames = new Set();
   for (const item of manifest.packages) {
@@ -134,13 +192,53 @@ function importPlan(manifest) {
     ordered.push(declaration);
   };
   for (const declaration of classes) visit(declaration);
-  return {classes, ordered};
+
+  const methods = [];
+  const methodIdentities = new Set();
+  const nativeBindings = new Set();
+  for (const item of manifest.methods) {
+    exactKeys(item, ['identity', 'package', 'class', 'side', 'selector', 'source'], 'method declaration');
+    const packageName = text(item.package, 'method package');
+    if (!packageNames.has(packageName)) fail(`method names undeclared package ${packageName}`);
+    const classIdentity = text(item.class, 'method target class semantic identity');
+    if (!byIdentity.has(classIdentity)) {
+      fail(`method target ${classIdentity} is outside the imported native class graph`, item.identity ?? null);
+    }
+    if (item.side !== 'instance' && item.side !== 'class') {
+      fail(`method side must be instance or class, got ${item.side ?? 'missing'}`, item.identity ?? null);
+    }
+    const selector = text(item.selector, 'method selector');
+    const identity = text(item.identity, 'method semantic identity');
+    const expectedIdentity = canonicalMethodIdentity(packageName, classIdentity, item.side, selector);
+    if (identity !== expectedIdentity) {
+      fail(`method semantic identity ${identity} does not match its canonical declaration`, identity);
+    }
+    if (methodIdentities.has(identity)) fail(`method semantic identity ${identity} appears more than once`, identity);
+    methodIdentities.add(identity);
+    const binding = `${classIdentity}\u0000${item.side}\u0000${selector}`;
+    if (nativeBindings.has(binding)) {
+      fail(`native ${item.side} method ${classIdentity}>>${selector} appears more than once`, identity);
+    }
+    nativeBindings.add(binding);
+    const source = text(item.source, `method ${identity} source`);
+    methods.push(Object.freeze({
+      identity,
+      classIdentity,
+      side: item.side,
+      selector,
+      source: nativeMethodSource({identity, selector, source}),
+    }));
+  }
+  return {classes, ordered, methods};
 }
 
-async function importCuisNativeClasses({images, imageId, manifest} = {}) {
+async function importCuisNativePackage({images, compilation, imageId, manifest} = {}) {
   text(imageId, 'image id');
   if (!images || typeof images !== 'object') fail('images must be an image service');
   const plan = importPlan(manifest);
+  if (plan.methods.length > 0 && (!compilation || typeof compilation.compileArtifact !== 'function')) {
+    fail('compilation must be a compilation service when methods are present');
+  }
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) fail(`image ${imageId} has no Smalltalk kernel`);
 
@@ -162,6 +260,26 @@ async function importCuisNativeClasses({images, imageId, manifest} = {}) {
     }));
   }
 
+  const methodGroups = new Map();
+  for (const method of plan.methods) {
+    const target = resolved.get(method.classIdentity);
+    const classRef = method.side === 'class' ? target.metaclassRef : target.classRef;
+    const key = `${classRef.imageId}\u0000${classRef.objectId}`;
+    const group = methodGroups.get(key) ?? {classRef, methods: []};
+    group.methods.push({selector: method.selector, source: method.source});
+    methodGroups.set(key, group);
+  }
+  for (const {classRef, methods} of methodGroups.values()) {
+    await defineMethodsFromSource({
+      images,
+      compilation,
+      imageId,
+      classRef,
+      methods,
+      lane: 'wasm',
+    });
+  }
+
   // Semantic identity is useful to the caller, but this is deliberately transient output: the
   // adapter creates no durable side table or alternate native representation.
   return Object.freeze({
@@ -175,5 +293,5 @@ async function importCuisNativeClasses({images, imageId, manifest} = {}) {
 export {
   CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
   CuisNativeImportError,
-  importCuisNativeClasses,
+  importCuisNativePackage,
 };

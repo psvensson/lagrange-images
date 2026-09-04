@@ -116,10 +116,14 @@ Starting from the frozen `smalltalk/cuis-semantic-export-v1` identity contract a
 
 ### M2 — native method compilation
 
-- [ ] translate/compile imported Cuis method source through the existing Smalltalk semantic compiler;
-- [ ] install imported methods as ordinary native methods/Blocks in ordinary native method dictionaries;
-- [ ] execute an imported create -> mutate -> read behavior through native dispatch and Lagrange WASM;
-- [ ] make unsupported semantics explicit import/compile failures; no silent live-Cuis fallback.
+- [x] translate/compile imported Cuis method source through the existing Smalltalk semantic compiler;
+- [x] install imported methods as ordinary native methods/Blocks in ordinary native method dictionaries;
+- [x] execute an imported create -> mutate -> read behavior through native dispatch and Lagrange WASM;
+- [x] make unsupported semantics explicit import/compile failures; no silent live-Cuis fallback.
+
+The M2 proof deliberately stops before method replacement. Exact A-to-A import reuses the existing
+method owner's semantic identity and is write-free; A-to-B revisions/reconciliation require their
+own native method-history proof and must not become importer-owned source comparison.
 
 ### M3 — Cuis compatibility-library closure
 

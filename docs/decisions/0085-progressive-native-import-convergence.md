@@ -214,7 +214,7 @@ It must not preserve a shadow Cuis object database or require runtime-specific i
 ## Ownership
 
 - **OpenSmalltalk/Cuis toolchain provider** owns extraction from real Cuis/package machinery into canonical Cuis semantic artifacts.
-- **Cuis native-import personality/adapter** owns translation from those semantic facts into calls on native Smalltalk/image owners. M1 implements class-graph translation in `src/language/cuis-native-import.js`; it owns no duplicate class, object, storage or compiler semantics.
+- **Cuis native-import personality/adapter** owns translation from those semantic facts into calls on native Smalltalk/image owners. M1/M2 implement class-graph ordering/root mapping and full Cuis method-header translation in `src/language/cuis-native-import.js`; it owns no duplicate class, object, method identity, storage or compiler semantics.
 - **Symmetric Smalltalk personality and its existing builders/compiler** remain the owners of native Smalltalk class, slot, method and semantic compilation rules.
 - **Object/graph/image owners** remain the owners of native identity, state, persistence and history.
 - **Project/artifact owners** remain the owners of application organization, dependency/provenance and release/install semantics.
@@ -259,8 +259,29 @@ M1 is implemented by the combination of:
 The latter closes the runtime that owns the real Cuis toolchain before it starts a separate runtime
 with no Cuis provider. That runtime imports ordinary native Classes/Metaclasses/Shapes, replays with
 no frontier movement, allocates through native `basicNew`, and persists inherited/local slots as
-ordinary Values/refs. No `CuisExport*` object or Spur identity participates. M2 and later milestones
+ordinary Values/refs. No `CuisExport*` object or Spur identity participates. M3 and later milestones
 remain unimplemented, so this ADR's overall status remains accepted rather than claiming the whole
+convergence roadmap is complete.
+
+## M2 implementation evidence
+
+M2 extends that same adapter boundary without adding a compiler or method representation. It
+validates canonical method identity/target/side, translates the unary/binary/keyword Cuis method
+header and implicit receiver return into the Block-form source accepted by the existing
+class-scoped compiler, and calls
+`defineMethodsFromSource()` with the WASM lane. The native builder still derives method identity and
+owns immutable artifacts, method-dictionary admission, idempotence and conflicts.
+
+The focused proof in `test/cuis-native-import.test.js` installs inherited and local exported-form
+methods as ordinary `wasm-function/v2`-backed Blocks, executes their sends, and proves exact replay
+does not move the frontier. The real proof in
+`test/opensmalltalk-cuis-semantic-export-real.test.js` obtains those method definitions from the
+actual OpenSmalltalkVM/Cuis package, closes its owning runtime, and then performs native `basicNew`
+-> imported setter sends -> imported getter sends in a provider-free runtime. No `CuisExport*`
+object, Cuis handle/fallback or Spur identity participates.
+
+A-to-B replacement/revision reconciliation, M3 compatibility closure and later milestones remain
+unimplemented, so this ADR's overall status remains accepted rather than claiming the whole
 convergence roadmap is complete.
 
 ## Relationship to earlier ADRs
