@@ -15,6 +15,7 @@ import {
   integerValue,
   migrateMethodDictionary,
   objectRef,
+  SmalltalkKernelConflictError,
   textValue,
 } from '../src/runtime.js';
 import {
@@ -518,7 +519,10 @@ test('a concurrent method addition conflicts rather than losing a method', async
       return await original(imageId, input, opts);
     };
 
-    await assert.rejects(defineMethods({...options, methods: [method('alpha')]}), /version conflict/);
+    await assert.rejects(
+      defineMethods({...options, methods: [method('alpha')]}),
+      (error) => error instanceof SmalltalkKernelConflictError && error.name !== 'VersionConflictError',
+    );
     runtime.images.putObject = original;
 
     // beta survived, and alpha can be installed by an ordinary retry.

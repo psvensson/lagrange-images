@@ -372,6 +372,83 @@ function validateProgramTree(program, imageId) {
   for (const child of nested) validateProgramTree(child.program, imageId);
 }
 
+// Read whichever MethodDictionary representation the Behavior currently names and expose its
+// selector bindings under the class builder's one semantic view. This is used both before planning
+// a definition and after a lost dictionary CAS, so winner classification cannot drift from the
+// definition-time duplicate/replay rule.
+async function readMethodBindings({images, imageId, dictionaryRef, record}) {
+  if (isSealed(record)) throw new SmalltalkSealedMethodDictionaryError(dictionaryRef);
+  const hashed = isMethodDictionary(record);
+  const dictionaryKernel = await findSmalltalkKernel({images, imageId});
+  if (hashed && !dictionaryKernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  if (hashed) {
+    const table = validateMethodDictionary(record, dictionaryRef, dictionaryKernel.nil);
+    return {
+      hashed,
+      dictionaryKernel,
+      merged: new Map(entriesFromBuckets(table.buckets).map(([selector, method]) => [selector.value, method])),
+    };
+  }
+
+  const existingShape = await images.getShape(record.shape.imageId, record.shape.objectId);
+  if (!existingShape) throw new TypeError(`method dictionary shape not found: ${record.shape.objectId}`);
+  assertUniqueSelectorShape(existingShape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
+  return {
+    hashed,
+    dictionaryKernel,
+    merged: new Map(existingShape.slots.map((slot) => [slot.name, record.slots[slot.id]])),
+  };
+}
+
+// The backend remains authoritative for the conditional write. The class builder owns what a lost
+// CAS means: reread the Behavior's CURRENT dictionary once, then adopt only a complete semantic
+// winner. There is deliberately no internal retry loop. An unrelated/different winner is a visible
+// Smalltalk-domain conflict and an explicit caller retry may start a fresh definition attempt.
+async function classifyLostMethodDictionaryCas({
+  images, imageId, classRef, methods, capturesBySelector, lane,
+}) {
+  const currentBehavior = await requireLocalBehavior(images, imageId, classRef, 'defineMethods class');
+  const currentRef = currentBehavior.slots['behavior-methods'];
+  const current = await images.getObject(currentRef.imageId, currentRef.objectId);
+  if (!current) throw new TypeError(`method dictionary not found: ${currentRef.imageId}/${currentRef.objectId}`);
+  const {merged} = await readMethodBindings({images, imageId, dictionaryRef: currentRef, record: current});
+
+  for (const {selector, program} of methods) {
+    const installed = merged.get(selector);
+    if (!installed) {
+      throw new SmalltalkKernelConflictError('method dictionary', currentRef.imageId, currentRef.objectId);
+    }
+    if (!await isSameInstalledMethod({
+      images,
+      imageId,
+      classRef,
+      selector,
+      program,
+      captures: capturesBySelector.get(selector),
+      lane,
+      installed,
+    })) {
+      throw new SmalltalkMethodRedefinitionError(classRef, selector);
+    }
+  }
+  return current;
+}
+
+async function putMethodDictionary({
+  images, imageId, classRef, methods, capturesBySelector, lane, input, expectedVersion,
+}) {
+  try {
+    return await images.putObject(imageId, input, {expectedVersion});
+  } catch (error) {
+    // Embedders may supply their own backend implementation through the public service seam, so
+    // match the backend contract by error name rather than by this package's class identity.
+    if (error?.name !== 'VersionConflictError') throw error;
+    return await classifyLostMethodDictionaryCas({
+      images, imageId, classRef, methods, capturesBySelector, lane,
+    });
+  }
+}
+
 // Adding a method rewrites the dictionary and its shape, per ADR 0044 decision 2 — visible,
 // confined to one object kind, and gone when collections arrive. The Behavior itself is untouched,
 // which is the point of giving it a fixed shape.
@@ -392,28 +469,11 @@ async function defineMethods({
   const existing = await images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
   if (!existing) throw new TypeError(`method dictionary not found: ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
 
-  // ADR 0049 decision 7. A sealed dictionary is mid-migration: the Behavior is about to stop
-  // pointing at it, so writing here would land in a record that is being abandoned. Refusing
-  // explicitly is what turns a lost method into a visible stall the caller can retry.
-  if (isSealed(existing)) throw new SmalltalkSealedMethodDictionaryError(dictionaryRef);
-
   // Whichever representation the record says it is. Both are readable throughout migration, so a
   // class that has not been migrated keeps accepting methods exactly as before.
-  const hashed = isMethodDictionary(existing);
-  const dictionaryKernel = await findSmalltalkKernel({images, imageId});
-  if (hashed && !dictionaryKernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
-  let merged;
-  if (hashed) {
-    const table = validateMethodDictionary(existing, dictionaryRef, dictionaryKernel.nil);
-    merged = new Map(entriesFromBuckets(table.buckets).map(([selector, method]) => [selector.value, method]));
-  } else {
-    const existingShape = await images.getShape(existing.shape.imageId, existing.shape.objectId);
-    if (!existingShape) throw new TypeError(`method dictionary shape not found: ${existing.shape.objectId}`);
-    // Validate the stored dictionary against the same global invariant the dispatcher enforces,
-    // rather than letting a Map silently normalize a corrupt one while extending it.
-    assertUniqueSelectorShape(existingShape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
-    merged = new Map(existingShape.slots.map((slot) => [slot.name, existing.slots[slot.id]]));
-  }
+  const {hashed, dictionaryKernel, merged} = await readMethodBindings({
+    images, imageId, dictionaryRef, record: existing,
+  });
 
   // Preflight covers duplicates *within this call* as well as against what is stored: two new
   // entries naming the same selector would otherwise both pass and the second silently win.
@@ -542,15 +602,24 @@ async function defineMethods({
   if (hashed) {
     const kernel = dictionaryKernel;
     const {buckets} = buildMethodBuckets([...merged.entries()].map(([selector, method]) => [textValue(selector), method]));
-    return await images.putObject(imageId, {
-      id: dictionaryRef.objectId,
-      ...methodDictionaryRecordFields({
-        buckets,
-        shapeRef: objectRef(imageId, METHOD_DICTIONARY_SHAPE_ID),
-        nilRef: kernel.nil,
-        metadata: existing.metadata,
-      }),
-    }, {expectedVersion: existing._version});
+    return await putMethodDictionary({
+      images,
+      imageId,
+      classRef,
+      methods,
+      capturesBySelector,
+      lane,
+      expectedVersion: existing._version,
+      input: {
+        id: dictionaryRef.objectId,
+        ...methodDictionaryRecordFields({
+          buckets,
+          shapeRef: objectRef(imageId, METHOD_DICTIONARY_SHAPE_ID),
+          nilRef: kernel.nil,
+          metadata: existing.metadata,
+        }),
+      },
+    });
   }
 
   // The shape id encodes the canonical selector *set*, not its cardinality. Keying on the count
@@ -572,12 +641,21 @@ async function defineMethods({
   });
   const bySelector = new Map(slots.map((slot) => [slot.name, slot.id]));
 
-  return await images.putObject(imageId, {
-    id: dictionaryRef.objectId,
-    shape: objectRef(imageId, shape.id),
-    slots: Object.fromEntries(selectors.map((selector) => [bySelector.get(selector), merged.get(selector)])),
-    metadata: existing.metadata,
-  }, {expectedVersion: existing._version});
+  return await putMethodDictionary({
+    images,
+    imageId,
+    classRef,
+    methods,
+    capturesBySelector,
+    lane,
+    expectedVersion: existing._version,
+    input: {
+      id: dictionaryRef.objectId,
+      shape: objectRef(imageId, shape.id),
+      slots: Object.fromEntries(selectors.map((selector) => [bySelector.get(selector), merged.get(selector)])),
+      metadata: existing.metadata,
+    },
+  });
 }
 
 // The Block installed for a selector on a class, read through whichever representation the
