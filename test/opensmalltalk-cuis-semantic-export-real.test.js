@@ -15,8 +15,9 @@ import {
   createOpenSmalltalkCuisToolchainProvider,
   createRuntime,
   findSmalltalkKernel,
-  importCuisNativeClasses,
+  importCuisNativePackage,
   installSmalltalkAllocationProtocol,
+  installSmalltalkInstanceVariableProtocol,
   installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
   integerValue,
@@ -24,6 +25,7 @@ import {
   readBehavior,
   textValue,
 } from '../src/runtime.js';
+import {referencesOfRecord} from '../src/graph/references.js';
 
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';
@@ -64,6 +66,30 @@ LagrangeNativeImportBase subclass: #LagrangeNativeImportChild
 !classDefinition: 'LagrangeNativeImportChild class' category: #LagrangeNativeImportM1!
 LagrangeNativeImportChild class
 \tinstanceVariableNames: ''!
+
+!LagrangeNativeImportBase methodsFor: 'accessing' stamp: 'Lagrange 9/4/2026 15:00'!
+baseValue
+\t^ baseValue! !
+
+!LagrangeNativeImportBase methodsFor: 'accessing' stamp: 'Lagrange 9/4/2026 15:00'!
+baseValue: aValue
+\tbaseValue := aValue! !
+
+!LagrangeNativeImportChild methodsFor: 'accessing' stamp: 'Lagrange 9/4/2026 15:00'!
+childFirst
+\t^ childFirst! !
+
+!LagrangeNativeImportChild methodsFor: 'accessing' stamp: 'Lagrange 9/4/2026 15:00'!
+childFirst: aValue
+\tchildFirst := aValue! !
+
+!LagrangeNativeImportChild methodsFor: 'accessing' stamp: 'Lagrange 9/4/2026 15:00'!
+childSecond
+\t^ childSecond! !
+
+!LagrangeNativeImportChild methodsFor: 'accessing' stamp: 'Lagrange 9/4/2026 15:00'!
+childSecond: aValue
+\tchildSecond := aValue! !
 `;
 
 async function put(runtime, id, representation, content, {metadata = {}, dependencies = [], logicalPath = null} = {}) {
@@ -136,7 +162,7 @@ async function buildNativeLayoutFixture(runtime, {stem}) {
   return artifact.content.value;
 }
 
-test('real Cuis v2 export carries ordered local class declarations without inherited layout', {skip: !enabled, timeout: 600_000}, async () => {
+test('real Cuis v2 export carries ordered local declarations and complete method source', {skip: !enabled, timeout: 600_000}, async () => {
   const toolchainProvider = createOpenSmalltalkCuisToolchainProvider({
     vmPath: process.env.LAGRANGE_OPENSMALLTALK_VM_PATH, vmIdentity: VM_IDENTITY, timeoutMs: 600_000,
   });
@@ -160,7 +186,21 @@ test('real Cuis v2 export carries ordered local class declarations without inher
     assert.equal(child.superclass, 'cuis-class/LagrangeNativeImportM1/LagrangeNativeImportBase');
     assert.deepEqual(child.instanceVariables, ['childFirst', 'childSecond']);
     assert.equal(child.instanceVariables.includes('baseValue'), false, 'the export must not flatten inherited layout');
-    assert.deepEqual(manifest.methods, [], 'M1A fixture exercises declarations, not method compilation');
+    assert.deepEqual(
+      manifest.methods.map(({class: target, side, selector}) => [target, side, selector]),
+      [
+        ['cuis-class/LagrangeNativeImportM1/LagrangeNativeImportBase', 'instance', 'baseValue'],
+        ['cuis-class/LagrangeNativeImportM1/LagrangeNativeImportBase', 'instance', 'baseValue:'],
+        ['cuis-class/LagrangeNativeImportM1/LagrangeNativeImportChild', 'instance', 'childFirst'],
+        ['cuis-class/LagrangeNativeImportM1/LagrangeNativeImportChild', 'instance', 'childFirst:'],
+        ['cuis-class/LagrangeNativeImportM1/LagrangeNativeImportChild', 'instance', 'childSecond'],
+        ['cuis-class/LagrangeNativeImportM1/LagrangeNativeImportChild', 'instance', 'childSecond:'],
+      ],
+    );
+    assert.equal(
+      manifest.methods.find(({selector}) => selector === 'baseValue:').source,
+      'baseValue: aValue\n\tbaseValue := aValue',
+    );
 
     const serialized = JSON.stringify(manifest);
     assert.doesNotMatch(serialized, /\b(?:oop|offset|address)\b/i);
@@ -169,7 +209,7 @@ test('real Cuis v2 export carries ordered local class declarations without inher
   }
 });
 
-test('real Cuis v2 classes become native classes and durable objects after the VM is gone', {skip: !enabled, timeout: 600_000}, async () => {
+test('real Cuis v2 classes and methods become native WASM behavior after the VM is gone', {skip: !enabled, timeout: 600_000}, async () => {
   let exportText;
   const buildRuntime = await createRuntime({
     backend: {mode: 'mock'},
@@ -196,9 +236,12 @@ test('real Cuis v2 classes become native classes and durable objects after the V
     await installSmalltalkAllocationProtocol({
       images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', lane: 'neutral',
     });
+    await installSmalltalkInstanceVariableProtocol({images: runtime.images, imageId: 'native-image'});
 
     const manifest = JSON.parse(exportText);
-    const imported = await importCuisNativeClasses({images: runtime.images, imageId: 'native-image', manifest});
+    const imported = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest,
+    });
     const byIdentity = new Map(imported.classes.map((entry) => [entry.identity, entry]));
     const base = byIdentity.get('cuis-class/LagrangeNativeImportM1/LagrangeNativeImportBase');
     const child = byIdentity.get('cuis-class/LagrangeNativeImportM1/LagrangeNativeImportChild');
@@ -226,7 +269,9 @@ test('real Cuis v2 classes become native classes and durable objects after the V
     assert.deepEqual(childShape.slots[0], baseShape.slots[0], 'native inheritance composes the declared base slot');
 
     const frontierBeforeReplay = await runtime.images.frontier('native-image');
-    const replayed = await importCuisNativeClasses({images: runtime.images, imageId: 'native-image', manifest});
+    const replayed = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest,
+    });
     assert.deepEqual(replayed, imported);
     assert.equal(await runtime.images.frontier('native-image'), frontierBeforeReplay, 'A -> A import replay is write-free');
 
@@ -253,20 +298,40 @@ test('real Cuis v2 classes become native classes and durable objects after the V
       [kernel.nil, kernel.nil, kernel.nil],
       'the native allocation owner initializes the complete imported layout',
     );
-    const slotByName = new Map(childShape.slots.map(({id, name}) => [name, id]));
-    await runtime.images.putObject('native-image', {
-      id: allocated.id,
-      shape: allocated.shape,
-      behavior: allocated.behavior,
-      slots: {
-        ...allocated.slots,
-        [slotByName.get('baseValue')]: textValue('base-state'),
-        [slotByName.get('childFirst')]: integerValue(42),
-        [slotByName.get('childSecond')]: peer,
-      },
-      metadata: allocated.metadata,
-    }, {expectedVersion: allocated._version});
+    const mutate = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'native-image',
+      id: 'mutate-imported-child',
+      source: "[ :object :other | object baseValue: 'base-state'. object childFirst: 42. object childSecond: other ]",
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('native-image', mutate.block.id), [instance, peer],
+      )),
+      instance,
+      'a real Cuis setter answers its receiver rather than the assigned value',
+    );
+    const readImported = async (id, selector) => {
+      const block = await installSymmetricSmalltalkBlock({
+        images: runtime.images,
+        imageId: 'native-image',
+        id,
+        source: `[ :object | object ${selector} ]`,
+      });
+      return await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('native-image', block.block.id), [instance],
+      ));
+    };
+    assert.deepEqual(
+      await readImported('read-imported-base', 'baseValue'),
+      textValue('base-state'),
+      'the child reaches the imported base reader through native inheritance',
+    );
+    assert.deepEqual(await readImported('read-imported-first', 'childFirst'), integerValue(42));
+    assert.deepEqual(await readImported('read-imported-second', 'childSecond'), peer);
+
     const reread = await runtime.images.getObject('native-image', instance.objectId);
+    const slotByName = new Map(childShape.slots.map(({id, name}) => [name, id]));
     assert.deepEqual(reread.slots[slotByName.get('baseValue')], textValue('base-state'));
     assert.deepEqual(reread.slots[slotByName.get('childFirst')], integerValue(42));
     assert.deepEqual(reread.slots[slotByName.get('childSecond')], peer);
@@ -278,12 +343,40 @@ test('real Cuis v2 classes become native classes and durable objects after the V
       'no CuisExportClass representation participates in native construction, allocation or state',
     );
     assert.equal(await runtime.images.getObject('native-image', 'smalltalk/class/CuisExportClass'), null);
-    const nativeM1Graph = records.filter((record) =>
+    const importedMethodSelectors = [
+      'baseValue', 'baseValue:', 'childFirst', 'childFirst:', 'childSecond', 'childSecond:',
+    ];
+    const importedMethodBlocks = records.filter((record) =>
+      record.kind === 'block' && record.metadata?.smalltalk === 'method'
+        && importedMethodSelectors.includes(record.metadata.selector));
+    assert.equal(importedMethodBlocks.length, importedMethodSelectors.length);
+    assert.ok(importedMethodBlocks.every((record) => record.metadata.lane === 'wasm'));
+    for (const block of importedMethodBlocks) {
+      assert.equal(
+        (await runtime.images.getCodeArtifact(block.code.imageId, block.code.objectId)).representation,
+        'wasm-function/v2',
+      );
+    }
+    const nativeImportGraph = records.filter((record) =>
       record.id.includes('LagrangeNativeImport') || record.id === instance.objectId || record.id === peer.objectId);
-    const nativeGraphText = JSON.stringify(nativeM1Graph);
-    assert.doesNotMatch(nativeGraphText, /cuis-(?:class|method)\//, 'Cuis semantic identity is not native runtime identity');
-    assert.doesNotMatch(nativeGraphText, /@[0-9a-f]{6,}|\b0x[0-9a-f]+\b|\/\d{7,}\b|\b\d{9,}\b/i, 'no Spur address/oop form leaks');
-    assert.doesNotMatch(nativeGraphText, /\b(?:oop|offset|address)\b/i);
+    const nativeIdentityText = JSON.stringify(nativeImportGraph.flatMap((record) => [
+      record.id,
+      ...(record.kind === 'shape' ? record.slots.map(({id}) => id) : []),
+      ...(record.kind === 'object' ? Object.keys(record.slots) : []),
+      ...(record.kind === 'lexical-environment' ? Object.keys(record.bindings) : []),
+      ...referencesOfRecord(record).flatMap((ref) => [ref.imageId, ref.objectId]),
+    ]));
+    assert.doesNotMatch(
+      nativeIdentityText,
+      /cuis-(?:class|method)\//,
+      'Cuis semantic identity is not native runtime identity',
+    );
+    assert.doesNotMatch(
+      nativeIdentityText,
+      /@[0-9a-f]{6,}|\b0x[0-9a-f]+\b|\/\d{7,}\b|\b\d{9,}\b/i,
+      'no Spur address/oop form leaks into durable identity or graph references',
+    );
+    assert.doesNotMatch(nativeIdentityText, /\b(?:oop|offset|address)\b/i);
   } finally {
     await runtime.close();
   }

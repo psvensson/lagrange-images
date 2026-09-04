@@ -77,7 +77,7 @@ Cuis import adapter
 
 Do not create an importer-local executable class representation.
 
-M1 is now implemented by `importCuisNativeClasses()`. It consumes the canonical v2 manifest
+M1 and M2 are now implemented by `importCuisNativePackage()`. It consumes the canonical v2 manifest
 directly, preflights its schema/semantic identities/dependency topology, and delegates each ordered
 local declaration to `ensureClassFromDeclaration()`. Native declaration legality remains in that
 class owner: the adapter neither duplicates inherited-slot rules nor promises a new batch
@@ -111,7 +111,19 @@ lagrange-code
 Lagrange WASM
 ```
 
-An imported method becomes an ordinary native method/Block installed in the ordinary method dictionary.
+M2 translates each canonical full Cuis method definition into the selector plus Block-form source
+accepted by the existing class-scoped compiler. The adapter validates method identity, target and
+side, supports ordinary unary, binary and keyword headers, and makes Cuis's implicit receiver
+return explicit because native Blocks otherwise answer their last expression. The native compiler
+remains the sole owner of body syntax, slot binding and semantic lowering. `defineMethodsFromSource()` and
+`defineMethods()` install the result in the target native Class or Metaclass with the WASM lane, so
+an imported method is an ordinary native method/Block backed by `wasm-function/v2` and installed in
+the ordinary method dictionary. The importer chooses no method id and stores no method table.
+
+The real two-runtime proof now exports inherited and local accessors, closes Cuis, imports them, and
+performs native `basicNew` -> imported mutation sends -> imported read sends. Exact replay is
+write-free. A-to-B replacement/revision reconciliation remains later work at the native method
+history owner; M2 does not compare source text or overwrite an existing selector.
 
 ### 3. Compatibility library closure
 
