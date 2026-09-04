@@ -91,7 +91,7 @@ function normalizeInterface(value) {
   if (!SAFE_NAME.test(service)) throw new TypeError('OpenSmalltalk Cuis interface service contains unsafe characters');
   if (!SAFE_NAME.test(operation)) throw new TypeError('OpenSmalltalk Cuis interface operation contains unsafe characters');
   const exported = (service === 'proof' && ['add', 'echo', 'factorial'].includes(operation))
-    || (service === 'json' && operation === 'package-proof')
+    || (service === 'json' && ['package-proof', 'render'].includes(operation))
     || (service === 'cluster' && operation === 'package-proof')
     || (service === 'text' && operation === 'normalize')
     || (service === 'bytes' && operation === 'reverse')
@@ -107,6 +107,7 @@ function expectedArity(service, operation) {
   if (service === 'proof' && operation === 'echo') return 1;
   if (service === 'proof' && operation === 'factorial') return 1;
   if (service === 'json' && operation === 'package-proof') return 0;
+  if (service === 'json' && operation === 'render') return 1;
   if (service === 'cluster' && operation === 'package-proof') return 0;
   if (service === 'text' && operation === 'normalize') return 1;
   if (service === 'bytes' && operation === 'reverse') return 1;
@@ -143,6 +144,12 @@ const BRIDGE_METHODS = Object.freeze([
     ^ (((numbers at: 1) + (numbers at: 2) + (numbers at: 3)) = 16)
         and: [ (reparsed at: 'ok') = true
         and: [ (nested at: 'name') = 'cuis' ]]`,
+// json/render is the ADR 0085 M3 reference oracle (Bead lagrange-images-nv1.1): it answers what
+// the real Cuis JSON package's public `render:` protocol produces for one Value, so the native
+// import target has a deterministic expected result recorded from real Cuis semantics rather
+// than from a reading of the source. It is an oracle only — native execution never calls it.
+`jsonRender: aValue
+    ^ (Smalltalk at: #Json) render: aValue`,
 // cluster/package-proof (Bead lagrange-images-d57): exercise REAL behavior from the
 // multi-package cluster, not merely class presence. Compression is pure-Smalltalk and
 // headless-safe: round-trip a ByteArray through gzip. The compress idiom is the package's
@@ -408,6 +415,9 @@ const BRIDGE_METHODS = Object.freeze([
     (serviceName = 'json' and: [ operation = 'package-proof' ]) ifTrue: [
         fields size = 4 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self jsonPackageProof ].
+    (serviceName = 'json' and: [ operation = 'render' ]) ifTrue: [
+        fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self jsonRender: (self lagrangeDecode: (fields at: 5)) ].
     (serviceName = 'cluster' and: [ operation = 'package-proof' ]) ifTrue: [
         fields size = 4 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self clusterPackageProof ].
