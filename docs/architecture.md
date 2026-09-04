@@ -280,7 +280,10 @@ semantic compilation and installation to the native method owner in the WASM lan
 two-runtime proof closes the Cuis build side before a
 provider-free native runtime constructs Classes/Metaclasses/Shapes, replays without writes,
 allocates a native ObjectRef, and mutates/reads inherited/local state through imported
-`wasm-function/v2`-backed methods. A-to-B method revision/reconciliation remains future work.
+`wasm-function/v2`-backed methods. ADR 0086 adds the next vertical: exact replay is write-free;
+changed native semantics create immutable semantic/Block/function revision identities and advance
+only the existing MethodDictionary selector binding by one owner-classified CAS. The Cuis adapter
+keeps no prior-source or reconciliation state.
 
 ## 11. Foreign runtime lifecycle
 

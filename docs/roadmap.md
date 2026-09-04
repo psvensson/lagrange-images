@@ -121,9 +121,16 @@ Starting from the frozen `smalltalk/cuis-semantic-export-v1` identity contract a
 - [x] execute an imported create -> mutate -> read behavior through native dispatch and Lagrange WASM;
 - [x] make unsupported semantics explicit import/compile failures; no silent live-Cuis fallback.
 
-The M2 proof deliberately stops before method replacement. Exact A-to-A import reuses the existing
-method owner's semantic identity and is write-free; A-to-B revisions/reconciliation require their
-own native method-history proof and must not become importer-owned source comparison.
+M2 deliberately stopped before method replacement. ADR 0086 completes the separate native
+method-history proof between M2 and M3:
+
+- [x] real Cuis A import -> exact A replay -> changed B import -> exact B replay;
+- [x] Class/Metaclass + selector remains the logical position while B receives new immutable native
+  semantic/Block/`wasm-function/v2` identities;
+- [x] only the native MethodDictionary binding/version advances, exactly once for B;
+- [x] identical concurrent B converges and divergent C wins visibly without overwrite or backend
+  conflict leakage;
+- [x] the importer owns no previous-source/revision table and Project tokens do not participate.
 
 ### M3 — Cuis compatibility-library closure
 

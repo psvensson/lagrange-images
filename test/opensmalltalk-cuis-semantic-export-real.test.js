@@ -21,6 +21,7 @@ import {
   installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
   integerValue,
+  methodBlockRef,
   objectRef,
   readBehavior,
   textValue,
@@ -92,6 +93,31 @@ childSecond: aValue
 \tchildSecond := aValue! !
 `;
 
+const nativeMethodReconciliationPackage = (answer) => `'From Cuis7.9'!
+'Lagrange ADR 0085 native imported-method reconciliation fixture'!
+!provides: 'LagrangeNativeMethodReconciliation' 1 0!
+!requires: 'Cuis-Base' 60 5557 nil!
+SystemOrganization addCategory: #LagrangeNativeMethodReconciliation!
+
+!classDefinition: #LagrangeNativeMethodTarget category: #LagrangeNativeMethodReconciliation!
+Object subclass: #LagrangeNativeMethodTarget
+\tinstanceVariableNames: ''
+\tclassVariableNames: ''
+\tpoolDictionaries: ''
+\tcategory: 'LagrangeNativeMethodReconciliation'!
+!classDefinition: 'LagrangeNativeMethodTarget class' category: #LagrangeNativeMethodReconciliation!
+LagrangeNativeMethodTarget class
+\tinstanceVariableNames: ''!
+
+!LagrangeNativeMethodTarget methodsFor: 'testing' stamp: 'Lagrange 9/4/2026 20:00'!
+stable
+\t^ 9! !
+
+!LagrangeNativeMethodTarget methodsFor: 'testing' stamp: 'Lagrange 9/4/2026 20:00'!
+value
+\t^ ${answer}! !
+`;
+
 async function put(runtime, id, representation, content, {metadata = {}, dependencies = [], logicalPath = null} = {}) {
   return await runtime.images.putCodeArtifact('build-image', {
     id, languageId: 'smalltalk', representation, content, ...(logicalPath ? {logicalPath} : {}), metadata, dependencies,
@@ -160,6 +186,39 @@ async function buildNativeLayoutFixture(runtime, {stem}) {
   const artifact = await runtime.images.getCodeArtifact('build-image', `${stem}-export`);
   assert.equal(artifact.representation, CUIS_SEMANTIC_EXPORT_V2);
   return artifact.content.value;
+}
+
+async function buildNativeMethodReconciliationFixture(runtime, {stem, answer}) {
+  const baseImage = await put(runtime, `method-bi-${stem}`, CUIS_IMAGE_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_IMAGE_PATH)), {logicalPath: 'Cuis7.9-8090.image'});
+  const baseChanges = await put(runtime, `method-bc-${stem}`, CUIS_CHANGES_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_CHANGES_PATH)), {logicalPath: 'Cuis7.9-8090.changes'});
+  const baseSources = await put(runtime, `method-bs-${stem}`, CUIS_SOURCES_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_SOURCES_PATH)), {logicalPath: 'Cuis7.8.sources'});
+  const pkg = await put(runtime, `method-p-${stem}`, CUIS_PACKAGE_V1, textValue(nativeMethodReconciliationPackage(answer)), {
+    logicalPath: 'LagrangeNativeMethodReconciliation.pck.st',
+  });
+  await runtime.images.putCodeArtifact('build-image', {
+    id: `method-buildroot-${stem}`,
+    languageId: 'smalltalk',
+    representation: CUIS_BUILD_V1,
+    content: textValue(CUIS_BUILD_CONTRACT_V0),
+    metadata: {},
+    dependencies: [
+      {role: 'base-image', artifact: objectRef('build-image', baseImage.id)},
+      {role: 'base-changes', artifact: objectRef('build-image', baseChanges.id)},
+      {role: 'base-sources', artifact: objectRef('build-image', baseSources.id)},
+      {role: 'package', artifact: objectRef('build-image', pkg.id)},
+    ],
+  });
+  await runtime.toolchains.run({
+    providerId: OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
+    imageId: 'build-image',
+    roots: [objectRef('build-image', `method-buildroot-${stem}`)],
+    target: {representation: CUIS_IMAGE_V1, fileName: `${stem}.image`},
+    options: {semanticExport: CUIS_SEMANTIC_EXPORT_V2},
+    outputIds: {image: `${stem}-image`, changes: `${stem}-changes`, 'semantic-export': `${stem}-export`},
+  });
+  const artifact = await runtime.images.getCodeArtifact('build-image', `${stem}-export`);
+  assert.equal(artifact.representation, CUIS_SEMANTIC_EXPORT_V2);
+  return JSON.parse(artifact.content.value);
 }
 
 test('real Cuis v2 export carries ordered local declarations and complete method source', {skip: !enabled, timeout: 600_000}, async () => {
@@ -377,6 +436,126 @@ test('real Cuis v2 classes and methods become native WASM behavior after the VM 
       'no Spur address/oop form leaks into durable identity or graph references',
     );
     assert.doesNotMatch(nativeIdentityText, /\b(?:oop|offset|address)\b/i);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('real Cuis A import -> A replay -> B method change -> B replay advances only the native selector binding', {skip: !enabled, timeout: 900_000}, async () => {
+  let manifestA;
+  let manifestB;
+  const buildRuntime = await createRuntime({
+    backend: {mode: 'mock'},
+    toolchainProviders: [[OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID, createOpenSmalltalkCuisToolchainProvider({
+      vmPath: process.env.LAGRANGE_OPENSMALLTALK_VM_PATH, vmIdentity: VM_IDENTITY, timeoutMs: 600_000,
+    })]],
+  });
+  try {
+    await buildRuntime.images.createImage({id: 'build-image'});
+    manifestA = await buildNativeMethodReconciliationFixture(buildRuntime, {stem: 'NativeMethodA', answer: 1});
+    manifestB = await buildNativeMethodReconciliationFixture(buildRuntime, {stem: 'NativeMethodB', answer: 2});
+    const sourceBySelector = (manifest) => new Map(manifest.methods.map(({selector, source}) => [selector, source]));
+    assert.equal(sourceBySelector(manifestA).get('value'), 'value\n\t^ 1');
+    assert.equal(sourceBySelector(manifestB).get('value'), 'value\n\t^ 2');
+    assert.equal(sourceBySelector(manifestA).get('stable'), sourceBySelector(manifestB).get('stable'));
+    assert.deepEqual(manifestB.classes, manifestA.classes, 'class identity and layout remain unchanged');
+    const positions = (manifest) => manifest.methods.map(({
+      identity, package: packageName, class: classIdentity, side, selector,
+    }) => ({identity, package: packageName, class: classIdentity, side, selector}));
+    assert.deepEqual(positions(manifestB), positions(manifestA),
+      'package, class, side, selector and canonical method identity remain unchanged');
+  } finally {
+    // Both real exports are now portable semantic data. The runtime/provider/toolchain boundary is
+    // gone before any native import or execution below.
+    await buildRuntime.close();
+  }
+
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    assert.deepEqual(runtime.toolchainProviders.list(), []);
+    assert.deepEqual(runtime.foreignRuntimeProviders.list(), []);
+    await runtime.images.createImage({id: 'native-image'});
+    await installSmalltalkKernel({images: runtime.images, imageId: 'native-image'});
+    await installSmalltalkAllocationProtocol({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', lane: 'neutral',
+    });
+    await installSmalltalkInstanceVariableProtocol({images: runtime.images, imageId: 'native-image'});
+
+    const targetIdentity = 'cuis-class/LagrangeNativeMethodReconciliation/LagrangeNativeMethodTarget';
+    const importedA = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest: manifestA,
+    });
+    const targetA = importedA.classes.find(({identity}) => identity === targetIdentity);
+    const valueA = await methodBlockRef({
+      images: runtime.images, imageId: 'native-image', classRef: targetA.classRef, selector: 'value',
+    });
+    const stableA = await methodBlockRef({
+      images: runtime.images, imageId: 'native-image', classRef: targetA.classRef, selector: 'stable',
+    });
+    const blockA = await runtime.images.getBlock(valueA.imageId, valueA.objectId);
+    const semanticA = await runtime.images.getCodeArtifact('native-image', `${blockA.id}:semantic`);
+    const behaviorA = await readBehavior(runtime.images, targetA.classRef);
+    const dictionaryA = await runtime.images.getObject(behaviorA.methods.imageId, behaviorA.methods.objectId);
+
+    const allocate = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'native-image', id: 'method-reconciliation-allocation',
+      source: '[ :class | class basicNew ]',
+    });
+    const instance = await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('native-image', allocate.block.id), [targetA.classRef],
+    ));
+    const execute = async (id, selector) => {
+      const send = await installSymmetricSmalltalkBlock({
+        images: runtime.images, imageId: 'native-image', id, source: `[ :object | object ${selector} ]`,
+      });
+      return await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('native-image', send.block.id), [instance],
+      ));
+    };
+    assert.deepEqual(await execute('execute-native-method-a', 'value'), integerValue(1));
+
+    const historyA = await runtime.images.history('native-image');
+    assert.deepEqual(await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest: manifestA,
+    }), importedA);
+    assert.equal((await runtime.images.history('native-image')).length, historyA.length, 'A replay is write-free');
+    assert.deepEqual(await methodBlockRef({
+      images: runtime.images, imageId: 'native-image', classRef: targetA.classRef, selector: 'value',
+    }), valueA);
+
+    const importedB = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest: manifestB,
+    });
+    const targetB = importedB.classes.find(({identity}) => identity === targetIdentity);
+    const valueB = await methodBlockRef({
+      images: runtime.images, imageId: 'native-image', classRef: targetB.classRef, selector: 'value',
+    });
+    const stableB = await methodBlockRef({
+      images: runtime.images, imageId: 'native-image', classRef: targetB.classRef, selector: 'stable',
+    });
+    const blockB = await runtime.images.getBlock(valueB.imageId, valueB.objectId);
+    const semanticB = await runtime.images.getCodeArtifact('native-image', `${blockB.id}:semantic`);
+    const dictionaryB = await runtime.images.getObject(behaviorA.methods.imageId, behaviorA.methods.objectId);
+    assert.deepEqual(targetB.classRef, targetA.classRef, 'native Class identity is stable');
+    assert.notDeepEqual(valueB, valueA, 'value now names immutable native revision B');
+    assert.notEqual(semanticB.id, semanticA.id);
+    assert.notDeepEqual(blockB.code, blockA.code);
+    assert.deepEqual(stableB, stableA, 'unrelated selector binding is unchanged');
+    assert.equal(dictionaryB._version, dictionaryA._version + 1, 'MethodDictionary advances exactly once');
+    assert.ok(await runtime.images.getBlock(valueA.imageId, valueA.objectId), 'immutable A remains durable');
+    assert.deepEqual(await execute('execute-native-method-b', 'value'), integerValue(2));
+    assert.deepEqual(await execute('execute-native-method-stable', 'stable'), integerValue(9));
+
+    const historyB = await runtime.images.history('native-image');
+    assert.deepEqual(await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest: manifestB,
+    }), importedB);
+    assert.equal((await runtime.images.history('native-image')).length, historyB.length, 'B replay is write-free');
+    assert.deepEqual(await methodBlockRef({
+      images: runtime.images, imageId: 'native-image', classRef: targetB.classRef, selector: 'value',
+    }), valueB);
+    assert.equal((await runtime.images.getObject(behaviorA.methods.imageId, behaviorA.methods.objectId))._version,
+      dictionaryB._version);
   } finally {
     await runtime.close();
   }

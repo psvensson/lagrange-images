@@ -10,6 +10,7 @@ import {
   installSymmetricSmalltalkBlock,
   integerValue,
   objectRef,
+  reconcileMethods,
 } from '../src/runtime.js';
 import {SmalltalkMethodRedefinitionError} from '../src/language/smalltalk-class-builder.js';
 import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
@@ -30,6 +31,15 @@ const PLUS = {
     body: {op: 'integer-add', left: {op: 'receiver'}, right: {op: 'argument', index: 0}},
   },
 };
+
+const revisedPlus = (answer) => ({
+  selector: '+',
+  program: {
+    parameters: [{id: 'plus:arg', name: 'aNumber'}],
+    captures: [],
+    body: {op: 'literal', value: integerValue(answer)},
+  },
+});
 
 // A capture-bearing method, per ADR 0045 decision 6: the nil arm of a one-arm conditional names
 // `nil` through a lexical environment, which adds a write to this publication sequence. A sequence
@@ -157,6 +167,64 @@ for (const lane of ['neutral', 'wasm']) {
       }
     });
   }
+}
+
+for (const lane of ['neutral', 'wasm']) {
+  test(`exhaustive-recovery: every write publishing a ${lane} native method revision`, async () => {
+    // Prepare A once. Every fork then starts from the same authoritative selector binding and the
+    // sweep enumerates only the immutable-B publication plus the one MethodDictionary CAS.
+    const base = await forkableRuntime(async (runtime) => {
+      const kernel = await freshImage(runtime, 'app');
+      await defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+        classRef: kernel.integerClass, methods: [PLUS], lane,
+      });
+      return kernel;
+    });
+    try {
+      const total = await base.withFork(async (runtime, kernel) => {
+        const {images, writeCount} = faultingImages(runtime.images);
+        await reconcileMethods({
+          images, compilation: servicesFor(images), imageId: 'app',
+          classRef: kernel.integerClass, methods: [revisedPlus(8)], lane,
+        });
+        return writeCount();
+      });
+      assert.ok(total > 3, `expected immutable B material plus dictionary CAS, saw ${total} writes`);
+
+      for (let failAt = 1; failAt <= total; failAt += 1) {
+        for (const commitThenThrow of [false, true]) {
+          await base.withFork(async (runtime, kernel) => {
+            const {images} = faultingImages(runtime.images, {failAt, commitThenThrow});
+            await assert.rejects(
+              reconcileMethods({
+                images, compilation: servicesFor(images), imageId: 'app',
+                classRef: kernel.integerClass, methods: [revisedPlus(8)], lane,
+              }),
+              /injected/,
+            );
+            await reconcileMethods({
+              images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+              classRef: kernel.integerClass, methods: [revisedPlus(8)], lane,
+            });
+            const installed = await installSymmetricSmalltalkBlock({
+              images: runtime.images,
+              imageId: 'app',
+              id: `revision-retry-${lane}-${failAt}-${commitThenThrow}`,
+              source: '[ :n | n + 1 ]',
+            });
+            const result = await runtime.executor.execute(await runtime.invocations.invokeBlock(
+              objectRef('app', installed.block.id), [integerValue(99)],
+            ));
+            assert.deepEqual(result, integerValue(8),
+              `${lane}: B was not current after write ${failAt}, postCommit=${commitThenThrow}`);
+          });
+        }
+      }
+    } finally {
+      await base.close();
+    }
+  });
 }
 
 // A lost acknowledgement on the final dictionary swap is the case where the caller believes it

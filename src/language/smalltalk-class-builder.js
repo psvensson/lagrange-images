@@ -111,10 +111,10 @@ async function requireLocalBehavior(images, imageId, ref, label) {
   return record;
 }
 
-// Add-only for this landing. The semantic, code and Block artifacts are create-once and their ids
-// are derived from class and selector, so a redefinition would fail partway through — after new
-// artifacts, before the dictionary swap — leaving the class inconsistent. Rejecting up front is
-// honest; real replacement needs versioned method identity and gets it deliberately later.
+// `defineMethods` remains add-only. `reconcileMethods` is the explicit native-owner operation for
+// advancing an existing logical selector position to new immutable method material. Keeping those
+// contracts separate prevents a caller that asked to define once from silently acquiring update
+// semantics.
 // A visible, retryable stall rather than a silent loss: the caller retries once migration has
 // swapped the Behavior's methods edge, and lands in the hashed dictionary.
 class SmalltalkSealedMethodDictionaryError extends TypeError {
@@ -131,11 +131,27 @@ class SmalltalkMethodRedefinitionError extends TypeError {
   constructor(classRef, selector) {
     super(
       `${classRef.imageId}/${classRef.objectId} already implements ${selector}; `
-      + 'method replacement needs versioned method identity and is not supported yet',
+      + 'the current native method has different semantics and was not overwritten',
     );
     this.name = 'SmalltalkMethodRedefinitionError';
     this.selector = selector;
   }
+}
+
+// A logical method position is class + selector (`methodId`). A changed definition receives an
+// immutable revision identity beneath that position. The encoded material is the class builder's
+// existing semantic input after capture normalization: compiled native program, lane and capture
+// bindings. It is deliberately NOT Cuis source and not a probabilistic digest. Canonical JSON plus
+// base64url is injective for these normalized Values, so concurrent equal revisions select the same
+// create-once records while different revisions cannot alias.
+function methodRevisionId(classObjectId, selector, program, captures, lane) {
+  const material = canonicalJson({
+    captures,
+    lane,
+    representation: methodRepresentation(program),
+    semanticContent: JSON.stringify(program),
+  });
+  return `${methodId(classObjectId, selector)}/revision/${base64urlEncode(utf8Encode(material))}`;
 }
 
 // The generic ensure-exact-or-create helpers, with this layer's conflict error so callers and tests
@@ -329,12 +345,17 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
   return objectRef(imageId, functionArtifact.id);
 }
 
-// Is the selector already bound to exactly this definition? The Block id is deterministic from
-// class and selector, so identity is: the dictionary points at that Block, the Block was installed
-// for this lane, and its semantic artifact holds this program.
+// Is the selector already bound to exactly this definition? The first definition uses the legacy
+// class+selector Block id; an evolved definition uses the deterministic immutable revision id.
+// Both are native-owner identities, and the complete Block/semantic/environment contract must
+// still agree. Merely finding equal source or an arbitrary Block with equal-looking content is not
+// convergence.
 async function isSameInstalledMethod({images, imageId, classRef, selector, program, captures, lane, installed}) {
-  const id = methodId(classRef.objectId, selector);
-  if (!isObjectRef(installed) || installed.imageId !== imageId || installed.objectId !== id) return false;
+  const baseId = methodId(classRef.objectId, selector);
+  const revisionId = methodRevisionId(classRef.objectId, selector, program, captures, lane);
+  if (!isObjectRef(installed) || installed.imageId !== imageId
+    || (installed.objectId !== baseId && installed.objectId !== revisionId)) return false;
+  const id = installed.objectId;
   const block = await images.getBlock(imageId, id);
   if (!block || block.metadata?.lane !== lane) return false;
   const semantic = await images.getCodeArtifact(imageId, `${id}:semantic`);
@@ -449,16 +470,18 @@ async function putMethodDictionary({
   }
 }
 
-// Adding a method rewrites the dictionary and its shape, per ADR 0044 decision 2 — visible,
-// confined to one object kind, and gone when collections arrive. The Behavior itself is untouched,
-// which is the point of giving it a fixed shape.
-async function defineMethods({
+// Installing or reconciling a method rewrites the dictionary (and the legacy representation's
+// shape), per ADR 0044 decision 2 — visible and confined to one object kind. The Behavior itself is
+// untouched, which is the point of giving it a fixed shape.
+async function installMethods({
   images,
   compilation,
   imageId,
   classRef,
   methods,
   lane = 'neutral',
+  allowRedefinition,
+  operation,
 } = {}) {
   if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
   requiredText(imageId, 'image id');
@@ -487,7 +510,7 @@ async function defineMethods({
   for (const {selector, program, captures = []} of methods) {
     requiredText(selector, 'selector');
     if (incoming.has(selector)) {
-      throw new TypeError(`defineMethods declares ${selector} twice in one call`);
+      throw new TypeError(`${operation} declares ${selector} twice in one call`);
     }
     incoming.add(selector);
     capturesBySelector.set(selector, normalizeMethodCaptures(selector, program, captures));
@@ -502,7 +525,7 @@ async function defineMethods({
         alreadyInstalled.add(selector);
         continue;
       }
-      throw new SmalltalkMethodRedefinitionError(classRef, selector);
+      if (!allowRedefinition) throw new SmalltalkMethodRedefinitionError(classRef, selector);
     }
     // Walks the body, so an unknown op is rejected here rather than during compilation — after the
     // create-once `:semantic` artifact has already claimed the selector's deterministic id.
@@ -528,7 +551,10 @@ async function defineMethods({
 
   for (const {selector, program} of methods) {
     if (alreadyInstalled.has(selector)) continue;
-    const id = methodId(classRef.objectId, selector);
+    const captures = capturesBySelector.get(selector);
+    const id = merged.has(selector)
+      ? methodRevisionId(classRef.objectId, selector, program, captures, lane)
+      : methodId(classRef.objectId, selector);
     const semantic = await ensureCodeArtifact(images, imageId, {
       id: `${id}:semantic`,
       languageId: SYMMETRIC_SMALLTALK_ID,
@@ -540,7 +566,6 @@ async function defineMethods({
     // lane's Block points at a wasm-function artifact, not at the module it references.
     // Written before the code, because the WASM tree installer publishes the method's Block itself
     // and therefore needs the environment its captures resolve through.
-    const captures = capturesBySelector.get(selector);
     const desiredEnvironment = describeMethodEnvironment({methodObjectId: id, selector, captures});
     const environment = desiredEnvironment === null
       ? null
@@ -655,6 +680,26 @@ async function defineMethods({
       slots: Object.fromEntries(selectors.map((selector) => [bySelector.get(selector), merged.get(selector)])),
       metadata: existing.metadata,
     },
+  });
+}
+
+async function defineMethods(options = {}) {
+  return await installMethods({
+    ...options,
+    allowRedefinition: false,
+    operation: 'defineMethods',
+  });
+}
+
+// Native method evolution, owned at the same boundary as selector definition and the dictionary
+// CAS. Exact current semantics are a write-free success; changed semantics publish immutable
+// revision material and move the one authoritative selector binding. The importer only requests
+// this operation and owns none of its identity, history or concurrency decisions.
+async function reconcileMethods(options = {}) {
+  return await installMethods({
+    ...options,
+    allowRedefinition: true,
+    operation: 'reconcileMethods',
   });
 }
 
@@ -1080,6 +1125,7 @@ export {
   SmalltalkSealedMethodDictionaryError,
   defineClass,
   defineMethods,
+  reconcileMethods,
   ensureBlock,
   ensureClassFromDeclaration,
   ensureNamedClass,

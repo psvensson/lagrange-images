@@ -221,7 +221,10 @@ imports, replays and allocates ordinary native object state. Canonical full Cuis
 are header-translated by the adapter, with the Cuis implicit receiver return made explicit, then
 compiled and installed by the existing class-scoped compiler/method-dictionary owners in the WASM lane. Imported inherited and local accessor sends
 mutate/read that object after the runtime cut. The adapter owns no method identity, body compiler or
-method-dictionary decision; A-to-B replacement remains future owner pressure.
+method-dictionary decision. ADR 0086 now proves A -> A -> B -> B at that owner: exact replay is
+write-free, changed compiled native semantics produce immutable semantic/Block/function revision
+identities, and only the existing MethodDictionary selector binding advances. The Cuis adapter
+keeps no previous source or reconciliation state.
 
 Frozen v1 remains readable for the existing inspection materializer. Extend v2 only when the next importer milestone requires more semantic facts. Do not broaden it into arbitrary heap export or flatten inherited/physical VM layout into declaration data.
 

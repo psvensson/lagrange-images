@@ -12,6 +12,7 @@ import {
   installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
   integerValue,
+  methodBlockRef,
   objectRef,
   readBehavior,
   textValue,
@@ -373,6 +374,91 @@ test('Cuis method definitions become inherited native WASM behavior and replay w
       images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: input,
     }), imported);
     assert.equal(await runtime.images.frontier('app'), frontierBeforeReplay);
+  });
+});
+
+test('changed Cuis method semantics advance one native selector binding and replay write-free', async () => {
+  await withKernel(async (runtime) => {
+    await installSmalltalkAllocationProtocol({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane: 'neutral',
+    });
+    await installSmalltalkInstanceVariableProtocol({images: runtime.images, imageId: 'app'});
+    const method = (selector, answer) => ({
+      identity: `cuis-method/Fixture/AChild/instance/${selector}`,
+      package: 'Fixture',
+      class: 'cuis-class/Fixture/AChild',
+      side: 'instance',
+      selector,
+      source: `${selector}\n\t^ ${answer}`,
+    });
+    const a = manifest({methods: [method('stable', 9), method('value', 1)]});
+    const b = manifest({methods: [method('stable', 9), method('value', 2)]});
+    const execute = async (id, classRef, selector) => {
+      const allocation = await installSymmetricSmalltalkBlock({
+        images: runtime.images, imageId: 'app', id: `${id}-allocation`, source: '[ :class | class basicNew ]',
+      });
+      const instance = await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', allocation.block.id), [classRef],
+      ));
+      const send = await installSymmetricSmalltalkBlock({
+        images: runtime.images, imageId: 'app', id, source: `[ :object | object ${selector} ]`,
+      });
+      return await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', send.block.id), [instance],
+      ));
+    };
+
+    const importedA = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: a,
+    });
+    const childA = importedA.classes.find(({identity}) => identity === 'cuis-class/Fixture/AChild');
+    const valueA = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: childA.classRef, selector: 'value',
+    });
+    const stableA = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: childA.classRef, selector: 'stable',
+    });
+    assert.deepEqual(await execute('execute-a', childA.classRef, 'value'), integerValue(1));
+
+    const dictionaryA = (await readBehavior(runtime.images, childA.classRef)).record.slots['behavior-methods'];
+    const dictionaryRecordA = await runtime.images.getObject(dictionaryA.imageId, dictionaryA.objectId);
+    const frontierA = await runtime.images.frontier('app');
+    const replayA = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: a,
+    });
+    assert.deepEqual(replayA, importedA);
+    assert.equal(await runtime.images.frontier('app'), frontierA);
+    assert.deepEqual(await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: childA.classRef, selector: 'value',
+    }), valueA);
+
+    const importedB = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: b,
+    });
+    const childB = importedB.classes.find(({identity}) => identity === 'cuis-class/Fixture/AChild');
+    const valueB = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: childB.classRef, selector: 'value',
+    });
+    const stableB = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: childB.classRef, selector: 'stable',
+    });
+    const dictionaryRecordB = await runtime.images.getObject(dictionaryA.imageId, dictionaryA.objectId);
+    assert.deepEqual(childB.classRef, childA.classRef);
+    assert.notDeepEqual(valueB, valueA);
+    assert.deepEqual(stableB, stableA);
+    assert.equal(dictionaryRecordB._version, dictionaryRecordA._version + 1);
+    assert.deepEqual(await execute('execute-b', childB.classRef, 'value'), integerValue(2));
+    assert.deepEqual(await execute('execute-stable', childB.classRef, 'stable'), integerValue(9));
+
+    const frontierB = await runtime.images.frontier('app');
+    const replayB = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: b,
+    });
+    assert.deepEqual(replayB, importedB);
+    assert.equal(await runtime.images.frontier('app'), frontierB);
+    assert.deepEqual(await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: childB.classRef, selector: 'value',
+    }), valueB);
   });
 });
 

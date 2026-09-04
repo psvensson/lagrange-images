@@ -1,6 +1,7 @@
 import {objectRef, textValue} from '../value/index.js';
 import {
   defineMethods,
+  reconcileMethods,
   ensureBlock,
   ensureCodeArtifact,
 } from './smalltalk-class-builder.js';
@@ -218,7 +219,9 @@ async function compileSymmetricSmalltalkMethod({
 // Compile methods from source against their defining class and install them. This is where a
 // capture declaration acquires its value: the slot primitives resolve to their well-known Blocks in
 // this image, and anything else must have been supplied by the caller.
-async function defineMethodsFromSource({images, compilation, imageId, classRef, methods, lane = 'neutral', namespaceId} = {}) {
+async function methodsFromSource({
+  images, compilation, imageId, classRef, methods, lane, namespaceId, install,
+}) {
   if (!Array.isArray(methods) || methods.length === 0) throw new TypeError('methods must be a non-empty array');
   const primitiveIds = new Set(Object.values(PRIMITIVE_BLOCK_ID));
   // Resolved once: `nil` means this image's kernel nil, and a method that never writes it carries
@@ -266,13 +269,22 @@ async function defineMethodsFromSource({images, compilation, imageId, classRef, 
     });
     compiled.push({selector: method.selector, program: method.program, captures: bound});
   }
-  return await defineMethods({images, compilation, imageId, classRef, lane, methods: compiled});
+  return await install({images, compilation, imageId, classRef, lane, methods: compiled});
+}
+
+async function defineMethodsFromSource(options = {}) {
+  return await methodsFromSource({...options, lane: options.lane ?? 'neutral', install: defineMethods});
+}
+
+async function reconcileMethodsFromSource(options = {}) {
+  return await methodsFromSource({...options, lane: options.lane ?? 'neutral', install: reconcileMethods});
 }
 
 export {
   PRIMITIVE_BLOCK_ID as SMALLTALK_INSTANCE_SLOT_PRIMITIVE_BLOCK_ID,
   compileSymmetricSmalltalkMethod,
   defineMethodsFromSource,
+  reconcileMethodsFromSource,
   installSmalltalkInstanceVariableProtocol,
   instanceVariableBindings,
 };
