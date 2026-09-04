@@ -101,6 +101,23 @@ jobs:
       - name: Compile and execute a closed Rust graph through real Cargo/rustc
         run: npm run test:cargo-oci
 
+  common-lisp-integration:
+    runs-on: ubuntu-latest
+    # The language-neutrality falsifier (ADR 0084): a real SBCL from the distribution package,
+    # executed through the generic foreign-runtime contracts. The identity the test records is
+    # `sbcl/<version>` as reported by the installed binary.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts
+      - name: Install SBCL
+        run: sudo apt-get update && sudo apt-get install -y sbcl && sbcl --version
+      - name: Execute Common Lisp through the generic foreign-runtime path
+        run: npm run test:common-lisp
+
   opensmalltalk-cuis-integration:
     runs-on: ubuntu-latest
     # 20 min: the semantic-export tests add three full 6-package cluster builds (structural +

@@ -1,5 +1,6 @@
 export * from './callable-artifacts.js';
 export * from './callable-executor.js';
+export * from './common-lisp-sbcl-provider.js';
 export * from './definition-binding-registry.js';
 export * from './definition-service.js';
 export * from './line-process-runner.js';
@@ -7,3 +8,4 @@ export * from './opensmalltalk-cuis-artifact-provider.js';
 export * from './opensmalltalk-cuis-provider.js';
 export * from './provider-registry.js';
 export * from './service.js';
+export * from './stdio-value-bridge.js';

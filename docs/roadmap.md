@@ -156,7 +156,9 @@ Inspecting and navigating those structures belongs to Lagrange Object Environmen
 
 ### Common Lisp
 
-- [ ] personality spike using the common artifact/closure/toolchain substrate
+- [x] personality spike using the common artifact/closure/toolchain substrate: a real SBCL executes Lisp
+      functions through the unchanged generic foreign-runtime, callable and release contracts (ADR 0084);
+      the only generic change was extracting the stdio value-call bridge as a shared owner
 - [ ] reader/macroexpansion representation
 - [ ] dynamic bindings
 - [ ] multiple values
