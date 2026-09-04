@@ -2,8 +2,17 @@ import {createHash} from 'node:crypto';
 import {copyFile, mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {basename, join, resolve} from 'node:path';
-import {VALUE_KIND, booleanValue, bytesFromBase64, bytesValue, canonicalizeValue, float64FromBits, float64ToNumber, float64Value, integerValue, textValue} from '../value/index.js';
 import {LineProcessRunner} from './line-process-runner.js';
+import {
+  StdioValueBridgeCallError,
+  awaitBridgeReady,
+  bridgeCall,
+  bridgeQuit,
+  createBridgeHandle,
+  decodeBridgeValue,
+  encodeBridgeValue,
+  forceStopSession,
+} from './stdio-value-bridge.js';
 
 const OPENSMALLTALK_CUIS_PROVIDER_ID = 'smalltalk/opensmalltalk-cuis';
 const OPENSMALLTALK_CUIS_PROVIDER_V0 = 'opensmalltalk-cuis-runtime/v0';
@@ -91,66 +100,6 @@ function normalizeInterface(value) {
     || (service === 'item' && ['relabel', 'relabel-all', 'make'].includes(operation));
   if (!exported) throw new TypeError(`OpenSmalltalk Cuis interface not exported: ${service}/${operation}`);
   return Object.freeze({service, operation});
-}
-
-function percentEncodeUtf8(str) {
-  const bytes = new TextEncoder().encode(str);
-  let result = '';
-  for (const byte of bytes) {
-    if ((byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A)
-      || byte === 0x2D || byte === 0x2E || byte === 0x5F || byte === 0x7E) {
-      result += String.fromCharCode(byte);
-    } else {
-      result += `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
-    }
-  }
-  return result;
-}
-
-function percentDecodeUtf8(encoded) {
-  const bytes = [];
-  for (let i = 0; i < encoded.length; i++) {
-    if (encoded[i] === '%' && i + 2 < encoded.length) {
-      bytes.push(parseInt(encoded.substring(i + 1, i + 3), 16));
-      i += 2;
-    } else {
-      bytes.push(encoded.charCodeAt(i));
-    }
-  }
-  return new TextDecoder().decode(new Uint8Array(bytes));
-}
-
-function float64ToHexPayload(value) {
-  const view = new DataView(new ArrayBuffer(8));
-  view.setFloat64(0, value, false);
-  return view.getBigUint64(0, false).toString(16).padStart(16, '0');
-}
-
-function hexPayloadToFloat64(hex) {
-  const view = new DataView(new ArrayBuffer(8));
-  view.setBigUint64(0, BigInt(`0x${hex}`), false);
-  return view.getFloat64(0, false);
-}
-
-function encodeBridgeValue(input) {
-  const value = canonicalizeValue(input);
-  if (value.kind === VALUE_KIND.INTEGER) return `i:${value.value}`;
-  if (value.kind === VALUE_KIND.BOOLEAN) return `b:${value.value ? '1' : '0'}`;
-  if (value.kind === VALUE_KIND.FLOAT64) return `f:${float64ToHexPayload(float64ToNumber(value))}`;
-  if (value.kind === VALUE_KIND.TEXT) return `e:${percentEncodeUtf8(value.value)}`;
-  if (value.kind === VALUE_KIND.BYTES) return `d:${value.base64}`;
-  throw new TypeError(`OpenSmalltalk Cuis bridge does not support ${value.kind} Values yet`);
-}
-
-function decodeBridgeValue(token) {
-  if (typeof token !== 'string') throw new TypeError('OpenSmalltalk Cuis bridge response value must be text');
-  if (/^i:-?\d+$/.test(token)) return integerValue(token.slice(2));
-  if (token === 'b:1') return booleanValue(true);
-  if (token === 'b:0') return booleanValue(false);
-  if (token.startsWith('f:')) return float64Value(hexPayloadToFloat64(token.slice(2)));
-  if (token.startsWith('e:')) return textValue(percentDecodeUtf8(token.slice(2)));
-  if (token.startsWith('d:')) return bytesFromBase64(token.slice(2));
-  throw new TypeError(`invalid OpenSmalltalk Cuis bridge Value: ${token}`);
 }
 
 function expectedArity(service, operation) {
@@ -578,52 +527,16 @@ Smalltalk quitPrimitive: 0.
 `;
 }
 
-class OpenSmalltalkCuisCallError extends Error {
+// The Cuis call error keeps its name and `code` for existing consumers; the transport itself is
+// the neutral stdio value bridge (stdio-value-bridge.js).
+class OpenSmalltalkCuisCallError extends StdioValueBridgeCallError {
   constructor(code) {
-    super(`OpenSmalltalk Cuis call failed: ${code}`);
+    super('OpenSmalltalk Cuis', code);
     this.name = 'OpenSmalltalkCuisCallError';
-    this.code = code;
   }
 }
 
-async function nextMatchingLine(session, predicate, {timeoutMs, action}) {
-  const deadline = Date.now() + timeoutMs;
-  const boot = [];
-  const allLines = [];
-  for (;;) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      const suffix = allLines.length > 0 ? `; saw: ${allLines.join(' -> ')}` : '';
-      throw new TypeError(`OpenSmalltalk Cuis timed out waiting for ${action}${suffix}`);
-    }
-    let line;
-    try {
-      line = await session.nextLine({timeoutMs: remaining, action});
-    } catch (error) {
-      const suffix = allLines.length > 0 ? `; saw: ${allLines.join(' -> ')}` : '';
-      if (boot.length === 0 && allLines.length === 0) throw error;
-      throw new TypeError(`${error.message}${suffix}`, {cause: error});
-    }
-    allLines.push(line);
-    if (line.startsWith('BOOT\t')) boot.push(line);
-    if (predicate(line)) return line;
-  }
-}
-
-async function forceStopSession(session, timeoutMs) {
-  session.kill('SIGKILL');
-  try {
-    await session.waitForExit({timeoutMs});
-  } catch {
-    // The original startup failure is more useful than a secondary cleanup error.
-  }
-}
-
-function queueCall(handle, work) {
-  const task = handle.tail.then(work, work);
-  handle.tail = task.then(() => undefined, () => undefined);
-  return task;
-}
+const RUNTIME_LABEL = 'OpenSmalltalk Cuis';
 
 function createOpenSmalltalkCuisProvider({
   vmPath,
@@ -668,19 +581,9 @@ function createOpenSmalltalkCuisProvider({
           cwd: workspace,
           environment: {},
         });
-        await nextMatchingLine(
-          session,
-          (line) => line === `READY\t${CUIS_STDIO_BRIDGE_V1}`,
-          {timeoutMs: startupTimeoutMs, action: 'Cuis bridge readiness'},
-        );
+        await awaitBridgeReady(session, CUIS_STDIO_BRIDGE_V1, {timeoutMs: startupTimeoutMs, runtimeLabel: RUNTIME_LABEL});
         return Object.freeze({
-          handle: {
-            session,
-            workspace,
-            nextRequestId: 1,
-            tail: Promise.resolve(),
-            terminated: false,
-          },
+          handle: createBridgeHandle(session, {workspace}),
           metadata: Object.freeze({
             runtime: 'OpenSmalltalkVM',
             image: 'Cuis',
@@ -707,45 +610,20 @@ function createOpenSmalltalkCuisProvider({
       if (request.arguments.length !== arity) {
         throw new TypeError(`OpenSmalltalk Cuis ${callable.service}/${callable.operation} expects ${arity} arguments`);
       }
-      const encoded = request.arguments.map(encodeBridgeValue);
-      return await queueCall(handle, async () => {
-        if (handle.terminated) throw new TypeError('OpenSmalltalk Cuis runtime is terminated');
-        const id = String(handle.nextRequestId++);
-        await handle.session.writeLine(['CALL', id, callable.service, callable.operation, ...encoded].join('\t'));
-        const response = await nextMatchingLine(
-          handle.session,
-          (line) => line.startsWith(`OK\t${id}\t`) || line.startsWith(`ERR\t${id}\t`),
-          {timeoutMs: callTimeoutMs, action: `Cuis response ${id}`},
-        );
-        const fields = response.split('\t');
-        if (fields[0] === 'ERR') throw new OpenSmalltalkCuisCallError(fields[2] ?? 'unknown');
-        if (fields.length !== 3) throw new TypeError('malformed OpenSmalltalk Cuis success response');
-        return decodeBridgeValue(fields[2]);
-      });
+      try {
+        return await bridgeCall(handle, {
+          service: callable.service, operation: callable.operation, arguments: request.arguments,
+          timeoutMs: callTimeoutMs, runtimeLabel: RUNTIME_LABEL,
+        });
+      } catch (error) {
+        if (error instanceof StdioValueBridgeCallError && !(error instanceof OpenSmalltalkCuisCallError)) {
+          throw new OpenSmalltalkCuisCallError(error.code);
+        }
+        throw error;
+      }
     },
     async stop(handle) {
-      await handle.tail;
-      if (!handle.terminated) {
-        try {
-          await handle.session.writeLine('QUIT');
-          await nextMatchingLine(
-            handle.session,
-            (line) => line === 'BYE',
-            {timeoutMs: stopTimeoutMs, action: 'Cuis bridge shutdown'},
-          );
-          const exited = await handle.session.waitForExit({timeoutMs: stopTimeoutMs});
-          if (exited.code !== 0) throw new TypeError(`OpenSmalltalk Cuis VM exited with code ${exited.code}`);
-        } catch (error) {
-          handle.session.kill('SIGKILL');
-          try {
-            await handle.session.waitForExit({timeoutMs: stopTimeoutMs});
-          } catch (killError) {
-            throw new AggregateError([error, killError], 'failed to stop OpenSmalltalk Cuis runtime');
-          }
-        } finally {
-          handle.terminated = true;
-        }
-      }
+      await bridgeQuit(handle, {timeoutMs: stopTimeoutMs, runtimeLabel: `${RUNTIME_LABEL} VM`});
       await rm(handle.workspace, {recursive: true, force: true});
     },
   });
