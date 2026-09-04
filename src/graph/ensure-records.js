@@ -96,12 +96,20 @@ const defaultConflict = (kind, imageId, id) => new RecordConflictError(kind, ima
 //
 // Every per-kind ensure below is this rule over its kind's read/insert/projection; none of them
 // decides the rule again.
-async function ensureRecord({kind, imageId, desired, read, insert, projection, conflict}) {
+//
+// Two modes, one rule. EXACT (default): the record is immutable by construction, so a present or
+// winning record must be IDENTICAL to be adopted. SEED (`seed: true`): the desired record is only
+// the initial value of a record that is mutated afterwards through its own CAS (a registry that
+// is appended to, a companion whose values change), so a present or winning record is adopted AS
+// IT IS — the caller applies its own domain check to what it gets back — and only creation is
+// decided here. Neither mode ever overwrites.
+async function ensureRecord({kind, imageId, desired, read, insert, projection, conflict, seed = false}) {
+  const adopt = (record) => {
+    if (!seed && projection(desired) !== projection(record)) throw conflict(kind, imageId, desired.id);
+    return record;
+  };
   const existing = await read();
-  if (existing) {
-    if (projection(desired) !== projection(existing)) throw conflict(kind, imageId, desired.id);
-    return existing;
-  }
+  if (existing) return adopt(existing);
   try {
     return await insert();
   } catch (error) {
@@ -109,8 +117,8 @@ async function ensureRecord({kind, imageId, desired, read, insert, projection, c
     const winner = await read();
     // No readable winner of this kind means the id is occupied by something that is not this
     // kind of record: a conflicting occupant, never normalized into success.
-    if (!winner || projection(desired) !== projection(winner)) throw conflict(kind, imageId, desired.id);
-    return winner;
+    if (!winner) throw conflict(kind, imageId, desired.id);
+    return adopt(winner);
   }
 }
 
@@ -181,9 +189,9 @@ async function ensureLexicalEnvironment(images, imageId, desired, {conflict = de
 
 // ADR 0060. Object promotion writes at a derived id, so a retry after a lost acknowledgement
 // converges on the same durable object rather than minting a second identity for one transient one.
-async function ensureObject(images, imageId, desired, {conflict = defaultConflict} = {}) {
+async function ensureObject(images, imageId, desired, {conflict = defaultConflict, seed = false} = {}) {
   return await ensureRecord({
-    kind: 'object', imageId, desired, conflict, projection: objectProjection,
+    kind: 'object', imageId, desired, conflict, seed, projection: objectProjection,
     read: () => images.getObject(imageId, desired.id),
     // Insert-only: an ensure never overwrites, even when two callers raced past the read.
     insert: () => images.putObject(imageId, desired, {expectedVersion: 0}),

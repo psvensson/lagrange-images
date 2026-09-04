@@ -52,7 +52,7 @@ main -> agent/<task> -> pull request -> GitHub Actions -> squash merge -> main
 
 Protect these invariants:
 
-- Every Shape written at a derived id is admitted only through `ensureShape` in `src/graph/ensure-records.js`: insert-only create, convergence on an identical concurrent winner, conflict on a divergent occupant (layout = slots + indexed, ADR 0047). Never write `getShape` + `putShape` inline, and never add a second Shape-specific concurrency mechanism (bead ea8). The same `ensureRecord` rule backs the owner's `ensureObject`/`ensureBlock`/`ensureCodeArtifact`/`ensureLexicalEnvironment`; the Smalltalk kernel's own `ensureObject` and the class builder's `ensureLexicalEnvironment` are recorded duplicates to be routed through it (bead discovered from ea8), not a second authority to extend.
+- Every Shape written at a derived id is admitted only through `ensureShape` in `src/graph/ensure-records.js`: insert-only create, convergence on an identical concurrent winner, conflict on a divergent occupant (layout = slots + indexed, ADR 0047). Never write `getShape` + `putShape` inline, and never add a second Shape-specific concurrency mechanism (bead ea8). The same `ensureRecord` rule backs the owner's `ensureObject`/`ensureBlock`/`ensureCodeArtifact`/`ensureLexicalEnvironment`, in EXACT mode (immutable records: a present or winning record must be identical) or SEED mode (`seed: true`, for records mutated afterwards under their own CAS: adopt what exists, then apply the caller's own domain check). No Smalltalk/kernel/class-builder module implements admission itself (bead ehz; a structural test enforces it).
 ```text
 shape != behavior
 reference != authority

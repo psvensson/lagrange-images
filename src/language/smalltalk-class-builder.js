@@ -24,6 +24,7 @@ import {
   codeArtifactProjection,
   ensureBlock as ensureBlockRecord,
   ensureCodeArtifact as ensureCodeArtifactRecord,
+  ensureLexicalEnvironment as ensureLexicalEnvironmentRecord,
   ensureShape as ensureRecordShape,
 } from '../graph/ensure-records.js';
 import {TupleSet} from '../support/tuple-map.js';
@@ -227,17 +228,10 @@ function sameOptionalRef(left, right) {
   return isObjectRef(from) && isObjectRef(to) && from.imageId === to.imageId && from.objectId === to.objectId;
 }
 
-// `putLexicalEnvironment` is an upsert with a layout-compatibility check, so a plain write would
-// quietly replace the bindings of an existing method environment. Same rule as everywhere else in
-// this sequence: reuse an identical record, refuse a differing one, create an absent one.
-async function ensureLexicalEnvironment(images, imageId, desired) {
-  const existing = await images.getLexicalEnvironment(imageId, desired.id);
-  if (!existing) return await images.putLexicalEnvironment(imageId, desired, {expectedVersion: 0});
-  if (lexicalEnvironmentProjection(desired) !== lexicalEnvironmentProjection(existing)) {
-    throw new SmalltalkKernelConflictError('lexical environment', imageId, desired.id);
-  }
-  return existing;
-}
+// Method-environment admission is owned by graph/ensure-records.js (insert-only; convergent on
+// an identical concurrent winner; conflict on a divergent one). Only the conflict class is ours.
+const ensureLexicalEnvironment = (images, imageId, desired) =>
+  ensureLexicalEnvironmentRecord(images, imageId, desired, {conflict: smalltalkConflict});
 
 const ensureBlock = (images, imageId, desired) =>
   ensureBlockRecord(images, imageId, desired, {conflict: smalltalkConflict});

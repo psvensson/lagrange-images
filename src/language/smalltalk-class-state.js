@@ -1,4 +1,5 @@
 import {objectRef, isObjectRef} from '../value/index.js';
+import {ensureObject} from '../graph/ensure-records.js';
 import {findSmalltalkKernel, readBehavior, isBehaviorObject} from './smalltalk-kernel.js';
 
 // Class-instance state: the per-class companion that holds the *values* for a
@@ -60,28 +61,27 @@ async function ensureClassStateCompanion({images, imageId, classRef, classInstan
   const className = await classNameOfBehavior(images, classRef);
   const id = classStateObjectId(className);
 
-  const existing = await images.getObject(imageId, id);
-  if (existing) {
-    // Rediscovery: same identity and a compatible shape, values preserved.
-    const existingShape = await images.getShape(existing.shape.imageId, existing.shape.objectId);
-    if (!existingShape) throw new TypeError(`class-state companion ${id} has a dangling shape`);
-    const existingSlotIds = new Set(existingShape.slots.map(({id: slotId}) => slotId));
-    const missing = shape.slots.map(({id: slotId}) => slotId).filter((slotId) => !existingSlotIds.has(slotId));
-    if (missing.length > 0) {
-      throw new TypeError(
-        `class-state companion ${id} shape is missing visible class-instance slot ids: ${missing.join(', ')}`,
-      );
-    }
-    return objectRef(imageId, id);
-  }
-
-  await images.putObject(imageId, {
+  // The nil-filled companion is only a SEED: its values change afterwards, so a present (or
+  // concurrently created) companion is adopted as it is by the ensure owner (seed mode) — never
+  // overwritten by a late creator. The domain invariant that belongs HERE — the companion's shape
+  // must carry every visible class-instance slot, values preserved — is checked on whatever came
+  // back, created or adopted; it is compatibility, not identity, so it is not admission.
+  const companion = await ensureObject(images, imageId, {
     id,
     shape: classInstanceShapeRef,
     behavior: null,
     slots: Object.fromEntries(shape.slots.map(({id: slotId}) => [slotId, kernel.nil])),
     metadata: {smalltalk: 'class-state', name: className},
-  });
+  }, {seed: true});
+  const companionShape = await images.getShape(companion.shape.imageId, companion.shape.objectId);
+  if (!companionShape) throw new TypeError(`class-state companion ${id} has a dangling shape`);
+  const companionSlotIds = new Set(companionShape.slots.map(({id: slotId}) => slotId));
+  const missing = shape.slots.map(({id: slotId}) => slotId).filter((slotId) => !companionSlotIds.has(slotId));
+  if (missing.length > 0) {
+    throw new TypeError(
+      `class-state companion ${id} shape is missing visible class-instance slot ids: ${missing.join(', ')}`,
+    );
+  }
   return objectRef(imageId, id);
 }
 

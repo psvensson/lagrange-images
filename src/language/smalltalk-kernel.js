@@ -1,5 +1,5 @@
 import {base64urlEncode, utf8Encode} from '../support/portable-bytes.js';
-import {ensureShape as ensureRecordShape} from '../graph/ensure-records.js';
+import {ensureObject as ensureRecordObject, ensureShape as ensureRecordShape} from '../graph/ensure-records.js';
 import {VALUE_KIND, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {
   METHOD_DICTIONARY_SHAPE_ID,
@@ -96,7 +96,8 @@ class SmalltalkKernelConflictError extends TypeError {
 }
 
 // Key order is not part of a record's meaning, so compare a canonical projection rather than
-// whatever order the caller or the backend happened to produce.
+// whatever order the caller or the backend happened to produce. Shared by the Smalltalk builders'
+// own (non-admission) comparisons; admission itself lives in graph/ensure-records.js.
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -113,24 +114,13 @@ async function ensureShape(service, imageId, desired) {
   });
 }
 
-// `putObject` does take expectedVersion, and 0 means "must not already exist" — belt and braces
-// alongside the existence check above, against a concurrent writer.
+// Object admission is owned by graph/ensure-records.js (insert-only; convergent on an identical
+// concurrent winner; conflict on a divergent one; identity = shape/behavior/slots/indexed-when-
+// present/metadata, ADR 0060). The kernel only requests the object and names its conflict class.
 async function ensureObject(service, imageId, desired) {
-  const existing = await service.getObject(imageId, desired.id);
-  const projection = (record) => canonicalJson({
-    shape: record.shape ?? null,
-    behavior: record.behavior ?? null,
-    slots: record.slots ?? {},
-    // Unlike Shape, object absence is not equivalent to an empty indexed part: a values Shape
-    // requires the property even when its length is zero. Exactness therefore preserves absence.
-    indexed: Object.hasOwn(record, 'indexed') ? record.indexed : null,
-    metadata: record.metadata ?? {},
+  return await ensureRecordObject(service, imageId, desired, {
+    conflict: (kind, image, id) => new SmalltalkKernelConflictError(kind, image, id),
   });
-  if (!existing) return await service.putObject(imageId, desired, {expectedVersion: 0});
-  if (projection(desired) !== projection(existing)) {
-    throw new SmalltalkKernelConflictError('object', imageId, desired.id);
-  }
-  return existing;
 }
 
 // The global invariant, checked against stored data rather than assumed from how it was built.
@@ -435,8 +425,8 @@ export {
   isLegacyMethodDictionary,
   createSmalltalkTemporaryInitializer,
   SmalltalkKernelConflictError,
-  assertUniqueSelectorShape,
   canonicalJson,
+  assertUniqueSelectorShape,
   ensureObject,
   ensureShape,
   isLocalRef,
