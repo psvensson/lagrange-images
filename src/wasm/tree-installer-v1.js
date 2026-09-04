@@ -5,7 +5,7 @@ import {
   normalizeLagrangeCodeV1Program,
   parseLagrangeCodeV1Program,
 } from '../code/lagrange-code-v1.js';
-import {WASM_FUNCTION_V1} from '../code/wasm-artifacts.js';
+import {bindClosurePrototypes, describeWasmFunctionV2} from './function-contract.js';
 import {WASM_MODULE_V2, moduleFunctionOf, readModuleDescriptor} from './module-contract.js';
 import {createCompilationGroup} from '../compilation/group.js';
 import {normalizeMetadata} from '../object/model.js';
@@ -187,9 +187,8 @@ function normalizePrototypeMap(blockPrototypes) {
   return result;
 }
 
-// The v1 assembly seam. Separate from assembleWasmFunctionArtifact(), which requires
-// lagrange-code/v0 and writes no cellBindings — copying the full {id, name, source} descriptor is
-// what keeps the module/function consistency check meaningful.
+// The v1-lane assembly seam. Separate from assembleWasmFunctionArtifact(), which requires
+// lagrange-code/v0; the SUPPORTED_MODULE_ABIS gate is what keeps a v0-ABI module out of this lane.
 async function assembleWasmV1FunctionArtifact({
   images,
   semanticRef,
@@ -212,50 +211,28 @@ async function assembleWasmV1FunctionArtifact({
   }
 
   const descriptor = moduleFunctionOf(moduleDescriptor, {entry: requiredText(entry, 'WASM function entry')});
-  const allClosureSites = moduleDescriptor.closureSites;
-  const closureSites = descriptor.closureSiteIndices.map((siteIndex) => {
-    if (!Number.isInteger(siteIndex) || siteIndex < 0 || siteIndex >= allClosureSites.length) {
-      throw new TypeError(`WASM function closure site index out of range: ${siteIndex}`);
-    }
-    return allClosureSites[siteIndex];
+  const {closurePrototypes, prototypeRefs} = bindClosurePrototypes({
+    descriptor,
+    closureSites: moduleDescriptor.closureSites,
+    prototypes: normalizePrototypeMap(blockPrototypes),
   });
-
-  const prototypes = normalizePrototypeMap(blockPrototypes);
-  const prototypeRefs = [];
-  const closurePrototypes = [];
-  for (let localIndex = 0; localIndex < closureSites.length; localIndex += 1) {
-    const site = closureSites[localIndex];
-    const ref = prototypes.get(site.blockId);
-    if (!ref) throw new TypeError(`missing WASM Block prototype for semantic block: ${site.blockId}`);
+  for (const ref of prototypeRefs) {
     if (!await images.getBlock(ref.imageId, ref.objectId)) {
       throw new TypeError(`WASM Block prototype not found: ${ref.imageId}/${ref.objectId}`);
     }
-    prototypeRefs.push(ref);
-    closurePrototypes.push(Object.freeze({
-      blockId: site.blockId,
-      siteIndex: descriptor.closureSiteIndices[localIndex],
-      derivedFromIndex: 2 + prototypeRefs.length - 1,
-    }));
-    prototypes.delete(site.blockId);
   }
-  if (prototypes.size > 0) throw new TypeError(`unused WASM Block prototype: ${prototypes.keys().next().value}`);
 
-  const functionArtifact = await ensureCodeArtifact(images, semanticRef.imageId, {
-    id: functionId,
+  // The v2 function carries only its selection; abi/parameters/captures/cellBindings are the
+  // module's function-table entry, resolved at execution through the module accessor.
+  const functionArtifact = await ensureCodeArtifact(images, semanticRef.imageId, describeWasmFunctionV2({
+    functionId,
     languageId: semantic.languageId,
-    representation: WASM_FUNCTION_V1,
-    content: normalizedModuleRef,
-    derivedFrom: [semanticRef, normalizedModuleRef, ...prototypeRefs],
-    metadata: {
-      abi,
-      entry: descriptor.entry,
-      parameters: descriptor.parameters,
-      // Snapshot captures only, exactly as the module descriptor records them.
-      captures: descriptor.captures,
-      cellBindings: descriptor.cellBindings,
-      closurePrototypes,
-    },
-  });
+    semanticRef,
+    moduleRef: normalizedModuleRef,
+    entry: descriptor.entry,
+    closurePrototypes,
+    prototypeRefs,
+  }));
   return Object.freeze({moduleArtifact, functionArtifact});
 }
 

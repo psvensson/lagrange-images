@@ -39,7 +39,7 @@ Project is the intentional middle case: it is image-level but represented using 
 
 ```text
 image-native semantics
-  -> wasm-module/v2 (+ wasm-binary/v1) / wasm-function/v1
+  -> wasm-module/v2 (+ wasm-binary/v1) / wasm-function/v2
   -> Lagrange Value-handle ABI
 
 external compiler/tooling ecosystem

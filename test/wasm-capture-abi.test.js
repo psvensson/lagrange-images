@@ -5,7 +5,10 @@ import {
   createRuntime,
   integerValue,
   LAGRANGE_CODE_V0,
+  moduleFunctionOf,
   objectRef,
+  readFunctionSelection,
+  readModuleDescriptor,
   textValue,
   WASM_MODULE_V2,
   WASM_VALUE_HANDLE_ABI_V0,
@@ -34,9 +37,14 @@ test('WASM ABI passes captured bindings by stable binding id after receiver and 
     moduleId: 'captured-module',
     functionId: 'captured-function',
   });
-  assert.equal(functionArtifact.metadata.abi, WASM_VALUE_HANDLE_ABI_V0);
-  assert.equal(functionArtifact.metadata.parameters, 1);
-  assert.deepEqual(functionArtifact.metadata.captures, ['capture:offset']);
+  // ABI, arity and captures are the MODULE's function-table entry; the function only selects it.
+  const module = await runtime.images.getCodeArtifact('demo', 'captured-module');
+  const descriptor = readModuleDescriptor(module);
+  const entry = moduleFunctionOf(descriptor, {entry: readFunctionSelection(functionArtifact).entry});
+  assert.equal(descriptor.abi, WASM_VALUE_HANDLE_ABI_V0);
+  assert.equal(entry.parameters, 1);
+  assert.deepEqual(entry.captures, ['capture:offset']);
+  assert.deepEqual(functionArtifact.metadata, {}, 'the function carries no module mirror in metadata');
 
   const environment = await runtime.images.putLexicalEnvironment('demo', {
     id: 'captured-env',

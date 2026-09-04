@@ -4,6 +4,7 @@ import {
   createRuntime,
   defineClass,
   defineMethods,
+  encodeFunctionSelectionContent,
   findSmalltalkKernel,
   installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
@@ -334,7 +335,7 @@ test('the same semantic + method runs through both execution lanes', async () =>
       const code = await runtime.images.getCodeArtifact(methodBlock.code.imageId, methodBlock.code.objectId);
       assert.equal(
         code.representation,
-        lane === 'wasm' ? 'wasm-function/v1' : 'neutral-expression/v0',
+        lane === 'wasm' ? 'wasm-function/v2' : 'neutral-expression/v0',
         `the ${lane} lane must derive its own executable representation`,
       );
       // The semantic artifact is lagrange-code/v0 in both cases — the method itself is lane-neutral.
@@ -736,12 +737,15 @@ test('a wasm function with right provenance but the wrong module is a conflict',
       content: {kind: 'bytes', base64: ''},
       metadata: {abi: 'lagrange-value-handle/v0', entry: 'run', parameters: 1, captures: []},
     });
+    // A v2 decoy: identical in representation and content to what a fresh compile writes, differing
+    // ONLY in its module dependency — so the reuse comparison must include the dependency edge.
     await runtime.images.putCodeArtifact('app', {
       id: `${methodObjectId}:wasm:function`,
-      representation: 'wasm-function/v1',
-      content: objectRef('app', decoyModule.id),
+      representation: 'wasm-function/v2',
+      content: textValue(encodeFunctionSelectionContent({entry: 'run', closurePrototypes: []})),
+      dependencies: [{role: 'module', artifact: objectRef('app', decoyModule.id)}],
       derivedFrom: [objectRef('app', semantic.id), objectRef('app', decoyModule.id)],
-      metadata: {abi: 'lagrange-value-handle/v0', entry: 'run', parameters: 1, captures: [], closurePrototypes: []},
+      metadata: {},
     });
 
     await assert.rejects(

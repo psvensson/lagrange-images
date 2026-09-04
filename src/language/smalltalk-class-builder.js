@@ -321,7 +321,6 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
       languageId: semantic?.languageId ?? null,
       semanticRef,
       moduleRef,
-      moduleArtifact,
       descriptor: moduleFunctionDescriptor(moduleArtifact, soleModuleEntry(readModuleDescriptor(moduleArtifact))),
       closurePrototypes: [],
     });
@@ -489,7 +488,7 @@ async function defineMethods({
       metadata: {smalltalk: 'method', selector},
     });
     // ADR 0044 decision 6: one semantic method, an executable Block derived per lane. The WASM
-    // lane's Block points at a wasm-function/v1, not at the module it references.
+    // lane's Block points at a wasm-function artifact, not at the module it references.
     // Written before the code, because the WASM tree installer publishes the method's Block itself
     // and therefore needs the environment its captures resolve through.
     const captures = capturesBySelector.get(selector);

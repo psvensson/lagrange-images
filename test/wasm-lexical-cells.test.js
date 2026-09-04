@@ -263,7 +263,7 @@ test('a v0 module artifact is not accepted under the v1 ABI', async () => {
     });
     await assert.rejects(
       run(runtime, objectRef('wasm-cells', block.id)),
-      /WASM module ABI does not match lagrange-value-handle\/v1/,
+      /does not match module ABI lagrange-value-handle\/v0/,
     );
   });
 });

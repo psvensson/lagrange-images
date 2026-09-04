@@ -11,6 +11,7 @@ import {
   readModuleDescriptor,
   textValue,
   WASM_FUNCTION_V1,
+  WASM_FUNCTION_V2,
   WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
 } from '../src/runtime.js';
 
@@ -59,7 +60,7 @@ test('installWasmBlockTree recursively compiles and installs a complete nested B
   assert.equal(installed.nodes.length, 3);
   assert.equal(installed.block.id, 'wasm-tree');
   assert.equal(installed.semanticBlockId, null);
-  assert.ok(installed.nodes.every(({functionArtifact}) => functionArtifact.representation === WASM_FUNCTION_V1));
+  assert.ok(installed.nodes.every(({functionArtifact}) => functionArtifact.representation === WASM_FUNCTION_V2));
 
   const prototypeNodes = installed.nodes.filter(({semanticBlockId}) => semanticBlockId !== null);
   assert.equal(prototypeNodes.length, 2);

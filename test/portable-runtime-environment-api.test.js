@@ -79,8 +79,12 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // owner (src/wasm/module-contract.js, ygi) — the ONE decoder/describer of the compiled-module
   // representation, reached from the compilation registry and the WASM producers already in the
   // closure. It imports only value/object/code/support modules (no node:*).
-  assert.equal(modules.length, 110, 'the reviewed owner modules: two Project owners + the wasm-module contract owner');
+  // 111 after the wasm-function contract owner (src/wasm/function-contract.js, ADR 0082), the ONE
+  // decoder/describer of the function representation, reached from the WASM producers already in
+  // the closure. It imports only value/code modules and module-contract.js (no node:*).
+  assert.equal(modules.length, 111, 'the reviewed owner modules: two Project owners + the wasm-module and wasm-function contract owners');
   assert.ok(paths.includes('src/wasm/module-contract.js'));
+  assert.ok(paths.includes('src/wasm/function-contract.js'));
   assert.deepEqual(projectPaths, [
     'src/project/model.js',
     'src/project/working-state.js',

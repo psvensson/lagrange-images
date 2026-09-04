@@ -4,8 +4,9 @@
 // Block — recovering the exact implementation dependency and the complete executable semantics
 // from wasm-module/v2 content + the wasm-binary/v1 edge alone: the old semantic metadata is
 // absent (the bundle strips metadata), and neither the compiler, the semantic source nor any cache
-// participates. The frozen v1 form is the falsifier: the same flow over a v1 module reproduces the
-// broken installed graph.
+// participates — at BLOCK level, since wasm-function/v2 (ADR 0082) selects its entry from content.
+// The frozen v1 form is the falsifier: the same flow over a v1 module reproduces the broken
+// installed graph.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp, rm} from 'node:fs/promises';
@@ -16,7 +17,7 @@ import {
   LAGRANGE_CODE_V0,
   LAGRANGE_CODE_V1,
   WASM_MODULE_V1,
-  WASM_FUNCTION_V1,
+  WASM_FUNCTION_V2,
   WASM_MODULE_V2,
   WasmModuleCache,
   addProjectMember,
@@ -26,6 +27,7 @@ import {
   createDeploymentProfile,
   createProject,
   createRuntime,
+  functionModuleRef,
   installWasmBlockTree,
   integerValue,
   objectRef,
@@ -165,7 +167,7 @@ test('capture -> bundle -> managed install -> fresh runtime executes compiled WA
       // provenance metadata GONE (the bundle strips it) — meaning must not depend on it.
       const installedBlock = await runtimeB.images.getBlock(PROD, byKey.get('app/add-one').target.objectId);
       const installedFunction = await runtimeB.images.getCodeArtifact(PROD, installedBlock.code.objectId);
-      const installedModule = await runtimeB.images.getCodeArtifact(PROD, installedFunction.content.objectId);
+      const installedModule = await runtimeB.images.getCodeArtifact(PROD, functionModuleRef(installedFunction).objectId);
       assert.equal(installedModule.representation, WASM_MODULE_V2);
       assert.deepEqual(installedModule.metadata, {}, 'the old semantic metadata is absent after release');
       assert.equal(installedModule.dependencies.length, 1);
@@ -178,19 +180,15 @@ test('capture -> bundle -> managed install -> fresh runtime executes compiled WA
       assert.equal(contract.functions[0].entry, 'run');
       assert.equal(contract.functions[0].parameters, 1);
 
-      // Execute the INSTALLED module through the real executor, with compiler and semantic source
-      // forbidden. The function artifact that names the entry is described here purely from the
-      // recovered module contract (wasm-function/v1 still carries its own contract in stripped
-      // metadata — the follow-up slice o8a moves entry selection into content; until then an
-      // installed Block cannot dispatch, which is why this proof is module-level).
+      // Execute the INSTALLED Blocks through the installation descriptor ONLY, with compiler and
+      // semantic source forbidden: wasm-function/v2 selects its entry from content and reaches the
+      // module through its dependency, so nothing stripped by the bundle is needed (ADR 0082).
       const reads = forbidCompilerAndSource(runtimeB);
-      const [fn] = contract.functions;
-      await runtimeB.images.putCodeArtifact(PROD, {
-        id: 'recovered:function', representation: WASM_FUNCTION_V1, content: objectRef(PROD, installedModule.id),
-        metadata: {abi: contract.abi, entry: fn.entry, parameters: fn.parameters, captures: fn.captures, closurePrototypes: []},
-      });
-      await runtimeB.images.putBlock(PROD, {id: 'recovered:block', code: objectRef(PROD, 'recovered:function'), environment: null});
-      assert.deepEqual(await run(runtimeB, objectRef(PROD, 'recovered:block'), [integerValue(41)]), integerValue(42));
+      assert.equal(installedFunction.representation, WASM_FUNCTION_V2);
+      assert.deepEqual(installedFunction.metadata, {});
+      assert.deepEqual(await run(runtimeB, byKey.get('app/add-one').target, [integerValue(41)]), integerValue(42));
+      const closureB = await run(runtimeB, byKey.get('app/nested').target, [integerValue(40)]);
+      assert.deepEqual(await run(runtimeB, closureB), integerValue(42), 'the nested-Block tree (lexical-cell ABI, closure prototypes via derivedFrom) executes from the installed graph');
       assert.ok(reads.includes(WASM_MODULE_V2) && reads.includes('wasm-binary/v1'), 'execution read the descriptor and its implementation');
       assert.ok(!reads.includes(WASM_MODULE_V1));
 
@@ -198,7 +196,7 @@ test('capture -> bundle -> managed install -> fresh runtime executes compiled WA
       // function descriptor with its cellBindings, the closure sites, and compilable bytes.
       const nestedBlock = await runtimeB.images.getBlock(PROD, byKey.get('app/nested').target.objectId);
       const nestedFunction = await runtimeB.images.getCodeArtifact(PROD, nestedBlock.code.objectId);
-      const nestedModule = await runtimeB.images.getCodeArtifact(PROD, nestedFunction.content.objectId);
+      const nestedModule = await runtimeB.images.getCodeArtifact(PROD, functionModuleRef(nestedFunction).objectId);
       assert.equal(nestedModule.representation, WASM_MODULE_V2);
       assert.deepEqual(nestedModule.metadata, {});
       const nested = await readModuleContract(nestedModule, {resolveImplementation: (ref) => runtimeB.images.getCodeArtifact(ref.imageId, ref.objectId)});
@@ -251,7 +249,7 @@ test('FALSIFIER: the frozen v1 form does not survive release — the installed v
       const target = installation.members[0].target;
       const installedBlock = await runtimeB.images.getBlock(PROD, target.objectId);
       const installedFunction = await runtimeB.images.getCodeArtifact(PROD, installedBlock.code.objectId);
-      const installedModule = await runtimeB.images.getCodeArtifact(PROD, installedFunction.content.objectId);
+      const installedModule = await runtimeB.images.getCodeArtifact(PROD, functionModuleRef(installedFunction).objectId);
       assert.equal(installedModule.representation, WASM_MODULE_V1);
       assert.deepEqual(installedModule.metadata, {}, 'the bundle stripped the v1 contract');
       assert.throws(() => readModuleDescriptor(installedModule), /metadata\.abi/, 'the installed v1 module has no readable contract');

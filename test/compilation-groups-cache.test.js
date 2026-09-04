@@ -7,6 +7,7 @@ import {
   installWasmBlockTree,
   LAGRANGE_CODE_WASM_GROUP_COMPILER_ID,
   objectRef,
+  readFunctionSelection,
   readModuleDescriptor,
   textValue,
   WASM_MODULE_V2,
@@ -200,7 +201,7 @@ test('independent WASM Block-tree installations share one multi-function module 
   assert.equal(readModuleDescriptor(modulesAfterFirst[0]).functions.length, 3);
   assert.deepEqual(readModuleDescriptor(modulesAfterFirst[0]).functions.map(({entry}) => entry), ['run_0', 'run_1', 'run_2']);
   assert.ok(first.nodes.every(({moduleArtifact}) => moduleArtifact.id === modulesAfterFirst[0].id));
-  assert.equal(new Set(first.nodes.map(({functionArtifact}) => functionArtifact.metadata.entry)).size, 3);
+  assert.equal(new Set(first.nodes.map(({functionArtifact}) => readFunctionSelection(functionArtifact).entry)).size, 3);
 
   const second = await installWasmBlockTree({
     images: runtime.images,

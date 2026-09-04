@@ -1,20 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LAGRANGE_CODE_V0,
-  WASM_FUNCTION_V1,
-  WASM_INSTANCE_REUSE_STATELESS_V0,
-  WASM_MODULE_V1,
-  WASM_MODULE_V2,
-  WasmInstancePool,
   compileSymmetricSmalltalkBlock,
   compileWasmFunctionArtifact,
   createDefaultCodeExecutorRegistry,
   createRuntime,
   installWasmBlockTree,
   integerValue,
+  LAGRANGE_CODE_V0,
   objectRef,
   textValue,
+  WASM_FUNCTION_V1,
+  WASM_FUNCTION_V2,
+  WASM_INSTANCE_REUSE_STATELESS_V0,
+  WASM_MODULE_V1,
+  WASM_MODULE_V2,
+  WasmInstancePool,
 } from '../src/runtime.js';
 
 async function putSemantic(runtime, id, source) {
@@ -211,13 +212,15 @@ test('WASM modules without an explicit instance-reuse contract remain one-shot',
     derivedFrom: moduleArtifact.derivedFrom,
     metadata: moduleMetadata,
   });
+  // The same v2 selection, bound to the one-shot module through the module dependency.
   const oneShotFunction = await runtime.images.putCodeArtifact('demo', {
     id: 'one-shot-function',
     languageId: functionArtifact.languageId,
-    representation: WASM_FUNCTION_V1,
-    content: objectRef('demo', oneShotModule.id),
+    representation: WASM_FUNCTION_V2,
+    content: functionArtifact.content,
+    dependencies: [{role: 'module', artifact: objectRef('demo', oneShotModule.id)}],
     derivedFrom: [objectRef('demo', semantic.id), objectRef('demo', oneShotModule.id)],
-    metadata: functionArtifact.metadata,
+    metadata: {},
   });
   const block = await runtime.images.putBlock('demo', {
     id: 'one-shot-block',

@@ -17,7 +17,8 @@ artifact's `representation`.
 | --- | --- | --- |
 | `neutral-expression/v0` | — (built by language personalities) | `neutralExpressionV0Executor` |
 | `neutral-expression/v1` | — (built by language personalities) | `neutralExpressionV1Executor`; adds temporaries, sequences and assignment |
-| `wasm-function/v1` | `installWasmBlockTree()` | `createWasmFunctionV1Executor()` |
+| `wasm-function/v2` | `installWasmBlockTree()` / `assembleWasmFunctionArtifact()` (ADR 0082: selection `{entry, closurePrototypes}` as content + one `module` dependency) | `createWasmFunctionV1Executor()` (chooses by the module's ABI) |
+| `wasm-function/v1` | FROZEN (ADR 0082) — never produced; readable/executable in-image, does not survive release | `createWasmFunctionV1Executor()` |
 | `wasm-callable-interface/v1` | `installWasmScalarCallable()` | `createWasmCallableInterfaceV1Executor()` |
 | `foreign-runtime-callable-interface/v1` | `installForeignRuntimeCallable()` | `createForeignRuntimeCallableInterfaceV1Executor()` |
 | `wasm-component-binding/v1` | `installWasmComponentBinding()` | `createWasmComponentBindingV1Executor()` |

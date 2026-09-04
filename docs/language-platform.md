@@ -123,7 +123,7 @@ Smalltalk source
   -> Smalltalk syntax
   -> lagrange-code/v0
        |-> neutral-expression/v0
-       `-> wasm-module/v2 (+ wasm-binary/v1) / wasm-function/v1
+       `-> wasm-module/v2 (+ wasm-binary/v1) / wasm-function/v2
   -> Block
 ```
 
@@ -360,11 +360,12 @@ Strings/bytes, records/arrays, multiple results, WASI, callbacks, async operatio
 ```text
 lagrange-code/v0 | lagrange-code/v1
   -> wasm-module/v2 ---dependency(implementation)---> wasm-binary/v1
-  -> wasm-function/v1
+  -> wasm-function/v2 ---dependency(module)---> wasm-module/v2
 ```
 
-Uses the Lagrange Value-handle ABIs and known host effects. The module's executable contract is
-identity-bearing content (ADR 0081); `wasm-module/v1` is frozen and read-only.
+Uses the Lagrange Value-handle ABIs and known host effects. The module's executable contract and
+the function's entry selection are identity-bearing content (ADRs 0081, 0082); `wasm-module/v1`
+and `wasm-function/v1` are frozen and read-only.
 
 ### Foreign WASM
 

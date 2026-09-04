@@ -6,6 +6,15 @@ export * from './foreign-callable-executor.js';
 export * from './instance-pool.js';
 export * from './module-cache.js';
 export {
+  assertWasmFunctionArtifactAnyVersion,
+  assertWasmFunctionV2Artifact,
+  describeWasmFunctionV2,
+  encodeFunctionSelectionContent,
+  functionModuleRef,
+  readFunctionSelection,
+  resolveFunctionContract,
+} from './function-contract.js';
+export {
   WASM_MODULE_V2,
   assertWasmModuleArtifactAnyVersion,
   assertWasmModuleV2Artifact,

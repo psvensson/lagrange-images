@@ -7,6 +7,7 @@ import {
   integerValue,
   LAGRANGE_CODE_V0,
   objectRef,
+  readFunctionSelection,
   readModuleDescriptor,
   textValue,
 } from '../src/runtime.js';
@@ -160,9 +161,12 @@ test('WASM function artifacts keep closure prototype graph edges in derivedFrom 
   });
 
   assert.equal(readModuleDescriptor(moduleArtifact).closureSites[0].blockId, blockId);
-  assert.equal(functionArtifact.metadata.closurePrototypes[0].blockId, blockId);
-  assert.equal(functionArtifact.metadata.closurePrototypes[0].derivedFromIndex, 2);
+  const selection = readFunctionSelection(functionArtifact);
+  assert.equal(selection.closurePrototypes[0].blockId, blockId);
+  assert.equal(selection.closurePrototypes[0].derivedFromIndex, 2);
   assert.deepEqual(functionArtifact.derivedFrom[2], prototypeRef);
-  assert.equal(JSON.stringify(functionArtifact.metadata).includes(prototypeRef.objectId), false);
+  // The prototype is a graph edge (derivedFrom), never a ref hidden in content or metadata.
+  assert.equal(functionArtifact.content.value.includes(prototypeRef.objectId), false);
+  assert.deepEqual(functionArtifact.metadata, {});
   await runtime.close();
 });

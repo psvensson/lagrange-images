@@ -135,12 +135,12 @@ language meaning
    -> lagrange-code/v0 | lagrange-code/v1
    -> wasm-module/v2  (canonical contract as content)
         dependency(implementation) -> wasm-binary/v1 (exact bytes)
-   -> wasm-function/v1
+   -> wasm-function/v2  (entry selection as content; dependency(module) -> the module)
    -> ActivationExecutor
 ```
 
-`wasm-module/v1` is frozen (ADR 0081): still executable in-image through the canonical accessor,
-never produced, and it does not survive a portable release.
+`wasm-module/v1` and `wasm-function/v1` are frozen (ADRs 0081, 0082): still executable in-image
+through the canonical accessors, never produced, and they do not survive a portable release.
 
 The semantic artifact is independent of the physical WASM ABI. The default compiler currently chooses between two internal contracts.
 

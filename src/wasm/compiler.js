@@ -10,7 +10,7 @@ import {
   vector,
 } from './encoding.js';
 import {LAGRANGE_CODE_V0, parseLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
-import {WASM_FUNCTION_V1} from '../code/wasm-artifacts.js';
+import {bindClosurePrototypes, describeWasmFunctionV2} from './function-contract.js';
 import {WASM_MODULE_V2, moduleFunctionOf, readModuleDescriptor, soleModuleEntry} from './module-contract.js';
 import {canonicalizeValue, isObjectRef, isReference, objectRef} from '../value/index.js';
 import {
@@ -384,29 +384,25 @@ function moduleFunctionDescriptor(moduleArtifact, entry) {
   return moduleFunctionOf(readModuleDescriptor(moduleArtifact), {entry});
 }
 
+// The function artifact a compilation selects: described ONCE by the function-contract owner
+// (wasm-function/v2). Nothing module-owned is copied onto the function.
 function describeWasmFunctionArtifact({
   functionId,
   languageId,
   semanticRef,
   moduleRef,
-  moduleArtifact,
   descriptor,
   closurePrototypes,
   prototypeRefs = [],
 }) {
-  return Object.freeze({
-    id: functionId,
+  return describeWasmFunctionV2({
+    functionId,
     languageId,
-    representation: WASM_FUNCTION_V1,
-    content: moduleRef,
-    derivedFrom: [semanticRef, moduleRef, ...prototypeRefs],
-    metadata: {
-      abi: readModuleDescriptor(moduleArtifact).abi,
-      entry: descriptor.entry,
-      parameters: descriptor.parameters,
-      captures: descriptor.captures,
-      closurePrototypes,
-    },
+    semanticRef,
+    moduleRef,
+    entry: descriptor.entry,
+    closurePrototypes,
+    prototypeRefs,
   });
 }
 
@@ -429,35 +425,18 @@ async function assembleWasmFunctionArtifact({
   if (!moduleArtifact) throw new TypeError('moduleRef must reference a WASM module artifact');
   const moduleDescriptor = readModuleDescriptor(moduleArtifact);
   const descriptor = moduleFunctionOf(moduleDescriptor, {entry: requiredText(entry, 'WASM function entry')});
-  const allClosureSites = moduleDescriptor.closureSites;
-  const closureSites = descriptor.closureSiteIndices.map((siteIndex) => {
-    if (!Number.isInteger(siteIndex) || siteIndex < 0 || siteIndex >= allClosureSites.length) {
-      throw new TypeError(`WASM function closure site index out of range: ${siteIndex}`);
-    }
-    return allClosureSites[siteIndex];
+  const {closurePrototypes, prototypeRefs} = bindClosurePrototypes({
+    descriptor,
+    closureSites: moduleDescriptor.closureSites,
+    prototypes: normalizePrototypeMap(blockPrototypes),
   });
-
-  const prototypes = normalizePrototypeMap(blockPrototypes);
-  const prototypeRefs = [];
-  const closurePrototypes = [];
-  for (let localIndex = 0; localIndex < closureSites.length; localIndex += 1) {
-    const site = closureSites[localIndex];
-    const ref = prototypes.get(site.blockId);
-    if (!ref) throw new TypeError(`missing WASM Block prototype for semantic block: ${site.blockId}`);
+  for (const ref of prototypeRefs) {
     if (!await images.getBlock(ref.imageId, ref.objectId)) {
       throw new TypeError(`WASM Block prototype not found: ${ref.imageId}/${ref.objectId}`);
     }
-    prototypeRefs.push(ref);
-    closurePrototypes.push(Object.freeze({
-      blockId: site.blockId,
-      siteIndex: descriptor.closureSiteIndices[localIndex],
-      derivedFromIndex: 2 + prototypeRefs.length - 1,
-    }));
-    prototypes.delete(site.blockId);
   }
-  if (prototypes.size > 0) throw new TypeError(`unused WASM Block prototype: ${prototypes.keys().next().value}`);
 
-  // The complete wasm-function/v1 contract, in one place. A caller deciding whether an existing
+  // The complete wasm-function/v2 contract, in one place. A caller deciding whether an existing
   // artifact may be reused compares against this same description, so "exact" cannot drift apart
   // from what assembly would actually write.
   const input = describeWasmFunctionArtifact({
@@ -465,7 +444,6 @@ async function assembleWasmFunctionArtifact({
     languageId: semantic.languageId,
     semanticRef,
     moduleRef: normalizedModuleRef,
-    moduleArtifact,
     descriptor,
     closurePrototypes,
     prototypeRefs,
