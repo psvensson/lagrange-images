@@ -16,10 +16,12 @@ import {
   createOpenSmalltalkCuisProvider,
   createOpenSmalltalkCuisToolchainProvider,
   createRuntime,
+  findSmalltalkKernel,
   importCuisNativePackage,
   installSymmetricSmalltalkStandardImage,
   integerValue,
   objectRef,
+  readBehavior,
   textValue,
 } from '../src/runtime.js';
 
@@ -202,33 +204,96 @@ test('real Cuis is the M3 oracle for the acceptance target and never the executo
   }
 });
 
-test('the real JSON package refuses native import at its first unsupported semantic', {skip: !enabled, timeout: 900_000}, async () => {
+// The scope of the M3 acceptance target, named in the canonical export's own semantic identities:
+// the package's `Json` class, its class-side `render:` entry point, and the package's own
+// `Integer>>jsonWriteOn:` extension that an integer receiver reaches from there.
+const ACCEPTANCE_TARGET_SCOPE = Object.freeze({
+  classes: Object.freeze(['cuis-class/JSON/Json']),
+  methods: Object.freeze([
+    'cuis-method/JSON/Json/class/render:',
+    'cuis-method/JSON/Integer/instance/jsonWriteOn:',
+  ]),
+});
+
+async function nativeRuntime() {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  assert.deepEqual(runtime.toolchainProviders.list(), [], 'the native runtime has no Cuis toolchain provider');
+  assert.deepEqual(runtime.foreignRuntimeProviders.list(), [], 'the native runtime has no foreign runtime fallback');
+  await runtime.images.createImage({id: 'native-image'});
+  await installSymmetricSmalltalkStandardImage({
+    images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', lane: 'wasm',
+  });
+  return runtime;
+}
+
+test('a real upstream class imports natively from the canonical export with Cuis gone', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await jsonSemanticExport());
 
-  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  const runtime = await nativeRuntime();
   try {
-    assert.deepEqual(runtime.toolchainProviders.list(), [], 'the native runtime has no Cuis toolchain provider');
-    assert.deepEqual(runtime.foreignRuntimeProviders.list(), [], 'the native runtime has no foreign runtime fallback');
-    await runtime.images.createImage({id: 'native-image'});
-    await installSymmetricSmalltalkStandardImage({
-      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', lane: 'wasm',
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'native-image'});
+    const scope = {classes: ['cuis-class/JSON/Json'], methods: []};
+    const imported = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest, scope,
     });
 
+    assert.deepEqual(imported.classes.map(({identity}) => identity), ['cuis-class/JSON/Json']);
+    const behavior = await readBehavior(runtime.images, imported.classes[0].classRef);
+    assert.deepEqual(behavior.superclass, kernel.objectClass, 'the exact Cuis-Base/Object mapping is structural M1 compatibility');
+    const shape = await runtime.images.getShape(behavior.instanceShape.imageId, behavior.instanceShape.objectId);
+    assert.deepEqual(
+      shape.slots.map(({name}) => name),
+      ['stream', 'ctorMap'],
+      'the real upstream class keeps its own declared layout',
+    );
+
+    // A declaration the scope omits is not constructed: `JsonObject` and `JsonSyntaxError` are in
+    // the same canonical manifest and stay absent.
+    assert.equal(await runtime.images.getObject('native-image', 'smalltalk/class/JsonObject'), null);
+    assert.equal(await runtime.images.getObject('native-image', 'smalltalk/class/JsonSyntaxError'), null);
+
+    const frontierBeforeReplay = await runtime.images.frontier('native-image');
+    const replayed = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest, scope,
+    });
+    assert.deepEqual(replayed, imported);
+    assert.equal(
+      await runtime.images.frontier('native-image'),
+      frontierBeforeReplay,
+      'exact replay of a real scoped package import is write-free',
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('the M3 acceptance target refuses native import at its first unsupported semantic', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await jsonSemanticExport());
+
+  const runtime = await nativeRuntime();
+  try {
     const frontierBefore = await runtime.images.frontier('native-image');
     const refusal = await importCuisNativePackage({
-      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest,
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: ACCEPTANCE_TARGET_SCOPE,
     }).then(
-      (imported) => assert.fail(`the real JSON package imported natively: ${JSON.stringify(imported)}`),
+      (imported) => assert.fail(`the M3 acceptance target imported natively: ${JSON.stringify(imported)}`),
       (error) => error,
     );
 
-    // M3 blocker 1 (Bead lagrange-images-nv1.2): the whole canonical manifest is the current import
-    // unit, so the first unsupported semantic a real package hits is a class the acceptance target
-    // never uses. `JsonObject` descends from Cuis's `OrderedDictionary`, which this image has no
-    // native counterpart for; `Json` alone would import.
-    assert.ok(refusal instanceof CuisNativeImportError, 'the real package is refused, not partially imported');
-    assert.equal(refusal.semanticIdentity, 'cuis-class/JSON/JsonObject');
-    assert.match(refusal.message, /unsupported superclass semantic identity cuis-class\/Cuis-Base\/OrderedDictionary/);
+    // M3 blocker 2 (Bead lagrange-images-nv1.3): most of this package's behavior is extension
+    // methods on classes it does not define, and the adapter maps exactly one base semantic
+    // identity — `cuis-class/Cuis-Base/Object`, and only as the M1 structural superclass root.
+    // `Integer>>jsonWriteOn:` therefore has no native class to install on.
+    assert.ok(refusal instanceof CuisNativeImportError, 'the target is refused, not partially imported');
+    assert.equal(refusal.semanticIdentity, 'cuis-method/JSON/Integer/instance/jsonWriteOn:');
+    assert.match(
+      refusal.message,
+      /method target cuis-class\/Cuis-Base\/Integer is outside the imported native class graph/,
+    );
 
     // The adapter's preflight-before-first-write rule holds for a real package, not only for
     // fixtures: a refused import leaves the native image exactly where it was.

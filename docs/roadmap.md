@@ -144,6 +144,9 @@ feature must be demanded by that consumer and repaired at its own owner
 - [x] drive the pinned package through toolchain -> canonical export -> native import as a real
   forcing harness, record the real-Cuis oracle for the acceptance target, and classify the first
   unsupported semantic instead of pretending it succeeded;
+- [x] import a caller-declared scope of the unmodified canonical manifest, so one useful behavior
+  can be imported without first satisfying declarations it never uses; the package's own `Json`
+  class now imports natively with Cuis gone;
 - [ ] map Cuis base classes/protocols to existing native classes only when required behavior is explicitly equivalent and tested;
 - [ ] add missing native library/kernel semantics only for real imported consumers;
 - [ ] use real OpenSmalltalkVM/Cuis as a semantic oracle where differential proof is useful;
