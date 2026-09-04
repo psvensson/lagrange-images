@@ -55,7 +55,9 @@ jobs:
 
   lagrange-backend-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The proof itself runs in ~30s; the npm ci / public-package link setup varies 5-15 minutes on
+    # hosted runners and hit the old 15-minute limit with the test already green (PR #195).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/checkout@v7

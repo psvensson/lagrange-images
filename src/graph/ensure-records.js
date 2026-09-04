@@ -9,6 +9,8 @@
 // It lives here, language-neutral, because both the Symmetric Smalltalk builders and the WASM tree
 // installers write deterministic ids and both owe the same convergence guarantee. Two copies would
 // be two chances to disagree about what "identical" means.
+import {SHAPE_INDEXED} from '../object/model.js';
+
 class RecordConflictError extends TypeError {
   constructor(kind, imageId, objectId) {
     super(`${kind} ${imageId}/${objectId} already exists and differs; refusing to overwrite it`);
@@ -70,15 +72,71 @@ function objectProjection(record) {
   });
 }
 
+// A Shape's meaning is its LAYOUT: named slots and the indexed declaration (ADR 0047: absence of
+// `indexed` is the old `none` meaning, and a values Shape must never compare equal to a no-indexed
+// Shape by accident). Metadata is provenance and does not decide whether two Shapes are the same.
+function shapeProjection(record) {
+  return canonicalRecordJson({
+    slots: record.slots ?? [],
+    indexed: Object.hasOwn(record, 'indexed') ? record.indexed : SHAPE_INDEXED.NONE,
+  });
+}
+
 const defaultConflict = (kind, imageId, id) => new RecordConflictError(kind, imageId, id);
 
-async function ensureCodeArtifact(images, imageId, desired, {conflict = defaultConflict} = {}) {
-  const existing = await images.getCodeArtifact(imageId, desired.id);
-  if (!existing) return await images.putCodeArtifact(imageId, desired);
-  if (codeArtifactProjection(desired) !== codeArtifactProjection(existing)) {
-    throw conflict('code artifact', imageId, desired.id);
+// THE ensure-exact-or-create core, including its concurrency rule (bead lagrange-images-ea8):
+//
+//   read absent -> INSERT-ONLY create (the image service's expectedVersion:0 CAS in one backend
+//                  transaction, so a record is never overwritten or half-written)
+//   the insert loses the CAS -> another caller created the record between our read and our
+//                  insert; re-read and treat the WINNER as the authority: identical -> converge on
+//                  it, different -> conflict. Which contender wins scheduling never changes the
+//                  outcome, and a retry after the winner commits is idempotent.
+//   read present -> identical reuses, different conflicts, nothing is written.
+//
+// Every per-kind ensure below is this rule over its kind's read/insert/projection; none of them
+// decides the rule again.
+async function ensureRecord({kind, imageId, desired, read, insert, projection, conflict}) {
+  const existing = await read();
+  if (existing) {
+    if (projection(desired) !== projection(existing)) throw conflict(kind, imageId, desired.id);
+    return existing;
   }
-  return existing;
+  try {
+    return await insert();
+  } catch (error) {
+    if (error?.name !== 'VersionConflictError') throw error;
+    const winner = await read();
+    // No readable winner of this kind means the id is occupied by something that is not this
+    // kind of record: a conflicting occupant, never normalized into success.
+    if (!winner || projection(desired) !== projection(winner)) throw conflict(kind, imageId, desired.id);
+    return winner;
+  }
+}
+
+// The ONE Shape admission owner. Reads through getRecord so a non-Shape occupant of the id is a
+// conflict rather than "absent"; inserts through the insert-only putShape.
+async function ensureShape(images, imageId, desired, {conflict = defaultConflict} = {}) {
+  const read = async () => {
+    const record = typeof images.getRecord === 'function'
+      ? await images.getRecord(imageId, desired.id)
+      : await images.getShape(imageId, desired.id);
+    if (!record) return null;
+    if (record.kind !== 'shape') throw conflict('shape', imageId, desired.id);
+    return record;
+  };
+  return await ensureRecord({
+    kind: 'shape', imageId, desired, read, conflict, projection: shapeProjection,
+    insert: () => images.putShape(imageId, desired),
+  });
+}
+
+async function ensureCodeArtifact(images, imageId, desired, {conflict = defaultConflict} = {}) {
+  return await ensureRecord({
+    kind: 'code artifact', imageId, desired, conflict, projection: codeArtifactProjection,
+    read: () => images.getCodeArtifact(imageId, desired.id),
+    insert: () => images.putCodeArtifact(imageId, desired),
+  });
 }
 
 // Ensure-exact-or-create for a SMALL GRAPH of code artifacts that must become durable together
@@ -103,34 +161,33 @@ async function ensureCodeArtifacts(images, imageId, desiredList, {conflict = def
 }
 
 async function ensureBlock(images, imageId, desired, {conflict = defaultConflict} = {}) {
-  const existing = await images.getBlock(imageId, desired.id);
-  if (!existing) return await images.putBlock(imageId, desired);
-  if (blockProjection(desired) !== blockProjection(existing)) {
-    throw conflict('block', imageId, desired.id);
-  }
-  return existing;
+  return await ensureRecord({
+    kind: 'block', imageId, desired, conflict, projection: blockProjection,
+    read: () => images.getBlock(imageId, desired.id),
+    insert: () => images.putBlock(imageId, desired),
+  });
 }
 
 // ADR 0052 decision 7a. Promotion writes at deterministic ids, so a retry after a lost
 // acknowledgement must converge rather than mint a second identity for one closure.
 async function ensureLexicalEnvironment(images, imageId, desired, {conflict = defaultConflict} = {}) {
-  const existing = await images.getLexicalEnvironment(imageId, desired.id);
-  if (!existing) return await images.putLexicalEnvironment(imageId, desired);
-  if (lexicalEnvironmentProjection(desired) !== lexicalEnvironmentProjection(existing)) {
-    throw conflict('lexical environment', imageId, desired.id);
-  }
-  return existing;
+  return await ensureRecord({
+    kind: 'lexical environment', imageId, desired, conflict, projection: lexicalEnvironmentProjection,
+    read: () => images.getLexicalEnvironment(imageId, desired.id),
+    // Insert-only: an ensure never overwrites, even when two callers raced past the read.
+    insert: () => images.putLexicalEnvironment(imageId, desired, {expectedVersion: 0}),
+  });
 }
 
 // ADR 0060. Object promotion writes at a derived id, so a retry after a lost acknowledgement
 // converges on the same durable object rather than minting a second identity for one transient one.
 async function ensureObject(images, imageId, desired, {conflict = defaultConflict} = {}) {
-  const existing = await images.getObject(imageId, desired.id);
-  if (!existing) return await images.putObject(imageId, desired);
-  if (objectProjection(desired) !== objectProjection(existing)) {
-    throw conflict('object', imageId, desired.id);
-  }
-  return existing;
+  return await ensureRecord({
+    kind: 'object', imageId, desired, conflict, projection: objectProjection,
+    read: () => images.getObject(imageId, desired.id),
+    // Insert-only: an ensure never overwrites, even when two callers raced past the read.
+    insert: () => images.putObject(imageId, desired, {expectedVersion: 0}),
+  });
 }
 
 export {
@@ -143,6 +200,8 @@ export {
   ensureCodeArtifacts,
   ensureLexicalEnvironment,
   ensureObject,
+  ensureShape,
   lexicalEnvironmentProjection,
   objectProjection,
+  shapeProjection,
 };

@@ -1,4 +1,5 @@
 import {isObjectRef, objectRef, textValue} from '../value/index.js';
+import {ensureShape} from '../graph/ensure-records.js';
 import {SHAPE_INDEXED} from '../object/model.js';
 import {SMALLTALK_PRIMITIVE} from './smalltalk-primitive-support.js';
 import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
@@ -36,11 +37,11 @@ function requiredText(value, label) {
 }
 
 async function ensureRegistryShape(images, imageId) {
-  const existing = await images.getShape(imageId, SUBCLASS_REGISTRY_SHAPE_ID);
-  if (existing) return objectRef(imageId, existing.id);
-  return objectRef(imageId, (await images.putShape(imageId, {
+  const desired = {
     id: SUBCLASS_REGISTRY_SHAPE_ID, slots: [], indexed: SHAPE_INDEXED.VALUES,
-  })).id);
+  };
+  const shape = await ensureShape(images, imageId, desired);
+  return objectRef(imageId, shape.id);
 }
 
 // The registry's shape is well-known and lazily ensured, but the registry record
