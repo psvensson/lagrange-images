@@ -1,5 +1,5 @@
 import {isObjectRef, objectRef, textValue} from '../value/index.js';
-import {ensureShape} from '../graph/ensure-records.js';
+import {ensureObject, ensureShape} from '../graph/ensure-records.js';
 import {SHAPE_INDEXED} from '../object/model.js';
 import {SMALLTALK_PRIMITIVE} from './smalltalk-primitive-support.js';
 import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
@@ -50,11 +50,12 @@ async function ensureRegistryShape(images, imageId) {
 async function ensureSubclassRegistry({images, imageId, className}) {
   const shapeRef = await ensureRegistryShape(images, imageId);
   const id = subclassRegistryId(className);
-  const existing = await images.getObject(imageId, id);
-  if (existing) return {ref: objectRef(imageId, id), record: existing};
-  const record = await images.putObject(imageId, {
+  // The empty registry is only a SEED: the record is appended to afterwards under its own CAS, so
+  // a present (or concurrently created) registry is adopted as it is — never overwritten by a
+  // late creator, and never compared for identity (ensure owner, seed mode).
+  const record = await ensureObject(images, imageId, {
     id, shape: shapeRef, behavior: null, slots: {}, indexed: [], metadata: {smalltalk: 'subclass-registry'},
-  });
+  }, {seed: true});
   return {ref: objectRef(imageId, id), record};
 }
 

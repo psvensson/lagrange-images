@@ -1,10 +1,9 @@
 import {isObjectRef, objectRef, textValue} from '../value/index.js';
-import {ensureShape} from '../graph/ensure-records.js';
+import {ensureObject, ensureShape} from '../graph/ensure-records.js';
 import {SHAPE_INDEXED} from '../object/model.js';
 import {
   SmalltalkKernelConflictError,
   assertUniqueSelectorShape,
-  canonicalJson,
   findSmalltalkKernel,
   readBehavior,
 } from './smalltalk-kernel.js';
@@ -88,20 +87,12 @@ async function readLegacyEntries(images, dictionaryRef, record) {
 // write finds its own previous output and reuses it rather than leaving another orphan — which is
 // the whole reason this id is deterministic rather than fresh per attempt (contrast ADR 0048
 // decision 6, where an unbounded series of snapshots needs the opposite rule).
+// Admission of the migrated dictionary is the ensure owner's (insert-only; convergent on an
+// identical concurrent winner; conflict on a divergent one). Only the conflict label is ours.
 async function ensureMigratedDictionary(images, imageId, desired) {
-  const existing = await images.getObject(imageId, desired.id);
-  const projection = (record) => canonicalJson({
-    shape: record.shape ?? null,
-    behavior: record.behavior ?? null,
-    slots: record.slots ?? {},
-    indexed: Object.hasOwn(record, 'indexed') ? record.indexed : null,
-    metadata: record.metadata ?? {},
+  return await ensureObject(images, imageId, desired, {
+    conflict: (kind, image, id) => new SmalltalkKernelConflictError('method dictionary', image, id),
   });
-  if (!existing) return await images.putObject(imageId, desired, {expectedVersion: 0});
-  if (projection(desired) !== projection(existing)) {
-    throw new SmalltalkKernelConflictError('method dictionary', imageId, desired.id);
-  }
-  return existing;
 }
 
 async function migrateMethodDictionary({images, imageId, behaviorRef} = {}) {

@@ -96,12 +96,20 @@ const defaultConflict = (kind, imageId, id) => new RecordConflictError(kind, ima
 //
 // Every per-kind ensure below is this rule over its kind's read/insert/projection; none of them
 // decides the rule again.
-async function ensureRecord({kind, imageId, desired, read, insert, projection, conflict}) {
+//
+// Two modes, one rule. EXACT (default): the record is immutable by construction, so a present or
+// winning record must be IDENTICAL to be adopted. SEED (`seed: true`): the desired record is only
+// the initial value of a record that is mutated afterwards through its own CAS (a registry that
+// is appended to, a companion whose values change), so a present or winning record is adopted AS
+// IT IS — the caller applies its own domain check to what it gets back — and only creation is
+// decided here. Neither mode ever overwrites.
+async function ensureRecord({kind, imageId, desired, read, insert, projection, conflict, seed = false}) {
+  const adopt = (record) => {
+    if (!seed && projection(desired) !== projection(record)) throw conflict(kind, imageId, desired.id);
+    return record;
+  };
   const existing = await read();
-  if (existing) {
-    if (projection(desired) !== projection(existing)) throw conflict(kind, imageId, desired.id);
-    return existing;
-  }
+  if (existing) return adopt(existing);
   try {
     return await insert();
   } catch (error) {
@@ -109,8 +117,8 @@ async function ensureRecord({kind, imageId, desired, read, insert, projection, c
     const winner = await read();
     // No readable winner of this kind means the id is occupied by something that is not this
     // kind of record: a conflicting occupant, never normalized into success.
-    if (!winner || projection(desired) !== projection(winner)) throw conflict(kind, imageId, desired.id);
-    return winner;
+    if (!winner) throw conflict(kind, imageId, desired.id);
+    return adopt(winner);
   }
 }
 
@@ -146,18 +154,30 @@ async function ensureCodeArtifact(images, imageId, desired, {conflict = defaultC
 // ImageService.createRecords' — this owner adds only the convergence rule.
 async function ensureCodeArtifacts(images, imageId, desiredList, {conflict = defaultConflict} = {}) {
   if (!Array.isArray(desiredList) || desiredList.length === 0) throw new TypeError('ensureCodeArtifacts requires a non-empty list');
-  const existing = [];
-  for (const desired of desiredList) existing.push(await images.getCodeArtifact(imageId, desired.id));
-  if (existing.every((record) => !record)) {
-    if (typeof images.createRecords !== 'function') throw new TypeError('ensureCodeArtifacts requires images.createRecords');
-    return await images.createRecords(imageId, desiredList.map((desired) => ({kind: 'code-artifact', ...desired})));
-  }
-  for (const [index, desired] of desiredList.entries()) {
-    if (!existing[index] || codeArtifactProjection(desired) !== codeArtifactProjection(existing[index])) {
-      throw conflict('code artifact', imageId, desired.id);
+  const readAll = async () => {
+    const records = [];
+    for (const desired of desiredList) records.push(await images.getCodeArtifact(imageId, desired.id));
+    return records;
+  };
+  const adoptAll = (records) => {
+    for (const [index, desired] of desiredList.entries()) {
+      if (!records[index] || codeArtifactProjection(desired) !== codeArtifactProjection(records[index])) {
+        throw conflict('code artifact', imageId, desired.id);
+      }
     }
+    return records;
+  };
+  const existing = await readAll();
+  if (!existing.every((record) => !record)) return adoptAll(existing);
+  if (typeof images.createRecords !== 'function') throw new TypeError('ensureCodeArtifacts requires images.createRecords');
+  try {
+    return await images.createRecords(imageId, desiredList.map((desired) => ({kind: 'code-artifact', ...desired})));
+  } catch (error) {
+    if (error?.name !== 'VersionConflictError') throw error;
+    // The whole batch lost to a concurrent creator (all-or-none): the winner's graph is the
+    // authority — identical converges, anything else conflicts. Same rule as ensureRecord.
+    return adoptAll(await readAll());
   }
-  return existing;
 }
 
 async function ensureBlock(images, imageId, desired, {conflict = defaultConflict} = {}) {
@@ -181,9 +201,9 @@ async function ensureLexicalEnvironment(images, imageId, desired, {conflict = de
 
 // ADR 0060. Object promotion writes at a derived id, so a retry after a lost acknowledgement
 // converges on the same durable object rather than minting a second identity for one transient one.
-async function ensureObject(images, imageId, desired, {conflict = defaultConflict} = {}) {
+async function ensureObject(images, imageId, desired, {conflict = defaultConflict, seed = false} = {}) {
   return await ensureRecord({
-    kind: 'object', imageId, desired, conflict, projection: objectProjection,
+    kind: 'object', imageId, desired, conflict, seed, projection: objectProjection,
     read: () => images.getObject(imageId, desired.id),
     // Insert-only: an ensure never overwrites, even when two callers raced past the read.
     insert: () => images.putObject(imageId, desired, {expectedVersion: 0}),
