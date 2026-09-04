@@ -199,13 +199,17 @@ The first ABI, `wasm-scalar-call/v0`, supports one named no-import function over
 
 ```text
 language semantics
-      -> lagrange-code/v0
-      -> wasm-module/v1
-      -> wasm-function/v1
+      -> lagrange-code/v0 | lagrange-code/v1
+      -> wasm-module/v2
+      -> wasm-function/v2
       -> ActivationExecutor
 ```
 
-`wasm-module/v1` means a Lagrange-owned Value-handle/effect ABI. It may use the tail-only v0 contract or the resumable v1 contract without changing the semantic artifact or Block identity.
+`wasm-module/v2` carries the Lagrange-owned Value-handle/effect ABI contract in identity-bearing
+content and references its neutral `wasm-binary/v1` implementation. `wasm-function/v2` selects an
+entry in that module without changing the semantic artifact or Block identity. Their v1
+predecessors are frozen compatibility representations: readable and executable in-image, but never
+produced and not portable across a release.
 
 ### External/foreign WASM
 
