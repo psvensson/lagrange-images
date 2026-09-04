@@ -3,27 +3,28 @@ import assert from 'node:assert/strict';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 import {
-  CARGO_RUSTC_OCI_PROVIDER_ID,
-  CUIS_IMAGE_V1,
-  CUIS_RUNTIME_DEFINITION_CONTRACT_V0,
-  CUIS_RUNTIME_DEFINITION_V1,
-  OPENSMALLTALK_CUIS_PROVIDER_ID,
-  RUST_CARGO_LOCK_V1,
-  RUST_CARGO_MANIFEST_V1,
-  RUST_SOURCE_V1,
-  WASM_BINARY_V1,
-  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
   bytesValue,
+  CARGO_RUSTC_OCI_PROVIDER_ID,
   compileWasmFunctionArtifact,
   createArtifactBackedOpenSmalltalkCuisProvider,
   createCargoRustcOciProvider,
   createRuntime,
+  CUIS_IMAGE_V1,
+  CUIS_RUNTIME_DEFINITION_CONTRACT_V0,
+  CUIS_RUNTIME_DEFINITION_V1,
   installForeignRuntimeCallable,
   installSymmetricSmalltalkBlock,
   installWasmScalarCallable,
   integerValue,
   objectRef,
+  OPENSMALLTALK_CUIS_PROVIDER_ID,
+  readModuleDescriptor,
+  RUST_CARGO_LOCK_V1,
+  RUST_CARGO_MANIFEST_V1,
+  RUST_SOURCE_V1,
   textValue,
+  WASM_BINARY_V1,
+  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
 } from '../src/runtime.js';
 
 const PINNED_RUST_IMAGE = `registry.example/rust-wasm@sha256:${'a'.repeat(64)}`;
@@ -223,11 +224,11 @@ test('Symmetric Smalltalk composes Cargo-derived WASM and Cuis Blocks identicall
       environment: environmentRef,
     });
 
-    assert.equal(wasm.moduleArtifact.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+    assert.equal(readModuleDescriptor(wasm.moduleArtifact).abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
     assert.equal(wasm.functionArtifact.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
-    assert.deepEqual(wasm.moduleArtifact.metadata.effectSites.map(({kind}) => kind), ['send', 'send']);
-    assert.match(wasm.moduleArtifact.metadata.effectSites[0].resumeEntry, /\$resume_/);
-    assert.equal(wasm.moduleArtifact.metadata.effectSites[1].resumeEntry, null);
+    assert.deepEqual(readModuleDescriptor(wasm.moduleArtifact).effectSites.map(({kind}) => kind), ['send', 'send']);
+    assert.match(readModuleDescriptor(wasm.moduleArtifact).effectSites[0].resumeEntry, /\$resume_/);
+    assert.equal(readModuleDescriptor(wasm.moduleArtifact).effectSites[1].resumeEntry, null);
     assert.equal(runtime.foreignRuntimes.list().length, 0);
 
     const wasmRef = objectRef('mixed', wasmBlock.id);

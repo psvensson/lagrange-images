@@ -1,16 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LAGRANGE_CODE_V0,
-  WASM_FUNCTION_V1,
-  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
   compileSymmetricSmalltalkBlock,
   createRuntime,
   installSymmetricSmalltalkBlock,
   installWasmBlockTree,
   integerValue,
+  LAGRANGE_CODE_V0,
   objectRef,
+  readModuleDescriptor,
   textValue,
+  WASM_FUNCTION_V1,
+  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
 } from '../src/runtime.js';
 
 async function putSmalltalkSemantic(runtime, id, source) {
@@ -139,9 +140,9 @@ test('WASM Block trees resume after non-tail nested Block creation inside a shar
     semanticRef: objectRef('demo', semantic.id),
     id: 'resumable-tree',
   });
-  assert.equal(installed.moduleArtifact.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+  assert.equal(readModuleDescriptor(installed.moduleArtifact).abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
   assert.equal(installed.nodes.length, 3);
-  assert.ok(installed.moduleArtifact.metadata.effectSites.some(({resumeEntry}) => resumeEntry !== null));
+  assert.ok(readModuleDescriptor(installed.moduleArtifact).effectSites.some(({resumeEntry}) => resumeEntry !== null));
 
   const middle = await executeBlock(runtime, objectRef('demo', installed.block.id), [integerValue(31)]);
   assert.deepEqual(await invokeValue(runtime, middle, [integerValue(7)]), integerValue(31));

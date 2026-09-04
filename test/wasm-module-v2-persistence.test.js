@@ -269,23 +269,29 @@ test('a v2-compiled module executes through the v0 lane and the v1 lexical-cell 
   });
 });
 
-test('frozen v1 stays readable and behavior-identical: same source compiled to v1 and v2 yields the same contract and the same bytes', async () => {
+test('frozen v1 stays readable and behavior-identical: a v1 artifact built from the same contract and bytes decodes to the same contract and still executes; nothing produces new v1', async () => {
   await withRuntime(async (runtime) => {
     await semanticV0(runtime, 'src');
-    const v1 = await runtime.compilation.compileArtifact(objectRef(IMG, 'src'), {id: 'm1', targetRepresentation: WASM_MODULE_V1});
     const v2 = await compileV2(runtime, 'src', 'm2');
-    assert.equal(v1.representation, WASM_MODULE_V1);
-    assert.equal(v1.content.kind, 'bytes', 'v1 is unchanged: bytes as content, contract in metadata');
     const binary = await runtime.images.getCodeArtifact(IMG, 'm2:implementation');
-    assert.equal(binary.content.base64, v1.content.base64, 'identical implementation bytes');
-    const d1 = readModuleDescriptor(v1);
-    const d2 = readModuleDescriptor(v2);
-    assert.equal(canonicalJson(d1), canonicalJson(d2), 'identical executable contract through the one accessor');
+    // The frozen v1 form (contract in metadata, bytes as content), as an older image persisted it.
+    const v1 = await runtime.images.putCodeArtifact(IMG, {
+      id: 'm1', representation: WASM_MODULE_V1, content: binary.content,
+      metadata: {...JSON.parse(v2.content.value), semanticRepresentation: LAGRANGE_CODE_V0, instanceReuse: WASM_INSTANCE_REUSE_STATELESS_V0},
+    });
+    assert.equal(canonicalJson(readModuleDescriptor(v1)), canonicalJson(readModuleDescriptor(v2)), 'identical executable contract through the one accessor');
     // The v1 artifact still executes in-image through the frozen path.
     const {functionArtifact} = await assembleWasmFunctionArtifact({
       images: runtime.images, semanticRef: objectRef(IMG, 'src'), moduleRef: objectRef(IMG, v1.id), functionId: 'fn1', entry: 'run',
     });
     const block = await runtime.images.putBlock(IMG, {id: 'b1', code: objectRef(IMG, functionArtifact.id), environment: null});
     assert.deepEqual(await run(runtime, objectRef(IMG, block.id), [integerValue(1)]), integerValue(2));
+    // No compiler produces v1 any more: the target is not registered (no dual-write).
+    assert.equal(runtime.codeCompilers.has(LAGRANGE_CODE_V0, WASM_MODULE_V1), false);
+    assert.equal(runtime.codeCompilers.has(LAGRANGE_CODE_V0, WASM_MODULE_V2), true);
+    await assert.rejects(
+      runtime.compilation.compileArtifact(objectRef(IMG, 'src'), {id: 'never', targetRepresentation: WASM_MODULE_V1}),
+      (e) => e?.name === 'CodeCompilerNotFoundError',
+    );
   });
 });

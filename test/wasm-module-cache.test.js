@@ -1,16 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  WASM_FUNCTION_V1,
-  WASM_MODULE_V1,
-  WasmModuleCache,
   compileSymmetricSmalltalkBlock,
   createDefaultCodeExecutorRegistry,
   createRuntime,
   installWasmBlockTree,
   integerValue,
   objectRef,
+  readModuleContract,
   textValue,
+  WASM_FUNCTION_V1,
+  WASM_MODULE_V2,
+  WasmModuleCache,
 } from '../src/runtime.js';
 
 async function putSemantic(runtime, id, source) {
@@ -27,7 +28,7 @@ async function compileModule(runtime, id = 'module-source') {
   const semantic = await putSemantic(runtime, id, '[ :x | x ]');
   return await runtime.compilation.compileArtifact(objectRef('demo', semantic.id), {
     id: `${id}:wasm`,
-    targetRepresentation: WASM_MODULE_V1,
+    targetRepresentation: WASM_MODULE_V2,
   });
 }
 
@@ -51,6 +52,7 @@ test('WasmModuleCache coalesces concurrent compilation of one immutable module a
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   await runtime.images.createImage({id: 'demo'});
   const artifact = await compileModule(runtime);
+  const {bytes} = await readModuleContract(artifact, {resolveImplementation: (ref) => runtime.images.getCodeArtifact(ref.imageId, ref.objectId)});
   let compileCount = 0;
   const cache = new WasmModuleCache({
     async compile(bytes) {
@@ -60,7 +62,7 @@ test('WasmModuleCache coalesces concurrent compilation of one immutable module a
     },
   });
 
-  const [first, second] = await Promise.all([cache.get(artifact), cache.get(artifact)]);
+  const [first, second] = await Promise.all([cache.get(artifact, bytes), cache.get(artifact, bytes)]);
   assert.equal(first, second);
   assert.equal(compileCount, 1);
   assert.deepEqual(cache.stats(), {
@@ -86,7 +88,8 @@ test('WasmModuleCache evicts failed compilation so a later attempt can retry', a
     },
   });
 
-  await assert.rejects(cache.get(artifact), /synthetic compile failure/);
+  const {bytes} = await readModuleContract(artifact, {resolveImplementation: (ref) => runtime.images.getCodeArtifact(ref.imageId, ref.objectId)});
+  await assert.rejects(cache.get(artifact, bytes), /synthetic compile failure/);
   assert.deepEqual(cache.stats(), {
     entries: 0,
     hits: 0,
@@ -94,7 +97,7 @@ test('WasmModuleCache evicts failed compilation so a later attempt can retry', a
     compilations: 1,
     failures: 1,
   });
-  const compiled = await cache.get(artifact);
+  const compiled = await cache.get(artifact, bytes);
   assert.ok(compiled instanceof WebAssembly.Module);
   assert.equal(attempts, 2);
   assert.deepEqual(cache.stats(), {

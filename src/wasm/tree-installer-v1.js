@@ -5,8 +5,8 @@ import {
   normalizeLagrangeCodeV1Program,
   parseLagrangeCodeV1Program,
 } from '../code/lagrange-code-v1.js';
-import {WASM_FUNCTION_V1, WASM_MODULE_V1} from '../code/wasm-artifacts.js';
-import {moduleFunctionOf, readModuleDescriptor} from './module-contract.js';
+import {WASM_FUNCTION_V1} from '../code/wasm-artifacts.js';
+import {WASM_MODULE_V2, moduleFunctionOf, readModuleDescriptor} from './module-contract.js';
 import {createCompilationGroup} from '../compilation/group.js';
 import {normalizeMetadata} from '../object/model.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
@@ -345,7 +345,7 @@ async function installWasmV1BlockTree({
 
   const group = createCompilationGroup({
     policyId: WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1,
-    targetRepresentation: WASM_MODULE_V1,
+    targetRepresentation: WASM_MODULE_V2,
     members: groupPlans.map((plan) => plan.semanticRef),
     options: {physicalLayout: 'shared-module'},
   });

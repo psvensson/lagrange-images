@@ -10,9 +10,9 @@ import {
   vector,
 } from './encoding.js';
 import {LAGRANGE_CODE_V0, parseLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
-import {WASM_FUNCTION_V1, WASM_MODULE_V1} from '../code/wasm-artifacts.js';
-import {moduleFunctionOf, readModuleDescriptor, soleModuleEntry} from './module-contract.js';
-import {bytesValue, canonicalizeValue, isObjectRef, isReference, objectRef} from '../value/index.js';
+import {WASM_FUNCTION_V1} from '../code/wasm-artifacts.js';
+import {WASM_MODULE_V2, moduleFunctionOf, readModuleDescriptor, soleModuleEntry} from './module-contract.js';
+import {canonicalizeValue, isObjectRef, isReference, objectRef} from '../value/index.js';
 import {
   WASM_ENTRY_V0,
   WASM_IMPORT_MODULE,
@@ -309,16 +309,16 @@ const lagrangeCodeV0ToWasmModuleCompiler = Object.freeze({
     const compiled = compileWasmModule(program);
     return Object.freeze({
       languageId: source.languageId,
-      content: bytesValue(compiled.bytes),
-      metadata: {
+      bytes: compiled.bytes,
+      contract: {
         abi: WASM_VALUE_HANDLE_ABI_V0,
-        entry: WASM_ENTRY_V0,
-        parameters: compiled.parameterCount,
-        captures: compiled.captureIds,
         literals: compiled.literals,
+        functions: compiled.functions,
         sendSites: compiled.sendSites,
         closureSites: compiled.closureSites,
-        functions: compiled.functions,
+        effectSites: [],
+      },
+      metadata: {
         semanticRepresentation: LAGRANGE_CODE_V0,
       },
     });
@@ -345,13 +345,16 @@ const lagrangeCodeGroupToWasmModuleCompiler = Object.freeze({
     });
     const compiled = compileWasmModuleEntries(entries);
     return Object.freeze({
-      content: bytesValue(compiled.bytes),
-      metadata: {
+      bytes: compiled.bytes,
+      contract: {
         abi: WASM_VALUE_HANDLE_ABI_V0,
         literals: compiled.literals,
+        functions: compiled.functions,
         sendSites: compiled.sendSites,
         closureSites: compiled.closureSites,
-        functions: compiled.functions,
+        effectSites: [],
+      },
+      metadata: {
         semanticRepresentation: LAGRANGE_CODE_V0,
         groupPolicyId: group.policyId,
         physicalLayout: 'shared-module',
@@ -486,7 +489,7 @@ async function compileWasmFunctionArtifact({
 } = {}) {
   if (!compilation || typeof compilation.compileArtifact !== 'function') throw new TypeError('compilation service is required');
   const moduleArtifact = await compilation.compileArtifact(semanticRef, {
-    targetRepresentation: WASM_MODULE_V1,
+    targetRepresentation: WASM_MODULE_V2,
     id: moduleId,
   });
   return await assembleWasmFunctionArtifact({

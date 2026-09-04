@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LAGRANGE_CODE_V0,
-  WASM_MODULE_V1,
-  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
   createRuntime,
   integerValue,
+  LAGRANGE_CODE_V0,
   objectRef,
+  readModuleDescriptor,
   textValue,
+  WASM_MODULE_V2,
+  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
 } from '../src/runtime.js';
 
 async function semantic(runtime, id, body) {
@@ -34,12 +35,12 @@ test('WASM compiler selects the resumable ABI for a non-tail message send', asyn
   });
   const module = await runtime.compilation.compileArtifact(objectRef('demo', source.id), {
     id: 'send-wasm',
-    targetRepresentation: WASM_MODULE_V1,
+    targetRepresentation: WASM_MODULE_V2,
   });
-  assert.equal(module.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
-  assert.equal(module.metadata.effectSites.length, 1);
-  assert.equal(module.metadata.effectSites[0].kind, 'send');
-  assert.match(module.metadata.effectSites[0].resumeEntry, /\$resume_/);
+  assert.equal(readModuleDescriptor(module).abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+  assert.equal(readModuleDescriptor(module).effectSites.length, 1);
+  assert.equal(readModuleDescriptor(module).effectSites[0].kind, 'send');
+  assert.match(readModuleDescriptor(module).effectSites[0].resumeEntry, /\$resume_/);
   assert.equal(module.metadata.continuations.length, 1);
   await runtime.close();
 });
@@ -61,12 +62,12 @@ test('WASM compiler selects the resumable ABI for non-tail nested Block creation
   });
   const module = await runtime.compilation.compileArtifact(objectRef('demo', source.id), {
     id: 'block-wasm',
-    targetRepresentation: WASM_MODULE_V1,
+    targetRepresentation: WASM_MODULE_V2,
   });
-  assert.equal(module.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
-  assert.deepEqual(module.metadata.effectSites.map(({kind}) => kind), ['closure', 'send']);
-  assert.match(module.metadata.effectSites[0].resumeEntry, /\$resume_/);
-  assert.equal(module.metadata.effectSites[1].resumeEntry, null);
+  assert.equal(readModuleDescriptor(module).abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+  assert.deepEqual(readModuleDescriptor(module).effectSites.map(({kind}) => kind), ['closure', 'send']);
+  assert.match(readModuleDescriptor(module).effectSites[0].resumeEntry, /\$resume_/);
+  assert.equal(readModuleDescriptor(module).effectSites[1].resumeEntry, null);
   await runtime.close();
 });
 
@@ -80,7 +81,7 @@ test('WASM backend refuses reference literals because metadata cannot hide graph
   await assert.rejects(
     runtime.compilation.compileArtifact(objectRef('demo', source.id), {
       id: 'ref-wasm',
-      targetRepresentation: WASM_MODULE_V1,
+      targetRepresentation: WASM_MODULE_V2,
     }),
     /does not embed reference literals/,
   );

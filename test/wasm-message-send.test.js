@@ -6,6 +6,7 @@ import {
   installSymmetricSmalltalkBlock,
   integerValue,
   objectRef,
+  readModuleDescriptor,
   textValue,
 } from '../src/runtime.js';
 
@@ -70,10 +71,10 @@ test('WASM tail sends re-enter normal Smalltalk dispatch and may resolve another
   const expected = integerValue(42);
   assert.deepEqual(await runtime.executor.execute(neutralActivation), expected);
   assert.deepEqual(await runtime.executor.execute(wasmActivation), expected);
-  assert.equal(wasmSender.moduleArtifact.metadata.sendSites.length, 1);
-  assert.equal(wasmSender.moduleArtifact.metadata.sendSites[0].languageId, 'symmetric-smalltalk');
-  assert.deepEqual(wasmSender.moduleArtifact.metadata.sendSites[0].message, textValue('echo:'));
-  assert.equal(wasmSender.moduleArtifact.metadata.sendSites[0].arity, 1);
+  assert.equal(readModuleDescriptor(wasmSender.moduleArtifact).sendSites.length, 1);
+  assert.equal(readModuleDescriptor(wasmSender.moduleArtifact).sendSites[0].languageId, 'symmetric-smalltalk');
+  assert.deepEqual(readModuleDescriptor(wasmSender.moduleArtifact).sendSites[0].message, textValue('echo:'));
+  assert.equal(readModuleDescriptor(wasmSender.moduleArtifact).sendSites[0].arity, 1);
 
   await runtime.close();
 });

@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LAGRANGE_CODE_V0,
-  WASM_VALUE_HANDLE_ABI_V0,
   compileWasmFunctionArtifact,
   createRuntime,
   integerValue,
+  LAGRANGE_CODE_V0,
   objectRef,
   textValue,
+  WASM_MODULE_V2,
+  WASM_VALUE_HANDLE_ABI_V0,
 } from '../src/runtime.js';
 
 test('WASM ABI passes captured bindings by stable binding id after receiver and arguments', async () => {
@@ -62,6 +63,6 @@ test('WASM ABI passes captured bindings by stable binding id after receiver and 
 test('WASM value handles are invocation-local and not persistent identities', async () => {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
   assert.equal(runtime.codeExecutors.has('wasm-function/v1'), true);
-  assert.equal(runtime.codeCompilers.has(LAGRANGE_CODE_V0, 'wasm-module/v1'), true);
+  assert.equal(runtime.codeCompilers.has(LAGRANGE_CODE_V0, WASM_MODULE_V2), true);
   await runtime.close();
 });

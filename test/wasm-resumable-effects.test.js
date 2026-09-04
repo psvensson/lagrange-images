@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  WASM_BINARY_V1,
-  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
   bytesValue,
   compileWasmFunctionArtifact,
   createRuntime,
@@ -10,6 +8,9 @@ import {
   installWasmScalarCallable,
   integerValue,
   objectRef,
+  readModuleDescriptor,
+  WASM_BINARY_V1,
+  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
 } from '../src/runtime.js';
 
 const I32_ADD_WASM = Buffer.from([
@@ -68,11 +69,11 @@ test('resumable Lagrange WASM survives multiple sequential non-tail Block sends 
       environment: environmentRef,
     });
 
-    assert.equal(compiled.moduleArtifact.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
-    assert.equal(compiled.moduleArtifact.metadata.effectSites.length, 3);
-    assert.notEqual(compiled.moduleArtifact.metadata.effectSites[0].resumeEntry, null);
-    assert.notEqual(compiled.moduleArtifact.metadata.effectSites[1].resumeEntry, null);
-    assert.equal(compiled.moduleArtifact.metadata.effectSites[2].resumeEntry, null);
+    assert.equal(readModuleDescriptor(compiled.moduleArtifact).abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+    assert.equal(readModuleDescriptor(compiled.moduleArtifact).effectSites.length, 3);
+    assert.notEqual(readModuleDescriptor(compiled.moduleArtifact).effectSites[0].resumeEntry, null);
+    assert.notEqual(readModuleDescriptor(compiled.moduleArtifact).effectSites[1].resumeEntry, null);
+    assert.equal(readModuleDescriptor(compiled.moduleArtifact).effectSites[2].resumeEntry, null);
     assert.equal(compiled.moduleArtifact.metadata.continuations.length, 2);
 
     const activation = await runtime.invocations.invokeBlock(

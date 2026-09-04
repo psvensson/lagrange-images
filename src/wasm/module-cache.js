@@ -20,7 +20,11 @@ class WasmModuleCache {
     this.failures = 0;
   }
 
+  // `bytes` are the module's implementation bytes as resolved through the canonical accessor
+  // (readModuleContract). The cache never decodes a representation itself: the frozen v1 form
+  // and v2 both reach it the same way, so there is exactly one place that knows where bytes live.
   async get(moduleArtifact, bytes) {
+    if (!(bytes instanceof Uint8Array)) throw new TypeError('WASM module cache requires the module bytes resolved through readModuleContract');
     const key = moduleCacheKey(moduleArtifact);
     const existing = this.entries.get(key);
     if (existing) {
@@ -30,7 +34,7 @@ class WasmModuleCache {
 
     this.misses += 1;
     this.compilations += 1;
-    const moduleBytes = bytes ?? Buffer.from(moduleArtifact.content.base64, 'base64');
+    const moduleBytes = bytes;
     let pending;
     pending = Promise.resolve()
       .then(() => this.compile(moduleBytes))

@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LAGRANGE_CODE_V0,
-  NEUTRAL_EXPRESSION_V0,
-  WASM_MODULE_V1,
   compileWasmFunctionArtifact,
   createRuntime,
   integerValue,
+  LAGRANGE_CODE_V0,
+  NEUTRAL_EXPRESSION_V0,
   objectRef,
+  readModuleContract,
   textValue,
+  WASM_MODULE_V2,
 } from '../src/runtime.js';
 
 async function installSemantic(runtime, id, program) {
@@ -38,8 +39,9 @@ async function installWasmBlock(runtime, semantic, id) {
     moduleId: `${id}:module`,
     functionId: `${id}:function`,
   });
-  assert.equal(moduleArtifact.representation, WASM_MODULE_V1);
-  assert.equal(WebAssembly.validate(Buffer.from(moduleArtifact.content.base64, 'base64')), true);
+  assert.equal(moduleArtifact.representation, WASM_MODULE_V2);
+  const {bytes} = await readModuleContract(moduleArtifact, {resolveImplementation: (ref) => runtime.images.getCodeArtifact(ref.imageId, ref.objectId)});
+  assert.equal(WebAssembly.validate(bytes), true);
   return await runtime.images.putBlock('demo', {
     id,
     code: objectRef('demo', functionArtifact.id),
