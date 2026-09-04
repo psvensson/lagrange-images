@@ -71,7 +71,7 @@ async function runWasm(runtime, imageId, id, semanticRef, args) {
     id: `${id}:wasm`,
   });
   const activation = await runtime.invocations.invokeBlock(objectRef(imageId, tree.block.id), args);
-  return {result: await runtime.executor.execute(activation), abi: tree.functionArtifact.metadata.abi};
+  return {result: await runtime.executor.execute(activation), abi: readModuleDescriptor(tree.moduleArtifact).abi};
 }
 
 // Runs both lanes from one semantic artifact and asserts they agree.

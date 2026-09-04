@@ -1,4 +1,4 @@
-import {WASM_FUNCTION_V1} from '../code/wasm-artifacts.js';
+import {WASM_FUNCTION_V1, WASM_FUNCTION_V2} from '../code/wasm-artifacts.js';
 import {FOREIGN_RUNTIME_CALLABLE_INTERFACE_V1} from '../foreign-runtime/callable-artifacts.js';
 import {createForeignRuntimeCallableInterfaceV1Executor} from '../foreign-runtime/callable-executor.js';
 import {createWasmFunctionV1Executor} from '../wasm/function-executor.js';
@@ -70,7 +70,11 @@ function createDefaultCodeExecutorRegistry({
   const wasmOptions = {};
   if (wasmModuleCache !== undefined) wasmOptions.moduleCache = wasmModuleCache;
   if (wasmInstancePool !== undefined) wasmOptions.instancePool = wasmInstancePool;
-  registry.register(WASM_FUNCTION_V1, createWasmFunctionV1Executor(wasmOptions));
+  // One executor for both durable function versions: it dispatches on the MODULE's ABI and
+  // reads the function through the function-contract owner, so v1 (frozen) and v2 share it.
+  const wasmFunctionExecutor = createWasmFunctionV1Executor(wasmOptions);
+  registry.register(WASM_FUNCTION_V1, wasmFunctionExecutor);
+  registry.register(WASM_FUNCTION_V2, wasmFunctionExecutor);
   const foreignOptions = {};
   if (foreignWasmModuleCache !== undefined) foreignOptions.moduleCache = foreignWasmModuleCache;
   registry.register(WASM_CALLABLE_INTERFACE_V1, createWasmCallableInterfaceV1Executor(foreignOptions));

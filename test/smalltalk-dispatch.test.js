@@ -334,7 +334,7 @@ test('the same semantic + method runs through both execution lanes', async () =>
       const code = await runtime.images.getCodeArtifact(methodBlock.code.imageId, methodBlock.code.objectId);
       assert.equal(
         code.representation,
-        lane === 'wasm' ? 'wasm-function/v1' : 'neutral-expression/v0',
+        lane === 'wasm' ? 'wasm-function/v2' : 'neutral-expression/v0',
         `the ${lane} lane must derive its own executable representation`,
       );
       // The semantic artifact is lagrange-code/v0 in both cases — the method itself is lane-neutral.

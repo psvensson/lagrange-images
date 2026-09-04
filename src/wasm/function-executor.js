@@ -9,6 +9,8 @@ import {
 import {createResumableWasmFunctionV1Executor} from './resumable-executor.js';
 import {createWasmFunctionV1CellExecutor} from './executor-v1.js';
 import {createResumableWasmFunctionV2Executor} from './resumable-executor-v2.js';
+import {assertWasmFunctionArtifactAnyVersion, functionModuleRef} from './function-contract.js';
+import {readModuleDescriptor} from './module-contract.js';
 
 function createWasmFunctionV1Executor({
   moduleCache = new WasmModuleCache(),
@@ -23,14 +25,21 @@ function createWasmFunctionV1Executor({
     moduleCache,
     instancePool,
     async execute(request, context) {
-      const abi = request?.code?.metadata?.abi;
-      if (abi === WASM_VALUE_HANDLE_ABI_V0) return await tail.execute(request, context);
-      // The representation stays wasm-function/v1; the declared ABI decides which contract the
-      // artifact is read under, so no normalizer has to accept two shapes.
-      if (abi === WASM_VALUE_HANDLE_ABI_V1) return await cells.execute(request, context);
-      if (abi === WASM_RESUMABLE_VALUE_HANDLE_ABI_V1) return await resumable.execute(request, context);
-      if (abi === WASM_RESUMABLE_VALUE_HANDLE_ABI_V2) return await resumableCells.execute(request, context);
-      throw new TypeError(`unsupported WASM function ABI: ${abi}`);
+      // The MODULE's ABI decides which contract the pair is read under (ADR 0082): a function
+      // artifact selects an entry and carries no ABI of its own. The module is resolved once here
+      // and handed to the chosen executor, so a dispatch costs no second read.
+      const code = request?.code;
+      assertWasmFunctionArtifactAnyVersion(code);
+      const moduleRef = functionModuleRef(code);
+      const moduleArtifact = await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
+      if (!moduleArtifact) throw new TypeError(`WASM module not found: ${moduleRef.imageId}/${moduleRef.objectId}`);
+      const abi = readModuleDescriptor(moduleArtifact).abi;
+      const resolved = Object.freeze({moduleArtifact});
+      if (abi === WASM_VALUE_HANDLE_ABI_V0) return await tail.execute(request, context, resolved);
+      if (abi === WASM_VALUE_HANDLE_ABI_V1) return await cells.execute(request, context, resolved);
+      if (abi === WASM_RESUMABLE_VALUE_HANDLE_ABI_V1) return await resumable.execute(request, context, resolved);
+      if (abi === WASM_RESUMABLE_VALUE_HANDLE_ABI_V2) return await resumableCells.execute(request, context, resolved);
+      throw new TypeError(`unsupported WASM module ABI: ${abi}`);
     },
   });
 }

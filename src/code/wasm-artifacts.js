@@ -2,6 +2,10 @@ import {VALUE_KIND, canonicalizeValue, isObjectRef} from '../value/index.js';
 
 const WASM_MODULE_V1 = 'wasm-module/v1';
 const WASM_FUNCTION_V1 = 'wasm-function/v1';
+// wasm-function/v2 (ADR 0082): entry selection + closure-prototype binding as canonical-JSON
+// content, the module reached through exactly one `role: module` dependency. v1 is FROZEN.
+const WASM_FUNCTION_V2 = 'wasm-function/v2';
+const WASM_FUNCTION_MODULE_DEPENDENCY_ROLE = 'module';
 // wasm-binary/v1 is the NEUTRAL raw-WASM byte owner: exact compiled bytes and nothing else (no
 // ABI, no call semantics). It is the implementation dependency of BOTH the foreign
 // wasm-callable-interface/v1 and the compiled wasm-module/v2, so its identity lives here, in the
@@ -60,7 +64,9 @@ function assertWasmFunctionArtifact(artifact) {
 
 export {
   WASM_BINARY_V1,
+  WASM_FUNCTION_MODULE_DEPENDENCY_ROLE,
   WASM_FUNCTION_V1,
+  WASM_FUNCTION_V2,
   WASM_IMPLEMENTATION_DEPENDENCY_ROLE,
   WASM_MODULE_V1,
   assertWasmBinaryArtifact,

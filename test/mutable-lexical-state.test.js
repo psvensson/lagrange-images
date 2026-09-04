@@ -1,16 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LAGRANGE_CODE_V0,
-  LAGRANGE_CODE_V1,
-  NEUTRAL_EXPRESSION_V0,
   compileSymmetricSmalltalkBlock,
   createRuntime,
   evaluateSymmetricSmalltalkBlock,
   installSymmetricSmalltalkBlock,
   installWasmBlockTree,
   integerValue,
+  LAGRANGE_CODE_V0,
+  LAGRANGE_CODE_V1,
+  moduleFunctionOf,
+  NEUTRAL_EXPRESSION_V0,
   objectRef,
+  readFunctionSelection,
+  readModuleDescriptor,
   textValue,
 } from '../src/runtime.js';
 import {LexicalCellArena, NEUTRAL_EXPRESSION_V1} from '../src/execution/executor.js';
@@ -444,8 +447,10 @@ test('the WASM lane installs a lagrange-code/v1 tree and agrees with the neutral
       semanticRef,
       id: 'wasm-tree',
     });
-    assert.equal(tree.functionArtifact.metadata.abi, 'lagrange-value-handle/v1');
-    assert.deepEqual(tree.functionArtifact.metadata.cellBindings, [
+    // The function selects an entry; ABI and cellBindings are the module's function-table entry.
+    const rootModule = readModuleDescriptor(tree.moduleArtifact);
+    assert.equal(rootModule.abi, 'lagrange-value-handle/v1');
+    assert.deepEqual(moduleFunctionOf(rootModule, {entry: readFunctionSelection(tree.functionArtifact).entry}).cellBindings, [
       {id: 'root:temporary:0', name: 'a', source: 'temporary'},
     ]);
 
@@ -472,7 +477,8 @@ test('a lagrange-code/v0 tree still installs through the untouched v0 path', asy
       semanticRef: objectRef('lexical', installed.semanticArtifact.id),
       id: 'wasm-tree-v0',
     });
-    assert.equal(tree.functionArtifact.metadata.abi, 'lagrange-value-handle/v0');
-    assert.equal(Object.hasOwn(tree.functionArtifact.metadata, 'cellBindings'), false);
+    const v0Module = readModuleDescriptor(tree.moduleArtifact);
+    assert.equal(v0Module.abi, 'lagrange-value-handle/v0');
+    assert.equal(Object.hasOwn(moduleFunctionOf(v0Module, {entry: readFunctionSelection(tree.functionArtifact).entry}), 'cellBindings'), false);
   });
 });

@@ -1,8 +1,5 @@
-import {
-  WASM_FUNCTION_V1,
-  assertWasmFunctionArtifact,
-} from '../code/wasm-artifacts.js';
-import {canonicalizeValue, isObjectRef, isReference} from '../value/index.js';
+import {assertWasmFunctionArtifactAnyVersion, functionModuleRef, resolveFunctionContract} from './function-contract.js';
+import {canonicalizeValue, isReference} from '../value/index.js';
 import {
   WASM_IMPORT_MODULE,
   ValueHandleArena,
@@ -163,51 +160,8 @@ function normalizeModuleFunctions(value, sendSites, closureSites) {
   }));
 }
 
-function sameStrings(left, right) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
 
-function activeFunctionDescriptor(code, moduleFunctions, sendSites, closureSites) {
-  const functions = normalizeModuleFunctions(moduleFunctions, sendSites, closureSites);
-  const descriptor = functions.find(({entry}) => entry === code.metadata.entry);
-  if (!descriptor) throw new TypeError(`WASM function entry not described by module: ${code.metadata.entry}`);
-  if (descriptor.parameters !== code.metadata.parameters) throw new TypeError('WASM function parameter metadata does not match module entry');
-  const codeCaptures = normalizeCaptures(code.metadata.captures ?? []);
-  if (!sameStrings(descriptor.captures, codeCaptures)) throw new TypeError('WASM function capture metadata does not match module entry');
-  return descriptor;
-}
 
-function normalizeClosurePrototypes(code, descriptor, closureSites) {
-  const entries = code.metadata?.closurePrototypes ?? [];
-  if (!Array.isArray(entries)) throw new TypeError('WASM function metadata.closurePrototypes must be an array');
-  if (entries.length !== descriptor.closureSiteIndices.length) throw new TypeError('WASM closure prototype count does not match module function closure sites');
-  const result = new Map();
-  entries.forEach((entry, localIndex) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new TypeError(`WASM closure prototype ${localIndex} must be an object`);
-    const keys = Object.keys(entry).sort();
-    const legacyKeys = ['blockId', 'derivedFromIndex'].sort();
-    const currentKeys = ['blockId', 'derivedFromIndex', 'siteIndex'].sort();
-    const isLegacy = keys.length === legacyKeys.length && keys.every((key, index) => key === legacyKeys[index]);
-    const isCurrent = keys.length === currentKeys.length && keys.every((key, index) => key === currentKeys[index]);
-    if (!isLegacy && !isCurrent) throw new TypeError(`WASM closure prototype ${localIndex} has unsupported fields`);
-    const siteIndex = isCurrent
-      ? requireNonNegativeInteger(entry.siteIndex, `WASM closure prototype ${localIndex} siteIndex`)
-      : descriptor.closureSiteIndices[localIndex];
-    if (siteIndex !== descriptor.closureSiteIndices[localIndex]) {
-      throw new TypeError(`WASM closure prototype ${localIndex} does not match module function closure site index`);
-    }
-    const site = closureSites[siteIndex];
-    if (entry.blockId !== site.blockId) throw new TypeError(`WASM closure prototype ${localIndex} does not match closure site ${site.blockId}`);
-    const derivedFromIndex = requireNonNegativeInteger(entry.derivedFromIndex, `WASM closure prototype ${localIndex} derivedFromIndex`);
-    if (derivedFromIndex < 2 || derivedFromIndex >= code.derivedFrom.length) {
-      throw new TypeError(`WASM closure prototype ${localIndex} derivedFromIndex is out of range`);
-    }
-    const ref = canonicalizeValue(code.derivedFrom[derivedFromIndex]);
-    if (!isObjectRef(ref)) throw new TypeError(`WASM closure prototype ${localIndex} must resolve to an unpinned Block ref`);
-    result.set(siteIndex, ref);
-  });
-  return result;
-}
 
 function recordPending(pending, effect) {
   if (pending.effect !== null) throw new TypeError('WASM activation attempted more than one pending host effect');
@@ -392,19 +346,11 @@ function createResumableWasmFunctionV1Executor({
   return Object.freeze({
     moduleCache,
     instancePool,
-    async execute({activation, code}, context) {
-      assertWasmFunctionArtifact(code);
-      if (code.metadata.abi !== WASM_RESUMABLE_VALUE_HANDLE_ABI_V1) {
-        throw new TypeError(`resumable WASM executor requires ${WASM_RESUMABLE_VALUE_HANDLE_ABI_V1}`);
-      }
-      const parameterCount = requireNonNegativeInteger(code.metadata.parameters, 'WASM function parameter count');
-      const captureIds = normalizeCaptures(code.metadata.captures ?? []);
-      if (activation.arguments.length !== parameterCount) {
-        throw new TypeError(`WASM activation expected ${parameterCount} arguments, received ${activation.arguments.length}`);
-      }
-
-      const moduleRef = canonicalizeValue(code.content);
-      const moduleArtifact = await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
+    async execute({activation, code}, context, resolved = null) {
+      assertWasmFunctionArtifactAnyVersion(code);
+      const moduleRef = functionModuleRef(code);
+      const moduleArtifact = resolved?.moduleArtifact ?? await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
+      if (!moduleArtifact) throw new TypeError(`WASM module not found: ${moduleRef.imageId}/${moduleRef.objectId}`);
       const contract = readModuleDescriptor(moduleArtifact);
       const resolveImplementation = (ref) => context.images.getCodeArtifact(ref.imageId, ref.objectId);
       if (contract.abi !== WASM_RESUMABLE_VALUE_HANDLE_ABI_V1) {
@@ -414,8 +360,13 @@ function createResumableWasmFunctionV1Executor({
       const sendSites = normalizeSendSites(contract.sendSites);
       const closureSites = normalizeClosureSites(contract.closureSites);
       const effectSites = normalizeEffectSites(contract.effectSites, sendSites, closureSites);
-      const descriptor = activeFunctionDescriptor(code, contract.functions, sendSites, closureSites);
-      const closurePrototypes = normalizeClosurePrototypes(code, descriptor, closureSites);
+      const fn = resolveFunctionContract(code, Object.freeze({...contract, functions: normalizeModuleFunctions(contract.functions, sendSites, closureSites), closureSites}));
+      const {descriptor, closurePrototypes} = fn;
+      const parameterCount = descriptor.parameters;
+      const captureIds = descriptor.captures;
+      if (activation.arguments.length !== parameterCount) {
+        throw new TypeError(`WASM activation expected ${parameterCount} arguments, received ${activation.arguments.length}`);
+      }
       const compiledModule = await moduleCache.get(moduleArtifact, () => readModuleImplementationBytes(moduleArtifact, {resolveImplementation}));
 
       const arena = new ValueHandleArena({receiverAbsent: activation.receiver === null});
@@ -438,7 +389,7 @@ function createResumableWasmFunctionV1Executor({
       let released = false;
       let result = null;
       let tailEffect = null;
-      let currentEntry = code.metadata.entry;
+      let currentEntry = fn.entry;
       let currentHandles = [receiverHandle, ...argumentHandles, ...captureHandles];
       let resumptions = 0;
 

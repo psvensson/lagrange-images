@@ -18,12 +18,14 @@ import {
   integerValue,
   objectRef,
   OPENSMALLTALK_CUIS_PROVIDER_ID,
+  readFunctionSelection,
   readModuleDescriptor,
   RUST_CARGO_LOCK_V1,
   RUST_CARGO_MANIFEST_V1,
   RUST_SOURCE_V1,
   textValue,
   WASM_BINARY_V1,
+  WASM_FUNCTION_V2,
   WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
 } from '../src/runtime.js';
 
@@ -225,7 +227,8 @@ test('Symmetric Smalltalk composes Cargo-derived WASM and Cuis Blocks identicall
     });
 
     assert.equal(readModuleDescriptor(wasm.moduleArtifact).abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
-    assert.equal(wasm.functionArtifact.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+    assert.equal(wasm.functionArtifact.representation, WASM_FUNCTION_V2);
+    assert.equal(readFunctionSelection(wasm.functionArtifact).entry, 'run');
     assert.deepEqual(readModuleDescriptor(wasm.moduleArtifact).effectSites.map(({kind}) => kind), ['send', 'send']);
     assert.match(readModuleDescriptor(wasm.moduleArtifact).effectSites[0].resumeEntry, /\$resume_/);
     assert.equal(readModuleDescriptor(wasm.moduleArtifact).effectSites[1].resumeEntry, null);
