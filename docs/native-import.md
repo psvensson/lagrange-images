@@ -77,6 +77,20 @@ Cuis import adapter
 
 Do not create an importer-local executable class representation.
 
+M1 is now implemented by `importCuisNativeClasses()`. It consumes the canonical v2 manifest
+directly, preflights its schema/semantic identities/dependency topology, and delegates each ordered
+local declaration to `ensureClassFromDeclaration()`. Native declaration legality remains in that
+class owner: the adapter neither duplicates inherited-slot rules nor promises a new batch
+transaction, and a corrected retry reuses any already-valid immutable ancestor. Its sole external compatibility mapping is the exact
+semantic identity `cuis-class/Cuis-Base/Object` to this image's native kernel Object, scoped to M1
+structural class construction/allocation; a class merely named `Object` is not equivalent. Import
+results are transient semantic-identity/native-ref associations, not a durable side table.
+
+The real proof obtains v2 from OpenSmalltalkVM/Cuis, closes that build runtime, then imports into a
+separate runtime with no Cuis toolchain or foreign-runtime provider. Exact replay is write-free, and
+the native allocation owner creates an ordinary ObjectRef whose inherited/local slots persist
+ordinary Values/refs. `CuisExport*` materialization is not used.
+
 ### 2. Native method compilation
 
 Compile imported Cuis method source through the existing Smalltalk semantic/compiler path.

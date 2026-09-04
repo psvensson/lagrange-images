@@ -211,6 +211,15 @@ Cuis native-import adapter
     `-> native application roots/state
 ```
 
+M1 now implements the first arrow in `src/language/cuis-native-import.js`: one canonical v2 class
+graph is schema/identity/dependency-checked before publication, the exact `cuis-class/Cuis-Base/Object` identity is
+mapped for structural root compatibility, and ordered local declarations are handed to the native
+class builder. Declaration legality remains that native owner's decision; the adapter does not
+duplicate it into a batch validator. The adapter stores no reconciliation table and makes no Shape/slot/allocation
+decision. Its real proof closes the Cuis build runtime before a separate provider-free runtime
+imports, replays, allocates and accesses ordinary native object state. Methods remain explicit M2
+breadth and a non-empty method list is refused rather than silently ignored.
+
 Frozen v1 remains readable for the existing inspection materializer. Extend v2 only when the next importer milestone requires more semantic facts. Do not broaden it into arbitrary heap export or flatten inherited/physical VM layout into declaration data.
 
 ### Role of OpenSmalltalkVM after import begins

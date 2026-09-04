@@ -209,6 +209,7 @@ export {ImageService};
 export * from './execution/executor.js';
 export * from './execution/model.js';
 export * from './language/index.js';
+export * from './language/cuis-native-import.js';
 export * from './object/index.js';
 export * from './project/index.js';
 export * from './toolchain/index.js';
