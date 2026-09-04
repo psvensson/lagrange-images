@@ -48,17 +48,27 @@ function requiredArray(value, label) {
   return value;
 }
 
+function requiredIndex(value, label) {
+  if (!Number.isInteger(value) || value < 0) throw new TypeError(`${label} must be a non-negative integer`);
+  return value;
+}
+
 // Deterministic serialization: keys sorted at every level so the descriptor's content bytes — and
 // therefore its identity — never drift with object construction order. Not ordinary
 // JSON.stringify, whose key order follows insertion.
-function canonicalJson(value) {
-  if (value === null || typeof value === 'number' || typeof value === 'boolean') return JSON.stringify(value);
-  if (typeof value === 'string') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(',')}}`;
+function canonicalJson(value, path = 'contract') {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number') {
+    // JSON.stringify would silently turn NaN/Infinity into null — a different value under the
+    // same identity. Refuse instead: nothing in a contract is allowed to be non-finite.
+    if (!Number.isFinite(value)) throw new TypeError(`${path} must be a finite number`);
+    return JSON.stringify(value);
   }
-  throw new TypeError('module contract contains a non-canonical value');
+  if (Array.isArray(value)) return `[${value.map((entry, index) => canonicalJson(entry, `${path}[${index}]`)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k], `${path}.${k}`)}`).join(',')}}`;
+  }
+  throw new TypeError(`${path} contains a non-canonical ${value === undefined ? 'undefined' : typeof value} value`);
 }
 
 // Validate + freeze the executable contract (order-independent). The function descriptors keep the
@@ -90,8 +100,8 @@ function normalizeFunctionDescriptor(descriptor, label) {
   if (!descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)) throw new TypeError(`${label} must be an object`);
   return Object.freeze({
     entry: requiredText(descriptor.entry, `${label}.entry`),
-    memberIndex: descriptor.memberIndex,
-    parameters: descriptor.parameters,
+    memberIndex: requiredIndex(descriptor.memberIndex, `${label}.memberIndex`),
+    parameters: requiredIndex(descriptor.parameters, `${label}.parameters`),
     captures: Object.freeze([...requiredArray(descriptor.captures, `${label}.captures`)]),
     ...(Object.hasOwn(descriptor, 'cellBindings')
       ? {cellBindings: Object.freeze([...requiredArray(descriptor.cellBindings, `${label}.cellBindings`)])}
@@ -119,9 +129,25 @@ function assertWasmModuleV2Artifact(artifact) {
     throw new TypeError(`artifact is not ${WASM_MODULE_V2}`);
   }
   if (artifact.content?.kind !== 'text') throw new TypeError(`${WASM_MODULE_V2} content must be a canonical-JSON text Value`);
-  normalizeModuleContract(JSON.parse(artifact.content.value), `${WASM_MODULE_V2} content`);
+  let parsed;
+  try {
+    parsed = JSON.parse(artifact.content.value);
+  } catch (error) {
+    throw new TypeError(`${WASM_MODULE_V2} content must be valid JSON`, {cause: error});
+  }
+  // Canonical form is enforced on READ as well as on write: a descriptor whose bytes are not the
+  // canonical serialization of its own contract would carry a different identity for the same
+  // meaning, so it is not a v2 module at all.
+  if (canonicalJson(normalizeModuleContract(parsed, `${WASM_MODULE_V2} content`)) !== artifact.content.value) {
+    throw new TypeError(`${WASM_MODULE_V2} content is not the canonical serialization of its contract`);
+  }
   implementationRef(artifact);
   return artifact;
+}
+
+function isWasmModuleArtifact(artifact) {
+  return artifact?.kind === 'code-artifact'
+    && (artifact.representation === WASM_MODULE_V1 || artifact.representation === WASM_MODULE_V2);
 }
 
 // Either durable version of a compiled module. v1 is validated by its frozen contract owner
@@ -145,14 +171,52 @@ function readModuleDescriptor(artifact) {
     // executors validate the schema themselves), never through the v2 normalizer.
     if (artifact.content?.kind !== 'bytes') throw new TypeError(`${WASM_MODULE_V1} content must be a bytes Value`);
     const md = artifact.metadata ?? {};
+    const sendSites = Object.freeze([...(md.sendSites ?? [])]);
+    const closureSites = Object.freeze([...(md.closureSites ?? [])]);
     return Object.freeze({
       abi: requiredText(md.abi, `${WASM_MODULE_V1} metadata.abi`),
       literals: Object.freeze([...(md.literals ?? [])]),
-      functions: Object.freeze([...(md.functions ?? [])]),
-      sendSites: Object.freeze([...(md.sendSites ?? [])]),
-      closureSites: Object.freeze([...(md.closureSites ?? [])]),
+      functions: Array.isArray(md.functions)
+        ? Object.freeze([...md.functions])
+        // The oldest v1 sub-form (before the functions table): one entry described by the
+        // top-level entry/parameters/captures[/cellBindings] mirrors, using every site. This is
+        // exactly the fallback the executors and function assembly applied before the accessor
+        // existed, kept here — in the frozen decoder — so those artifacts stay executable.
+        : Object.freeze([Object.freeze({
+          entry: requiredText(md.entry, `${WASM_MODULE_V1} metadata.entry`),
+          memberIndex: 0,
+          parameters: md.parameters,
+          captures: Object.freeze([...(md.captures ?? [])]),
+          ...(Object.hasOwn(md, 'cellBindings') ? {cellBindings: Object.freeze([...md.cellBindings])} : {}),
+          sendSiteIndices: Object.freeze(sendSites.map((_, index) => index)),
+          closureSiteIndices: Object.freeze(closureSites.map((_, index) => index)),
+        })]),
+      sendSites,
+      closureSites,
       effectSites: Object.freeze([...(md.effectSites ?? [])]),
     });
+  }
+  throw new TypeError(`not a WASM module artifact: ${artifact?.representation ?? 'missing'}`);
+}
+
+// The module's implementation bytes ONLY, resolved through the one place that knows where they
+// live (the implementation dependency for v2, the content for frozen v1). Executors hand this to
+// the module cache as a thunk, so a cache hit resolves and decodes nothing.
+async function readModuleImplementationBytes(artifact, {resolveImplementation} = {}) {
+  if (artifact?.representation === WASM_MODULE_V2) {
+    if (typeof resolveImplementation !== 'function') {
+      throw new TypeError(`${WASM_MODULE_V2} requires resolveImplementation(ref) to read its bytes`);
+    }
+    const ref = implementationRef(artifact);
+    const impl = await resolveImplementation(ref);
+    if (!impl || impl.content?.kind !== 'bytes') {
+      throw new TypeError(`${WASM_MODULE_V2} implementation ${ref.imageId}/${ref.objectId} must be a bytes artifact`);
+    }
+    return base64Decode(impl.content.base64);
+  }
+  if (artifact?.representation === WASM_MODULE_V1) {
+    if (artifact.content?.kind !== 'bytes') throw new TypeError(`${WASM_MODULE_V1} content must be a bytes Value`);
+    return base64Decode(artifact.content.base64);
   }
   throw new TypeError(`not a WASM module artifact: ${artifact?.representation ?? 'missing'}`);
 }
@@ -162,18 +226,7 @@ function readModuleDescriptor(artifact) {
 // v2 (an executor passes context.images.getCodeArtifact); it is never called for v1.
 async function readModuleContract(artifact, {resolveImplementation} = {}) {
   const descriptor = readModuleDescriptor(artifact);
-  if (artifact.representation === WASM_MODULE_V2) {
-    if (typeof resolveImplementation !== 'function') {
-      throw new TypeError(`${WASM_MODULE_V2} requires resolveImplementation(ref) to read its bytes`);
-    }
-    const ref = implementationRef(artifact);
-    const impl = await resolveImplementation(ref);
-    if (!impl || impl.content?.kind !== 'bytes') {
-      throw new TypeError(`${WASM_MODULE_V2} implementation ${ref.imageId}/${ref.objectId} must be a bytes artifact`);
-    }
-    return Object.freeze({bytes: base64Decode(impl.content.base64), ...descriptor});
-  }
-  return Object.freeze({bytes: base64Decode(artifact.content.base64), ...descriptor});
+  return Object.freeze({bytes: await readModuleImplementationBytes(artifact, {resolveImplementation}), ...descriptor});
 }
 
 // Select one function of a module's contract by entry name or member index. The ONE lookup every
@@ -204,7 +257,7 @@ function soleModuleEntry(descriptor) {
 // Compilers hand in compilation FACTS {bytes, contract, metadata}; they never build artifacts.
 // `metadata` is provenance only: a contract field or a semantic mirror there is refused, so the
 // descriptor content stays the single authority for meaning.
-function describeWasmModuleV2Result({languageId = null, bytes, contract, metadata = {}} = {}) {
+function describeWasmModuleV2Result({languageId, bytes, contract, metadata = {}} = {}) {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) throw new TypeError('WASM module bytes must be a non-empty Uint8Array');
   const normalized = normalizeModuleContract(contract);
   const provenance = normalizeMetadata(metadata, `${WASM_MODULE_V2} provenance metadata`);
@@ -214,7 +267,9 @@ function describeWasmModuleV2Result({languageId = null, bytes, contract, metadat
     }
   }
   return Object.freeze({
-    languageId,
+    // Only when the compiler stated one: an absent languageId lets the CompilationService apply
+    // its own fallback (the source's, or the group members' common language).
+    ...(languageId === undefined ? {} : {languageId}),
     primary: 'module',
     artifacts: Object.freeze([
       Object.freeze({key: 'implementation', representation: WASM_BINARY_V1, content: bytesValue(bytes), dependencies: [], metadata: {}}),
@@ -241,9 +296,11 @@ export {
   describeWasmModuleV2Result,
   encodeModuleContractContent,
   implementationRef,
+  isWasmModuleArtifact,
   moduleFunctionOf,
   normalizeModuleContract,
   readModuleContract,
   readModuleDescriptor,
+  readModuleImplementationBytes,
   soleModuleEntry,
 };

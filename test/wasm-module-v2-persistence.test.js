@@ -180,24 +180,36 @@ test('canonical serialization is independent of JS insertion/key order at every 
 test('atomicity and convergence: the descriptor is never visible without its implementation; an identical pair is reused; a differing or partial pair is refused', async () => {
   await withRuntime(async (runtime) => {
     await semanticV0(runtime, 'src');
-    // (a) the implementation id is already occupied by something else: the insert-only batch
-    //     refuses as a whole, so the descriptor never appears.
+    // (a) the implementation id is already occupied by something else: ensureCodeArtifacts refuses
+    //     the whole graph before any write, so the descriptor never appears.
     await runtime.images.putCodeArtifact(IMG, {id: 'taken:implementation', representation: 'wasm-binary/v1', content: bytesValue(new Uint8Array([1, 2, 3]))});
     await assert.rejects(compileV2(runtime, 'src', 'taken'), (e) => e?.name === 'RecordConflictError');
     assert.equal(await runtime.images.getCodeArtifact(IMG, 'taken'), null, 'no descriptor without its binary');
-    // (b) a partial pair (descriptor present, binary absent) is refused, never completed in place.
-    await runtime.images.putCodeArtifact(IMG, {id: 'half', representation: WASM_MODULE_V1, content: bytesValue(new Uint8Array([1])), metadata: {abi: 'x', literals: []}});
-    await assert.rejects(compileV2(runtime, 'src', 'half'), (e) => e?.name === 'RecordConflictError');
-    assert.equal(await runtime.images.getCodeArtifact(IMG, 'half:implementation'), null);
+    // (b) a PARTIAL pair — the sibling already present and IDENTICAL to what the compile would
+    //     write, the primary absent — is refused by the partial-graph rule, never completed in
+    //     place (an implementation that filled in the missing half would pass this wrongly).
+    const reference = await compileV2(runtime, 'src', 'ref');
+    const referenceBinary = await runtime.images.getCodeArtifact(IMG, 'ref:implementation');
+    await runtime.images.putCodeArtifact(IMG, {
+      id: 'half:implementation', languageId: referenceBinary.languageId, representation: referenceBinary.representation,
+      content: referenceBinary.content, derivedFrom: referenceBinary.derivedFrom, metadata: referenceBinary.metadata,
+    });
+    await assert.rejects(
+      runtime.compilation.compileArtifact(objectRef(IMG, 'src'), {id: 'half', targetRepresentation: WASM_MODULE_V2, reuse: false}),
+      (e) => e?.name === 'RecordConflictError',
+    );
+    assert.equal(await runtime.images.getCodeArtifact(IMG, 'half'), null, 'the descriptor was not created over a partial graph');
+    assert.ok(reference);
     // (c) an identical pair converges: the second compile with reuse disabled writes nothing.
-    const first = await compileV2(runtime, 'src', 'mod');
+    const first = await runtime.compilation.compileArtifact(objectRef(IMG, 'src'), {id: 'mod', targetRepresentation: WASM_MODULE_V2, reuse: false});
+    assert.equal(first.id, 'mod');
     const count = (await artifactIds(runtime)).length;
     const again = await runtime.compilation.compileArtifact(objectRef(IMG, 'src'), {id: 'mod', targetRepresentation: WASM_MODULE_V2, reuse: false});
     assert.equal(again.id, first.id);
     assert.equal((await artifactIds(runtime)).length, count, 'nothing new written');
     // (d) derivation reuse also finds the v2 descriptor (cache metadata rides on the primary).
     const reused = await runtime.compilation.compileArtifact(objectRef(IMG, 'src'), {id: 'other-id', targetRepresentation: WASM_MODULE_V2});
-    assert.equal(reused.id, 'mod', 'the reusable derivation is the existing descriptor');
+    assert.ok(['ref', 'mod'].includes(reused.id), 'the reusable derivation is an existing descriptor (never a fresh graph)');
     assert.equal(await runtime.images.getCodeArtifact(IMG, 'other-id'), null);
   });
 });
@@ -293,5 +305,56 @@ test('frozen v1 stays readable and behavior-identical: a v1 artifact built from 
       runtime.compilation.compileArtifact(objectRef(IMG, 'src'), {id: 'never', targetRepresentation: WASM_MODULE_V1}),
       (e) => e?.name === 'CodeCompilerNotFoundError',
     );
+  });
+});
+
+test("a group compilation inherits the members' common languageId (the describer states none, the service falls back)", async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.putCodeArtifact(IMG, {id: 'src-lang', languageId: 'symmetric-smalltalk', representation: LAGRANGE_CODE_V0, content: textValue(JSON.stringify(ADD_PROGRAM))});
+    const module = await runtime.compilation.compileArtifact(objectRef(IMG, 'src-lang'), {id: 'mod-lang', targetRepresentation: WASM_MODULE_V2});
+    assert.equal(module.languageId, 'symmetric-smalltalk');
+    assert.equal((await runtime.images.getCodeArtifact(IMG, 'mod-lang:implementation')).languageId, 'symmetric-smalltalk');
+    const {installWasmBlockTree} = await import('../src/runtime.js');
+    await runtime.images.putCodeArtifact(IMG, {id: 'tree-src', languageId: 'symmetric-smalltalk', representation: LAGRANGE_CODE_V0, content: textValue(JSON.stringify(ADD_PROGRAM))});
+    const tree = await installWasmBlockTree({images: runtime.images, compilation: runtime.compilation, semanticRef: objectRef(IMG, 'tree-src'), id: 'tree'});
+    assert.equal(tree.moduleArtifact.languageId, 'symmetric-smalltalk', "group compilers state no languageId; the service derives the members' common one");
+  });
+});
+
+test('the frozen v1 decoder also reads the oldest v1 sub-form (no functions table) exactly as the executors used to', async () => {
+  await withRuntime(async (runtime) => {
+    await semanticV0(runtime, 'src');
+    const v2 = await compileV2(runtime, 'src', 'm2');
+    const binary = await runtime.images.getCodeArtifact(IMG, 'm2:implementation');
+    const contract = JSON.parse(v2.content.value);
+    const [fn] = contract.functions;
+    const old = await runtime.images.putCodeArtifact(IMG, {
+      id: 'm-old', representation: WASM_MODULE_V1, content: binary.content,
+      metadata: {abi: contract.abi, entry: fn.entry, parameters: fn.parameters, captures: fn.captures, literals: contract.literals, sendSites: contract.sendSites, closureSites: contract.closureSites},
+    });
+    assert.deepEqual(readModuleDescriptor(old).functions, contract.functions, 'the single entry is synthesized from the top-level mirrors');
+    const {functionArtifact} = await assembleWasmFunctionArtifact({images: runtime.images, semanticRef: objectRef(IMG, 'src'), moduleRef: objectRef(IMG, old.id), functionId: 'fn-old', entry: 'run'});
+    const block = await runtime.images.putBlock(IMG, {id: 'b-old', code: objectRef(IMG, functionArtifact.id), environment: null});
+    assert.deepEqual(await run(runtime, objectRef(IMG, block.id), [integerValue(1)]), integerValue(2));
+  });
+});
+
+test('a v2 descriptor is refused unless its content IS the canonical serialization of a valid contract', async () => {
+  await withRuntime(async (runtime) => {
+    await semanticV0(runtime, 'src');
+    const v2 = await compileV2(runtime, 'src', 'm2');
+    const contract = JSON.parse(v2.content.value);
+    const dep = v2.dependencies;
+    const put = (id, text) => runtime.images.putCodeArtifact(IMG, {id, representation: WASM_MODULE_V2, content: textValue(text), dependencies: dep});
+    // Same contract, pretty-printed: same meaning, different bytes -> not canonical -> not a v2 module.
+    const pretty = await put('pretty', JSON.stringify(contract, null, 2));
+    assert.throws(() => readModuleDescriptor(pretty), /not the canonical serialization/);
+    // An extra descriptor key survives parsing but not normalization -> refused rather than silently dropped.
+    const extra = await put('extra', canonicalJson({...contract, functions: [{...contract.functions[0], extra: 1}]}));
+    assert.throws(() => readModuleDescriptor(extra), /not the canonical serialization/);
+    // Non-finite numbers cannot enter identity-bearing content at all.
+    assert.throws(() => encodeModuleContractContent({...contract, functions: [{...contract.functions[0], parameters: Number.NaN}]}), /parameters must be a non-negative integer/);
+    assert.throws(() => canonicalJson({a: Infinity}), /must be a finite number/);
+    assert.throws(() => canonicalJson({a: undefined}), /undefined/);
   });
 });

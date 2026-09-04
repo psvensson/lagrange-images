@@ -1,7 +1,6 @@
 import {
   WASM_FUNCTION_V1,
   assertWasmFunctionArtifact,
-  assertWasmModuleArtifact,
 } from '../code/wasm-artifacts.js';
 import {canonicalizeValue, isObjectRef, isReference} from '../value/index.js';
 import {
@@ -13,7 +12,7 @@ import {
   WasmInstancePool,
 } from './instance-pool.js';
 import {WasmModuleCache} from './module-cache.js';
-import {readModuleContract} from './module-contract.js';
+import {readModuleDescriptor, readModuleImplementationBytes} from './module-contract.js';
 import {WASM_RESUMABLE_VALUE_HANDLE_ABI_V1} from './resumable-abi.js';
 
 const MAX_WASM_RESUMPTIONS = 256;
@@ -406,9 +405,8 @@ function createResumableWasmFunctionV1Executor({
 
       const moduleRef = canonicalizeValue(code.content);
       const moduleArtifact = await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
-      const contract = await readModuleContract(moduleArtifact, {
-        resolveImplementation: (ref) => context.images.getCodeArtifact(ref.imageId, ref.objectId),
-      });
+      const contract = readModuleDescriptor(moduleArtifact);
+      const resolveImplementation = (ref) => context.images.getCodeArtifact(ref.imageId, ref.objectId);
       if (contract.abi !== WASM_RESUMABLE_VALUE_HANDLE_ABI_V1) {
         throw new TypeError(`WASM module ABI does not match ${WASM_RESUMABLE_VALUE_HANDLE_ABI_V1}`);
       }
@@ -418,7 +416,7 @@ function createResumableWasmFunctionV1Executor({
       const effectSites = normalizeEffectSites(contract.effectSites, sendSites, closureSites);
       const descriptor = activeFunctionDescriptor(code, contract.functions, sendSites, closureSites);
       const closurePrototypes = normalizeClosurePrototypes(code, descriptor, closureSites);
-      const compiledModule = await moduleCache.get(moduleArtifact, contract.bytes);
+      const compiledModule = await moduleCache.get(moduleArtifact, () => readModuleImplementationBytes(moduleArtifact, {resolveImplementation}));
 
       const arena = new ValueHandleArena({receiverAbsent: activation.receiver === null});
       const receiverHandle = activation.receiver === null ? 0 : arena.put(activation.receiver);

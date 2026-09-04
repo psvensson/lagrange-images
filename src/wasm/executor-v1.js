@@ -1,12 +1,11 @@
 import {
   assertWasmFunctionArtifact,
-  assertWasmModuleArtifact,
 } from '../code/wasm-artifacts.js';
 import {canonicalizeValue, isObjectRef, isReference} from '../value/index.js';
 import {ValueHandleArena, WASM_IMPORT_MODULE, WASM_VALUE_HANDLE_ABI_V1} from './abi.js';
 import {readCellThrough, writeCellThrough} from './cell-access.js';
 import {WasmModuleCache} from './module-cache.js';
-import {readModuleContract} from './module-contract.js';
+import {readModuleDescriptor, readModuleImplementationBytes} from './module-contract.js';
 import {WASM_INSTANCE_REUSE_STATELESS_V0, WasmInstancePool} from './instance-pool.js';
 
 // The lagrange-value-handle/v1 executor. Separate from the v0 one on purpose: every metadata
@@ -402,9 +401,8 @@ function createWasmFunctionV1CellExecutor({
 
       const moduleRef = canonicalizeValue(code.content);
       const moduleArtifact = await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
-      const contract = await readModuleContract(moduleArtifact, {
-        resolveImplementation: (ref) => context.images.getCodeArtifact(ref.imageId, ref.objectId),
-      });
+      const contract = readModuleDescriptor(moduleArtifact);
+      const resolveImplementation = (ref) => context.images.getCodeArtifact(ref.imageId, ref.objectId);
       if (contract.abi !== WASM_VALUE_HANDLE_ABI_V1) {
         throw new TypeError(`WASM module ABI does not match ${WASM_VALUE_HANDLE_ABI_V1}`);
       }
@@ -413,7 +411,7 @@ function createWasmFunctionV1CellExecutor({
       const closureSites = normalizeClosureSites(contract.closureSites);
       const descriptor = activeFunctionDescriptor(code, contract.functions, sendSites, closureSites);
       const closurePrototypes = normalizeClosurePrototypes(code, descriptor, closureSites);
-      const compiledModule = await moduleCache.get(moduleArtifact, contract.bytes);
+      const compiledModule = await moduleCache.get(moduleArtifact, () => readModuleImplementationBytes(moduleArtifact, {resolveImplementation}));
 
       // Only temporaries: this activation declares the cells it owns. A cell capture already
       // exists in the frame that declared it, and declaring one here would shadow it with a fresh

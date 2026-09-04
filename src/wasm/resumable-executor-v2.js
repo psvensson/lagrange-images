@@ -1,7 +1,6 @@
 import {
   WASM_FUNCTION_V1,
   assertWasmFunctionArtifact,
-  assertWasmModuleArtifact,
 } from '../code/wasm-artifacts.js';
 import {canonicalizeValue, isObjectRef, isReference} from '../value/index.js';
 import {
@@ -14,7 +13,7 @@ import {
 } from './instance-pool.js';
 import {readCellThrough, writeCellThrough} from './cell-access.js';
 import {WasmModuleCache} from './module-cache.js';
-import {readModuleContract} from './module-contract.js';
+import {readModuleDescriptor, readModuleImplementationBytes} from './module-contract.js';
 import {WASM_RESUMABLE_VALUE_HANDLE_ABI_V2} from './resumable-abi.js';
 
 const MAX_WASM_RESUMPTIONS = 256;
@@ -500,9 +499,8 @@ function createResumableWasmFunctionV2Executor({
 
       const moduleRef = canonicalizeValue(code.content);
       const moduleArtifact = await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
-      const contract = await readModuleContract(moduleArtifact, {
-        resolveImplementation: (ref) => context.images.getCodeArtifact(ref.imageId, ref.objectId),
-      });
+      const contract = readModuleDescriptor(moduleArtifact);
+      const resolveImplementation = (ref) => context.images.getCodeArtifact(ref.imageId, ref.objectId);
       if (contract.abi !== WASM_RESUMABLE_VALUE_HANDLE_ABI_V2) {
         throw new TypeError(`WASM module ABI does not match ${WASM_RESUMABLE_VALUE_HANDLE_ABI_V2}`);
       }
@@ -512,7 +510,7 @@ function createResumableWasmFunctionV2Executor({
       const effectSites = normalizeEffectSites(contract.effectSites, sendSites, closureSites);
       const descriptor = activeFunctionDescriptor(code, contract.functions, sendSites, closureSites);
       const closurePrototypes = normalizeClosurePrototypes(code, descriptor, closureSites);
-      const compiledModule = await moduleCache.get(moduleArtifact, contract.bytes);
+      const compiledModule = await moduleCache.get(moduleArtifact, () => readModuleImplementationBytes(moduleArtifact, {resolveImplementation}));
 
       // Only temporaries: a cell capture already exists in the frame that declared it.
       context.declareTemporaries(descriptor.cellBindings.filter(({source}) => source === 'temporary'));

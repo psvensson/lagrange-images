@@ -159,3 +159,21 @@ test('default executor registries own separate runtime-local WASM module caches'
   assert.notEqual(first, second);
   assert.notEqual(first.moduleCache, second.moduleCache);
 });
+
+test('WasmModuleCache invokes a bytes thunk only on a miss: a hit resolves nothing', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  await runtime.images.createImage({id: 'demo'});
+  const artifact = await compileModule(runtime);
+  const cache = new WasmModuleCache();
+  let resolved = 0;
+  const thunk = async () => {
+    resolved += 1;
+    return (await readModuleContract(artifact, {resolveImplementation: (ref) => runtime.images.getCodeArtifact(ref.imageId, ref.objectId)})).bytes;
+  };
+  const first = await cache.get(artifact, thunk);
+  const second = await cache.get(artifact, thunk);
+  assert.equal(first, second);
+  assert.equal(resolved, 1, 'the implementation was resolved and decoded exactly once');
+  await assert.rejects(cache.get(artifact, 'not-bytes'), /requires the module bytes/);
+  await runtime.close();
+});

@@ -17,7 +17,9 @@ re-interpreted the metadata schema on their own.
 
 1. **`wasm-module/v1` is frozen** (ADR 0035 precedent: a named durable representation is versioned,
    never mutated). Existing durable v1 artifacts stay readable and executable in-image through the
-   canonical accessor's frozen decoder. No compiler produces v1; a request for that target is
+   canonical accessor's frozen decoder — including the oldest v1 sub-form without a `functions`
+   table, whose single entry the decoder synthesizes from the top-level mirrors exactly as the
+   executors used to. No compiler produces v1; a request for that target is
    `CodeCompilerNotFoundError`. There is no dual-write.
 
 2. **`wasm-module/v2` is the canonical compiled form — Shape 2, a descriptor referencing bytes.**
@@ -56,7 +58,9 @@ re-interpreted the metadata schema on their own.
    recover module executable semantics from provenance metadata.
 
 7. **The compilation persistence owner materializes the pair; compilers state facts.** The eight
-   WASM compiler entries return `{languageId, bytes, contract, metadata}`. `CompilationService` gained a
+   WASM compiler entries return `{bytes, contract, metadata}` plus `languageId` where the compiler
+   knows it (single-source entries; group entries state none and the service derives the members'
+   common language, as before). `CompilationService` gained a
    generic **result graph**: a compiler result may be `{primary, artifacts: [{key, representation,
    content, dependencies, metadata}]}` with sibling keys as dependency targets; ids derive from the
    requested id (`<id>` primary, `<id>:<key>` siblings), caller/cache metadata ride on the primary,
@@ -66,9 +70,12 @@ re-interpreted the metadata schema on their own.
    (`describeWasmModuleV2Result`, refusing any contract field or semantic mirror in provenance); no
    compiler, installer or executor knows the graph shape, and the service has no WASM branch.
 
-8. **Canonical serialization is load-bearing.** Descriptor bytes come from a key-sorted canonical
-   JSON at every depth, never `JSON.stringify` insertion order, so identity cannot drift with
-   construction order.
+8. **Canonical serialization is load-bearing, on write and on read.** Descriptor bytes come from a
+   key-sorted canonical JSON at every depth (non-finite numbers refused), never `JSON.stringify`
+   insertion order; and a v2 artifact whose content is not the canonical serialization of its own
+   normalized contract is refused by the accessor, so the same meaning can never carry two
+   identities. Executors read the descriptor synchronously and hand the module cache a bytes thunk
+   that is invoked only on a cache miss.
 
 ## Consequences
 

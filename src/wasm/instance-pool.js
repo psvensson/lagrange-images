@@ -1,17 +1,19 @@
 import {TupleMap} from '../support/tuple-map.js';
-import {assertWasmModuleArtifactAnyVersion as assertWasmModuleArtifact} from './module-contract.js';
+import {isWasmModuleArtifact} from './module-contract.js';
 
 const WASM_INSTANCE_REUSE_STATELESS_V0 = 'stateless-v0';
 
 // A tuple key, not a joined string: image and object ids are arbitrary non-empty text, so
 // no separator is safe to join on. See src/support/tuple-map.js.
+// The pool keys and gates on identity and the instanceReuse PROVENANCE only; the contract itself
+// was already decoded by the executor through the accessor, so nothing is re-parsed per acquire.
 function modulePoolKey(artifact) {
-  assertWasmModuleArtifact(artifact);
+  if (!isWasmModuleArtifact(artifact)) throw new TypeError(`not a WASM module artifact: ${artifact?.representation ?? 'missing'}`);
   return [artifact.imageId, artifact.id];
 }
 
 function requireReusableModule(artifact) {
-  assertWasmModuleArtifact(artifact);
+  modulePoolKey(artifact);
   if (artifact.metadata?.instanceReuse !== WASM_INSTANCE_REUSE_STATELESS_V0) {
     throw new TypeError(`WASM module does not declare reusable instance contract: ${WASM_INSTANCE_REUSE_STATELESS_V0}`);
   }

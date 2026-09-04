@@ -12,9 +12,11 @@ export {
   canonicalJson,
   describeWasmModuleV2Result,
   encodeModuleContractContent,
+  isWasmModuleArtifact,
   moduleFunctionOf,
   readModuleContract,
   readModuleDescriptor,
+  readModuleImplementationBytes,
   soleModuleEntry,
 } from './module-contract.js';
 export * from './resumable-abi.js';

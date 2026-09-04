@@ -23,8 +23,13 @@ class WasmModuleCache {
   // `bytes` are the module's implementation bytes as resolved through the canonical accessor
   // (readModuleContract). The cache never decodes a representation itself: the frozen v1 form
   // and v2 both reach it the same way, so there is exactly one place that knows where bytes live.
+  // `bytes` is the module's implementation as resolved through the canonical accessor: either
+  // the Uint8Array itself or a thunk returning it, which is invoked ONLY on a cache miss — so a
+  // hit resolves and decodes nothing.
   async get(moduleArtifact, bytes) {
-    if (!(bytes instanceof Uint8Array)) throw new TypeError('WASM module cache requires the module bytes resolved through readModuleContract');
+    if (!(bytes instanceof Uint8Array) && typeof bytes !== 'function') {
+      throw new TypeError('WASM module cache requires the module bytes (or a thunk) resolved through the module-contract accessor');
+    }
     const key = moduleCacheKey(moduleArtifact);
     const existing = this.entries.get(key);
     if (existing) {
@@ -34,10 +39,13 @@ class WasmModuleCache {
 
     this.misses += 1;
     this.compilations += 1;
-    const moduleBytes = bytes;
     let pending;
     pending = Promise.resolve()
-      .then(() => this.compile(moduleBytes))
+      .then(async () => {
+        const moduleBytes = typeof bytes === 'function' ? await bytes() : bytes;
+        if (!(moduleBytes instanceof Uint8Array)) throw new TypeError('WASM module bytes must resolve to a Uint8Array');
+        return await this.compile(moduleBytes);
+      })
       .then((module) => {
         if (!(module instanceof WebAssembly.Module)) {
           throw new TypeError('WASM module cache compiler must return a WebAssembly.Module');
