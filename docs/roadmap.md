@@ -2,241 +2,288 @@
 
 This roadmap is deliberately limited to **image/Project semantics, language/execution and generic graph primitives**. Graphical presentation and human-facing collaboration UX live in [Lagrange Object Environment](https://github.com/psvensson/lagrange-object-environment); see [object-environment-boundary.md](object-environment-boundary.md) and ADR 0058.
 
-The ordering is by architectural pressure, not language popularity. Completed implementation detail belongs in the ADRs and tests; this file should preserve the remaining frontier without becoming a second history log.
+The ordering is by architectural pressure, not language popularity. Completed implementation detail belongs in the ADRs and tests; this file preserves the remaining frontier.
+
+## Primary convergence directive
+
+ADR 0085 makes **progressive native import of an existing application** the main language-convergence path.
+
+The platform has enough horizontal proof. Do not spend roadmap time accumulating additional foreign-runtime, package-depth or language-spike demonstrations unless they advance this vertical path or expose a concrete generic owner needed by it.
+
+Cuis is the first forcing ecosystem:
+
+```text
+existing Cuis application
+        |
+        v
+source/package graph + real Cuis semantics
+        |
+        v
+canonical semantic import
+        |
+        v
+native Classes / Shapes / methods / Blocks / roots
+        |
+        v
+lagrange-code -> Lagrange WASM
+        |
+        v
+Lagrange objects / storage / history / placement
+```
+
+OpenSmalltalkVM remains importer/toolchain, semantic oracle and explicit foreign-service escape hatch. It is **not** an automatic fallback executor for unsupported native import.
+
+See [native-import.md](native-import.md) for the current model and ADR 0085 for the decision.
 
 ## Current foundation
 
 The substrate already proves:
 
-- stable language-neutral Value/ref/Shape/object identity and history
-- atomic current-state + history mutation through the backend transaction contract
-- public Lagrange durable backend and restart-compatible mapping
-- CodeArtifacts, LexicalEnvironments, Blocks and language-owned dispatch
-- Symmetric Smalltalk with mutable lexical state, object/class model, control flow, allocation, indexed Arrays, hashed Dictionary/MethodDictionary, conditions/non-local return, globals and a canonical standard image
-- neutral + hybrid resumable Lagrange-WASM execution
-- explicit artifact dependency/provenance graphs and toolchain providers
-- Cargo/rustc closed-input builds and deterministic toolchain reuse, proven end to end by a real
-  digest-pinned compiler lane in CI
-- raw/callable/Component WASM lanes with structured interface values
-- transient execution authority, capability-aware imports, authorized object projection/mutation and activation-scoped resource handles
-- long-lived foreign-runtime lifecycle with real OpenSmalltalkVM/Cuis runtime, toolchain and
-  six-package dependency-DAG proofs
-- deterministic Cuis package/class/method semantic export and atomic ordinary-object materialization
-- mixed image-native/foreign-WASM/live-Cuis composition
-- durable Project working state plus graph-backed portable releases, managed install/restart recovery, and one durable Project spanning native Smalltalk, live Cuis and a real Rust Component
-- Node-independent portable runtime closure, deterministic source artifact and public Environment
-  composition bindings
+- stable language-neutral Value/ref/Shape/object identity and history;
+- atomic current-state + history mutation through the backend transaction contract;
+- public Lagrange durable backend and restart-compatible mapping;
+- CodeArtifacts, LexicalEnvironments, Blocks and language-owned dispatch;
+- a substantial Symmetric Smalltalk object/class/kernel/library model;
+- neutral + hybrid resumable Lagrange-WASM execution;
+- explicit artifact dependency/provenance graphs and toolchain providers;
+- real Cargo/rustc closed-input builds in digest-pinned OCI;
+- raw/callable/Component WASM lanes with structured interface values;
+- transient execution authority and authorized object read/mutation/creation/observation lanes;
+- real OpenSmalltalkVM/Cuis runtime, toolchain and multi-package dependency proofs;
+- deterministic Cuis package/class/method semantic export and ordinary-object materialization;
+- real SBCL through the unchanged generic foreign-runtime contracts (ADR 0084);
+- mixed native/foreign-WASM/live-runtime composition;
+- durable Project working state, portable releases and managed install/restart recovery;
+- Node-independent portable runtime closure and public Object Environment bindings.
 
 ## 1. Symmetric Smalltalk substrate
 
-Keep language work here when it is language semantics or execution substrate rather than editor/REPL UX.
+Keep language work here when it is language semantics or execution substrate rather than editor/REPL UX. From ADR 0085 onward, broaden the language primarily under pressure from imported Cuis application code.
 
 Next pressures:
 
-- [x] cascades: `receiver m1; m2; m3` sends every message to the receiver of the first message and
-      answers the first message's value. The parser keeps receiver and messages apart; the compiler
-      lowers the cascade to hidden temporaries, a sequence and ordinary sends, so `lagrange-code`
-      gains no op and no selector is recognized
-- [x] finish the basic collection hierarchy and `species` conventions: `Collection` holds the shared
-      enumeration written against `do:` and `species`, with `species` answering the receiver's class
-      by default, so `collect:`/`select:` make their answer from `self species new`. A subclass
-      redirects its derived collections by overriding `species`, not the enumeration methods. `OrderedCollection` is its first concrete subclass
-- [ ] primitive-backed methods beyond the current kernel minimum where real library code demands them
-- [x] decide and implement nested namespace semantics (**ADR 0061**): a namespace is a mapping onto
-      flat, shared bindings; nesting is parent-linked *visibility* (inner shadows outer, walked at
-      compile time, acyclic to the root), never containment. A Project designates a namespace as
-      organization — the parent chain is not the §8 Project graph and confers no authority. No path
-      syntax, no private names, no runtime cost. The parent edge lives on a v2 namespace Shape (ADR
-      0002 immutability); pre-0061 v1 records dual-read and migrate on first write. Proof lives in
-      `test/nested-namespaces.test.js`
-- [x] decide and implement general object residency/promotion (**ADR 0060**): an allocated object
-      begins transient in the arena and promotes to a durable record only when a reference crosses a
-      durability boundary. Decided and implemented — aliasing (one durable object, memoized), cycles
-      (preassigned ids, staged before edges resolve, with write-through so a mutation during
-      promotion is not lost), promotion atomicity (one central operation riding the ADR 0032
-      transaction), stable identity (fresh at allocation, derived durable id), reachable-graph
-      persistence (traverse transient refs only; durable refs are edges), and a slot/indexed write
-      that promotes only when the receiver is durable. A handled condition and a built-and-discarded
-      collection now write no durable record; proof lives in `test/object-residency.test.js`
-- [ ] broaden the standard image only from real library/tool pressure
-- [ ] debugger-grade activation/resumption metadata without putting debugger UI here
+- [ ] primitive-backed methods only where M1-M5 imported code requires them;
+- [ ] broaden the standard image only from real imported library/application pressure;
+- [ ] debugger-grade activation/resumption metadata without putting debugger UI here;
+- [ ] preserve the current owner boundaries for classes, Shapes, method dictionaries, instance/class state, namespaces and object residency as native import begins using them.
 
-The REPL, source browser, inspector and debugger presentation belong in Lagrange Object Environment; this repository must expose the semantic/compiler/execution APIs they need.
+Already established foundations include cascades, collection/species conventions, nested namespaces (ADR 0061) and transient-to-durable object residency/promotion (ADR 0060).
+
+The REPL, source browser, inspector and debugger presentation belong in Lagrange Object Environment; this repository exposes the semantic/compiler/execution APIs they need.
 
 ## 2. Callable Component and authority refinements
 
-The structured foreign/component boundary is functionally closed for current needs. Keep only refinements with concrete pressure:
+The structured foreign/component boundary is functionally closed for current needs. Keep only refinements with concrete application pressure:
 
-- [ ] per-call resource reads once async-capable host imports work; ADR 0040's preloaded record is tooling limitation, not intended persistence semantics
-- [ ] async foreign callbacks/effects only through explicit contracts, including delegated/attenuated authority semantics
-- [ ] reusable foreign Component instance/reset contracts only if measurements justify them; fresh-per-activation remains the safe default
-- [ ] per-call authority transport for long-lived foreign runtimes; ADR 0037 already fixes authority as call-scoped rather than runtime-scoped
+- [ ] per-call resource reads once async-capable host imports work;
+- [ ] async foreign callbacks/effects only through explicit contracts, including delegated/attenuated authority semantics;
+- [ ] reusable foreign Component instance/reset contracts only if measurements justify them;
+- [ ] per-call authority transport for long-lived foreign runtimes when an explicit foreign service requires it.
 
-### Portable graphics capability boundary
-
-ADR 0063 accepts a graphics direction without moving presentation into Images. The substrate-side proofs this section once anticipated have now been demonstrated **in the Lagrange Object Environment** (they are environment achievements, not a graphics capability in this repository):
-
-- [x] one exact-version `wasi:webgpu` import exercised end-to-end through a Component — proven environment-side (`lagrange-object-environment` browser renderer, `wasi:webgpu@0.3.0-rc.2` host provider), not in Images
-- [x] runtime-local provider wiring without adding graphics Value/object/storage semantics — proven environment-side (Lagrange-owned host providers under `src/browser-renderer/`); Images' Value/object/storage model gained no graphics semantics
-- [x] GPU/device/surface WIT resources remain transient and non-durable — proven environment-side (transient render targets/surfaces, never persisted)
-- [x] Lagrange Object Environment supplies a surface/provider for a Component while Images remains renderer-agnostic — proven environment-side (Component-backed GLB rendering against the env's authorized lanes)
-- [ ] keep protected graphics operations use-time-authorized and independently scoped from image-object authority — an **environment** concern (asset-bytes authority), owned there
-- [ ] reuse upstream examples/libraries before proposing any Lagrange scene/GPU ABI — only under concrete pressure, environment-side
-
-These are checked off here only to record that the Object Environment already demonstrated them, so a future agent does not re-derive or reimplement them in Images. The desired result remains a portable renderer Component boundary, **not** a graphics subsystem in this repository; Images stays renderer-agnostic. Do not start by designing a scene graph.
+The portable graphics capability boundary remains an Object Environment concern as recorded in ADR 0063 and the environment repository. Images stays renderer-agnostic.
 
 Do not put principals, grants or cached authorization decisions into durable artifacts, refs or resource handles.
 
 ## 3. Image-native Lagrange WASM
 
-The hybrid tail/resumable execution model is established. Remaining optimization and runtime pressure:
+The hybrid tail/resumable execution model is established. Optimize only under measured native-application pressure:
 
-- [ ] tighter live-Value-handle analysis at suspension points
-- [ ] module-size/budget splitting of logical compilation groups
-- [ ] direct optimized calls between entries in one shared module
-- [ ] condition/exception unwinding across suspension points
-- [ ] debugger activation/resumption metadata
-- [ ] optimized/non-materialized closure representations
-- [ ] explicit cancellation semantics for suspended activations
+- [ ] tighter live-Value-handle analysis at suspension points;
+- [ ] module-size/budget splitting of logical compilation groups;
+- [ ] direct optimized calls between entries in one shared module;
+- [ ] condition/exception unwinding across suspension points;
+- [ ] debugger activation/resumption metadata;
+- [ ] optimized/non-materialized closure representations;
+- [ ] explicit cancellation semantics for suspended activations.
 
 Do not conflate compiler-generated resumption with durable continuation state, retry or distributed recovery.
 
-## 4. OpenSmalltalkVM / Cuis compatibility depth
+## 4. Cuis progressive native import
 
-Runtime/toolchain:
+This is the primary language roadmap. Milestones are ordered and should be treated as irreversible movement toward native execution/storage rather than independent proofs.
 
-- [x] explicit dependency graph/order for several Cuis packages: the six-package upstream cluster is
-      declared in anti-dependency order, Cuis resolves its real `!requires:` DAG (including a diamond),
-      and an unsatisfied synthetic requirement produces an explicit failure diagnostic
-- [x] prove a larger third-party package with real dependencies: the fresh derived image performs
-      Compression and WeakDictionaries behavior without runtime package injection
-- [x] snapshot byte reproducibility/normalization investigation: measured NOT reproducible and not
-      normalizable (ADR 0083, `scripts/measure-cuis-snapshot-reproducibility.mjs`)
-- [ ] opt into toolchain result reuse only if snapshot determinism is demonstrated (revisit condition in ADR 0083)
-- [ ] richer explicit Cuis service interfaces without ambient eval
-- [ ] OCI foreign-runtime launcher/placement
-- [ ] restart/reconciliation and snapshot persistence behavior
+### M1 — native class import
 
-Structured export/migration:
+Starting from `smalltalk/cuis-semantic-export-v1` (ADR 0072):
 
-- [x] export package/class/superclass/method/selector/source relationships as structured image artifacts (Stage 1 extraction: `smalltalk/cuis-semantic-export-v1` canonical manifest, PR #136, ADR 0072; Stage 2 materialization into ordinary `CuisExportPackage`/`CuisExportClass`/`CuisExportMethod` objects via the ADR 0067 atomic creation batch — semantic identity as string data, ObjectRef server-minted, Cuis-Base refs reserved identity strings, one atomic all-or-none batch with the four ADR 0067 failure proofs. Follow-up pressure recorded, not solved: repeat-import/reconciliation of the same semantic manifest; authorized creation of behaviorless generic Shape-backed objects for non-Smalltalk consumers.)
-- [ ] export useful CompiledMethod/bytecode/literal information where stable
-- [ ] relate exported structures into image-level mixed-language Projects
-- [ ] selective native lowering/recompilation where useful
-- [ ] measure which code benefits from migration and leave the rest on the compatibility runtime
+- [ ] extend the canonical export with instance-variable definitions and only the additional class-side layout facts required by the target package;
+- [ ] add the Cuis native-import adapter that routes class declarations through the existing native Smalltalk class/Shape/state owners;
+- [ ] import an unchanged multi-class Cuis package as executable native classes/metaclasses;
+- [ ] instantiate an imported class as an ordinary Lagrange object with durable native slots;
+- [ ] prove no OpenSmalltalkVM participates after import in construction or slot access.
 
-Inspecting and navigating those structures belongs to Lagrange Object Environment.
+`CuisExportClass`/`CuisExportMethod` remain inspection/proof representations. They are not the executable native-import destination.
+
+### M2 — native method compilation
+
+- [ ] translate/compile imported Cuis method source through the existing Smalltalk semantic compiler;
+- [ ] install imported methods as ordinary native methods/Blocks in ordinary native method dictionaries;
+- [ ] execute an imported create -> mutate -> read behavior through native dispatch and Lagrange WASM;
+- [ ] make unsupported semantics explicit import/compile failures; no silent live-Cuis fallback.
+
+### M3 — Cuis compatibility-library closure
+
+Use one increasingly realistic imported package/application as the pressure source:
+
+- [ ] map Cuis base classes/protocols to existing native classes only when required behavior is explicitly equivalent and tested;
+- [ ] add missing native library/kernel semantics only for real imported consumers;
+- [ ] use real OpenSmalltalkVM/Cuis as a semantic oracle where differential proof is useful;
+- [ ] keep FFI or other deliberately non-native facilities behind explicit interfaces rather than heap mirroring.
+
+### M4 — native application state and restart
+
+- [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
+- [ ] create a linked application domain graph through imported/native application code;
+- [ ] restart Images and recover the same ObjectRefs, state and relationships;
+- [ ] resume behavior without a Cuis snapshot/Spur heap as authoritative persistence;
+- [ ] prove one authority for native state: the Lagrange image graph.
+
+### M5 — one real independently authored Cuis application
+
+- [ ] choose a nontrivial existing application/package set;
+- [ ] keep its core application source unchanged for Lagrange;
+- [ ] represent the complete source/package closure in a Project/release;
+- [ ] install into a fresh Image;
+- [ ] run useful existing application behavior/tests using native classes, methods and domain objects;
+- [ ] require neither OpenSmalltalkVM nor a Cuis image in the ordinary execution path after import;
+- [ ] expose any remaining foreign dependency as an explicit, inspectable boundary.
+
+### M6 — distribution without language rewrites
+
+- [ ] run the same M5 application with application objects placed across Lagrange nodes;
+- [ ] keep placement/routing entirely out of the Cuis importer and application semantics;
+- [ ] prove generic Lagrange owners decide object location and execution placement;
+- [ ] measure useful compute-near-object/distributed behavior without rewriting the application as a hand-authored distributed program.
+
+### Support work, not parallel goals
+
+The existing OpenSmalltalkVM/Cuis runtime/toolchain remains supported. Additional work is justified only when it advances M1-M6, serves as an oracle, or supports an explicit foreign boundary:
+
+- [ ] opt into Cuis snapshot toolchain result reuse only if ADR 0083's determinism revisit condition is actually met;
+- [ ] broader Cuis ecosystem inputs/support files only when required by the target application;
+- [ ] explicit Cuis service interfaces only for deliberately foreign application boundaries;
+- [ ] runtime placement/reconciliation only when an explicit retained foreign service needs it.
+
+Do not add arbitrary `perform:`, eval, oop export or transparent heap synchronization.
+
+Inspecting, editing and navigating imported structures belongs to Lagrange Object Environment through public Images APIs.
 
 ## 5. Package and compiler ecosystems
 
 ### Generic import/toolchain work
 
-- [x] real pinned-OCI Cargo integration proof in CI: the required `cargo-rustc-oci-integration`
-      lane compiles a closed vendored Rust graph with real Cargo/rustc in a digest-pinned image
-      with the network off, and executes the resulting WASM through the scalar callable lane
-      (Bead lagrange-images-1h9, ADR 0077)
-- [ ] crates.io `.crate` importer -> explicit package/vendor artifacts
-- [ ] git/private-registry dependency import conventions
-- [ ] indexed durable lookup for derivation keys
-- [ ] cross-install content-addressed reuse with truthful installation provenance
+Keep generic work only when it directly supports the native-import application closure or another shipping path:
+
+- [ ] package/archive importer conventions with explicit immutable dependency artifacts;
+- [ ] git/private-registry dependency import conventions;
+- [ ] indexed durable lookup for derivation keys;
+- [ ] cross-install content-addressed reuse with truthful installation provenance.
 
 ### Rust
 
-- [ ] standard package importer built on explicit artifact/dependency semantics
-- [ ] Lagrange Rust SDK/crate for explicit host calls
-- [ ] portable precompiled WASM/Component dependency reuse
+Rust remains the mature existing-compiler -> WASM path:
 
-### Java
-
-- [ ] Java source/class/JAR artifact conventions
-- [ ] JAR/class importer and dependency reuse
-- [ ] javac/JVM/AOT/Java-to-WASM toolchain spike
-- [ ] JVM/OCI foreign-runtime compatibility spike over the generic lifecycle
-- [ ] compare JVM compatibility with deeper WASM/image integration on one realistic application
+- [ ] standard package importer built on explicit artifact/dependency semantics when a real Project needs it;
+- [ ] Lagrange Rust SDK/crate for explicit host calls under concrete pressure;
+- [ ] portable precompiled WASM/Component dependency reuse.
 
 ### Common Lisp
 
-- [x] personality spike using the common artifact/closure/toolchain substrate: a real SBCL executes Lisp
-      functions through the unchanged generic foreign-runtime, callable and release contracts (ADR 0084);
-      the only generic change was extracting the stdio value-call bridge as a shared owner
-- [ ] reader/macroexpansion representation
-- [ ] dynamic bindings
-- [ ] multiple values
-- [ ] conditions/restarts
-- [ ] reuse an existing Lisp compiler/runtime where useful rather than growing a replacement compiler by default
+ADR 0084 completed the required neutrality proof: real SBCL executes through unchanged generic foreign-runtime/callable/release contracts.
+
+Park substantive native Lisp work until the Cuis path has proved native objects and authoritative state through at least M4, preferably under M5 application pressure:
+
+- [ ] ASDF/package import and source closure;
+- [ ] reader/macroexpansion representation;
+- [ ] CLOS/native object mapping;
+- [ ] dynamic bindings and multiple values;
+- [ ] conditions/restarts;
+- [ ] native semantic compilation where the proven import architecture genuinely applies.
+
+Do not pre-generalize the Cuis importer for Lisp. Extract shared owners only when Lisp demonstrates a genuinely shared concern.
+
+### Java and additional runtimes
+
+Java/JAR/JVM and other runtime spikes are parked as roadmap priorities. Resume them only for a concrete product need or when they falsify a generic owner required by the main native-import path.
 
 A package/Project UI is not part of this layer; portable artifact and Project relationship semantics are.
 
 ## 6. Execution, authority and distribution
 
-- [ ] object locator and placement policy
-- [ ] local vs remote call semantics
-- [ ] Lagrange WASM placement
-- [ ] OCI foreign-runtime lifecycle/placement
-- [ ] JVM foreign-runtime implementation
-- [ ] distributed routing across image-native, Component/foreign WASM and live runtimes
-- [ ] explicit failure/retry/idempotency semantics
-- [ ] durable deployment/reconciliation contract above runtime definitions
-- [ ] measured `ctx.call()` / compute-near-object wins
+M6 depends on the generic distribution owners, not on language-specific routing:
 
-Authority remains transient execution context. Identity/contact pickers and invitation UX live above this repository. The semantics needed for a Project-wide grant remain a lower authority question because Project structure must not imply transitive authority accidentally.
+- [ ] object locator and placement policy;
+- [ ] local vs remote call semantics;
+- [ ] Lagrange WASM placement;
+- [ ] distributed routing for native Blocks and explicitly retained foreign/component boundaries;
+- [ ] explicit failure/retry/idempotency semantics;
+- [ ] durable deployment/reconciliation contract for intentionally foreign runtime definitions;
+- [ ] measured `ctx.call()` / compute-near-object wins using the imported application as a realistic workload.
+
+OCI/JVM foreign-runtime lifecycle/placement is not a prerequisite for Cuis M1-M5.
+
+Authority remains transient execution context. Project structure must not imply transitive authority accidentally.
 
 ## 7. Durable graph and backend
 
-- [ ] real Lagrange process-restart durability proof
-- [ ] multi-node failure/recovery durability tests
-- [ ] logical snapshot/revision frontiers (first current-Image frontier primitive exists — `GraphImageService.frontier()` via the backend `streamHead` seam, PR #158, ADR 0071; snapshot/compaction/revision-aware reads below remain open)
-- [ ] revision-aware reads
-- [ ] indexed graph reachability and derivation lookup
-- [x] export/import graph format — first complete substrate level (ADR 0074, `src/graph/bundle.js`): `exportGraphBundle` (closure, bundle-local identity, internal/external ref rule, deterministic canonical `contentIdentity`, cycles + shared refs, frontier/authority outside the bundle) and `importGraphBundle` (whole-bundle validation + closure completeness via `assertGraphBundleV1`, `expectedContentIdentity` verification before any minting/publication, explicit external bindings — pinned PinnedRef preserved, unpinned existing-target ObjectRef verified, two-phase up-front target-id minting via the active crypto provider, generic ref rewriting, ONE `ImageService.createRecords` atomic publication; fresh-copy semantics, no reconciliation). Project release materialization and fresh-copy installation now consume this owner as described below. Still NOT claimed by the generic bundle layer: an authorized export/import lane, reconciliation/dedup, historical portability or retained pins.
-- [x] portable Project release materialization — first portable level IMPLEMENTED (ADR 0075): `captureCurrentGraphProjectRelease(...) -> {release, provenance, material}` — ONE multi-root bundle per release (roots = selected member keys; sharing/cycles across members preserved); manifest v1 per-member contentIdentity = whole-bundle hash (coarse-but-truthful, sharing-topology-safe); fully-closed material (internalize-all unpinned, reachable pinned ref => `ProjectGraphReleaseMaterializationError`; empty externals proves source identity cannot enter releaseId — same releaseId from different development Images); capture coordinator's stable-current read session shared by BOTH capture paths (direct path behavior-unchanged); one immutable `lagrange-project-release-material/v1` package (intrinsic + release-linkage validation incl. root-keys === member-keys); and the first end-to-end portable install: `installProjectRelease({images, targetImageId, release, material}) -> ProjectInstallation/v1` (`src/project/release-installation.js`, ADR 0075 Decision 8) — linked preflight through the single `validateProjectReleaseMaterialForRelease` owner, ONE `importGraphBundle` with `expectedContentIdentity` (cross-member sharing/cycles survive; a second install is a deliberate fresh copy, NOT reconciliation), model-owned canonical descriptor. This API is intentionally unmanaged: nothing durable is persisted beyond its imported graph, and a second call makes another fresh copy. ADR 0076's managed sibling below closes the crash/recovery window; upgrade execution and semantic external requirements (manifest v2 precision) remain deferred by evidence)
-- [x] durable managed Project installation — IMPLEMENTED (ADR 0076): ONE current managed installation per `(targetImageId, projectId)`; ordinary target-Image state (stable deterministic head -> immutable snapshot -> member records — member records forced by the tagged-scalar Value domain); graph candidates + installation records in ONE insert-only `createRecords` batch so the head IS the commit point and the PR #172 crash window is structurally closed; lost-ack idempotency via stable key + content-derived releaseId (no idempotency key); concurrency decided by insert-only head conflict (one winner, loser re-reads: same release -> winner's descriptor, different release -> explicit upgrade-required conflict); restart recovery reads ONLY durable installation state; corruption surfaced, never repaired; `installProjectRelease` stays the unmanaged fresh-copy API. All three implementation slices are current: public effect-free `prepareGraphBundleImport` in the graph bundle owner returns a deeply frozen plan without local-id leakage and standalone import consumes it unchanged; `src/project/installation-state.js` owns the fixed Shapes, deterministic head id, frozen record materialization, head-only recovery and explicit corruption taxonomy; `src/project/managed-installation.js` owns `installManagedProjectRelease` lifecycle sequencing and its three-outcome contract. NEXT PRESSURE RECORDED, NOT SOLVED: upgrade execution = fresh graph/snapshot + ONE expected-version head CAS (createRecords is insert-only; the minimal widening is deliberately deferred); semantic external requirements and manifest v2 precision unchanged
-- [ ] garbage-collection rules respecting history and pinned refs
-- [ ] object migration between immutable Shapes
-- [ ] measure partitioning/index choices on large images
+The native-import path depends on the image graph becoming the authoritative application store:
+
+- [ ] real Lagrange process-restart durability proof;
+- [ ] multi-node failure/recovery durability tests;
+- [ ] logical snapshot/revision frontiers beyond the first `GraphImageService.frontier()` seam;
+- [ ] revision-aware reads;
+- [ ] indexed graph reachability and derivation lookup;
+- [ ] garbage-collection rules respecting history and pinned refs;
+- [ ] object migration between immutable Shapes when real imported class evolution requires it;
+- [ ] measure partitioning/index choices on large application images.
+
+Already established: generic graph bundle export/import (ADR 0074), portable Project release materialization (ADR 0075) and durable managed Project installation/recovery (ADR 0076).
 
 ## 8. Projects and collaborative history semantics
 
-Project remains an image-level concept because it is useful without a graphical environment.
+Project remains image-level because it is useful without a graphical environment.
 
-- [x] Project objects and relationships over ordinary image objects/refs (`src/project/working-state.js`, PR #156, ADR 0073; durable Project/member objects, member key as identity, `readProjectDescriptor` feeding the pure model)
-- [ ] code + notes + tests + data + work items
-- [x] first-class package/binary/component/runtime relationships: heterogeneous language targets are ordinary Project members ({key, role, target}); membership is organization only (docs/ownership.md, bead lagrange-images-gxa)
-- [x] manifest/lock/runtime-image artifacts as Project members: a Cuis runtime definition + package and a Rust-derived Component are captured, installed and recovered as members (test/mixed-language-project.test.js)
-- [x] Projects mixing image-native and OpenSmalltalkVM-backed code through explicit interfaces: one durable Project (native Symmetric Smalltalk entry + live-materialized Cuis lane + real Rust Component behind shared callable interfaces) survives capture -> managed install -> restart and executes cross-language from the declared graph alone (bead lagrange-images-gxa)
-- [ ] nested/related Project and namespace conventions
-- [ ] branch/working-frontier semantics
-- [ ] object/Project diff representation
-- [ ] merge semantics and conflict data model
-- [ ] Git/file import/export as projection rather than canonical storage
-- [ ] multi-author conflict API/data, without prescribing UI
+- [x] Project objects and relationships over ordinary image objects/refs;
+- [x] first-class package/binary/component/runtime relationships;
+- [x] manifest/lock/runtime-image artifacts as Project members;
+- [x] mixed native/foreign implementation Projects and portable managed install/recovery;
+- [ ] use Projects/releases as the complete closure for the M5 imported application;
+- [ ] code + notes + tests + data + work items;
+- [ ] nested/related Project and namespace conventions;
+- [ ] branch/working-frontier semantics;
+- [ ] object/Project diff representation;
+- [ ] merge semantics and conflict data model;
+- [ ] Git/file import/export as projection rather than canonical storage;
+- [ ] multi-author conflict API/data, without prescribing UI.
 
-Lagrange Object Environment owns Project browsers, working-view/history/diff presentation, merge/conflict-resolution interaction, Git projection UX and multi-author activity/presence.
+Project membership remains organization, not authority.
+
+Lagrange Object Environment owns Project browsers, import/progress interaction, working-view/history/diff presentation, merge/conflict-resolution interaction, Git projection UX and multi-author activity/presence.
 
 ## 9. Generic versioning pressure
 
-Project collaboration may expose generic primitives that should be reusable outside Projects too. Prefer such primitives when the semantics genuinely generalize:
+Project collaboration and imported-application evolution may expose generic primitives that should be reusable outside either concern:
 
-- [ ] graph/frontier diffs independent of one Project UI
-- [ ] branch/working-frontier primitives useful to headless clients
-- [ ] merge/conflict primitives that stay language/UI neutral
+- [ ] graph/frontier diffs independent of one Project UI;
+- [ ] branch/working-frontier primitives useful to headless clients;
+- [ ] merge/conflict primitives that stay language/UI neutral;
+- [ ] Shape/class evolution primitives only when a real imported application requires them.
 
-Do not move semantic state into the UI merely because the first pressure came from a UI. Conversely, do not add a storage-level Project record kind merely because Project is image-level; ordinary objects/refs should carry it unless real pressure proves otherwise.
+Do not move semantic state into the UI merely because the first pressure came from a UI. Do not add a storage-level Project record kind merely because Project is image-level; ordinary objects/refs remain the default.
 
 ## Moved to Lagrange Object Environment
 
-The former **Graphical environment** section now lives entirely in the Lagrange Object Environment roadmap. The human-facing half of Project/collaboration work moved with it.
+Human-facing concerns remain in the Lagrange Object Environment roadmap:
 
-Moved upward:
+- drawing/input/rendering substrate and concrete GPU/surface providers;
+- retained presentation/view composition;
+- surfaces/windows/world/compositor policy;
+- Perspectives and Session behavior;
+- inspectors, browsers, editors, REPL and debugger UI;
+- import commands/progress and provenance presentation;
+- visual inspection/editing of native-imported classes/methods/objects;
+- Project/history/diff/merge/conflict interaction;
+- Git/file projection UX;
+- invitations, multi-author activity and presence UX.
 
-- drawing/input/rendering substrate, including concrete GPU/surface WIT providers and Component-backed presentation hosting
-- retained presentation/view composition
-- surfaces/windows/world/compositor policy
-- Perspectives and Session behavior
-- inspectors, browsers, editors, REPL and debugger UI
-- visual inspection of exported OpenSmalltalkVM structures
-- Project/history/diff/merge/conflict interaction
-- Git/file projection UX
-- invitations, multi-author activity and presence UX
-
-The Project data model, Project history semantics, generic debugging/runtime metadata and headless projection services stay here.
+The Project data model, import semantics, native language/object semantics, Project history semantics, generic debugging/runtime metadata and headless projection services stay here.
