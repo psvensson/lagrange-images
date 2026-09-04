@@ -146,6 +146,15 @@ definitions, arbitrary heap-object export, and any bidirectional mutation (image
 edit). It adds no generic oop/`perform:`/introspection protocol and no live-bridge export
 operation. Those are separate decisions under real pressure.
 
+### Subsequent versioning note (ADR 0085 M1)
+
+ADR 0085 supplied that real pressure for native class construction. The v1 schema above remains
+frozen and readable. `smalltalk/cuis-semantic-export-v2` preserves its identity, package,
+superclass and method contracts and adds one class declaration field: `instanceVariables`, an
+ordered array of names declared locally by that class. It deliberately does not contain inherited
+names, physical slot offsets, Spur identity or other VM layout. The native Class/Shape owner remains
+responsible for composing inherited layout.
+
 ## Consequences
 
 - Cuis packages/classes/methods become image-visible as ordinary artifacts/objects with stable

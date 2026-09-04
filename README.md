@@ -170,10 +170,10 @@ as `proof/add`, recursive `proof/factorial`, package-backed `json/package-proof`
 `cluster/package-proof`; it is not remote Smalltalk eval or arbitrary `perform:`.
 
 The same multi-package toolchain stage can emit a deterministic
-`smalltalk/cuis-semantic-export-v1` artifact containing semantic package requirements, classes,
-superclasses, methods, selectors and source. A separate Cuis-owned translator materializes that
-manifest as ordinary `CuisExportPackage`/`CuisExportClass`/`CuisExportMethod` image objects through
-the authorized atomic creation batch. Semantic names cross the boundary; Spur oops never do.
+`smalltalk/cuis-semantic-export-v2` artifact containing semantic package requirements, classes,
+superclasses, ordered local instance-variable declarations, methods, selectors and source. Frozen
+v1 remains available for the existing inspection materializer. Semantic declarations cross the
+boundary; Spur oops and physical VM layout never do.
 
 A separate PR-only CI job downloads and verifies the pinned OpenSmalltalkVM 2026.06 Linux x64 Cog/Spur runtime, Cuis 7.9-8090 image and pinned upstream JSON package. It now proves the toolchain-produced image and the mixed program through the **resumable Lagrange-WASM** orchestration lane.
 

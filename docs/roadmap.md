@@ -104,9 +104,9 @@ This is the primary language roadmap. Milestones are ordered and should be treat
 
 ### M1 — native class import
 
-Starting from `smalltalk/cuis-semantic-export-v1` (ADR 0072):
+Starting from the frozen `smalltalk/cuis-semantic-export-v1` identity contract and its native-class declaration successor `smalltalk/cuis-semantic-export-v2` (ADRs 0072 and 0085):
 
-- [ ] extend the canonical export with instance-variable definitions and only the additional class-side layout facts required by the target package;
+- [x] extend the canonical export with ordered locally declared instance-variable names under v2, keeping v1 frozen; the M1 fixture requires no class-side layout facts;
 - [ ] add the Cuis native-import adapter that routes class declarations through the existing native Smalltalk class/Shape/state owners;
 - [ ] import an unchanged multi-class Cuis package as executable native classes/metaclasses;
 - [ ] instantiate an imported class as an ordinary Lagrange object with durable native slots;

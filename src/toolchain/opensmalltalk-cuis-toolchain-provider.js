@@ -12,6 +12,7 @@ const CUIS_CHANGES_V1 = 'smalltalk/cuis-changes-v1';
 const CUIS_SOURCES_V1 = 'smalltalk/cuis-sources-v1';
 const CUIS_PACKAGE_V1 = 'smalltalk/cuis-package-v1';
 const CUIS_SEMANTIC_EXPORT_V1 = 'smalltalk/cuis-semantic-export-v1';
+const CUIS_SEMANTIC_EXPORT_V2 = 'smalltalk/cuis-semantic-export-v2';
 const CUIS_BUILD_CONTRACT_V0 = 'cuis-build/v0';
 const OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID = 'smalltalk/opensmalltalk-cuis-toolchain';
 const OPENSMALLTALK_CUIS_TOOLCHAIN_V0 = 'opensmalltalk-cuis-toolchain/v0';
@@ -170,11 +171,18 @@ function normalizeTarget(target) {
   return Object.freeze({representation: CUIS_IMAGE_V1, fileName});
 }
 
+function normalizeSemanticExportOption(value) {
+  if (value === undefined || value === null || value === false) return null;
+  if (value === true) return CUIS_SEMANTIC_EXPORT_V1;
+  if (value === CUIS_SEMANTIC_EXPORT_V1 || value === CUIS_SEMANTIC_EXPORT_V2) return value;
+  throw new TypeError(
+    `OpenSmalltalk Cuis option semanticExport must be a boolean, ${CUIS_SEMANTIC_EXPORT_V1}, or ${CUIS_SEMANTIC_EXPORT_V2}`,
+  );
+}
+
 function normalizeOptions(options) {
   exactKeys(options, new Set(['semanticExport']), 'OpenSmalltalk Cuis options');
-  const semanticExport = options.semanticExport === undefined ? false : options.semanticExport === true;
-  if (typeof semanticExport !== 'boolean') throw new TypeError('OpenSmalltalk Cuis option semanticExport must be a boolean when present');
-  return Object.freeze({semanticExport});
+  return Object.freeze({semanticExport: normalizeSemanticExportOption(options.semanticExport)});
 }
 
 // The semantic-export extraction script (ADR 0072). Runs toolchain-stage in the build,
@@ -187,7 +195,7 @@ function normalizeOptions(options) {
 // JSON and canonicalizes (sort + normalize); the script sorts class iteration itself and
 // does NOT sort methods (left to the host). No perform:/generic-eval — this is a fixed,
 // provider-owned build script, same trust level as buildScript.
-function semanticExportScript(packages, exportFileName) {
+function semanticExportScript(packages, exportFileName, representation) {
   const packageNames = packages.map(({fileName}) => fileName.replace(/\.pck\.st$/, ''));
   // AVOID the brace array literal { 'a' 'b' ... }: the Cuis compiler hangs on it
   // (infinite loop or extreme slowdown during parsing). Use Array with:with:... instead.
@@ -202,6 +210,10 @@ function semanticExportScript(packages, exportFileName) {
   // category means the method belongs to the package that defines the class. This matches
   // CodePackage's own category-prefix attribution (isYourClassExtension:/category:matches:)
   // without a per-method packageOfMethod: detect: scan.
+  const classDeclarationFields = representation === CUIS_SEMANTIC_EXPORT_V2
+    ? `,
+    ',"instanceVariables":[', (',' join: (cls instVarNames collect: [ :name | jsonString value: name asString ])), ']'`
+    : '';
   return `
 "=== Lagrange Cuis semantic export (ADR 0072) ==="
 nl := String with: (Character codePoint: 10).
@@ -225,7 +237,7 @@ classEntry := [ :cls :pkg | | sup supPkg |
   '{"package":', (jsonString value: pkg),
     ',"name":', (jsonString value: cls name asString),
     ',"superclassName":', (jsonString value: (sup isNil ifTrue: [ '' ] ifFalse: [ sup name asString ])),
-    ',"superclassPackage":', (jsonString value: supPkg),
+    ',"superclassPackage":', (jsonString value: supPkg)${classDeclarationFields},
     '}' ].
 "ownerOfSel: derive the owning package of a method from its category. '*<rest>' -> the package whose name prefixes <rest> (case-insensitive, up to the first '-' or end); otherwise the package that defines the class."
 ownerOfSel := [ :cls :sel :defPkg | | cat rest owner |
@@ -276,7 +288,7 @@ pkgObjects do: [ :cp |
         ',"source":', (jsonString value: (target sourceCodeAt: mr methodSymbol) asString),
         '}') ] ].
 (DirectoryEntry currentDirectory // '${exportFileName}') writeStreamDo: [ :out |
-  out nextPutAll: '{"format":"smalltalk/cuis-semantic-export-v1","packages":['.
+  out nextPutAll: '{"format":"${representation}","packages":['.
   out nextPutAll: (',' join: packagesJson asArray).
   out nextPutAll: '],"classes":['.
   out nextPutAll: (',' join: classesJson asArray).
@@ -317,12 +329,15 @@ function buildScript(packages, targetFileName, {semanticExport = false} = {}) {
     `output nextPutAll: 'BUILD'; ${tab}nextPutAll: 'PACKAGE'; ${tab}nextPutAll: '${fileName}'; ${tab}nextPutAll: 'DONE'; newLine; flush.`,
   ].join('\n')).join('\n');
   const stem = imageStem(targetFileName);
+  const semanticExportRepresentation = normalizeSemanticExportOption(semanticExport);
   // The semantic export (ADR 0072) runs AFTER install (structure complete) and BEFORE
   // saveAndQuitAs: (which quits the process). It does not mutate the image.
-  const exportBlock = semanticExport ? `\n${semanticExportScript(packages, `${stem}.semantic-export.json`)}\n` : '';
+  const exportBlock = semanticExportRepresentation
+    ? `\n${semanticExportScript(packages, `${stem}.semantic-export.json`, semanticExportRepresentation)}\n`
+    : '';
   // A Smalltalk script allows exactly ONE top-level temp declaration, so the export temps
   // are declared here alongside `output` (semanticExportScript itself declares none).
-  const temps = semanticExport ? ' output jsonEscape jsonString nl pkgObjects classEntry methodEntry ownerOfSel packagesJson classesJson methodsJson nameArray ' : ' output ';
+  const temps = semanticExportRepresentation ? ' output jsonEscape jsonString nl pkgObjects classEntry methodEntry ownerOfSel packagesJson classesJson methodsJson nameArray ' : ' output ';
   return `|${temps}|\noutput := StdIOWriteStream stdout.\noutput nextPutAll: 'BUILD'; ${tab}nextPutAll: 'START'; newLine; flush.\n${installs}\n${exportBlock}\noutput nextPutAll: 'BUILD'; ${tab}nextPutAll: 'SAVE-AND-QUIT'; ${tab}nextPutAll: 'START'; newLine; flush.\nSmalltalk saveAndQuitAs: '${stem}' clearAllClassState: false.\n`;
 }
 
@@ -338,17 +353,15 @@ async function materializeBuild(graph, workspace, target, options) {
   return scriptPath;
 }
 
-// Canonicalize the raw guest manifest into the deterministic smalltalk/cuis-semantic-export-v1
-// artifact (ADR 0072 §3/§5): recompute the cuis-class/cuis-method identities from the manifest's
-// own fields (never trusting any guest iteration detail), resolve the superclass ref, sort every
-// collection by a canonical key, and normalize method source (LF line endings, trim trailing
-// whitespace per line, trim leading/trailing blank lines, preserve interior formatting). The
-// serialized artifact is a pure function of semantic content, so two equivalent builds are
-// byte-identical (tested, not assumed).
- function canonicalizeSemanticExport(raw) {
-  if (!raw || raw.format !== CUIS_SEMANTIC_EXPORT_V1) {
+// Canonicalize raw guest manifests into deterministic semantic-export artifacts (ADR 0072
+// §3/§5). V1 remains frozen; v2 adds only ordered, locally declared instance-variable names.
+// Recompute cuis-class/cuis-method identities from manifest fields, resolve superclass refs,
+// sort canonical collections, and normalize method source. The serialized artifact is a pure
+// function of semantic content, so two equivalent builds are byte-identical (tested, not assumed).
+function canonicalizeSemanticExport(raw) {
+  if (!raw || (raw.format !== CUIS_SEMANTIC_EXPORT_V1 && raw.format !== CUIS_SEMANTIC_EXPORT_V2)) {
     throw new OpenSmalltalkToolchainRunError(
-      `Cuis semantic export manifest must declare format ${CUIS_SEMANTIC_EXPORT_V1}, got ${raw?.format ?? 'missing'}`,
+      `Cuis semantic export manifest must declare format ${CUIS_SEMANTIC_EXPORT_V1} or ${CUIS_SEMANTIC_EXPORT_V2}, got ${raw?.format ?? 'missing'}`,
       {stderr: JSON.stringify(raw?.format ?? null), exitCode: null},
     );
   }
@@ -365,13 +378,31 @@ async function materializeBuild(graph, workspace, target, options) {
     .map((p) => ({name: p.name, requires: [...p.requires].sort()}))
     .sort((a, b) => a.name.localeCompare(b.name));
   const classes = [...raw.classes]
-    .map((c) => ({
-      identity: classIdentity(c.package, c.name),
-      package: c.package,
-      name: c.name,
-      superclassName: c.superclassName,
-      superclass: c.superclassName === '' ? null : classIdentity(c.superclassPackage, c.superclassName),
-    }))
+    .map((c) => {
+      const normalized = {
+        identity: classIdentity(c.package, c.name),
+        package: c.package,
+        name: c.name,
+        superclassName: c.superclassName,
+        superclass: c.superclassName === '' ? null : classIdentity(c.superclassPackage, c.superclassName),
+      };
+      if (raw.format === CUIS_SEMANTIC_EXPORT_V2) {
+        if (!Array.isArray(c.instanceVariables) || c.instanceVariables.some((name) => typeof name !== 'string' || name.length === 0)) {
+          throw new OpenSmalltalkToolchainRunError(
+            'Cuis semantic export v2 class instanceVariables must be an array of strings',
+            {stderr: JSON.stringify(c.instanceVariables ?? null), exitCode: null},
+          );
+        }
+        if (new Set(c.instanceVariables).size !== c.instanceVariables.length) {
+          throw new OpenSmalltalkToolchainRunError(
+            'Cuis semantic export v2 class instanceVariables must not contain duplicate names',
+            {stderr: JSON.stringify(c.instanceVariables), exitCode: null},
+          );
+        }
+        normalized.instanceVariables = [...c.instanceVariables];
+      }
+      return normalized;
+    })
     .sort((a, b) => a.identity.localeCompare(b.identity));
   const methods = [...raw.methods]
     .map((m) => ({
@@ -383,7 +414,7 @@ async function materializeBuild(graph, workspace, target, options) {
       source: normalizeSource(m.source),
     }))
     .sort((a, b) => a.identity.localeCompare(b.identity));
-  return Object.freeze({format: CUIS_SEMANTIC_EXPORT_V1, packages, classes, methods});
+  return Object.freeze({format: raw.format, packages, classes, methods});
 }
 
 class OpenSmalltalkToolchainRunError extends Error {
@@ -514,6 +545,12 @@ function createOpenSmalltalkCuisToolchainProvider({
               cause,
             });
           }
+          if (rawExport?.format !== options.semanticExport) {
+            throw new OpenSmalltalkToolchainRunError(
+              `Cuis semantic export manifest format must match requested ${options.semanticExport}, got ${rawExport?.format ?? 'missing'}`,
+              {stdout: run.stdout, stderr: JSON.stringify(rawExport?.format ?? null), exitCode: null},
+            );
+          }
           semanticExportText = JSON.stringify(canonicalizeSemanticExport(rawExport));
         }
 
@@ -552,7 +589,7 @@ function createOpenSmalltalkCuisToolchainProvider({
           outputs.push(Object.freeze({
             name: 'semantic-export',
             languageId: 'smalltalk',
-            representation: CUIS_SEMANTIC_EXPORT_V1,
+            representation: options.semanticExport,
             content: textValue(semanticExportText),
             logicalPath: semanticExportFileName,
             dependencies: [],
@@ -577,6 +614,7 @@ export {
   CUIS_IMAGE_V1,
   CUIS_PACKAGE_V1,
   CUIS_SEMANTIC_EXPORT_V1,
+  CUIS_SEMANTIC_EXPORT_V2,
   CUIS_SOURCES_V1,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
   OPENSMALLTALK_CUIS_TOOLCHAIN_V0,

@@ -265,11 +265,11 @@ Cuis resolves the packages' own `!requires:` graph rather than trusting caller o
 performs cross-package Compression and WeakDictionaries behavior with no runtime package injection;
 a separate unsatisfied-requirement case must fail with the real guest diagnostic.
 
-The same toolchain can emit a byte-deterministic `smalltalk/cuis-semantic-export-v1` artifact. It
-contains semantic Package/Class/Method identities, requirements, superclass relationships, selectors
-and normalized source — never Spur oops. A separate language-owned translator turns that manifest
-into ordinary `CuisExportPackage`/`CuisExportClass`/`CuisExportMethod` image objects through the
-authorized atomic creation batch.
+The same toolchain can emit a byte-deterministic `smalltalk/cuis-semantic-export-v2` artifact. It
+contains semantic Package/Class/Method identities, requirements, superclass relationships, ordered
+local instance-variable declarations, selectors and normalized source — never Spur oops or physical
+VM layout. Frozen v1 remains readable and is the input to the existing language-owned
+`CuisExportPackage`/`CuisExportClass`/`CuisExportMethod` inspection materializer.
 
 ## 11. Foreign runtime lifecycle
 

@@ -185,11 +185,11 @@ Cuis snapshot bytes are not assumed reproducible; ADR 0083 records the measured 
 
 ## 8. Cuis semantic export -> native import
 
-`smalltalk/cuis-semantic-export-v1` currently carries deterministic semantic information:
+`smalltalk/cuis-semantic-export-v2` currently carries deterministic semantic information:
 
 ```text
 packages / requirements
-classes / inheritance
+classes / inheritance / ordered local instance-variable declarations
 methods / selectors / normalized source
 ```
 
@@ -211,7 +211,7 @@ Cuis native-import adapter
     `-> native application roots/state
 ```
 
-Extend the export only when the next importer milestone requires more semantic facts, beginning with instance-variable/layout information. Do not broaden it into arbitrary heap export.
+Frozen v1 remains readable for the existing inspection materializer. Extend v2 only when the next importer milestone requires more semantic facts. Do not broaden it into arbitrary heap export or flatten inherited/physical VM layout into declaration data.
 
 ### Role of OpenSmalltalkVM after import begins
 

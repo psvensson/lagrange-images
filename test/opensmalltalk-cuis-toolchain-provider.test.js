@@ -7,10 +7,13 @@ import {
   CUIS_CHANGES_V1,
   CUIS_IMAGE_V1,
   CUIS_PACKAGE_V1,
+  CUIS_SEMANTIC_EXPORT_V1,
+  CUIS_SEMANTIC_EXPORT_V2,
   CUIS_SOURCES_V1,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
   bytesValue,
   canonicalizeSemanticExport,
+  createCuisToolchainBuildScript,
   createOpenSmalltalkCuisToolchainProvider,
   createRuntime,
   objectRef,
@@ -45,6 +48,19 @@ class FakeCuisToolchainRunner {
       stdout: 'BUILD\tSTART\nBUILD\tPACKAGE\tJSON.pck.st\tDONE\n',
       stderr: '',
     });
+  }
+}
+
+class MismatchedSemanticExportRunner extends FakeCuisToolchainRunner {
+  async run(request) {
+    const result = await super.run(request);
+    await writeFile(`${request.cwd}/Derived.semantic-export.json`, JSON.stringify({
+      format: CUIS_SEMANTIC_EXPORT_V1,
+      packages: [],
+      classes: [],
+      methods: [],
+    }));
+    return result;
   }
 }
 
@@ -188,6 +204,38 @@ test('OpenSmalltalk Cuis toolchain validates roles, filenames and target before 
   }
 });
 
+test('OpenSmalltalk Cuis toolchain never labels a guest v1 manifest as requested v2', async () => {
+  const runner = new MismatchedSemanticExportRunner();
+  const provider = createOpenSmalltalkCuisToolchainProvider({
+    vmPath: '/opt/opensmalltalk/squeak',
+    vmIdentity: 'opensmalltalk-vm/202606270913/sha256:dff5',
+    runner,
+  });
+  const runtime = await createRuntime({
+    backend: {mode: 'mock'},
+    toolchainProviders: [[OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID, provider]],
+  });
+  await runtime.images.createImage({id: 'demo'});
+  try {
+    const {build} = await fixture(runtime);
+    await assert.rejects(
+      runtime.toolchains.run({
+        providerId: OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
+        imageId: 'demo',
+        roots: [objectRef('demo', build.id)],
+        target: {representation: CUIS_IMAGE_V1, fileName: 'Derived.image'},
+        options: {semanticExport: CUIS_SEMANTIC_EXPORT_V2},
+        outputIds: {image: 'mismatch-image', changes: 'mismatch-changes', 'semantic-export': 'mismatch-export'},
+      }),
+      /manifest format must match requested smalltalk\/cuis-semantic-export-v2, got smalltalk\/cuis-semantic-export-v1/,
+    );
+    assert.equal(runner.runs.length, 1);
+    assert.equal(await runtime.images.getCodeArtifact('demo', 'mismatch-export'), null);
+  } finally {
+    await runtime.close();
+  }
+});
+
 test('canonicalizeSemanticExport produces deterministic, semantic-identity output (ADR 0072)', () => {
   const raw = {
     format: 'smalltalk/cuis-semantic-export-v1',
@@ -221,4 +269,57 @@ test('canonicalizeSemanticExport produces deterministic, semantic-identity outpu
   const shuffled = {format: raw.format, packages: [...raw.packages].reverse(), classes: [...raw.classes].reverse(), methods: [...raw.methods]};
   assert.deepEqual(canonicalizeSemanticExport(shuffled), out);
   assert.deepEqual(canonicalizeSemanticExport(raw), out);
+  assert.equal(Object.hasOwn(archive, 'instanceVariables'), false, 'frozen v1 does not acquire v2 layout fields');
+});
+
+test('canonicalizeSemanticExport v2 preserves ordered local instance-variable declarations', () => {
+  const raw = {
+    format: CUIS_SEMANTIC_EXPORT_V2,
+    packages: [{name: 'LagrangeNativeImportM1', requires: ['Cuis-Base']}],
+    classes: [
+      {
+        package: 'LagrangeNativeImportM1',
+        name: 'LagrangeNativeImportChild',
+        superclassName: 'LagrangeNativeImportBase',
+        superclassPackage: 'LagrangeNativeImportM1',
+        instanceVariables: ['childFirst', 'childSecond'],
+      },
+      {
+        package: 'LagrangeNativeImportM1',
+        name: 'LagrangeNativeImportBase',
+        superclassName: 'Object',
+        superclassPackage: 'Cuis-Base',
+        instanceVariables: ['baseValue'],
+      },
+    ],
+    methods: [],
+  };
+
+  const out = canonicalizeSemanticExport(raw);
+  assert.equal(out.format, CUIS_SEMANTIC_EXPORT_V2);
+  const base = out.classes.find((candidate) => candidate.name === 'LagrangeNativeImportBase');
+  const child = out.classes.find((candidate) => candidate.name === 'LagrangeNativeImportChild');
+  assert.deepEqual(base.instanceVariables, ['baseValue']);
+  assert.deepEqual(child.instanceVariables, ['childFirst', 'childSecond']);
+  assert.equal(child.instanceVariables.includes('baseValue'), false, 'v2 carries local declarations, not flattened inherited layout');
+
+  assert.throws(
+    () => canonicalizeSemanticExport({...raw, classes: [{...raw.classes[0], instanceVariables: 'childFirst'}]}),
+    /instanceVariables must be an array of strings/,
+  );
+  assert.throws(
+    () => canonicalizeSemanticExport({...raw, classes: [{...raw.classes[0], instanceVariables: ['childFirst', 'childFirst']}]}),
+    /instanceVariables must not contain duplicate names/,
+  );
+});
+
+test('Cuis semantic export v2 script reads declarations, never flattened VM layout', () => {
+  const script = createCuisToolchainBuildScript([], 'Derived.image', {semanticExport: CUIS_SEMANTIC_EXPORT_V2});
+  assert.match(script, new RegExp(`"format":"${CUIS_SEMANTIC_EXPORT_V2}"`));
+  assert.match(script, /cls instVarNames/);
+  assert.equal(script.includes('allInstVarNames'), false);
+
+  const v1Script = createCuisToolchainBuildScript([], 'Derived.image', {semanticExport: true});
+  assert.match(v1Script, new RegExp(`"format":"${CUIS_SEMANTIC_EXPORT_V1}"`));
+  assert.equal(v1Script.includes('instanceVariables'), false, 'the v1 guest schema stays frozen');
 });
