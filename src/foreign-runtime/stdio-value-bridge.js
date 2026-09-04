@@ -1,7 +1,8 @@
 // The neutral stdio VALUE-CALL bridge: the one owner of how a host talks to a foreign runtime
 // process over lines (bead lagrange-images-9p4). It was extracted from the OpenSmalltalk/Cuis
-// provider when a second, unrelated runtime (Common Lisp) needed exactly the same framing and
-// Value transport — the point at which a provider-private protocol becomes a shared owner.
+// provider when a second, unrelated runtime needed exactly the same framing and Value transport
+// — the point at which a provider-private protocol becomes a shared owner. This module does not
+// know which runtimes exist; a provider owns everything language-specific.
 //
 // Framing (`lagrange-stdio-value-bridge/v1`, tab-separated, one message per line):
 //

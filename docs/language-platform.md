@@ -385,6 +385,13 @@ Java should reuse existing Java tooling. Likely paths are Java/JAR -> AOT/WASM a
 
 Common Lisp can reuse durable identity, artifacts, lexical environments, projects and execution infrastructure without Smalltalk semantics leaking into the substrate.
 
+Current (ADR 0084): a real SBCL runs as an ordinary foreign runtime through the unchanged generic
+contracts — `common-lisp/source-v1` source artifacts, a `common-lisp/sbcl-runtime-definition-v1`
+definition whose declared exports are the allowlist, `foreign-runtime-callable-interface/v1`
+Blocks, and Project capture -> managed install -> fresh-runtime execution. The spike's one
+repair was generic: the stdio value-call bridge left the Cuis provider and became a shared owner.
+Transport: integers (bignums included), booleans, text; refs never cross.
+
 A Lisp personality may own reader/macroexpansion, functions/generic functions, dynamic bindings, multiple values, conditions/restarts and compiler integration.
 
 ## 13. Cross-language libraries and services
