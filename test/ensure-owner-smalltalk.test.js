@@ -17,11 +17,17 @@ import {
   installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
   integerValue,
+  methodBlockRef,
   objectRef,
   SHAPE_INDEXED,
+  SmalltalkMethodRedefinitionError,
   textValue,
 } from '../src/runtime.js';
 import {RecordConflictError, ensureCodeArtifacts, ensureLexicalEnvironment, ensureObject, ensureShape} from '../src/graph/ensure-records.js';
+import {
+  buildMethodBuckets,
+  methodDictionaryRecordFields,
+} from '../src/language/smalltalk-method-dictionary.js';
 
 const PLUS = {
   selector: '+',
@@ -111,32 +117,148 @@ test('KERNEL: losing a race to a DIVERGENT winner of a kernel OBJECT conflicts w
   });
 });
 
-test('CLASS BUILDER: concurrent definitions of the same method never overwrite an environment, Block or artifact; the only possible loss is the dictionary swap', async () => {
+test('CLASS BUILDER: concurrent identical method definitions converge at the dictionary swap with no raw version conflict', async () => {
   await withRuntime(async (runtime) => {
     await installSmalltalkKernel({images: runtime.images, imageId: 'boot'});
     const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'boot'});
+    const methods = [
+      PLUS,
+      {
+        selector: 'fortyTwo',
+        program: {parameters: [], captures: [], body: {op: 'literal', value: integerValue(42)}},
+      },
+    ];
     const define = () => defineMethods({
       images: runtime.images, compilation: runtime.compilation, imageId: 'boot', classRef: kernel.integerClass,
-      methods: [PLUS],
+      methods,
     });
-    const results = await Promise.allSettled([define(), define()]);
-    assert.ok(results.some((r) => r.status === 'fulfilled'), 'at least one definition committed');
+    let competingResult = null;
+    const putObject = runtime.images.putObject.bind(runtime.images);
+    runtime.images.putObject = async (imageId, input, writeOptions) => {
+      if (competingResult === null
+        && input.id === `${kernel.integerClass.objectId}/methods`
+        && writeOptions?.expectedVersion !== undefined) {
+        runtime.images.putObject = putObject;
+        competingResult = await define();
+      }
+      return await putObject(imageId, input, writeOptions);
+    };
+    const result = await define();
+    runtime.images.putObject = putObject;
+    assert.ok(competingResult, 'the identical contender committed before the stale conditional write');
+    assert.deepEqual(result, competingResult, 'the loser adopted the complete semantic winner');
     // Admission of the method's environment, Block and compiled artifact converged: every such
     // record exists exactly once at version 1 whichever contender won.
     const records = await runtime.images.listRecords('boot');
     for (const r of records.filter((x) => ['lexical-environment', 'block', 'code-artifact'].includes(x.kind))) {
       assert.equal(r._version, 1, `${r.kind} ${r.id} inserted exactly once`);
     }
-    // A contender that lost did so at the class builder's own dictionary swap (a CAS-guarded
-    // MUTATION of the method dictionary, the class builder's concern — bead discovered from ehz),
-    // never at admission: the failure names the dictionary, not an environment, Block or artifact.
-    for (const r of results.filter((x) => x.status === 'rejected')) {
-      assert.equal(r.reason?.name, 'VersionConflictError', 'the known dictionary-swap leak (bead fb1), nothing else');
-      assert.ok(String(r.reason?.key).endsWith('/methods'), `lost at the dictionary swap, not at admission: ${r.reason?.key}`);
-    }
+    // This is the boundary falsifier for fb1: deleting the class-builder translation makes the
+    // stale outer write reject with raw VersionConflictError before these assertions.
     const installed = await installSymmetricSmalltalkBlock({images: runtime.images, imageId: 'boot', id: 'probe', source: '[ 40 + 2 ]'});
     const activation = await runtime.invocations.invokeBlock(objectRef('boot', installed.block.id), []);
     assert.deepEqual(await runtime.executor.execute(activation), integerValue(42));
+    const beforeReplay = await runtime.images.getObject('boot', `${kernel.integerClass.objectId}/methods`);
+    await define();
+    const afterReplay = await runtime.images.getObject('boot', `${kernel.integerClass.objectId}/methods`);
+    assert.equal(afterReplay._version, beforeReplay._version, 'retry against the converged state is idempotent');
+  });
+});
+
+test('CLASS BUILDER: a same-selector divergent dictionary-swap winner is a redefinition conflict and is not overwritten', async () => {
+  await withRuntime(async (runtime) => {
+    await installSmalltalkKernel({images: runtime.images, imageId: 'boot'});
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'boot'});
+    const options = {
+      images: runtime.images, compilation: runtime.compilation, imageId: 'boot', classRef: kernel.integerClass,
+    };
+    const requested = {
+      selector: 'alpha',
+      program: {parameters: [], captures: [], body: {op: 'literal', value: textValue('requested')}},
+    };
+    const impostor = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'boot', id: 'divergent-winner', source: '[ 99 ]',
+    });
+
+    // Force a structurally valid dictionary to bind alpha to a different Block after the request
+    // has read the dictionary but before its conditional write. This reaches the specific
+    // same-selector semantic classification branch; an ordinary competing defineMethods would
+    // conflict earlier at the selector's deterministic semantic-artifact id.
+    let injected = false;
+    const putObject = runtime.images.putObject.bind(runtime.images);
+    runtime.images.putObject = async (imageId, input, writeOptions) => {
+      if (!injected && input.id === `${kernel.integerClass.objectId}/methods` && writeOptions?.expectedVersion !== undefined) {
+        injected = true;
+        runtime.images.putObject = putObject;
+        const current = await runtime.images.getObject('boot', input.id);
+        const {buckets} = buildMethodBuckets([
+          [textValue('alpha'), objectRef('boot', impostor.block.id)],
+        ]);
+        await putObject('boot', {
+          id: current.id,
+          ...methodDictionaryRecordFields({
+            buckets,
+            shapeRef: current.shape,
+            nilRef: kernel.nil,
+            metadata: current.metadata,
+          }),
+        }, {expectedVersion: current._version});
+      }
+      return await putObject(imageId, input, writeOptions);
+    };
+
+    const error = await defineMethods({...options, methods: [requested]}).then(() => null, (cause) => cause);
+    runtime.images.putObject = putObject;
+    assert.ok(injected, 'the competing definition won the dictionary CAS');
+    assert.ok(error instanceof SmalltalkMethodRedefinitionError);
+    assert.notEqual(error?.name, 'VersionConflictError');
+    assert.equal(error.cause, undefined, 'the backend conflict is not retained as a cause');
+    assert.deepEqual(
+      await methodBlockRef({
+        images: runtime.images, imageId: 'boot', classRef: kernel.integerClass, selector: 'alpha',
+      }),
+      objectRef('boot', impostor.block.id),
+      'the divergent CAS winner remains authoritative',
+    );
+    assert.equal(
+      (await runtime.images.getObject('boot', `${kernel.integerClass.objectId}/methods`))._version,
+      2,
+      'the losing write did not overwrite the winner',
+    );
+  });
+});
+
+test('CLASS BUILDER: concurrent divergent definitions of one selector yield one winner and one Smalltalk-domain conflict', async () => {
+  await withRuntime(async (runtime) => {
+    await installSmalltalkKernel({images: runtime.images, imageId: 'boot'});
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'boot'});
+    const define = (answer) => defineMethods({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'boot',
+      classRef: kernel.integerClass,
+      methods: [{
+        selector: 'contended',
+        program: {parameters: [], captures: [], body: {op: 'literal', value: textValue(answer)}},
+      }],
+    });
+
+    const results = await Promise.allSettled([define('left'), define('right')]);
+    assert.equal(results.filter(({status}) => status === 'fulfilled').length, 1);
+    const [rejected] = results.filter(({status}) => status === 'rejected');
+    assert.ok(
+      rejected.reason instanceof SmalltalkMethodRedefinitionError
+        || rejected.reason instanceof SmalltalkKernelConflictError,
+      `expected a Smalltalk conflict, got ${rejected.reason?.name}: ${rejected.reason?.message}`,
+    );
+    assert.notEqual(rejected.reason?.name, 'VersionConflictError');
+
+    const installed = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'boot', id: 'contended-probe', source: '[ :a | a contended ]',
+    });
+    const activation = await runtime.invocations.invokeBlock(objectRef('boot', installed.block.id), [integerValue(1)]);
+    const answer = await runtime.executor.execute(activation);
+    assert.ok(['left', 'right'].includes(answer.value), 'exactly one complete semantic definition is visible');
   });
 });
 
