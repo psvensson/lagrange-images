@@ -1,0 +1,180 @@
+# Progressive native import
+
+This document describes the current convergence direction for importing existing language ecosystems into Lagrange Images. ADR 0085 records the decision; this file is the operational model.
+
+## Goal
+
+The goal is not merely to run an existing VM under Lagrange management. The goal is to import an existing application's source/package graph so that, as far as the language semantics permit, its executable structures and authoritative application state become native Lagrange image structures.
+
+For the first forcing ecosystem:
+
+```text
+existing Cuis application
+        |
+        v
+source/packages + real Cuis package semantics
+        |
+        v
+canonical semantic import
+        |
+        v
+native Classes / Shapes / methods / Blocks / roots
+        |
+        v
+lagrange-code -> Lagrange WASM
+        |
+        v
+Lagrange objects / storage / history / placement
+```
+
+A successfully native-imported application should not need OpenSmalltalkVM or a Spur heap for ordinary execution or authoritative domain persistence.
+
+## Why Cuis is first
+
+Cuis already supplies the strongest end-to-end pressure:
+
+- a real OpenSmalltalkVM/Cuis toolchain and package loader;
+- real multi-package dependency graphs;
+- deterministic package/class/method semantic export;
+- source text suitable for native Smalltalk compilation;
+- a mature reference implementation that can act as an oracle.
+
+Lagrange Images already supplies the target substrate:
+
+- native Behavior/Class/Metaclass and Shapes;
+- native allocation, instance slots, class variables and class-instance state;
+- native collections and conditions;
+- Blocks and lexical state;
+- semantic `lagrange-code` plus Lagrange-WASM compilation/execution;
+- durable ObjectRefs, graph state, history, Projects and portable releases.
+
+The work is therefore convergence between existing owners, not another runtime architecture.
+
+## Import stages
+
+### 0. Canonical ecosystem input
+
+Use the real Cuis toolchain to resolve packages and emit deterministic semantic facts. The current `smalltalk/cuis-semantic-export-v1` package/class/method export is the starting point.
+
+The toolchain owns extraction only. It does not create native image classes or objects.
+
+### 1. Native class construction
+
+Translate imported class declarations into the existing native Smalltalk class and Shape owners.
+
+Needed semantic facts are added under pressure, starting with instance-variable definitions and any class-side layout required by the target package.
+
+```text
+Cuis class declaration
+      |
+      v
+Cuis import adapter
+      |
+      +-> existing class builder
+      +-> existing Shape owner
+      +-> existing namespace/class-state owners
+```
+
+Do not create an importer-local executable class representation.
+
+### 2. Native method compilation
+
+Compile imported Cuis method source through the existing Smalltalk semantic/compiler path.
+
+```text
+Cuis method source
+      |
+      v
+Cuis syntax/compatibility adaptation where required
+      |
+      v
+native Smalltalk semantic compilation
+      |
+      v
+lagrange-code
+      |
+      v
+Lagrange WASM
+```
+
+An imported method becomes an ordinary native method/Block installed in the ordinary method dictionary.
+
+### 3. Compatibility library closure
+
+Existing applications depend on Cuis base semantics. Map or implement those semantics only when a real imported application requires them.
+
+A shared name is never enough to claim equivalence. `Array`, `Dictionary`, `String`, `Symbol`, streams, exceptions and other base protocols map to existing native classes only when their required behavior is explicitly compatible and tested.
+
+Missing semantics are explicit failures, not reasons to silently execute in Cuis.
+
+### 4. Native application state
+
+Application roots, globals/class state and domain objects must become ordinary image state when they are part of the native application domain.
+
+```text
+identity       ObjectRef
+layout         Shape
+state          Values + refs
+persistence    image/backend
+history        image history
+execution      Blocks/Lagrange WASM
+placement      Lagrange policy
+```
+
+There is no transparent mirrored authoritative state between the Lagrange graph and a Spur heap.
+
+### 5. Real application import
+
+The first application-level proof uses an independently authored, nontrivial Cuis application/package set.
+
+The application source should remain unchanged for Lagrange. Import metadata, package mappings or explicit foreign-interface declarations may be added outside the application's core source.
+
+Success means a fresh Image can install the Project/release and execute useful application behavior with native classes, native methods and native domain objects without a Cuis runtime in the ordinary execution path.
+
+### 6. Distribution
+
+Only after the same application is native should distribution become an application acceptance condition.
+
+Placement and routing remain generic Lagrange concerns. The Cuis importer and application source do not learn node addresses, partition placement or remote-call branches.
+
+## Role of OpenSmalltalkVM after this decision
+
+OpenSmalltalkVM remains valuable, but its role is bounded:
+
+```text
+importer/toolchain    resolve real Cuis ecosystem semantics
+reference oracle     compare native behavior with real Cuis
+foreign escape hatch explicit services/FFI that deliberately remain foreign
+```
+
+It is not an automatic fallback executor.
+
+A native import failure must identify unsupported semantics or the responsible owner. This keeps convergence measurable and prevents split object/storage authority.
+
+## Role of Common Lisp/SBCL
+
+ADR 0084 proved that SBCL can use the generic foreign-runtime contracts without contaminating generic layers. That is sufficient for now.
+
+Further Lisp-native work is intentionally sequenced behind the Cuis forcing path. Once native class/object/state import has been proven, Common Lisp can pressure the same architecture with genuinely different semantics such as reader/macroexpansion, CLOS, dynamic bindings, multiple values and conditions/restarts.
+
+Do not pre-generalize the Cuis importer for Lisp. Extract common owners only when the second ecosystem demonstrates that the concern is truly shared.
+
+## Object Environment boundary
+
+Lagrange Object Environment owns human interaction over imported content: import commands/progress, browsers, source editing, inspectors, diagnostics and provenance presentation.
+
+Once imported natively, a Cuis-origin class or object is navigated and edited through the same public Images APIs as any other native class or object. The environment may show that it originated from Cuis, but it must not create a shadow Cuis object database or runtime-specific identity model.
+
+## Non-goals
+
+This path does not require:
+
+- arbitrary Spur heap import;
+- preserving Spur oops;
+- byte-for-byte Cuis image compatibility;
+- reimplementing the entire Cuis VM;
+- silently falling back to a live Cuis VM;
+- making every FFI/native dependency image-native;
+- generalizing for Java/Lisp before Cuis proves the owner boundaries.
+
+The rule is simple: move existing software onto native Lagrange semantics in explicit, testable increments, and keep any remaining foreign boundary explicit.
