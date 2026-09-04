@@ -224,7 +224,12 @@ and evaluates:
 
 For `x = 14`, foreign WASM returns 28 and Cuis returns 42. The Smalltalk source knows neither implementation lane.
 
-PR33 compiles that **same persistent semantic artifact** into a resumable `wasm-function/v1`. Both the neutral executor and the Lagrange-WASM executor must produce the same canonical Values. The real PR-only integration proof runs the WASM orchestration against a toolchain-produced Cuis image.
+At the PR33 stage, the compiler produced a resumable `wasm-function/v1` from that **same persistent
+semantic artifact**. The current compiler instead produces `wasm-module/v2` and
+`wasm-function/v2`, with the executable contract and entry selection in identity-bearing content;
+frozen v1 remains readable only in-image. Both the neutral executor and the Lagrange-WASM executor
+must produce the same canonical Values. The real PR-only integration proof runs the WASM
+orchestration against a toolchain-produced Cuis image.
 
 See ADRs 0029 and 0030.
 
