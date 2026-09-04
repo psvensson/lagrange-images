@@ -214,7 +214,7 @@ It must not preserve a shadow Cuis object database or require runtime-specific i
 ## Ownership
 
 - **OpenSmalltalk/Cuis toolchain provider** owns extraction from real Cuis/package machinery into canonical Cuis semantic artifacts.
-- **Cuis native-import personality/adapter** owns translation from those semantic facts into calls on native Smalltalk/image owners. This is a planned owner; it owns no duplicate class, object, storage or compiler semantics.
+- **Cuis native-import personality/adapter** owns translation from those semantic facts into calls on native Smalltalk/image owners. M1 implements class-graph translation in `src/language/cuis-native-import.js`; it owns no duplicate class, object, storage or compiler semantics.
 - **Symmetric Smalltalk personality and its existing builders/compiler** remain the owners of native Smalltalk class, slot, method and semantic compilation rules.
 - **Object/graph/image owners** remain the owners of native identity, state, persistence and history.
 - **Project/artifact owners** remain the owners of application organization, dependency/provenance and release/install semantics.
@@ -246,6 +246,22 @@ placement != language semantics
 ```
 
 Do not add arbitrary `perform:`, eval, oop export or heap mirroring merely to make import easier. If an application requires a semantic feature, add it at the language owner or declare an explicit foreign boundary.
+
+## M1 implementation evidence
+
+M1 is implemented by the combination of:
+
+- the real v2 declaration export proof in `test/opensmalltalk-cuis-semantic-export-real.test.js`;
+- native declaration/slot ownership and recovery in `test/smalltalk-class-declarations.test.js`;
+- adapter dependency/root/replay proofs in `test/cuis-native-import.test.js`;
+- the real two-runtime native-import proof in `test/opensmalltalk-cuis-semantic-export-real.test.js`.
+
+The latter closes the runtime that owns the real Cuis toolchain before it starts a separate runtime
+with no Cuis provider. That runtime imports ordinary native Classes/Metaclasses/Shapes, replays with
+no frontier movement, allocates through native `basicNew`, and persists inherited/local slots as
+ordinary Values/refs. No `CuisExport*` object or Spur identity participates. M2 and later milestones
+remain unimplemented, so this ADR's overall status remains accepted rather than claiming the whole
+convergence roadmap is complete.
 
 ## Relationship to earlier ADRs
 

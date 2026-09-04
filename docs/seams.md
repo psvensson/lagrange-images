@@ -148,6 +148,7 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | --- | --- |
 | `defineClass()` | a class and its metaclass, wired by the ADR 0044 chain rule |
 | `ensureClassFromDeclaration()` | an instantiable class from locally declared instance-variable names; the native class owner assigns initial stable slot ids and composes the complete inherited Shape |
+| `importCuisNativeClasses()` | the ADR 0085 M1 translation from one canonical Cuis v2 class graph to calls on `ensureClassFromDeclaration`; the adapter preflights dependencies and recognizes only the exact Cuis-Base/Object structural root identity, with no `CuisExport*`, VM handle or durable importer state |
 | `defineMethods()` | methods from semantic `lagrange-code/v0` programs, optionally with captures |
 | `installSmalltalkControlFlow()` | `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:` on True and False (ADR 0045) |
 | `installSmalltalkAllocationProtocol()` | the `class-of`/`basic-new` primitive Blocks, plus `Object >> class`, `Object >> initialize`, `Class >> basicNew` and `Class >> new` (ADR 0046) |
