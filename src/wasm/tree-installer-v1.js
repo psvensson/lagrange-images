@@ -5,7 +5,7 @@ import {
   normalizeLagrangeCodeV1Program,
   parseLagrangeCodeV1Program,
 } from '../code/lagrange-code-v1.js';
-import {describeWasmFunctionV2} from './function-contract.js';
+import {bindClosurePrototypes, describeWasmFunctionV2} from './function-contract.js';
 import {WASM_MODULE_V2, moduleFunctionOf, readModuleDescriptor} from './module-contract.js';
 import {createCompilationGroup} from '../compilation/group.js';
 import {normalizeMetadata} from '../object/model.js';
@@ -211,33 +211,16 @@ async function assembleWasmV1FunctionArtifact({
   }
 
   const descriptor = moduleFunctionOf(moduleDescriptor, {entry: requiredText(entry, 'WASM function entry')});
-  const allClosureSites = moduleDescriptor.closureSites;
-  const closureSites = descriptor.closureSiteIndices.map((siteIndex) => {
-    if (!Number.isInteger(siteIndex) || siteIndex < 0 || siteIndex >= allClosureSites.length) {
-      throw new TypeError(`WASM function closure site index out of range: ${siteIndex}`);
-    }
-    return allClosureSites[siteIndex];
+  const {closurePrototypes, prototypeRefs} = bindClosurePrototypes({
+    descriptor,
+    closureSites: moduleDescriptor.closureSites,
+    prototypes: normalizePrototypeMap(blockPrototypes),
   });
-
-  const prototypes = normalizePrototypeMap(blockPrototypes);
-  const prototypeRefs = [];
-  const closurePrototypes = [];
-  for (let localIndex = 0; localIndex < closureSites.length; localIndex += 1) {
-    const site = closureSites[localIndex];
-    const ref = prototypes.get(site.blockId);
-    if (!ref) throw new TypeError(`missing WASM Block prototype for semantic block: ${site.blockId}`);
+  for (const ref of prototypeRefs) {
     if (!await images.getBlock(ref.imageId, ref.objectId)) {
       throw new TypeError(`WASM Block prototype not found: ${ref.imageId}/${ref.objectId}`);
     }
-    prototypeRefs.push(ref);
-    closurePrototypes.push(Object.freeze({
-      blockId: site.blockId,
-      siteIndex: descriptor.closureSiteIndices[localIndex],
-      derivedFromIndex: 2 + prototypeRefs.length - 1,
-    }));
-    prototypes.delete(site.blockId);
   }
-  if (prototypes.size > 0) throw new TypeError(`unused WASM Block prototype: ${prototypes.keys().next().value}`);
 
   // The v2 function carries only its selection; abi/parameters/captures/cellBindings are the
   // module's function-table entry, resolved at execution through the module accessor.

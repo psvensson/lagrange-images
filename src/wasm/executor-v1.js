@@ -324,7 +324,7 @@ function createWasmFunctionV1CellExecutor({
     moduleCache,
     instancePool,
     async execute({activation, code}, context, resolved = null) {
-      assertWasmFunctionArtifactAnyVersion(code);
+      if (!resolved) assertWasmFunctionArtifactAnyVersion(code);
       requireCellOperations(context);
       const moduleRef = functionModuleRef(code);
       const moduleArtifact = resolved?.moduleArtifact ?? await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
@@ -337,7 +337,11 @@ function createWasmFunctionV1CellExecutor({
       const literals = normalizeLiterals(contract.literals);
       const sendSites = normalizeSendSites(contract.sendSites);
       const closureSites = normalizeClosureSites(contract.closureSites);
-      const fn = resolveFunctionContract(code, Object.freeze({...contract, functions: normalizeModuleFunctions(contract.functions, sendSites, closureSites), closureSites}));
+      const fn = resolveFunctionContract(
+        code,
+        Object.freeze({...contract, functions: normalizeModuleFunctions(contract.functions, sendSites, closureSites), closureSites}),
+        resolved?.selection ? {selection: resolved.selection} : {},
+      );
       const {descriptor, closurePrototypes} = fn;
       const parameterCount = descriptor.parameters;
       const captureIds = descriptor.captures;

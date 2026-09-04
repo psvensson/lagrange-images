@@ -425,7 +425,7 @@ function createResumableWasmFunctionV2Executor({
     moduleCache,
     instancePool,
     async execute({activation, code}, context, resolved = null) {
-      assertWasmFunctionArtifactAnyVersion(code);
+      if (!resolved) assertWasmFunctionArtifactAnyVersion(code);
       for (const operation of ['readCell', 'writeCell', 'declareTemporaries']) {
         if (typeof context[operation] !== 'function') {
           throw new TypeError(`the lagrange-value-handle-resumable/v2 ABI requires the ${operation} execution operation`);
@@ -443,7 +443,11 @@ function createResumableWasmFunctionV2Executor({
       const sendSites = normalizeSendSites(contract.sendSites);
       const closureSites = normalizeClosureSites(contract.closureSites);
       const effectSites = normalizeEffectSites(contract.effectSites, sendSites, closureSites);
-      const fn = resolveFunctionContract(code, Object.freeze({...contract, functions: normalizeModuleFunctions(contract.functions, sendSites, closureSites), closureSites}));
+      const fn = resolveFunctionContract(
+        code,
+        Object.freeze({...contract, functions: normalizeModuleFunctions(contract.functions, sendSites, closureSites), closureSites}),
+        resolved?.selection ? {selection: resolved.selection} : {},
+      );
       const {descriptor, closurePrototypes} = fn;
       const parameterCount = descriptor.parameters;
       const captureIds = descriptor.captures;

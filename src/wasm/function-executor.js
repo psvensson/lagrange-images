@@ -9,7 +9,7 @@ import {
 import {createResumableWasmFunctionV1Executor} from './resumable-executor.js';
 import {createWasmFunctionV1CellExecutor} from './executor-v1.js';
 import {createResumableWasmFunctionV2Executor} from './resumable-executor-v2.js';
-import {assertWasmFunctionArtifactAnyVersion, functionModuleRef} from './function-contract.js';
+import {assertWasmFunctionArtifactAnyVersion, functionModuleRef, readFunctionSelection} from './function-contract.js';
 import {readModuleDescriptor} from './module-contract.js';
 
 function createWasmFunctionV1Executor({
@@ -34,7 +34,8 @@ function createWasmFunctionV1Executor({
       const moduleArtifact = await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
       if (!moduleArtifact) throw new TypeError(`WASM module not found: ${moduleRef.imageId}/${moduleRef.objectId}`);
       const abi = readModuleDescriptor(moduleArtifact).abi;
-      const resolved = Object.freeze({moduleArtifact});
+      // Decoded once here; the executor resolves the contract from this selection without re-parsing.
+      const resolved = Object.freeze({moduleArtifact, selection: readFunctionSelection(code)});
       if (abi === WASM_VALUE_HANDLE_ABI_V0) return await tail.execute(request, context, resolved);
       if (abi === WASM_VALUE_HANDLE_ABI_V1) return await cells.execute(request, context, resolved);
       if (abi === WASM_RESUMABLE_VALUE_HANDLE_ABI_V1) return await resumable.execute(request, context, resolved);

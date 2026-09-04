@@ -10,7 +10,7 @@ import {
   vector,
 } from './encoding.js';
 import {LAGRANGE_CODE_V0, parseLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
-import {describeWasmFunctionV2} from './function-contract.js';
+import {bindClosurePrototypes, describeWasmFunctionV2} from './function-contract.js';
 import {WASM_MODULE_V2, moduleFunctionOf, readModuleDescriptor, soleModuleEntry} from './module-contract.js';
 import {canonicalizeValue, isObjectRef, isReference, objectRef} from '../value/index.js';
 import {
@@ -385,8 +385,7 @@ function moduleFunctionDescriptor(moduleArtifact, entry) {
 }
 
 // The function artifact a compilation selects: described ONCE by the function-contract owner
-// (wasm-function/v2). `moduleArtifact` is accepted for callers that already hold it, but nothing
-// module-owned is copied onto the function.
+// (wasm-function/v2). Nothing module-owned is copied onto the function.
 function describeWasmFunctionArtifact({
   functionId,
   languageId,
@@ -426,33 +425,16 @@ async function assembleWasmFunctionArtifact({
   if (!moduleArtifact) throw new TypeError('moduleRef must reference a WASM module artifact');
   const moduleDescriptor = readModuleDescriptor(moduleArtifact);
   const descriptor = moduleFunctionOf(moduleDescriptor, {entry: requiredText(entry, 'WASM function entry')});
-  const allClosureSites = moduleDescriptor.closureSites;
-  const closureSites = descriptor.closureSiteIndices.map((siteIndex) => {
-    if (!Number.isInteger(siteIndex) || siteIndex < 0 || siteIndex >= allClosureSites.length) {
-      throw new TypeError(`WASM function closure site index out of range: ${siteIndex}`);
-    }
-    return allClosureSites[siteIndex];
+  const {closurePrototypes, prototypeRefs} = bindClosurePrototypes({
+    descriptor,
+    closureSites: moduleDescriptor.closureSites,
+    prototypes: normalizePrototypeMap(blockPrototypes),
   });
-
-  const prototypes = normalizePrototypeMap(blockPrototypes);
-  const prototypeRefs = [];
-  const closurePrototypes = [];
-  for (let localIndex = 0; localIndex < closureSites.length; localIndex += 1) {
-    const site = closureSites[localIndex];
-    const ref = prototypes.get(site.blockId);
-    if (!ref) throw new TypeError(`missing WASM Block prototype for semantic block: ${site.blockId}`);
+  for (const ref of prototypeRefs) {
     if (!await images.getBlock(ref.imageId, ref.objectId)) {
       throw new TypeError(`WASM Block prototype not found: ${ref.imageId}/${ref.objectId}`);
     }
-    prototypeRefs.push(ref);
-    closurePrototypes.push(Object.freeze({
-      blockId: site.blockId,
-      siteIndex: descriptor.closureSiteIndices[localIndex],
-      derivedFromIndex: 2 + prototypeRefs.length - 1,
-    }));
-    prototypes.delete(site.blockId);
   }
-  if (prototypes.size > 0) throw new TypeError(`unused WASM Block prototype: ${prototypes.keys().next().value}`);
 
   // The complete wasm-function/v2 contract, in one place. A caller deciding whether an existing
   // artifact may be reused compares against this same description, so "exact" cannot drift apart

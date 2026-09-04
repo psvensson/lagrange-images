@@ -347,7 +347,7 @@ function createResumableWasmFunctionV1Executor({
     moduleCache,
     instancePool,
     async execute({activation, code}, context, resolved = null) {
-      assertWasmFunctionArtifactAnyVersion(code);
+      if (!resolved) assertWasmFunctionArtifactAnyVersion(code);
       const moduleRef = functionModuleRef(code);
       const moduleArtifact = resolved?.moduleArtifact ?? await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
       if (!moduleArtifact) throw new TypeError(`WASM module not found: ${moduleRef.imageId}/${moduleRef.objectId}`);
@@ -360,7 +360,11 @@ function createResumableWasmFunctionV1Executor({
       const sendSites = normalizeSendSites(contract.sendSites);
       const closureSites = normalizeClosureSites(contract.closureSites);
       const effectSites = normalizeEffectSites(contract.effectSites, sendSites, closureSites);
-      const fn = resolveFunctionContract(code, Object.freeze({...contract, functions: normalizeModuleFunctions(contract.functions, sendSites, closureSites), closureSites}));
+      const fn = resolveFunctionContract(
+        code,
+        Object.freeze({...contract, functions: normalizeModuleFunctions(contract.functions, sendSites, closureSites), closureSites}),
+        resolved?.selection ? {selection: resolved.selection} : {},
+      );
       const {descriptor, closurePrototypes} = fn;
       const parameterCount = descriptor.parameters;
       const captureIds = descriptor.captures;

@@ -154,8 +154,7 @@ function sameStrings(left, right) {
 // descriptor, the ABI, and the closure-site -> prototype Block binding. `moduleContract.functions`
 // must be the executor-normalized function table (exact keys, validated site indices) and
 // `moduleContract.closureSites` the normalized sites, so the checks here are the last word.
-function resolveFunctionContract(artifact, moduleContract) {
-  const selection = readFunctionSelection(artifact);
+function resolveFunctionContract(artifact, moduleContract, {selection = readFunctionSelection(artifact)} = {}) {
   const descriptor = moduleFunctionOf(moduleContract, {entry: selection.entry});
   if (selection.mirrors) {
     // Frozen v1: the mirrors must agree with the module, exactly as the executors always required.
@@ -198,6 +197,31 @@ function resolveFunctionContract(artifact, moduleContract) {
   return Object.freeze({entry: selection.entry, abi: moduleContract.abi, descriptor, closurePrototypes});
 }
 
+// Bind a function's closure sites to prototype Blocks — the ONE place the {blockId, siteIndex,
+// derivedFromIndex} entries and the derivedFrom layout [semantic, module, ...prototypes] are
+// decided. `prototypes` maps semantic block id -> Block ref; every closure site of the selected
+// entry must be bound and no prototype may go unused. The caller (an assembler) verifies the
+// prototype Blocks exist; this owner verifies the binding against the module contract.
+function bindClosurePrototypes({descriptor, closureSites, prototypes} = {}) {
+  if (!(prototypes instanceof Map)) throw new TypeError('prototypes must be a Map of semantic block id -> Block ref');
+  const remaining = new Map(prototypes);
+  const prototypeRefs = [];
+  const closurePrototypes = [];
+  for (const [localIndex, siteIndex] of descriptor.closureSiteIndices.entries()) {
+    const site = closureSites[siteIndex];
+    if (!site) throw new TypeError(`WASM function closure site index out of range: ${siteIndex}`);
+    const ref = remaining.get(site.blockId);
+    if (!ref) throw new TypeError(`missing WASM Block prototype for semantic block: ${site.blockId}`);
+    const normalized = canonicalizeValue(ref);
+    if (!isObjectRef(normalized)) throw new TypeError(`block prototype ${site.blockId} must be an unpinned object ref`);
+    prototypeRefs.push(normalized);
+    closurePrototypes.push(Object.freeze({blockId: site.blockId, siteIndex, derivedFromIndex: 2 + localIndex}));
+    remaining.delete(site.blockId);
+  }
+  if (remaining.size > 0) throw new TypeError(`unused WASM Block prototype: ${remaining.keys().next().value}`);
+  return Object.freeze({closurePrototypes: Object.freeze(closurePrototypes), prototypeRefs: Object.freeze(prototypeRefs)});
+}
+
 // THE durable v2 function artifact, described once. `prototypeRefs` are the Block refs the closure
 // prototypes index into (derivedFrom = [semantic, module, ...prototypeRefs]).
 function describeWasmFunctionV2({functionId, languageId, semanticRef, moduleRef, entry, closurePrototypes = [], prototypeRefs = []} = {}) {
@@ -229,6 +253,7 @@ export {
   WASM_FUNCTION_V2,
   assertWasmFunctionArtifactAnyVersion,
   assertWasmFunctionV2Artifact,
+  bindClosurePrototypes,
   describeWasmFunctionV2,
   encodeFunctionSelectionContent,
   functionModuleRef,
