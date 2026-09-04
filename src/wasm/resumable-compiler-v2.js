@@ -9,7 +9,7 @@ import {
   vector,
 } from './encoding.js';
 import {LAGRANGE_CODE_V1, parseLagrangeCodeV1Program} from '../code/lagrange-code-v1.js';
-import {bytesValue, canonicalizeValue, isReference} from '../value/index.js';
+import {canonicalizeValue, isReference} from '../value/index.js';
 import {WASM_ENTRY_V0, WASM_IMPORT_MODULE} from './abi.js';
 import {WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1} from './compiler-v1.js';
 import {WASM_RESUMABLE_VALUE_HANDLE_ABI_V2} from './resumable-abi.js';
@@ -580,19 +580,17 @@ const lagrangeCodeV1ToResumableWasmModuleCompiler = Object.freeze({
     const compiled = compileResumableWasmV2Module(parseLagrangeCodeV1Program(source));
     return Object.freeze({
       languageId: source.languageId,
-      content: bytesValue(compiled.bytes),
-      metadata: {
+      bytes: compiled.bytes,
+      contract: {
         abi: WASM_RESUMABLE_VALUE_HANDLE_ABI_V2,
-        entry: WASM_ENTRY_V0,
-        parameters: compiled.parameterCount,
-        captures: compiled.captureIds,
-        cellBindings: compiled.cellBindings,
         literals: compiled.literals,
+        functions: compiled.functions,
         sendSites: compiled.sendSites,
         closureSites: compiled.closureSites,
         effectSites: compiled.effectSites,
+      },
+      metadata: {
         continuations: compiled.continuations,
-        functions: compiled.functions,
         semanticRepresentation: LAGRANGE_CODE_V1,
       },
     });
@@ -619,15 +617,17 @@ const lagrangeCodeV1GroupToResumableWasmModuleCompiler = Object.freeze({
     });
     const compiled = compileResumableWasmV2ModuleEntries(entries);
     return Object.freeze({
-      content: bytesValue(compiled.bytes),
-      metadata: {
+      bytes: compiled.bytes,
+      contract: {
         abi: WASM_RESUMABLE_VALUE_HANDLE_ABI_V2,
         literals: compiled.literals,
+        functions: compiled.functions,
         sendSites: compiled.sendSites,
         closureSites: compiled.closureSites,
         effectSites: compiled.effectSites,
+      },
+      metadata: {
         continuations: compiled.continuations,
-        functions: compiled.functions,
         semanticRepresentation: LAGRANGE_CODE_V1,
         groupPolicyId: group.policyId,
         physicalLayout: 'shared-module',

@@ -132,11 +132,15 @@ Cuis build graph -> OpenSmalltalkVM + Cuis -> derived runnable image
 
 ```text
 language meaning
-   -> lagrange-code/v0
-   -> wasm-module/v1
+   -> lagrange-code/v0 | lagrange-code/v1
+   -> wasm-module/v2  (canonical contract as content)
+        dependency(implementation) -> wasm-binary/v1 (exact bytes)
    -> wasm-function/v1
    -> ActivationExecutor
 ```
+
+`wasm-module/v1` is frozen (ADR 0081): still executable in-image through the canonical accessor,
+never produced, and it does not survive a portable release.
 
 The semantic artifact is independent of the physical WASM ABI. The default compiler currently chooses between two internal contracts.
 
@@ -186,7 +190,7 @@ existing ecosystem or imported binary
    -> ActivationExecutor / later placement
 ```
 
-`wasm-binary/v1` does not imply either Lagrange Value-handle ABI.
+`wasm-binary/v1` does not imply either Lagrange Value-handle ABI: it is the neutral byte owner, and what makes bytes executable is always the referencing descriptor (`wasm-module/v2` or a callable interface).
 
 The first callable interface is:
 

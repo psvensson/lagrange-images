@@ -1,15 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LAGRANGE_CODE_V1,
-  NEUTRAL_EXPRESSION_V0,
-  WASM_FUNCTION_V1,
   createRuntime,
   installSymmetricSmalltalkBlock,
   installWasmBlockTree,
   integerValue,
+  LAGRANGE_CODE_V1,
+  NEUTRAL_EXPRESSION_V0,
   objectRef,
+  readModuleDescriptor,
   textValue,
+  WASM_FUNCTION_V1,
 } from '../src/runtime.js';
 
 // The differential proof for ADR 0043 decision 10. Each case compiles ONE Symmetric Smalltalk
@@ -260,12 +261,12 @@ test('the mixed closure site passes one handle for two semantic captures', async
       semanticRef: objectRef('diff', installed.semanticArtifact.id),
       id: 'arity:wasm',
     });
-    const closureSites = tree.moduleArtifact.metadata.closureSites;
+    const closureSites = readModuleDescriptor(tree.moduleArtifact).closureSites;
     const site = closureSites.find((candidate) => candidate.captures.some(({mode}) => mode === 'cell'));
     assert.ok(site, 'expected a closure site with a cell capture');
     const modes = site.captures.map(({mode}) => mode).sort();
     assert.deepEqual(modes, ['cell', 'snapshot', 'snapshot']);
-    const effect = tree.moduleArtifact.metadata.effectSites
+    const effect = readModuleDescriptor(tree.moduleArtifact).effectSites
       .find(({kind, siteIndex}) => kind === 'closure' && closureSites[siteIndex] === site);
     assert.equal(effect.requestArity, 2, 'only the snapshot captures occupy handle positions');
   });

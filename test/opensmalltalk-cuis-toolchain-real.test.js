@@ -2,6 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {
+  booleanValue,
+  bytesValue,
+  compileWasmFunctionArtifact,
+  createArtifactBackedOpenSmalltalkCuisProvider,
+  createOpenSmalltalkCuisToolchainProvider,
+  createRuntime,
   CUIS_BUILD_CONTRACT_V0,
   CUIS_BUILD_V1,
   CUIS_CHANGES_V1,
@@ -10,22 +16,17 @@ import {
   CUIS_RUNTIME_DEFINITION_CONTRACT_V0,
   CUIS_RUNTIME_DEFINITION_V1,
   CUIS_SOURCES_V1,
-  OPENSMALLTALK_CUIS_PROVIDER_ID,
-  OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
-  WASM_BINARY_V1,
-  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
-  booleanValue,
-  bytesValue,
-  compileWasmFunctionArtifact,
-  createArtifactBackedOpenSmalltalkCuisProvider,
-  createOpenSmalltalkCuisToolchainProvider,
-  createRuntime,
   installForeignRuntimeCallable,
   installSymmetricSmalltalkBlock,
   installWasmScalarCallable,
   integerValue,
   objectRef,
+  OPENSMALLTALK_CUIS_PROVIDER_ID,
+  OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
+  readModuleDescriptor,
   textValue,
+  WASM_BINARY_V1,
+  WASM_RESUMABLE_VALUE_HANDLE_ABI_V1,
 } from '../src/runtime.js';
 
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
@@ -216,8 +217,8 @@ test('real Cuis toolchain participates in a resumable Lagrange-WASM mixed Block 
       code: objectRef('build-image', wasm.functionArtifact.id),
       environment: environmentRef,
     });
-    assert.equal(wasm.moduleArtifact.metadata.abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
-    assert.match(wasm.moduleArtifact.metadata.effectSites[0].resumeEntry, /\$resume_/);
+    assert.equal(readModuleDescriptor(wasm.moduleArtifact).abi, WASM_RESUMABLE_VALUE_HANDLE_ABI_V1);
+    assert.match(readModuleDescriptor(wasm.moduleArtifact).effectSites[0].resumeEntry, /\$resume_/);
 
     const mixedActivation = await runtime.invocations.invokeBlock(
       objectRef('build-image', wasmBlock.id),

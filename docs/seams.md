@@ -66,9 +66,10 @@ an interface or definition artifact.
 
 | Representation | What it holds |
 | --- | --- |
-| `wasm-binary/v1` | raw imported WASM bytes (Cargo output); not directly executable |
+| `wasm-binary/v1` | raw WASM bytes — the neutral byte owner for both imported (Cargo) output and compiled `wasm-module/v2` implementations; not directly executable |
 | `wasm-component/v1` | a compiled WASM Component; says nothing about which interfaces it satisfies |
-| `wasm-module/v1` | WASM using the Lagrange Value-handle ABI |
+| `wasm-module/v2` | a compiled Lagrange Value-handle-ABI module: canonical-JSON executable contract as content + one `implementation` dependency to its `wasm-binary/v1` bytes (ADR 0081) |
+| `wasm-module/v1` | FROZEN (ADR 0081): the same contract in stripped metadata with bytes as content; readable/executable in-image via the canonical accessor, never produced, does not survive release |
 | `smalltalk/cuis-image-v1` | a Cuis image |
 | `smalltalk/cuis-changes-v1`, `smalltalk/cuis-sources-v1` | Cuis support files |
 | `smalltalk/cuis-package-v1` | a `.pck.st` package |

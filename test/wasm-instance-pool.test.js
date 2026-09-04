@@ -5,6 +5,7 @@ import {
   WASM_FUNCTION_V1,
   WASM_INSTANCE_REUSE_STATELESS_V0,
   WASM_MODULE_V1,
+  WASM_MODULE_V2,
   WasmInstancePool,
   compileSymmetricSmalltalkBlock,
   compileWasmFunctionArtifact,
@@ -199,11 +200,14 @@ test('WASM modules without an explicit instance-reuse contract remain one-shot',
   });
   const {instanceReuse, compilerIdentity: _compilerIdentity, derivationKey: _derivationKey, ...moduleMetadata} = moduleArtifact.metadata;
   assert.equal(instanceReuse, WASM_INSTANCE_REUSE_STATELESS_V0);
+  // The same v2 descriptor and the same implementation bytes, with the instanceReuse provenance
+  // dropped: a provenance-only difference, so meaning is identical and only pooling changes.
   const oneShotModule = await runtime.images.putCodeArtifact('demo', {
     id: 'one-shot-module',
     languageId: moduleArtifact.languageId,
-    representation: WASM_MODULE_V1,
+    representation: WASM_MODULE_V2,
     content: moduleArtifact.content,
+    dependencies: moduleArtifact.dependencies,
     derivedFrom: moduleArtifact.derivedFrom,
     metadata: moduleMetadata,
   });

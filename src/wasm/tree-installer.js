@@ -5,7 +5,7 @@ import {
   normalizeLagrangeCodeProgram,
   parseLagrangeCodeProgram,
 } from '../code/lagrange-code-v0.js';
-import {WASM_MODULE_V1} from '../code/wasm-artifacts.js';
+import {WASM_MODULE_V2, moduleFunctionOf, readModuleDescriptor} from './module-contract.js';
 import {createCompilationGroup} from '../compilation/group.js';
 import {normalizeMetadata} from '../object/model.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
@@ -181,11 +181,7 @@ async function persistSemanticTree({images, rootRef, rootArtifact, rootPlan, roo
 }
 
 function descriptorForMember(moduleArtifact, memberIndex) {
-  const functions = moduleArtifact.metadata?.functions;
-  if (!Array.isArray(functions)) throw new TypeError('shared WASM module must describe exported functions');
-  const descriptor = functions.find((entry) => entry?.memberIndex === memberIndex);
-  if (!descriptor) throw new TypeError(`shared WASM module has no entry for group member ${memberIndex}`);
-  return descriptor;
+  return moduleFunctionOf(readModuleDescriptor(moduleArtifact), {memberIndex});
 }
 
 async function installExecutableTree({
@@ -275,7 +271,7 @@ async function installWasmBlockTree({
 
   const group = createCompilationGroup({
     policyId: WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
-    targetRepresentation: WASM_MODULE_V1,
+    targetRepresentation: WASM_MODULE_V2,
     members: groupPlans.map((plan) => plan.semanticRef),
     options: {physicalLayout: 'shared-module'},
   });

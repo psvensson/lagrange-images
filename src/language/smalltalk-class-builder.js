@@ -53,7 +53,8 @@ import {
   methodDictionarySlots,
   readBehavior,
 } from './smalltalk-kernel.js';
-import {WASM_FUNCTION_V1, WASM_MODULE_V1} from '../code/wasm-artifacts.js';
+import {WASM_FUNCTION_V1} from '../code/wasm-artifacts.js';
+import {WASM_MODULE_V2, readModuleDescriptor, soleModuleEntry} from '../wasm/module-contract.js';
 import {assembleWasmV1FunctionArtifact} from '../wasm/tree-installer-v1.js';
 import {ensureClassStateCompanion} from './smalltalk-class-state.js';
 import {maintainSubclassRegistries} from './smalltalk-subclasses.js';
@@ -282,7 +283,7 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
   // `ensureNeutralCode` uses, and for the same reason: matching provenance is not matching output.
   if (representation === LAGRANGE_CODE_V1) {
     const moduleArtifact = await compilation.compileArtifact(semanticRef, {
-      targetRepresentation: WASM_MODULE_V1,
+      targetRepresentation: WASM_MODULE_V2,
       id: `${id}:wasm:module`,
     });
     const moduleRef = objectRef(moduleArtifact.imageId ?? imageId, moduleArtifact.id);
@@ -291,7 +292,7 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
       semanticRef,
       moduleRef,
       functionId: target,
-      entry: moduleArtifact.metadata.entry,
+      entry: soleModuleEntry(readModuleDescriptor(moduleArtifact)),
     })).functionArtifact;
 
     const existing = await images.getCodeArtifact(imageId, functionId);
@@ -305,7 +306,7 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
     return objectRef(imageId, existing.id);
   }
   const moduleArtifact = await compilation.compileArtifact(semanticRef, {
-    targetRepresentation: WASM_MODULE_V1,
+    targetRepresentation: WASM_MODULE_V2,
     id: `${id}:wasm:module`,
   });
   const moduleRef = objectRef(moduleArtifact.imageId ?? imageId, moduleArtifact.id);
@@ -321,7 +322,7 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
       semanticRef,
       moduleRef,
       moduleArtifact,
-      descriptor: moduleFunctionDescriptor(moduleArtifact, moduleArtifact.metadata.entry),
+      descriptor: moduleFunctionDescriptor(moduleArtifact, soleModuleEntry(readModuleDescriptor(moduleArtifact))),
       closurePrototypes: [],
     });
     if (codeArtifactProjection(expected) !== codeArtifactProjection(existing)) {
@@ -335,7 +336,7 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
     semanticRef,
     moduleRef,
     functionId,
-    entry: moduleArtifact.metadata.entry,
+    entry: soleModuleEntry(readModuleDescriptor(moduleArtifact)),
   });
   return objectRef(imageId, functionArtifact.id);
 }

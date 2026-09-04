@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LAGRANGE_CODE_WASM_GROUP_COMPILER_ID,
-  WASM_MODULE_V1,
   createCompilationGroup,
   createRuntime,
   installSymmetricSmalltalkBlock,
   installWasmBlockTree,
+  LAGRANGE_CODE_WASM_GROUP_COMPILER_ID,
   objectRef,
+  readModuleDescriptor,
   textValue,
+  WASM_MODULE_V2,
 } from '../src/runtime.js';
 
 test('cacheable compilers reuse immutable derived artifacts by declared identity and key', async () => {
@@ -115,7 +116,7 @@ test('compilers without an explicit cache contract never reuse implicitly', asyn
 test('compilation groups describe compiler policy without prescribing a source language', () => {
   const group = createCompilationGroup({
     policyId: 'package-or-crate/v0',
-    targetRepresentation: WASM_MODULE_V1,
+    targetRepresentation: WASM_MODULE_V2,
     members: [objectRef('image', 'java-method'), objectRef('image', 'rust-function')],
     options: {optimization: 'release', moduleBudget: 64},
   });
@@ -126,7 +127,7 @@ test('compilation groups describe compiler policy without prescribing a source l
   assert.ok(Object.isFrozen(group.options));
   assert.throws(() => createCompilationGroup({
     policyId: 'bad',
-    targetRepresentation: WASM_MODULE_V1,
+    targetRepresentation: WASM_MODULE_V2,
     members: [objectRef('image', 'same'), objectRef('image', 'same')],
   }), /duplicate compilation group member/);
 });
@@ -193,11 +194,11 @@ test('independent WASM Block-tree installations share one multi-function module 
     id: 'tree-one',
   });
   const modulesAfterFirst = (await runtime.images.listCodeArtifacts('demo'))
-    .filter((artifact) => artifact.representation === WASM_MODULE_V1);
+    .filter((artifact) => artifact.representation === WASM_MODULE_V2);
   assert.equal(modulesAfterFirst.length, 1);
   assert.equal(modulesAfterFirst[0].metadata.compilerIdentity, LAGRANGE_CODE_WASM_GROUP_COMPILER_ID);
-  assert.equal(modulesAfterFirst[0].metadata.functions.length, 3);
-  assert.deepEqual(modulesAfterFirst[0].metadata.functions.map(({entry}) => entry), ['run_0', 'run_1', 'run_2']);
+  assert.equal(readModuleDescriptor(modulesAfterFirst[0]).functions.length, 3);
+  assert.deepEqual(readModuleDescriptor(modulesAfterFirst[0]).functions.map(({entry}) => entry), ['run_0', 'run_1', 'run_2']);
   assert.ok(first.nodes.every(({moduleArtifact}) => moduleArtifact.id === modulesAfterFirst[0].id));
   assert.equal(new Set(first.nodes.map(({functionArtifact}) => functionArtifact.metadata.entry)).size, 3);
 
@@ -208,7 +209,7 @@ test('independent WASM Block-tree installations share one multi-function module 
     id: 'tree-two',
   });
   const modulesAfterSecond = (await runtime.images.listCodeArtifacts('demo'))
-    .filter((artifact) => artifact.representation === WASM_MODULE_V1);
+    .filter((artifact) => artifact.representation === WASM_MODULE_V2);
   assert.equal(modulesAfterSecond.length, 1);
   assert.ok(second.nodes.every(({moduleArtifact}) => moduleArtifact.id === modulesAfterFirst[0].id));
   assert.notEqual(first.block.id, second.block.id);

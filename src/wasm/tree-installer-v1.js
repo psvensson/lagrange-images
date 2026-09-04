@@ -5,7 +5,8 @@ import {
   normalizeLagrangeCodeV1Program,
   parseLagrangeCodeV1Program,
 } from '../code/lagrange-code-v1.js';
-import {WASM_FUNCTION_V1, WASM_MODULE_V1} from '../code/wasm-artifacts.js';
+import {WASM_FUNCTION_V1} from '../code/wasm-artifacts.js';
+import {WASM_MODULE_V2, moduleFunctionOf, readModuleDescriptor} from './module-contract.js';
 import {createCompilationGroup} from '../compilation/group.js';
 import {normalizeMetadata} from '../object/model.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
@@ -174,14 +175,6 @@ async function persistSemanticTree({images, rootRef, rootArtifact, rootPlan, roo
   await persistChildren(rootPlan);
 }
 
-function moduleFunctionDescriptor(moduleArtifact, entry) {
-  const functions = moduleArtifact.metadata?.functions;
-  if (!Array.isArray(functions)) throw new TypeError('WASM v1 module must describe its exported functions');
-  const descriptor = functions.find((candidate) => candidate?.entry === entry);
-  if (!descriptor) throw new TypeError(`WASM module function entry not found in metadata: ${entry}`);
-  return descriptor;
-}
-
 function normalizePrototypeMap(blockPrototypes) {
   if (!blockPrototypes || typeof blockPrototypes !== 'object' || Array.isArray(blockPrototypes)) {
     throw new TypeError('blockPrototypes must be an object keyed by semantic block id');
@@ -211,16 +204,15 @@ async function assembleWasmV1FunctionArtifact({
   }
   const normalizedModuleRef = normalizeObjectRef(moduleRef, 'moduleRef');
   const moduleArtifact = await images.getCodeArtifact(normalizedModuleRef.imageId, normalizedModuleRef.objectId);
-  if (!moduleArtifact || moduleArtifact.representation !== WASM_MODULE_V1) {
-    throw new TypeError(`moduleRef must reference ${WASM_MODULE_V1}`);
-  }
-  const abi = moduleArtifact.metadata?.abi;
+  if (!moduleArtifact) throw new TypeError('moduleRef must reference a WASM module artifact');
+  const moduleDescriptor = readModuleDescriptor(moduleArtifact);
+  const abi = moduleDescriptor.abi;
   if (!SUPPORTED_MODULE_ABIS.includes(abi)) {
     throw new TypeError(`WASM v1 function assembly requires ${SUPPORTED_MODULE_ABIS.join(' or ')}, got ${abi}`);
   }
 
-  const descriptor = moduleFunctionDescriptor(moduleArtifact, requiredText(entry, 'WASM function entry'));
-  const allClosureSites = Array.isArray(moduleArtifact.metadata?.closureSites) ? moduleArtifact.metadata.closureSites : [];
+  const descriptor = moduleFunctionOf(moduleDescriptor, {entry: requiredText(entry, 'WASM function entry')});
+  const allClosureSites = moduleDescriptor.closureSites;
   const closureSites = descriptor.closureSiteIndices.map((siteIndex) => {
     if (!Number.isInteger(siteIndex) || siteIndex < 0 || siteIndex >= allClosureSites.length) {
       throw new TypeError(`WASM function closure site index out of range: ${siteIndex}`);
@@ -287,10 +279,7 @@ async function installExecutableTree({
       blockPrototypes[childPlan.semanticBlockId] = objectRef(child.block.imageId, child.block.id);
     }
 
-    const functions = moduleArtifact.metadata?.functions;
-    if (!Array.isArray(functions)) throw new TypeError('shared WASM module must describe exported functions');
-    const descriptor = functions.find((entry) => entry?.memberIndex === memberIndex.get(plan));
-    if (!descriptor) throw new TypeError(`shared WASM module has no entry for group member ${memberIndex.get(plan)}`);
+    const descriptor = moduleFunctionOf(readModuleDescriptor(moduleArtifact), {memberIndex: memberIndex.get(plan)});
 
     const {functionArtifact} = await assembleWasmV1FunctionArtifact({
       images,
@@ -356,7 +345,7 @@ async function installWasmV1BlockTree({
 
   const group = createCompilationGroup({
     policyId: WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1,
-    targetRepresentation: WASM_MODULE_V1,
+    targetRepresentation: WASM_MODULE_V2,
     members: groupPlans.map((plan) => plan.semanticRef),
     options: {physicalLayout: 'shared-module'},
   });

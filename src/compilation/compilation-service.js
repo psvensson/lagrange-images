@@ -1,4 +1,4 @@
-import {ensureCodeArtifact} from '../graph/ensure-records.js';
+import {ensureCodeArtifact, ensureCodeArtifacts} from '../graph/ensure-records.js';
 import {uuid as randomUUID} from '../support/default-crypto.js';
 import {normalizeArtifactDependencies} from '../execution/model.js';
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
@@ -22,16 +22,103 @@ function assertImages(images) {
   return images;
 }
 
+function requiredKey(value, label) {
+  if (typeof value !== 'string' || value.length === 0 || value.includes(':')) {
+    throw new TypeError(`${label} must be non-empty text without ':'`);
+  }
+  return value;
+}
+
+// A compiler result is either ONE artifact description {content, dependencies, metadata} — the
+// common case — or a RESULT GRAPH {primary, artifacts: [{key, representation, content,
+// dependencies, metadata}]} when a compilation's durable form is several records that must become
+// visible together (a compiled module = its raw bytes + its semantic descriptor + the edge between
+// them). A graph dependency's `artifact` may name a sibling by key; the service resolves it to that
+// sibling's ref at persistence time. This is the generic repair of the old one-result-one-artifact
+// assumption: no target-specific branch lives here, and the compiler never manufactures artifacts.
 function normalizeCompilerResult(result, fallbackLanguageId = null) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     throw new TypeError('compiler must return an artifact description object');
   }
-  return Object.freeze({
-    languageId: result.languageId === undefined ? fallbackLanguageId : result.languageId,
-    content: canonicalizeValue(result.content),
-    dependencies: normalizeArtifactDependencies(result.dependencies ?? []),
-    metadata: normalizeMetadata(result.metadata ?? {}, 'compiler result metadata'),
+  const languageId = result.languageId === undefined ? fallbackLanguageId : result.languageId;
+  if (result.artifacts === undefined) {
+    return Object.freeze({
+      languageId,
+      content: canonicalizeValue(result.content),
+      dependencies: normalizeArtifactDependencies(result.dependencies ?? []),
+      metadata: normalizeMetadata(result.metadata ?? {}, 'compiler result metadata'),
+    });
+  }
+  if (!Array.isArray(result.artifacts) || result.artifacts.length === 0) {
+    throw new TypeError('compiler result graph must list at least one artifact');
+  }
+  const keys = new Set();
+  const artifacts = result.artifacts.map((entry, index) => {
+    const label = `compiler result artifact ${index}`;
+    const key = requiredKey(entry?.key, `${label} key`);
+    if (keys.has(key)) throw new TypeError(`compiler result graph repeats key ${key}`);
+    keys.add(key);
+    return Object.freeze({
+      key,
+      representation: normalizeRepresentation(entry.representation, `${label} representation`),
+      content: canonicalizeValue(entry.content),
+      dependencies: Object.freeze((entry.dependencies ?? []).map((dependency) => Object.freeze({
+        role: dependency?.role,
+        artifact: typeof dependency?.artifact === 'string' ? dependency.artifact : canonicalizeValue(dependency?.artifact),
+      }))),
+      metadata: normalizeMetadata(entry.metadata ?? {}, `${label} metadata`),
+    });
   });
+  const primary = requiredKey(result.primary, 'compiler result primary key');
+  if (!keys.has(primary)) throw new TypeError(`compiler result primary ${primary} is not among its artifacts`);
+  for (const artifact of artifacts) {
+    for (const dependency of artifact.dependencies) {
+      if (typeof dependency.artifact === 'string' && !keys.has(dependency.artifact)) {
+        throw new TypeError(`compiler result artifact ${artifact.key} depends on unknown sibling ${dependency.artifact}`);
+      }
+    }
+  }
+  return Object.freeze({languageId, primary, artifacts: Object.freeze(artifacts)});
+}
+
+// Persist one normalized compiler result at `id` and return the artifact a caller compiles FOR
+// (the single artifact, or the graph's primary). Sibling ids derive from the primary id, so the
+// whole graph is ensure-exact-or-create at deterministic ids exactly like a single artifact; a
+// graph goes through ONE createRecords batch, so its descriptor can never be durably visible
+// without its implementation. Caller and cache metadata land on the primary only.
+async function persistCompilerResult(images, imageId, {id, target, result, derivedFrom, callerMetadata, cacheMetadata}) {
+  if (result.artifacts === undefined) {
+    return await ensureCodeArtifact(images, imageId, {
+      id,
+      languageId: result.languageId,
+      representation: target,
+      content: result.content,
+      dependencies: result.dependencies,
+      derivedFrom,
+      metadata: {...result.metadata, ...callerMetadata, ...cacheMetadata},
+    });
+  }
+  const idOf = (key) => (key === result.primary ? id : `${id}:${key}`);
+  const records = result.artifacts.map((artifact) => {
+    const isPrimary = artifact.key === result.primary;
+    if (isPrimary && artifact.representation !== target) {
+      throw new TypeError(`compiler result primary must be ${target}, got ${artifact.representation}`);
+    }
+    return {
+      id: idOf(artifact.key),
+      languageId: result.languageId,
+      representation: artifact.representation,
+      content: artifact.content,
+      dependencies: normalizeArtifactDependencies(artifact.dependencies.map(({role, artifact: target}) => ({
+        role,
+        artifact: typeof target === 'string' ? objectRef(imageId, idOf(target)) : target,
+      }))),
+      derivedFrom,
+      metadata: isPrimary ? {...artifact.metadata, ...callerMetadata, ...cacheMetadata} : artifact.metadata,
+    };
+  });
+  const stored = await ensureCodeArtifacts(images, imageId, records);
+  return stored[result.artifacts.findIndex((artifact) => artifact.key === result.primary)];
 }
 
 function commonLanguageId(artifacts) {
@@ -98,14 +185,9 @@ class CompilationService {
       ? {compilerIdentity: descriptor.compilerIdentity, derivationKey: descriptor.derivationKey}
       : {};
 
-    return await ensureCodeArtifact(this.images, ref.imageId, {
-      id,
-      languageId: result.languageId,
-      representation: target,
-      content: result.content,
-      dependencies: result.dependencies,
+    return await persistCompilerResult(this.images, ref.imageId, {
+      id, target, result, callerMetadata, cacheMetadata,
       derivedFrom: [objectRef(ref.imageId, ref.objectId)],
-      metadata: {...result.metadata, ...callerMetadata, ...cacheMetadata},
     });
   }
 
@@ -157,14 +239,9 @@ class CompilationService {
       ? {compilerIdentity: descriptor.compilerIdentity, derivationKey: descriptor.derivationKey}
       : {};
 
-    return await ensureCodeArtifact(this.images, imageId, {
-      id,
-      languageId: result.languageId,
-      representation: target,
-      content: result.content,
-      dependencies: result.dependencies,
+    return await persistCompilerResult(this.images, imageId, {
+      id, target, result, callerMetadata, cacheMetadata,
       derivedFrom: refs.map((ref) => objectRef(ref.imageId, ref.objectId)),
-      metadata: {...result.metadata, ...callerMetadata, ...cacheMetadata},
     });
   }
 }

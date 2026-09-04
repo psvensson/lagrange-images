@@ -2,6 +2,20 @@ import {VALUE_KIND, canonicalizeValue, isObjectRef} from '../value/index.js';
 
 const WASM_MODULE_V1 = 'wasm-module/v1';
 const WASM_FUNCTION_V1 = 'wasm-function/v1';
+// wasm-binary/v1 is the NEUTRAL raw-WASM byte owner: exact compiled bytes and nothing else (no
+// ABI, no call semantics). It is the implementation dependency of BOTH the foreign
+// wasm-callable-interface/v1 and the compiled wasm-module/v2, so its identity lives here, in the
+// language-neutral representation module, not in the foreign lane.
+const WASM_BINARY_V1 = 'wasm-binary/v1';
+const WASM_IMPLEMENTATION_DEPENDENCY_ROLE = 'implementation';
+
+function assertWasmBinaryArtifact(artifact) {
+  if (!artifact || artifact.kind !== 'code-artifact' || artifact.representation !== WASM_BINARY_V1) {
+    throw new TypeError(`artifact must be ${WASM_BINARY_V1}`);
+  }
+  if (artifact.content?.kind !== VALUE_KIND.BYTES) throw new TypeError('WASM binary content must be a bytes Value');
+  return artifact;
+}
 
 function assertWasmModuleArtifact(artifact) {
   if (!artifact || artifact.kind !== 'code-artifact' || artifact.representation !== WASM_MODULE_V1) {
@@ -45,8 +59,11 @@ function assertWasmFunctionArtifact(artifact) {
 }
 
 export {
+  WASM_BINARY_V1,
   WASM_FUNCTION_V1,
+  WASM_IMPLEMENTATION_DEPENDENCY_ROLE,
   WASM_MODULE_V1,
+  assertWasmBinaryArtifact,
   assertWasmFunctionArtifact,
   assertWasmModuleArtifact,
 };

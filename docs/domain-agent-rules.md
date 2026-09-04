@@ -148,8 +148,8 @@ pooled instance != activation state
 - The executed program is always an explicit `--entrypoint`. An image's declared `ENTRYPOINT` is undeclared build input; never let it decide, wrap or prefix what a build runs.
 - The Cargo/rustc boundary is proven by a real compiler, not only by an injected runner. Keep `test/cargo-rustc-oci-real.test.js` and its required CI lane green when changing provider materialization, argv or output extraction.
 - Temporary workspaces are build machinery and must be removed in a `finally` path.
-- Cargo-produced bytes are stored as `wasm-binary/v1`, not `wasm-module/v1`. The latter is reserved for the current Lagrange Value-handle/import/effect ABI.
-- Raw `wasm-binary/v1` may only enter ordinary activation through an explicit callable/component interface contract. Never relabel it as `wasm-module/v1` merely because the header validates.
+- Cargo-produced bytes are stored as `wasm-binary/v1`, never as a Lagrange module descriptor. `wasm-binary/v1` is the NEUTRAL raw-byte owner (ADR 0081): it holds exact bytes and nothing else, and is the implementation dependency of both `wasm-callable-interface/v1` and the compiled `wasm-module/v2`.
+- Raw `wasm-binary/v1` may only enter ordinary activation through an explicit callable/component interface contract or a `wasm-module/v2` descriptor. Never relabel it merely because the header validates.
 - Provider identity and output metadata must preserve the digest-pinned OCI toolchain identity.
 
 ### Foreign WASM callable interfaces
@@ -180,8 +180,11 @@ pooled instance != activation state
 
 ## WASM
 
-- WASM belongs in `wasm-module/v1` / `wasm-function/v1` CodeArtifacts, not in Block/image identity fields.
-- A shared `wasm-module/v1` may contain several exported entries, but each semantic member still gets its own `wasm-function/v1` and Block/prototype identity.
+- WASM belongs in `wasm-module/v2` (+ its `wasm-binary/v1` implementation) / `wasm-function/v1` CodeArtifacts, not in Block/image identity fields.
+- `wasm-module/v1` is FROZEN (ADR 0081): read it, never write it. The compiled module's executable contract `{abi, literals, functions[], sendSites, closureSites, effectSites}` is identity-bearing v2 CONTENT (canonical, key-order-independent JSON); the exact bytes are a separate `wasm-binary/v1` reached through exactly one `role: implementation` dependency, named nowhere else. Provenance metadata (`instanceReuse`, `continuations`, `semanticRepresentation`, group policy/layout) is never meaning-required; a contract field or a semantic mirror in v2 metadata is a defect, not a convenience.
+- Every reader of a module's contract or bytes goes through `src/wasm/module-contract.js` (`readModuleContract`, `readModuleDescriptor`, `moduleFunctionOf`, `soleModuleEntry`). Executors, caches, pools, installers and builders never decode the representation themselves. Outside that module's frozen v1 decoder there are zero consumers recovering module semantics from metadata; keep it that way.
+- Compilers return compilation FACTS `{languageId, bytes, contract, metadata}`. The module-contract owner describes the durable v2 graph once; the `CompilationService` result-graph path persists binary + descriptor + edge in ONE `createRecords` batch. Do not teach a compiler, installer or executor how to manufacture the pair, and do not add a WASM branch to the service.
+- A shared `wasm-module/v2` may contain several exported entries, but each semantic member still gets its own `wasm-function/v1` and Block/prototype identity.
 - Module function descriptors may refer to semantic members by `derivedFrom` index only; do not hide graph refs in module metadata.
 - A shared module's global import table does not grant ambient use of every host-effect site. The executor must select one entry descriptor and enable only that function's declared send/closure sites.
 - Cache compiled host `WebAssembly.Module` objects only as runtime-local execution state keyed by immutable module-artifact identity. Never persist them or treat them as image/code identity.

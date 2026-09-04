@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LAGRANGE_CODE_V0,
   compileWasmFunctionArtifact,
   createRuntime,
   installSymmetricSmalltalkBlock,
   integerValue,
+  LAGRANGE_CODE_V0,
   objectRef,
+  readModuleDescriptor,
   textValue,
 } from '../src/runtime.js';
 
@@ -158,7 +159,7 @@ test('WASM function artifacts keep closure prototype graph edges in derivedFrom 
     blockPrototypes: {[blockId]: prototypeRef},
   });
 
-  assert.equal(moduleArtifact.metadata.closureSites[0].blockId, blockId);
+  assert.equal(readModuleDescriptor(moduleArtifact).closureSites[0].blockId, blockId);
   assert.equal(functionArtifact.metadata.closurePrototypes[0].blockId, blockId);
   assert.equal(functionArtifact.metadata.closurePrototypes[0].derivedFromIndex, 2);
   assert.deepEqual(functionArtifact.derivedFrom[2], prototypeRef);

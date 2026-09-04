@@ -1,11 +1,11 @@
 import {
   assertWasmFunctionArtifact,
-  assertWasmModuleArtifact,
 } from '../code/wasm-artifacts.js';
 import {canonicalizeValue, isObjectRef, isReference} from '../value/index.js';
 import {ValueHandleArena, WASM_IMPORT_MODULE, WASM_VALUE_HANDLE_ABI_V1} from './abi.js';
 import {readCellThrough, writeCellThrough} from './cell-access.js';
 import {WasmModuleCache} from './module-cache.js';
+import {readModuleDescriptor, readModuleImplementationBytes} from './module-contract.js';
 import {WASM_INSTANCE_REUSE_STATELESS_V0, WasmInstancePool} from './instance-pool.js';
 
 // The lagrange-value-handle/v1 executor. Separate from the v0 one on purpose: every metadata
@@ -32,7 +32,7 @@ function exactKeys(value, expected, label) {
 }
 
 function normalizeLiterals(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.literals must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract literals must be an array');
   return Object.freeze(value.map((literal) => canonicalizeValue(literal)));
 }
 
@@ -56,7 +56,7 @@ function assertNonReferenceMessage(message, index) {
 }
 
 function normalizeSendSites(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.sendSites must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract sendSites must be an array');
   return Object.freeze(value.map((site, index) => {
     exactKeys(site, ['languageId', 'message', 'arity'], `WASM send site ${index}`);
     return Object.freeze({
@@ -70,7 +70,7 @@ function normalizeSendSites(value) {
 // v1 closure sites carry a per-capture mode. This normalizer requires it: a v0-shaped site reaching
 // a v1 module is a mismatch, not something to interpret generously.
 function normalizeClosureSites(value) {
-  if (!Array.isArray(value)) throw new TypeError('WASM module metadata.closureSites must be an array');
+  if (!Array.isArray(value)) throw new TypeError('WASM module contract closureSites must be an array');
   return Object.freeze(value.map((site, siteIndex) => {
     exactKeys(site, ['blockId', 'captures'], `WASM closure site ${siteIndex}`);
     requiredText(site.blockId, `WASM closure site ${siteIndex} blockId`);
@@ -126,7 +126,7 @@ function sameCellBindings(left, right) {
 function normalizeModuleFunctions(value, sendSites, closureSites) {
   if (value === undefined) return null;
   if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError('WASM module metadata.functions must be a non-empty array');
+    throw new TypeError('WASM module contract functions must be a non-empty array');
   }
   const entries = new Set();
   const memberIndices = new Set();
@@ -154,8 +154,8 @@ function normalizeModuleFunctions(value, sendSites, closureSites) {
   }));
 }
 
-function activeFunctionDescriptor(code, moduleArtifact, sendSites, closureSites) {
-  const functions = normalizeModuleFunctions(moduleArtifact.metadata?.functions, sendSites, closureSites);
+function activeFunctionDescriptor(code, moduleFunctions, sendSites, closureSites) {
+  const functions = normalizeModuleFunctions(moduleFunctions, sendSites, closureSites);
   if (functions) {
     const descriptor = functions.find(({entry}) => entry === code.metadata.entry);
     if (!descriptor) throw new TypeError(`WASM function entry not described by module: ${code.metadata.entry}`);
@@ -401,16 +401,17 @@ function createWasmFunctionV1CellExecutor({
 
       const moduleRef = canonicalizeValue(code.content);
       const moduleArtifact = await context.images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
-      assertWasmModuleArtifact(moduleArtifact);
-      if (moduleArtifact.metadata?.abi !== WASM_VALUE_HANDLE_ABI_V1) {
+      const contract = readModuleDescriptor(moduleArtifact);
+      const resolveImplementation = (ref) => context.images.getCodeArtifact(ref.imageId, ref.objectId);
+      if (contract.abi !== WASM_VALUE_HANDLE_ABI_V1) {
         throw new TypeError(`WASM module ABI does not match ${WASM_VALUE_HANDLE_ABI_V1}`);
       }
-      const literals = normalizeLiterals(moduleArtifact.metadata?.literals ?? []);
-      const sendSites = normalizeSendSites(moduleArtifact.metadata?.sendSites ?? []);
-      const closureSites = normalizeClosureSites(moduleArtifact.metadata?.closureSites ?? []);
-      const descriptor = activeFunctionDescriptor(code, moduleArtifact, sendSites, closureSites);
+      const literals = normalizeLiterals(contract.literals);
+      const sendSites = normalizeSendSites(contract.sendSites);
+      const closureSites = normalizeClosureSites(contract.closureSites);
+      const descriptor = activeFunctionDescriptor(code, contract.functions, sendSites, closureSites);
       const closurePrototypes = normalizeClosurePrototypes(code, descriptor, closureSites);
-      const compiledModule = await moduleCache.get(moduleArtifact);
+      const compiledModule = await moduleCache.get(moduleArtifact, () => readModuleImplementationBytes(moduleArtifact, {resolveImplementation}));
 
       // Only temporaries: this activation declares the cells it owns. A cell capture already
       // exists in the frame that declared it, and declaring one here would shadow it with a fresh

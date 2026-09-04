@@ -1,5 +1,5 @@
 import {LAGRANGE_CODE_V1, parseLagrangeCodeV1Program} from '../code/lagrange-code-v1.js';
-import {bytesValue, canonicalizeValue, isReference} from '../value/index.js';
+import {canonicalizeValue, isReference} from '../value/index.js';
 import {WASM_ENTRY_V0, WASM_IMPORT_MODULE, WASM_VALUE_HANDLE_ABI_V1} from './abi.js';
 import {
   I32,
@@ -413,17 +413,16 @@ const lagrangeCodeV1ToWasmModuleCompiler = Object.freeze({
     const compiled = compileWasmV1Module(parseLagrangeCodeV1Program(source));
     return Object.freeze({
       languageId: source.languageId,
-      content: bytesValue(compiled.bytes),
-      metadata: {
+      bytes: compiled.bytes,
+      contract: {
         abi: WASM_VALUE_HANDLE_ABI_V1,
-        entry: WASM_ENTRY_V0,
-        parameters: compiled.parameterCount,
-        captures: compiled.captureIds,
-        cellBindings: compiled.cellBindings,
         literals: compiled.literals,
+        functions: compiled.functions,
         sendSites: compiled.sendSites,
         closureSites: compiled.closureSites,
-        functions: compiled.functions,
+        effectSites: [],
+      },
+      metadata: {
         semanticRepresentation: LAGRANGE_CODE_V1,
       },
     });
@@ -450,13 +449,16 @@ const lagrangeCodeV1GroupToWasmModuleCompiler = Object.freeze({
     });
     const compiled = compileWasmV1ModuleEntries(entries);
     return Object.freeze({
-      content: bytesValue(compiled.bytes),
-      metadata: {
+      bytes: compiled.bytes,
+      contract: {
         abi: WASM_VALUE_HANDLE_ABI_V1,
         literals: compiled.literals,
+        functions: compiled.functions,
         sendSites: compiled.sendSites,
         closureSites: compiled.closureSites,
-        functions: compiled.functions,
+        effectSites: [],
+      },
+      metadata: {
         semanticRepresentation: LAGRANGE_CODE_V1,
         groupPolicyId: group.policyId,
         physicalLayout: 'shared-module',
