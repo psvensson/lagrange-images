@@ -26,6 +26,7 @@ import {
   ensureCodeArtifact as ensureCodeArtifactRecord,
   ensureLexicalEnvironment as ensureLexicalEnvironmentRecord,
   ensureShape as ensureRecordShape,
+  lexicalEnvironmentProjection,
 } from '../graph/ensure-records.js';
 import {TupleSet} from '../support/tuple-map.js';
 import {sameRef} from './smalltalk-lookup.js';
@@ -213,13 +214,6 @@ function describeMethodEnvironment({methodObjectId, selector, captures}) {
 // a durable field of the record, so an environment differing only there is a different environment.
 // Comparing bindings alone would let a squatter with the right bindings and foreign metadata pass as
 // identical, which is precisely the blind spot the ensure-exact-or-create rule exists to remove.
-function lexicalEnvironmentProjection(record) {
-  return canonicalJson({
-    parent: record.parent ?? null,
-    bindings: record.bindings ?? {},
-    metadata: record.metadata ?? {},
-  });
-}
 
 function sameOptionalRef(left, right) {
   const from = left ?? null;

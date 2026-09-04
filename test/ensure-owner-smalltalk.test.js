@@ -19,8 +19,9 @@ import {
   integerValue,
   objectRef,
   SHAPE_INDEXED,
+  textValue,
 } from '../src/runtime.js';
-import {RecordConflictError, ensureLexicalEnvironment, ensureObject, ensureShape} from '../src/graph/ensure-records.js';
+import {RecordConflictError, ensureCodeArtifacts, ensureLexicalEnvironment, ensureObject, ensureShape} from '../src/graph/ensure-records.js';
 
 const PLUS = {
   selector: '+',
@@ -130,7 +131,8 @@ test('CLASS BUILDER: concurrent definitions of the same method never overwrite a
     // MUTATION of the method dictionary, the class builder's concern — bead discovered from ehz),
     // never at admission: the failure names the dictionary, not an environment, Block or artifact.
     for (const r of results.filter((x) => x.status === 'rejected')) {
-      assert.match(String(r.reason?.message), /\/methods/, `lost at the dictionary swap, not at admission: ${r.reason?.message}`);
+      assert.equal(r.reason?.name, 'VersionConflictError', 'the known dictionary-swap leak (bead fb1), nothing else');
+      assert.ok(String(r.reason?.key).endsWith('/methods'), `lost at the dictionary swap, not at admission: ${r.reason?.key}`);
     }
     const installed = await installSymmetricSmalltalkBlock({images: runtime.images, imageId: 'boot', id: 'probe', source: '[ 40 + 2 ]'});
     const activation = await runtime.invocations.invokeBlock(objectRef('boot', installed.block.id), []);
@@ -172,20 +174,44 @@ test('OWNER seed mode: a present or concurrently created MUTABLE record is adopt
   });
 });
 
-test('STRUCTURAL: the Smalltalk layer contains no second implementation of the generic admission rule', async () => {
+test('OWNER: a code-artifact graph ensure that loses the batch insert to an identical concurrent creator converges; a divergent one conflicts', async () => {
+  await withRuntime(async (runtime) => {
+    const pair = [
+      {id: 'g', representation: 'x/v1', content: textValue('main'), dependencies: [{role: 'aux', artifact: objectRef('boot', 'g:aux')}]},
+      {id: 'g:aux', representation: 'x/v1', content: textValue('aux')},
+    ];
+    const [a, b] = await Promise.all([ensureCodeArtifacts(runtime.images, 'boot', pair), ensureCodeArtifacts(runtime.images, 'boot', pair)]);
+    assert.deepEqual(a.map((r) => [r.id, r._version]), b.map((r) => [r.id, r._version]));
+    assert.ok(a.every((r) => r._version === 1));
+    const divergent = [pair[0], {...pair[1], content: textValue('other')}];
+    await assert.rejects(ensureCodeArtifacts(runtime.images, 'boot', divergent), RecordConflictError);
+    assert.equal((await runtime.images.getCodeArtifact('boot', 'g:aux')).content.value, 'aux', 'never overwritten');
+  });
+});
+
+test('STRUCTURAL: the Smalltalk layer contains no admission implementation of its own', async () => {
   const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'language');
   const offenders = [];
   for (const file of await readdir(dir)) {
     if (!file.endsWith('.js')) continue;
     const source = await readFile(join(dir, file), 'utf8');
-    // The rule's signature: a local function that reads a record by id and then writes it with
-    // an existence-dependent put. Delegating wrappers that call ensure-records.js are allowed.
+    // (1) No ensure-style function that reads a record by id and then writes it itself.
     const bodies = source.match(/async function ensure[A-Za-z]*\([^)]*\) \{[\s\S]*?\n\}/g) ?? [];
     for (const body of bodies) {
       const readsThenPuts = /\.get(Object|Shape|Block|LexicalEnvironment|CodeArtifact|Record)\(/.test(body)
         && /\.put(Object|Shape|Block|LexicalEnvironment|CodeArtifact)\(/.test(body);
       if (readsThenPuts) offenders.push(`${file}: ${body.split('\n')[0]}`);
     }
+    // (2) Every insert-only write (expectedVersion: 0) outside the ensure owner is an ALLOCATION at
+    //     a freshly minted id inside ADR 0046's identity-retry loop — never admission at a derived
+    //     id. Admission at a derived id must be an ensure-owner call.
+    let match;
+    const insertOnly = /expectedVersion: 0\}/g;
+    while ((match = insertOnly.exec(source)) !== null) {
+      const before = source.slice(Math.max(0, match.index - 900), match.index);
+      const allocation = /for \(let attempt = 0; attempt < maxIdentityAttempts/.test(before) && /newObjectId\(\)/.test(before);
+      if (!allocation) offenders.push(`${file}: insert-only write outside an identity-retry allocation at offset ${match.index}`);
+    }
   }
-  assert.deepEqual(offenders, [], 'read-then-put ensure implementations outside graph/ensure-records.js');
+  assert.deepEqual(offenders, [], 'admission implementations outside graph/ensure-records.js');
 });

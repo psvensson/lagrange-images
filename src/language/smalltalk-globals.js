@@ -145,21 +145,18 @@ async function installSmalltalkGlobalNamespace({images, compilation, imageId, la
   // once anything is published, exactly as a binding's value does. Ensuring exactness here would
   // make re-running the installer conflict with every global published since — the same mistake as
   // resetting a rebound value on republication.
-  const existingNamespace = await images.getObject(imageId, NAMESPACE_OBJECT_ID);
-  if (!existingNamespace) {
-    await images.putObject(imageId, {
-      id: NAMESPACE_OBJECT_ID,
-      shape: objectRef(imageId, namespaceShape.id),
-      behavior: null,
-      slots: {[NAMESPACE_PARENT_SLOT]: kernel.nil},
-      indexed: [],
-      metadata: {protocol: SMALLTALK_GLOBAL_NAMESPACE_V1},
-    }, {expectedVersion: 0});
-  } else {
-    // Present already: it must still be a real namespace, so a squatter is refused rather than
-    // adopted.
-    await findSmalltalkGlobalNamespace({images, imageId});
-  }
+  // Admission is the ensure owner's, in SEED mode (the empty mapping is only the initial value);
+  // the domain check — whatever came back must be a real namespace, so a squatter is refused
+  // rather than adopted — is ours and runs on created and adopted records alike.
+  await ensureObject(images, imageId, {
+    id: NAMESPACE_OBJECT_ID,
+    shape: objectRef(imageId, namespaceShape.id),
+    behavior: null,
+    slots: {[NAMESPACE_PARENT_SLOT]: kernel.nil},
+    indexed: [],
+    metadata: {protocol: SMALLTALK_GLOBAL_NAMESPACE_V1},
+  }, {seed: true});
+  await findSmalltalkGlobalNamespace({images, imageId});
 
   // The kernel classes are published here because they already exist and this installer is the
   // first thing that can name anything. Everything else is published deliberately by whoever
@@ -305,19 +302,17 @@ async function publishGlobal({images, imageId, name, bindingId, value, namespace
     return objectRef(imageId, bindingId);
   }
 
-  const existingBinding = await images.getObject(imageId, bindingId);
-  if (!existingBinding) {
-    await images.putObject(imageId, {
-      id: bindingId,
-      shape: objectRef(imageId, GLOBAL_BINDING_SHAPE_ID),
-      behavior: objectRef(imageId, GLOBAL_BINDING_CLASS_ID),
-      slots: {[GLOBAL_BINDING_VALUE_SLOT]: value},
-      metadata: {},
-    }, {expectedVersion: 0});
-  } else {
-    // Already there — keep the value it has. Re-running an installer must not undo a rebind.
-    await assertIsBinding({images, imageId, name, binding: objectRef(imageId, bindingId)});
-  }
+  // SEED mode: the initial value is only a seed — a binding already there keeps the value it has
+  // (re-running an installer must not undo a rebind) and a concurrent creator never overwrites.
+  // The domain check that it IS a binding runs on created and adopted records alike.
+  await ensureObject(images, imageId, {
+    id: bindingId,
+    shape: objectRef(imageId, GLOBAL_BINDING_SHAPE_ID),
+    behavior: objectRef(imageId, GLOBAL_BINDING_CLASS_ID),
+    slots: {[GLOBAL_BINDING_VALUE_SLOT]: value},
+    metadata: {},
+  }, {seed: true});
+  await assertIsBinding({images, imageId, name, binding: objectRef(imageId, bindingId)});
 
   const entries = new Map(namespace.entries);
   entries.set(name, objectRef(imageId, bindingId));
@@ -416,29 +411,27 @@ async function createNamespace({images, imageId, namespaceId, parent = NAMESPACE
   }
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
-  const existing = await images.getObject(imageId, namespaceId);
-  if (existing) {
-    // Converge on a retry: it must be the same namespace with the same parent.
-    const found = await findNamespace({images, imageId, namespaceId});
-    const foundParent = found.parent?.objectId ?? null;
-    if (foundParent !== parent) {
-      throw new SmalltalkGlobalConflictError(
-        namespaceId,
-        `already exists with parent ${foundParent ?? 'none'}, not ${parent}`,
-      );
-    }
-    return objectRef(imageId, namespaceId);
-  }
   // The parent must be a real namespace; this also validates the root exists for a default parent.
   await requireNamespace({images, imageId, namespaceId: parent});
-  await images.putObject(imageId, {
+  // SEED mode: the empty mapping is only the initial value (the namespace fills afterwards under
+  // its own CAS), so a present or concurrently created namespace is adopted; the domain check —
+  // same namespace, same parent — runs on whatever came back, created, present or won by a race.
+  await ensureObject(images, imageId, {
     id: namespaceId,
     shape: objectRef(imageId, NAMESPACE_SHAPE_ID),
     behavior: null,
     slots: {[NAMESPACE_PARENT_SLOT]: objectRef(imageId, parent)},
     indexed: [],
     metadata: {protocol: SMALLTALK_GLOBAL_NAMESPACE_V1},
-  }, {expectedVersion: 0});
+  }, {seed: true});
+  const found = await findNamespace({images, imageId, namespaceId});
+  const foundParent = found.parent?.objectId ?? null;
+  if (foundParent !== parent) {
+    throw new SmalltalkGlobalConflictError(
+      namespaceId,
+      `already exists with parent ${foundParent ?? 'none'}, not ${parent}`,
+    );
+  }
   return objectRef(imageId, namespaceId);
 }
 

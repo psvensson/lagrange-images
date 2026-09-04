@@ -117,8 +117,9 @@ async function ensureShape(service, imageId, desired) {
 // Object admission is owned by graph/ensure-records.js (insert-only; convergent on an identical
 // concurrent winner; conflict on a divergent one; identity = shape/behavior/slots/indexed-when-
 // present/metadata, ADR 0060). The kernel only requests the object and names its conflict class.
-async function ensureObject(service, imageId, desired) {
+async function ensureObject(service, imageId, desired, {seed = false} = {}) {
   return await ensureRecordObject(service, imageId, desired, {
+    seed,
     conflict: (kind, image, id) => new SmalltalkKernelConflictError(kind, image, id),
   });
 }

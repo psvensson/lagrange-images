@@ -154,18 +154,30 @@ async function ensureCodeArtifact(images, imageId, desired, {conflict = defaultC
 // ImageService.createRecords' — this owner adds only the convergence rule.
 async function ensureCodeArtifacts(images, imageId, desiredList, {conflict = defaultConflict} = {}) {
   if (!Array.isArray(desiredList) || desiredList.length === 0) throw new TypeError('ensureCodeArtifacts requires a non-empty list');
-  const existing = [];
-  for (const desired of desiredList) existing.push(await images.getCodeArtifact(imageId, desired.id));
-  if (existing.every((record) => !record)) {
-    if (typeof images.createRecords !== 'function') throw new TypeError('ensureCodeArtifacts requires images.createRecords');
-    return await images.createRecords(imageId, desiredList.map((desired) => ({kind: 'code-artifact', ...desired})));
-  }
-  for (const [index, desired] of desiredList.entries()) {
-    if (!existing[index] || codeArtifactProjection(desired) !== codeArtifactProjection(existing[index])) {
-      throw conflict('code artifact', imageId, desired.id);
+  const readAll = async () => {
+    const records = [];
+    for (const desired of desiredList) records.push(await images.getCodeArtifact(imageId, desired.id));
+    return records;
+  };
+  const adoptAll = (records) => {
+    for (const [index, desired] of desiredList.entries()) {
+      if (!records[index] || codeArtifactProjection(desired) !== codeArtifactProjection(records[index])) {
+        throw conflict('code artifact', imageId, desired.id);
+      }
     }
+    return records;
+  };
+  const existing = await readAll();
+  if (!existing.every((record) => !record)) return adoptAll(existing);
+  if (typeof images.createRecords !== 'function') throw new TypeError('ensureCodeArtifacts requires images.createRecords');
+  try {
+    return await images.createRecords(imageId, desiredList.map((desired) => ({kind: 'code-artifact', ...desired})));
+  } catch (error) {
+    if (error?.name !== 'VersionConflictError') throw error;
+    // The whole batch lost to a concurrent creator (all-or-none): the winner's graph is the
+    // authority — identical converges, anything else conflicts. Same rule as ensureRecord.
+    return adoptAll(await readAll());
   }
-  return existing;
 }
 
 async function ensureBlock(images, imageId, desired, {conflict = defaultConflict} = {}) {
