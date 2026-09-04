@@ -189,11 +189,14 @@ ordinary image object with this image's Array instance Shape (zero named slots, 
 no behavior (kernel representation, like a hashed MethodDictionary), holding direct-subclass refs
 in its indexed part. Defining `C` under superclass `S` appends `C` to `S`'s registry idempotently
 (CAS on the registry version) and ensures `C`'s own empty registry; only the class object's
-superclass edge is registered, never a metaclass edge. The maintenance is lazy and tolerant — a
-missing registry Shape (pre-indexed-protocol image) or a squatter on the id skips the link rather
-than failing bootstrap — and a missing registry reads as empty, which is also how kernel classes
-read: `installSmalltalkKernel` writes its class graph directly and maintains no registries, so
-`Integer subclasses` answers empty. `subclassesOf` reads the registry and answers an image Array
+superclass edge is registered, never a metaclass edge. The subclass-registry owner validates the
+immutable record fields and unique local-ref membership after seed admission. A malformed occupant
+is a `SmalltalkSubclassRegistryConflictError`, never normalized. If an append CAS loses, the owner
+rereads once: an already-present requested membership converges, while a different winner is the
+same domain conflict; there is no overwrite, raw backend conflict, or retry loop. A missing registry
+reads as empty, which is also how kernel classes read: `installSmalltalkKernel` writes its class graph
+directly and maintains no registries, so `Integer subclasses` answers empty. `subclassesOf` reads the
+registry and answers an image Array
 (arena-minted inside an execution, durable create-once outside one); `Class >> subclasses` wraps
 it in an OrderedCollection and `Class >> allSubclasses` takes the transitive closure, both
 ordinary Smalltalk installed after the library.

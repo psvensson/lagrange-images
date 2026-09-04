@@ -1,7 +1,7 @@
 # ADR 0046: Allocation, initialization and class introspection
 
 Status: implemented — `basicNew`, `new` and `class` stay ordinary Smalltalk messages; allocation and class lookup use language-owned primitive Blocks registered at the composition root and image-local by one rule, instance shape is explicit durable class data, and image-native allocation is not an ADR 0037 capability check.
-Proven by: test/smalltalk-allocation.test.js, test/steering-docs.test.js
+Proven by: test/smalltalk-allocation.test.js, test/smalltalk-subclass-concurrency.test.js, test/steering-docs.test.js
 
 ## Problem
 
@@ -523,6 +523,13 @@ creation.
 
 A later source-level class-definition syntax may construct those Shapes for the programmer, but that
 surface syntax is not required to settle allocation semantics.
+
+Subclass introspection was subsequently added as an append-only durable registry maintained by
+`defineClass()`. That mutable registry owns the semantic interpretation of its append CAS. On one
+lost CAS it rereads once: a valid winner already containing the requested class ref completes the
+same set insertion and is adopted; a valid different winner or malformed registry raises
+`SmalltalkSubclassRegistryConflictError`. It never retries a write, overwrites the winner, exposes a
+backend `VersionConflictError`, or normalizes malformed membership.
 
 ## Proof required for implementation
 
