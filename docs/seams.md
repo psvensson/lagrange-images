@@ -147,6 +147,7 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | Installer | Installs |
 | --- | --- |
 | `defineClass()` | a class and its metaclass, wired by the ADR 0044 chain rule |
+| `ensureClassFromDeclaration()` | an instantiable class from locally declared instance-variable names; the native class owner assigns initial stable slot ids and composes the complete inherited Shape |
 | `defineMethods()` | methods from semantic `lagrange-code/v0` programs, optionally with captures |
 | `installSmalltalkControlFlow()` | `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:` on True and False (ADR 0045) |
 | `installSmalltalkAllocationProtocol()` | the `class-of`/`basic-new` primitive Blocks, plus `Object >> class`, `Object >> initialize`, `Class >> basicNew` and `Class >> new` (ADR 0046) |
@@ -182,6 +183,13 @@ Value still takes its class from its kind.
 A class is instantiable when its `instanceShape` is a Shape ref; `nil` there means not instantiable,
 and an empty Shape is a valid zero-slot layout. `defineClass()` still stores `nil` when no
 `instanceShapeRef` is supplied, so no class written before ADR 0046 changes meaning.
+
+`ensureClassFromDeclaration()` is the native declaration boundary added under ADR 0085 M1. Its
+caller supplies ordered, locally declared instance-variable names, never Shape or slot ids. The
+class builder derives each initial slot id from the defining native Class identity plus the declared
+name, preserves the nearest complete inherited layout, and routes the completed immutable Shape and
+Class/Metaclass through the existing admission owners. A later rename must preserve an existing slot
+id through an explicit migration; changing a declaration name is not inferred to be a rename.
 
 Class-hierarchy introspection keeps its state out of the fixed Behavior record. `defineClass()`
 maintains a per-class durable subclass registry at `smalltalk/subclasses/<ClassName>` — an
