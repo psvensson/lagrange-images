@@ -518,3 +518,308 @@ test('the adapter translates headers and preserves Cuis implicit-self method ret
     assert.deepEqual(await run('explicit-return-unit', '[ :object | object explicit ]', [instance]), integerValue(7));
   });
 });
+
+// M3 import scope (bead lagrange-images-nv1.2). A real package is imported progressively, so the
+// caller declares which canonical declarations one import covers. The manifest is never edited.
+test('a scoped import covers exactly the named declarations and replays write-free', async () => {
+  await withKernel(async (runtime) => {
+    const scope = {classes: ['cuis-class/Fixture/ZuluBase'], methods: []};
+    const imported = await importCuisNativePackage({
+      images: runtime.images, imageId: 'app', manifest: manifest(), scope,
+    });
+
+    assert.deepEqual(imported.classes.map(({identity}) => identity), ['cuis-class/Fixture/ZuluBase']);
+    assert.ok(await runtime.images.getObject('app', 'smalltalk/class/ZuluBase'));
+    assert.equal(
+      await runtime.images.getObject('app', 'smalltalk/class/AChild'),
+      null,
+      'a declaration the scope omits is not constructed',
+    );
+    assert.deepEqual((await shapeOf(runtime, imported.classes[0].classRef)).slots.map(({name}) => name), ['base']);
+
+    const frontierBeforeReplay = await runtime.images.frontier('app');
+    const replayed = await importCuisNativePackage({
+      images: runtime.images, imageId: 'app', manifest: manifest(), scope,
+    });
+    assert.deepEqual(replayed, imported);
+    assert.equal(
+      await runtime.images.frontier('app'),
+      frontierBeforeReplay,
+      'exact replay of a scoped import is write-free at the native owners',
+    );
+  });
+});
+
+test('a scope omitting a required superclass is refused rather than widened', async () => {
+  await withKernel(async (runtime) => {
+    const frontierBefore = await runtime.images.frontier('app');
+    await assert.rejects(
+      importCuisNativePackage({
+        images: runtime.images,
+        imageId: 'app',
+        manifest: manifest(),
+        scope: {classes: ['cuis-class/Fixture/AChild'], methods: []},
+      }),
+      (error) => error instanceof CuisNativeImportError
+        && /requires superclass cuis-class\/Fixture\/ZuluBase, which the requested import scope omits/.test(error.message)
+        && error.semanticIdentity === 'cuis-class/Fixture/AChild',
+    );
+    assert.equal(await runtime.images.frontier('app'), frontierBefore, 'preflight failure publishes nothing');
+  });
+});
+
+// The reason scope exists: a real package's manifest reaches semantics this image does not support,
+// and an import that does not cover them must not be blocked by them. The falsifier is the pair —
+// the same manifest still refuses when nothing is scoped out.
+test('an unsupported declaration outside the scope does not block the import, and inside it still refuses', async () => {
+  const withForeignExtension = manifest({methods: [{
+    identity: 'cuis-method/Fixture/Foreign/instance/value',
+    package: 'Fixture', class: 'cuis-class/Cuis-Base/Foreign', side: 'instance',
+    selector: 'value', source: 'value\n\t^ 1',
+  }]});
+
+  await withKernel(async (runtime) => {
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      imageId: 'app',
+      manifest: withForeignExtension,
+      scope: {classes: ['cuis-class/Fixture/ZuluBase'], methods: []},
+    });
+    assert.deepEqual(imported.classes.map(({identity}) => identity), ['cuis-class/Fixture/ZuluBase']);
+  });
+
+  await withKernel(async (runtime) => {
+    await assert.rejects(
+      importCuisNativePackage({images: runtime.images, imageId: 'app', manifest: withForeignExtension}),
+      (error) => error instanceof CuisNativeImportError
+        && /method target cuis-class\/Cuis-Base\/Foreign is outside the imported native class graph/.test(error.message),
+      'the same manifest still refuses when the import covers the whole thing',
+    );
+  });
+
+  await withKernel(async (runtime) => {
+    await assert.rejects(
+      importCuisNativePackage({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'app',
+        manifest: withForeignExtension,
+        scope: {
+          classes: ['cuis-class/Fixture/ZuluBase'],
+          methods: ['cuis-method/Fixture/Foreign/instance/value'],
+        },
+      }),
+      (error) => error instanceof CuisNativeImportError
+        && /method target cuis-class\/Cuis-Base\/Foreign is outside the imported native class graph/.test(error.message),
+      'an unsupported semantic the scope DOES cover is still an explicit refusal',
+    );
+  });
+});
+
+test('the adapter refuses a malformed or unsatisfiable import scope before any native publication', async () => {
+  const cases = [
+    {
+      label: 'unknown class',
+      scope: {classes: ['cuis-class/Fixture/Missing'], methods: []},
+      message: /import scope names class cuis-class\/Fixture\/Missing, which this manifest does not declare/,
+    },
+    {
+      label: 'unknown method',
+      scope: {classes: ['cuis-class/Fixture/ZuluBase'], methods: ['cuis-method/Fixture/ZuluBase/instance/missing']},
+      message: /import scope names method cuis-method\/Fixture\/ZuluBase\/instance\/missing, which this manifest does not declare/,
+    },
+    {
+      label: 'no class',
+      scope: {classes: [], methods: []},
+      message: /import scope must name at least one class/,
+    },
+    {
+      label: 'duplicate entry',
+      scope: {classes: ['cuis-class/Fixture/ZuluBase', 'cuis-class/Fixture/ZuluBase'], methods: []},
+      message: /import scope classes must not contain duplicates/,
+    },
+    {
+      label: 'unknown field',
+      scope: {classes: ['cuis-class/Fixture/ZuluBase'], methods: [], packages: []},
+      message: /import scope must have exactly fields classes, methods/,
+    },
+  ];
+
+  for (const {label, scope, message} of cases) {
+    await withKernel(async (runtime) => {
+      const frontierBefore = await runtime.images.frontier('app');
+      await assert.rejects(
+        importCuisNativePackage({images: runtime.images, imageId: 'app', manifest: manifest(), scope}),
+        (error) => error instanceof CuisNativeImportError && message.test(error.message),
+        label,
+      );
+      assert.equal(await runtime.images.frontier('app'), frontierBefore, `${label} publishes nothing`);
+    });
+  }
+});
+
+test('a covered method whose target class the scope omits is refused', async () => {
+  await withKernel(async (runtime) => {
+    const input = manifest({methods: [{
+      identity: 'cuis-method/Fixture/AChild/instance/value',
+      package: 'Fixture', class: 'cuis-class/Fixture/AChild', side: 'instance',
+      selector: 'value', source: 'value\n\t^ 1',
+    }]});
+    const frontierBefore = await runtime.images.frontier('app');
+    await assert.rejects(
+      importCuisNativePackage({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'app',
+        manifest: input,
+        scope: {
+          classes: ['cuis-class/Fixture/ZuluBase'],
+          methods: ['cuis-method/Fixture/AChild/instance/value'],
+        },
+      }),
+      (error) => error instanceof CuisNativeImportError
+        && /method target cuis-class\/Fixture\/AChild is outside the requested import scope/.test(error.message),
+    );
+    assert.equal(await runtime.images.frontier('app'), frontierBefore);
+  });
+});
+
+// Manifest well-formedness is never scoped away. The canonical export is one artifact: if any of
+// its declarations is malformed or duplicated, the input is untrustworthy whether or not this
+// invocation asks for that declaration. Scope answers "what does this invocation ask to make
+// native", not "which declarations must be valid".
+test('a declaration outside the scope cannot smuggle a malformed or duplicated canonical identity', async () => {
+  const scope = {classes: ['cuis-class/Fixture/ZuluBase'], methods: []};
+  const cases = [
+    {
+      label: 'non-canonical class identity outside scope',
+      input: manifest({classes: [
+        {
+          identity: 'cuis-class/Fixture/ZuluBase', package: 'Fixture', name: 'ZuluBase',
+          superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: ['base'],
+        },
+        {
+          identity: 'cuis-class/Fixture/Mislabelled', package: 'Fixture', name: 'Other',
+          superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+        },
+      ]}),
+      message: /class semantic identity cuis-class\/Fixture\/Mislabelled does not match its canonical package\/name/,
+    },
+    {
+      label: 'incomplete class declaration outside scope',
+      input: manifest({classes: [
+        {
+          identity: 'cuis-class/Fixture/ZuluBase', package: 'Fixture', name: 'ZuluBase',
+          superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: ['base'],
+        },
+        {
+          identity: 'cuis-class/Fixture/Partial', package: 'Fixture', name: 'Partial',
+          superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
+        },
+      ]}),
+      message: /class declaration must have exactly fields/,
+    },
+    {
+      label: 'duplicate class identity, both outside scope',
+      input: manifest({classes: [
+        {
+          identity: 'cuis-class/Fixture/ZuluBase', package: 'Fixture', name: 'ZuluBase',
+          superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: ['base'],
+        },
+        {
+          identity: 'cuis-class/Fixture/Twin', package: 'Fixture', name: 'Twin',
+          superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+        },
+        {
+          identity: 'cuis-class/Fixture/Twin', package: 'Fixture', name: 'Twin',
+          superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+        },
+      ]}),
+      message: /class semantic identity cuis-class\/Fixture\/Twin appears more than once/,
+    },
+    {
+      label: 'non-canonical method identity outside scope',
+      input: manifest({methods: [{
+        identity: 'cuis-method/Fixture/AChild/instance/wrong',
+        package: 'Fixture', class: 'cuis-class/Fixture/AChild', side: 'instance',
+        selector: 'value', source: 'value\n\t^ 1',
+      }]}),
+      message: /does not match its canonical declaration/,
+    },
+    {
+      label: 'duplicate method identity, both outside scope',
+      input: manifest({methods: [
+        {
+          identity: 'cuis-method/Fixture/AChild/instance/value',
+          package: 'Fixture', class: 'cuis-class/Fixture/AChild', side: 'instance',
+          selector: 'value', source: 'value\n\t^ 1',
+        },
+        {
+          identity: 'cuis-method/Fixture/AChild/instance/value',
+          package: 'Fixture', class: 'cuis-class/Fixture/AChild', side: 'instance',
+          selector: 'value', source: 'value\n\t^ 2',
+        },
+      ]}),
+      message: /method semantic identity cuis-method\/Fixture\/AChild\/instance\/value appears more than once/,
+    },
+    {
+      label: 'duplicate native class name, both outside scope',
+      input: manifest({classes: [
+        {
+          identity: 'cuis-class/Fixture/ZuluBase', package: 'Fixture', name: 'ZuluBase',
+          superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: ['base'],
+        },
+        {
+          identity: 'cuis-class/Fixture/Clash', package: 'Fixture', name: 'Clash',
+          superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+        },
+        {
+          identity: 'cuis-class/Other/Clash', package: 'Other', name: 'Clash',
+          superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+        },
+      ]}),
+      message: /native class name Clash appears more than once/,
+    },
+  ];
+
+  for (const {label, input, message} of cases) {
+    await withKernel(async (runtime) => {
+      const frontierBefore = await runtime.images.frontier('app');
+      await assert.rejects(
+        importCuisNativePackage({images: runtime.images, imageId: 'app', manifest: input, scope}),
+        (error) => error instanceof CuisNativeImportError && message.test(error.message),
+        label,
+      );
+      assert.equal(await runtime.images.frontier('app'), frontierBefore, `${label} publishes nothing`);
+    });
+  }
+});
+
+// Target resolution is by complete semantic identity. A Cuis class whose NAME matches a native
+// class is not thereby a native class, exactly as the M1 root rule already states for Object.
+test('a covered method target outside the manifest is refused however native its name looks', async () => {
+  for (const target of ['cuis-class/Cuis-Base/Dictionary', 'cuis-class/Cuis-Base/Object', 'cuis-class/Other/ZuluBase']) {
+    await withKernel(async (runtime) => {
+      const selector = 'value';
+      const className = target.slice(target.lastIndexOf('/') + 1);
+      const identity = `cuis-method/Fixture/${className}/instance/${selector}`;
+      const input = manifest({methods: [{
+        identity, package: 'Fixture', class: target, side: 'instance', selector, source: 'value\n\t^ 1',
+      }]});
+      const frontierBefore = await runtime.images.frontier('app');
+      await assert.rejects(
+        importCuisNativePackage({
+          images: runtime.images,
+          compilation: runtime.compilation,
+          imageId: 'app',
+          manifest: input,
+          scope: {classes: ['cuis-class/Fixture/ZuluBase'], methods: [identity]},
+        }),
+        (error) => error instanceof CuisNativeImportError
+          && new RegExp(`method target ${target.replace(/\//g, '\\/')} is outside the imported native class graph`).test(error.message),
+        target,
+      );
+      assert.equal(await runtime.images.frontier('app'), frontierBefore);
+    });
+  }
+});

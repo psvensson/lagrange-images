@@ -114,12 +114,31 @@ function nativeMethodSource({identity, selector, source}) {
   return `[${parameterSource}\n${body}${statementSeparator}\nself\n]`;
 }
 
+// M3 (bead lagrange-images-nv1.2): a real package is imported progressively, so the caller names
+// which canonical declarations this import covers. The canonical manifest is never edited — the
+// scope selects from the unmodified artifact, so the export owner remains the only authority on
+// what the package contains. Everything the adapter guarantees for a whole manifest holds
+// unchanged for the selected subset, and an unsupported semantic INSIDE the scope is still an
+// explicit refusal: nothing is silently skipped as though it had succeeded. Omitting the scope
+// imports the whole manifest, which is what M1/M2 proved.
+function normalizeScope(scope) {
+  if (scope === undefined || scope === null) return null;
+  exactKeys(scope, ['classes', 'methods'], 'import scope');
+  const classes = textArray(scope.classes, 'import scope classes');
+  const methods = textArray(scope.methods, 'import scope methods');
+  // A method can only be installed on an in-scope class, so a scope naming no class imports
+  // nothing. That is a caller mistake, not a successful empty import.
+  if (classes.length === 0) fail('import scope must name at least one class');
+  return Object.freeze({classes: new Set(classes), methods: new Set(methods)});
+}
+
 // Validate every adapter-owned schema, identity and dependency-graph rule before the first native
 // owner call. Native declaration semantics (for example inherited-name legality) stay exclusively
 // in the class builder; this adapter does not duplicate them to promise a batch transaction it does
 // not own. An owner rejection may therefore leave already-valid immutable ancestors, and an exact
 // retry converges through their ordinary admission rules.
-function importPlan(manifest) {
+function importPlan(manifest, scope) {
+  const requested = normalizeScope(scope);
   exactKeys(manifest, ['format', 'packages', 'classes', 'methods'], 'manifest');
   if (manifest.format !== CUIS_SEMANTIC_EXPORT_V2) {
     fail(`manifest format must be ${CUIS_SEMANTIC_EXPORT_V2}, got ${manifest.format ?? 'missing'}`);
@@ -165,14 +184,39 @@ function importPlan(manifest) {
     classes.push(normalized);
     byIdentity.set(identity, normalized);
   }
+  // Package attribution is a property of the manifest as a whole, so it is checked for every
+  // declaration whether or not this import covers it.
   for (const declaration of classes) {
     if (!packageNames.has(declaration.package)) {
       fail(`class ${declaration.identity} names undeclared package ${declaration.package}`, declaration.identity);
     }
-    if (declaration.superclass !== CUIS_NATIVE_ROOT_OBJECT_IDENTITY && !byIdentity.has(declaration.superclass)) {
+  }
+  if (requested) {
+    for (const identity of requested.classes) {
+      if (!byIdentity.has(identity)) {
+        fail(`import scope names class ${identity}, which this manifest does not declare`, identity);
+      }
+    }
+  }
+  const scopedClasses = requested === null
+    ? classes
+    : classes.filter((declaration) => requested.classes.has(declaration.identity));
+  for (const declaration of scopedClasses) {
+    if (declaration.superclass === CUIS_NATIVE_ROOT_OBJECT_IDENTITY) continue;
+    const parent = byIdentity.get(declaration.superclass);
+    if (!parent) {
       fail(
         `unsupported superclass semantic identity ${declaration.superclass}; `
         + `M1 maps only ${CUIS_NATIVE_ROOT_OBJECT_IDENTITY} outside the imported graph`,
+        declaration.identity,
+      );
+    }
+    // A superclass the scope omits is refused rather than pulled in: the caller decides what this
+    // import covers, and the adapter never widens it silently.
+    if (requested && !requested.classes.has(parent.identity)) {
+      fail(
+        `class ${declaration.identity} requires superclass ${declaration.superclass}, `
+        + 'which the requested import scope omits',
         declaration.identity,
       );
     }
@@ -191,8 +235,13 @@ function importPlan(manifest) {
     visited.add(declaration.identity);
     ordered.push(declaration);
   };
-  for (const declaration of classes) visit(declaration);
+  for (const declaration of scopedClasses) visit(declaration);
 
+  // Schema, canonical identity and uniqueness are properties of the manifest as a whole and are
+  // checked for every method declaration. Native target legality and source translation are
+  // properties of THIS import, so they apply to the covered methods: a Cuis package's source can
+  // reach semantics this image does not support yet, and an import that does not cover such a
+  // method must not be blocked by it.
   const methods = [];
   const methodIdentities = new Set();
   const nativeBindings = new Set();
@@ -201,9 +250,6 @@ function importPlan(manifest) {
     const packageName = text(item.package, 'method package');
     if (!packageNames.has(packageName)) fail(`method names undeclared package ${packageName}`);
     const classIdentity = text(item.class, 'method target class semantic identity');
-    if (!byIdentity.has(classIdentity)) {
-      fail(`method target ${classIdentity} is outside the imported native class graph`, item.identity ?? null);
-    }
     if (item.side !== 'instance' && item.side !== 'class') {
       fail(`method side must be instance or class, got ${item.side ?? 'missing'}`, item.identity ?? null);
     }
@@ -221,6 +267,13 @@ function importPlan(manifest) {
     }
     nativeBindings.add(binding);
     const source = text(item.source, `method ${identity} source`);
+    if (requested && !requested.methods.has(identity)) continue;
+    if (!byIdentity.has(classIdentity)) {
+      fail(`method target ${classIdentity} is outside the imported native class graph`, identity);
+    }
+    if (requested && !requested.classes.has(classIdentity)) {
+      fail(`method target ${classIdentity} is outside the requested import scope`, identity);
+    }
     methods.push(Object.freeze({
       identity,
       classIdentity,
@@ -229,13 +282,20 @@ function importPlan(manifest) {
       source: nativeMethodSource({identity, selector, source}),
     }));
   }
-  return {classes, ordered, methods};
+  if (requested) {
+    for (const identity of requested.methods) {
+      if (!methodIdentities.has(identity)) {
+        fail(`import scope names method ${identity}, which this manifest does not declare`, identity);
+      }
+    }
+  }
+  return {classes: scopedClasses, ordered, methods};
 }
 
-async function importCuisNativePackage({images, compilation, imageId, manifest} = {}) {
+async function importCuisNativePackage({images, compilation, imageId, manifest, scope = null} = {}) {
   text(imageId, 'image id');
   if (!images || typeof images !== 'object') fail('images must be an image service');
-  const plan = importPlan(manifest);
+  const plan = importPlan(manifest, scope);
   if (plan.methods.length > 0 && (!compilation || typeof compilation.compileArtifact !== 'function')) {
     fail('compilation must be a compilation service when methods are present');
   }

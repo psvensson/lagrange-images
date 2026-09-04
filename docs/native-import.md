@@ -199,11 +199,25 @@ its own owner in its own change, rerun the same JSON pressure. Compatibility wor
 acceptance target does not demand is not started, and an unsupported semantic is always an explicit
 refusal rather than a silent skip or a live-VM fallback.
 
-The harness's current recorded first blocker is the import unit itself: the whole canonical
-manifest is imported or nothing is, so the real package's `JsonObject` — a class the acceptance
-target never uses — refuses the import at its `OrderedDictionary` superclass. The refusal leaves
-the native image's frontier unchanged, so the adapter's preflight-before-first-write rule now holds
-against a real package and not only against fixtures.
+Because a real package is imported progressively, `importCuisNativePackage()` takes a
+caller-declared import scope over the **unmodified** canonical manifest: the caller names the
+semantic identities one import covers. Manifest-wide schema, canonical identity and uniqueness are
+still checked for every declaration; native target legality and source translation apply to the
+covered subset, because a real package's source reaches semantics this image does not support yet
+and an import that does not cover them must not be blocked by them. An omitted required superclass,
+an out-of-scope method target and an unsupported semantic inside the scope are all explicit
+refusals — nothing is widened silently, and nothing covered is skipped as though it had succeeded.
+Omitting the scope imports the whole manifest, which is what M1/M2 proved.
+
+With that, the pinned package's own `Json` class imports natively from the canonical export with
+Cuis gone, keeping its declared `stream`/`ctorMap` layout, while `JsonObject` and `JsonSyntaxError`
+stay absent; exact replay of the scoped import is write-free. The harness's current recorded first
+blocker is the next one the acceptance target hits: most of this package's behavior is extension
+methods on classes it does not define, and the adapter maps exactly one base semantic identity
+(`cuis-class/Cuis-Base/Object`, and only as the structural superclass root), so
+`Integer>>jsonWriteOn:` has no native class to install on. That refusal leaves the native image's
+frontier unchanged, so the adapter's preflight-before-first-write rule holds against a real package
+and not only against fixtures.
 
 ### 4. Native application state
 
