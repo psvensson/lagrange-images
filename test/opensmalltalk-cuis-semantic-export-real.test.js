@@ -8,6 +8,7 @@ import {
   CUIS_IMAGE_V1,
   CUIS_PACKAGE_V1,
   CUIS_SEMANTIC_EXPORT_V1,
+  CUIS_SEMANTIC_EXPORT_V2,
   CUIS_SOURCES_V1,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
   bytesValue,
@@ -30,6 +31,33 @@ const CLUSTER = [
   {fileName: 'WeakDictionaries.pck.st', env: 'LAGRANGE_CUIS_WEAKDICTIONARIES_PACKAGE_PATH', blob: '773620a6f3c15bb21deca5e9895ecfac881c8b64'},
   {fileName: 'Compression.pck.st', env: 'LAGRANGE_CUIS_COMPRESSION_PACKAGE_PATH', blob: '243d8265b411fc36a72dd101f21a18e7c94b2d87'},
 ];
+
+const NATIVE_LAYOUT_PACKAGE = `'From Cuis7.9'!
+'Lagrange ADR 0085 M1 native class-layout fixture'!
+!provides: 'LagrangeNativeImportM1' 1 0!
+!requires: 'Cuis-Base' 60 5557 nil!
+SystemOrganization addCategory: #LagrangeNativeImportM1!
+
+!classDefinition: #LagrangeNativeImportBase category: #LagrangeNativeImportM1!
+Object subclass: #LagrangeNativeImportBase
+\tinstanceVariableNames: 'baseValue'
+\tclassVariableNames: ''
+\tpoolDictionaries: ''
+\tcategory: 'LagrangeNativeImportM1'!
+!classDefinition: 'LagrangeNativeImportBase class' category: #LagrangeNativeImportM1!
+LagrangeNativeImportBase class
+\tinstanceVariableNames: ''!
+
+!classDefinition: #LagrangeNativeImportChild category: #LagrangeNativeImportM1!
+LagrangeNativeImportBase subclass: #LagrangeNativeImportChild
+\tinstanceVariableNames: 'childFirst childSecond'
+\tclassVariableNames: ''
+\tpoolDictionaries: ''
+\tcategory: 'LagrangeNativeImportM1'!
+!classDefinition: 'LagrangeNativeImportChild class' category: #LagrangeNativeImportM1!
+LagrangeNativeImportChild class
+\tinstanceVariableNames: ''!
+`;
 
 async function put(runtime, id, representation, content, {metadata = {}, dependencies = [], logicalPath = null} = {}) {
   return await runtime.images.putCodeArtifact('build-image', {
@@ -69,6 +97,70 @@ async function buildCluster(runtime, {stem}) {
   assert.equal(exportArtifact.representation, CUIS_SEMANTIC_EXPORT_V1);
   return {result, exportText: exportArtifact.content.value};
 }
+
+async function buildNativeLayoutFixture(runtime, {stem}) {
+  const baseImage = await put(runtime, `layout-bi-${stem}`, CUIS_IMAGE_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_IMAGE_PATH)), {logicalPath: 'Cuis7.9-8090.image'});
+  const baseChanges = await put(runtime, `layout-bc-${stem}`, CUIS_CHANGES_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_CHANGES_PATH)), {logicalPath: 'Cuis7.9-8090.changes'});
+  const baseSources = await put(runtime, `layout-bs-${stem}`, CUIS_SOURCES_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_SOURCES_PATH)), {logicalPath: 'Cuis7.8.sources'});
+  const pkg = await put(runtime, `layout-p-${stem}`, CUIS_PACKAGE_V1, textValue(NATIVE_LAYOUT_PACKAGE), {logicalPath: 'LagrangeNativeImportM1.pck.st'});
+  await runtime.images.putCodeArtifact('build-image', {
+    id: `layout-buildroot-${stem}`,
+    languageId: 'smalltalk',
+    representation: CUIS_BUILD_V1,
+    content: textValue(CUIS_BUILD_CONTRACT_V0),
+    metadata: {},
+    dependencies: [
+      {role: 'base-image', artifact: objectRef('build-image', baseImage.id)},
+      {role: 'base-changes', artifact: objectRef('build-image', baseChanges.id)},
+      {role: 'base-sources', artifact: objectRef('build-image', baseSources.id)},
+      {role: 'package', artifact: objectRef('build-image', pkg.id)},
+    ],
+  });
+  await runtime.toolchains.run({
+    providerId: OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
+    imageId: 'build-image',
+    roots: [objectRef('build-image', `layout-buildroot-${stem}`)],
+    target: {representation: CUIS_IMAGE_V1, fileName: `${stem}.image`},
+    options: {semanticExport: CUIS_SEMANTIC_EXPORT_V2},
+    outputIds: {image: `${stem}-image`, changes: `${stem}-changes`, 'semantic-export': `${stem}-export`},
+  });
+  const artifact = await runtime.images.getCodeArtifact('build-image', `${stem}-export`);
+  assert.equal(artifact.representation, CUIS_SEMANTIC_EXPORT_V2);
+  return artifact.content.value;
+}
+
+test('real Cuis v2 export carries ordered local class declarations without inherited layout', {skip: !enabled, timeout: 600_000}, async () => {
+  const toolchainProvider = createOpenSmalltalkCuisToolchainProvider({
+    vmPath: process.env.LAGRANGE_OPENSMALLTALK_VM_PATH, vmIdentity: VM_IDENTITY, timeoutMs: 600_000,
+  });
+  const runtime = await createRuntime({
+    backend: {mode: 'mock'},
+    toolchainProviders: [[OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID, toolchainProvider]],
+  });
+  await runtime.images.createImage({id: 'build-image'});
+  try {
+    const firstText = await buildNativeLayoutFixture(runtime, {stem: 'NativeLayoutA'});
+    const secondText = await buildNativeLayoutFixture(runtime, {stem: 'NativeLayoutB'});
+    assert.equal(secondText, firstText, 'equivalent real class declarations export byte-identically');
+
+    const manifest = JSON.parse(firstText);
+    assert.equal(manifest.format, CUIS_SEMANTIC_EXPORT_V2);
+    assert.deepEqual(manifest.packages, [{name: 'LagrangeNativeImportM1', requires: ['Cuis-Base']}]);
+    const base = manifest.classes.find((candidate) => candidate.name === 'LagrangeNativeImportBase');
+    const child = manifest.classes.find((candidate) => candidate.name === 'LagrangeNativeImportChild');
+    assert.equal(base.superclass, 'cuis-class/Cuis-Base/Object');
+    assert.deepEqual(base.instanceVariables, ['baseValue']);
+    assert.equal(child.superclass, 'cuis-class/LagrangeNativeImportM1/LagrangeNativeImportBase');
+    assert.deepEqual(child.instanceVariables, ['childFirst', 'childSecond']);
+    assert.equal(child.instanceVariables.includes('baseValue'), false, 'the export must not flatten inherited layout');
+    assert.deepEqual(manifest.methods, [], 'M1A fixture exercises declarations, not method compilation');
+
+    const serialized = JSON.stringify(manifest);
+    assert.doesNotMatch(serialized, /\b(?:oop|offset|address)\b/i);
+  } finally {
+    await runtime.close();
+  }
+});
 
 test('Cuis semantic export captures package/class/method structure with semantic (not heap) identities', {skip: !enabled, timeout: 600_000}, async () => {
   const toolchainProvider = createOpenSmalltalkCuisToolchainProvider({

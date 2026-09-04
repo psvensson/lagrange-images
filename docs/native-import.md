@@ -54,7 +54,7 @@ The work is therefore convergence between existing owners, not another runtime a
 
 ### 0. Canonical ecosystem input
 
-Use the real Cuis toolchain to resolve packages and emit deterministic semantic facts. The current `smalltalk/cuis-semantic-export-v1` package/class/method export is the starting point.
+Use the real Cuis toolchain to resolve packages and emit deterministic semantic facts. The current `smalltalk/cuis-semantic-export-v2` export adds ordered, locally declared instance-variable names to the frozen v1 package/class/method contract; superclass composition remains native-owner work.
 
 The toolchain owns extraction only. It does not create native image classes or objects.
 
