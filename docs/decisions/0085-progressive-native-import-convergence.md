@@ -268,8 +268,8 @@ convergence roadmap is complete.
 M2 extends that same adapter boundary without adding a compiler or method representation. It
 validates canonical method identity/target/side, translates the unary/binary/keyword Cuis method
 header and implicit receiver return into the Block-form source accepted by the existing
-class-scoped compiler, and calls
-`defineMethodsFromSource()` with the WASM lane. The native builder still derives method identity and
+class-scoped compiler, and now calls
+`reconcileMethodsFromSource()` with the WASM lane. The native builder still derives method identity and
 owns immutable artifacts, method-dictionary admission, idempotence and conflicts.
 
 The focused proof in `test/cuis-native-import.test.js` installs inherited and local exported-form
@@ -280,9 +280,12 @@ actual OpenSmalltalkVM/Cuis package, closes its owning runtime, and then perform
 -> imported setter sends -> imported getter sends in a provider-free runtime. No `CuisExport*`
 object, Cuis handle/fallback or Spur identity participates.
 
-A-to-B replacement/revision reconciliation, M3 compatibility closure and later milestones remain
-unimplemented, so this ADR's overall status remains accepted rather than claiming the whole
-convergence roadmap is complete.
+ADR 0086 now implements the deliberately separate A -> A -> B -> B native method-revision proof.
+The importer routes translated method inputs through the explicit native reconciliation operation;
+the native class builder derives immutable revision identity and advances only the ordinary
+MethodDictionary binding. M3 compatibility closure and later milestones remain unimplemented, so
+this ADR's overall status remains accepted rather than claiming the whole convergence roadmap is
+complete.
 
 ## Relationship to earlier ADRs
 

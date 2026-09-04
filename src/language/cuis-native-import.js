@@ -1,6 +1,6 @@
 import {ensureClassFromDeclaration} from './smalltalk-class-builder.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
-import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
+import {reconcileMethodsFromSource} from './smalltalk-instance-variables.js';
 import {tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
 
 // ADR 0085 M1/M2: this adapter owns translation only. The canonical representation remains owned
@@ -270,7 +270,7 @@ async function importCuisNativePackage({images, compilation, imageId, manifest} 
     methodGroups.set(key, group);
   }
   for (const {classRef, methods} of methodGroups.values()) {
-    await defineMethodsFromSource({
+    await reconcileMethodsFromSource({
       images,
       compilation,
       imageId,

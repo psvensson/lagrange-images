@@ -148,8 +148,9 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | --- | --- |
 | `defineClass()` | a class and its metaclass, wired by the ADR 0044 chain rule |
 | `ensureClassFromDeclaration()` | an instantiable class from locally declared instance-variable names; the native class owner assigns initial stable slot ids and composes the complete inherited Shape |
-| `importCuisNativePackage()` | the ADR 0085 M1/M2 translation from one canonical Cuis v2 package graph to existing native owners: class declarations go to `ensureClassFromDeclaration`, full Cuis method definitions are header-translated and go to `defineMethodsFromSource` in the WASM lane; the adapter recognizes only the exact Cuis-Base/Object structural root identity and owns no `CuisExport*`, VM handle, native identity, durable importer state or compiler semantics |
-| `defineMethods()` | methods from semantic `lagrange-code/v0` programs, optionally with captures |
+| `importCuisNativePackage()` | the ADR 0085 M1/M2 translation from one canonical Cuis v2 package graph to existing native owners: class declarations go to `ensureClassFromDeclaration`, full Cuis method definitions are header-translated and go to `reconcileMethodsFromSource` in the WASM lane; the adapter recognizes only the exact Cuis-Base/Object structural root identity and owns no `CuisExport*`, VM handle, native identity, prior-source/revision state, durable importer state or compiler semantics |
+| `defineMethods()` | add-only native methods from semantic `lagrange-code` programs, optionally with captures; exact replay converges and different current semantics are refused |
+| `reconcileMethods()` | ADR 0086's explicit native method evolution: exact current semantics are write-free; changed semantics get immutable class-builder-owned revision identities and one expected-version MethodDictionary publication |
 | `installSmalltalkControlFlow()` | `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:` on True and False (ADR 0045) |
 | `installSmalltalkAllocationProtocol()` | the `class-of`/`basic-new` primitive Blocks, plus `Object >> class`, `Object >> initialize`, `Class >> basicNew` and `Class >> new` (ADR 0046) |
 | `installSmalltalkEqualityProtocol()` | the `built-in-equals`/`built-in-hash` primitive Blocks, plus `Object >> =` and `Object >> hash` (ADR 0048) |
@@ -211,7 +212,7 @@ it in an OrderedCollection and `Class >> allSubclasses` takes the transitive clo
 ordinary Smalltalk installed after the library.
 
 Nested Block publication is one implementation, in `smalltalk-nested-blocks.js`, shared by
-`installSymmetricSmalltalkBlock()` and by `defineMethods()`. A method's nested identities derive from
+`installSymmetricSmalltalkBlock()`, `defineMethods()` and `reconcileMethods()`. A method's nested identities derive from
 its own deterministic method id plus the semantic block id, and every write is ensure-exact-or-create
 — as are the WASM tree installers and `CompilationService` outputs, so a partial install converges on
 an identical retry rather than colliding with its own earlier output. In the WASM lane a method with
@@ -219,7 +220,7 @@ nested Blocks is published by `installWasmBlockTree()`, which already plans a sh
 already dispatches on v0 versus v1.
 
 ADR 0050 adds no executable representation either. `compileSymmetricSmalltalkMethod()` and
-`defineMethodsFromSource()` are a class-scoped compilation entry point *beside*
+`defineMethodsFromSource()` and `reconcileMethodsFromSource()` are class-scoped compilation entry points *beside*
 `installSymmetricSmalltalkBlock()`, not above it: a Block still compiles with no class in sight, while
 a method resolves its free names against the defining class's visible instance layout and carries the
 stable slot **id** rather than the source name. Slot access rides two further

@@ -115,15 +115,46 @@ M2 translates each canonical full Cuis method definition into the selector plus 
 accepted by the existing class-scoped compiler. The adapter validates method identity, target and
 side, supports ordinary unary, binary and keyword headers, and makes Cuis's implicit receiver
 return explicit because native Blocks otherwise answer their last expression. The native compiler
-remains the sole owner of body syntax, slot binding and semantic lowering. `defineMethodsFromSource()` and
-`defineMethods()` install the result in the target native Class or Metaclass with the WASM lane, so
+remains the sole owner of body syntax, slot binding and semantic lowering.
+`reconcileMethodsFromSource()` and `reconcileMethods()` install or reconcile the result in the
+target native Class or Metaclass with the WASM lane, so
 an imported method is an ordinary native method/Block backed by `wasm-function/v2` and installed in
-the ordinary method dictionary. The importer chooses no method id and stores no method table.
+the ordinary method dictionary. The importer chooses no method or revision id and stores no method
+table or previous source.
 
 The real two-runtime proof now exports inherited and local accessors, closes Cuis, imports them, and
 performs native `basicNew` -> imported mutation sends -> imported read sends. Exact replay is
-write-free. A-to-B replacement/revision reconciliation remains later work at the native method
-history owner; M2 does not compare source text or overwrite an existing selector.
+write-free.
+
+### 2.1 Native imported-method reconciliation
+
+ADR 0086 proves the deliberately separate A -> A -> B -> B transition before M3. Native
+Class/Metaclass plus selector is the logical method position. The initial method uses the existing
+class-plus-selector Block identity; changed compiled native semantics receive an immutable
+class-builder-derived revision identity for the semantic artifact, Block and derived executable
+artifact. The old revision remains durable.
+
+The ordinary MethodDictionary binding is the sole mutable current-method authority. Exact A or B
+replay writes nothing. B publication persists its immutable material and then advances that
+dictionary once with its expected record version. A lost CAS is classified by the class builder:
+an identical semantic winner converges, while a different winner is a Smalltalk method conflict and
+is never overwritten. Raw backend version conflicts do not escape.
+
+The Cuis adapter merely calls the native operation with its resolved class, side, selector and
+translated current source. It neither compares source strings nor owns history. Project
+`versionToken`, membership, releases and managed installation do not participate.
+
+The real proof records the transition in the repository's durable vocabulary:
+
+| Stage | native Class ObjectRef | MethodDictionary `value` binding | semantic/executable identity | authoritative movement |
+| --- | --- | --- | --- | --- |
+| A import | same Class ref | initial class+selector Block ref | initial `:semantic` + `wasm-function/v2` artifacts | dictionary version +1 |
+| A replay | same Class ref | same A Block ref | same A artifacts | none |
+| B import | same Class ref | class-builder revision Block ref | new immutable B `:semantic` + `wasm-function/v2` artifacts | dictionary version +1 |
+| B replay | same Class ref | same B Block ref | same B artifacts | none |
+
+The unchanged `stable` selector keeps its original Block ref throughout. The Behavior and Class
+records do not move.
 
 ### 3. Compatibility library closure
 
