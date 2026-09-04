@@ -110,8 +110,9 @@ Runtime/toolchain:
       and an unsatisfied synthetic requirement produces an explicit failure diagnostic
 - [x] prove a larger third-party package with real dependencies: the fresh derived image performs
       Compression and WeakDictionaries behavior without runtime package injection
-- [ ] snapshot byte reproducibility/normalization investigation
-- [ ] opt into toolchain result reuse only if snapshot determinism is demonstrated
+- [x] snapshot byte reproducibility/normalization investigation: measured NOT reproducible and not
+      normalizable (ADR 0083, `scripts/measure-cuis-snapshot-reproducibility.mjs`)
+- [ ] opt into toolchain result reuse only if snapshot determinism is demonstrated (revisit condition in ADR 0083)
 - [ ] richer explicit Cuis service interfaces without ambient eval
 - [ ] OCI foreign-runtime launcher/placement
 - [ ] restart/reconciliation and snapshot persistence behavior

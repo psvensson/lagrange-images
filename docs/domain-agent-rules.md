@@ -115,6 +115,7 @@ pooled instance != activation state
 ### Toolchain result reuse
 
 - External-toolchain reuse is provider opt-in only. A provider is cacheable only when it implements `cacheKey(request, context)` in addition to a stable `identity`; never infer determinism from provider ID, output representation, filenames or past equal outputs.
+- The OpenSmalltalk/Cuis provider has NO `cacheKey` by measurement (ADR 0083): snapshot bytes differ on every build from identical closed inputs. Do not add one from the semantic export or from any normalization that has not produced zero differing bytes over three independent builds with `scripts/measure-cuis-snapshot-reproducibility.mjs`.
 - `lagrange-toolchain-derivation-key/v0` includes provider selection ID, stable identity, protocol, ordered roots, complete resolved artifact snapshots, target/options and provider-specific cache material.
 - Artifact snapshots used by the cache include identity, representation, content, dependencies and metadata. Backend versions, timestamps and old `derivedFrom` history stay out of build equivalence.
 - The first cache intentionally includes artifact/image identities. Reuse is exact to the same immutable input graph so the cached output's `derivedFrom` remains truthful. Do not remove identities for cross-install reuse without first adding an installation/provenance wrapper.
