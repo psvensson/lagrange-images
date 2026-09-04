@@ -134,8 +134,16 @@ method-history proof between M2 and M3:
 
 ### M3 — Cuis compatibility-library closure
 
-Use one increasingly realistic imported package/application as the pressure source:
+The pressure source is fixed: the pinned upstream Cuis JSON package that the integration setup
+already downloads, imported through the existing canonical export and native import adapter. The
+acceptance target is one behavior of its own public protocol — `Json render: <native integer>` —
+executing entirely natively after Cuis is gone, not "all of JSON imports". Every compatibility
+feature must be demanded by that consumer and repaired at its own owner
+(`docs/native-import.md`, "The M3 forcing harness").
 
+- [x] drive the pinned package through toolchain -> canonical export -> native import as a real
+  forcing harness, record the real-Cuis oracle for the acceptance target, and classify the first
+  unsupported semantic instead of pretending it succeeded;
 - [ ] map Cuis base classes/protocols to existing native classes only when required behavior is explicitly equivalent and tested;
 - [ ] add missing native library/kernel semantics only for real imported consumers;
 - [ ] use real OpenSmalltalkVM/Cuis as a semantic oracle where differential proof is useful;

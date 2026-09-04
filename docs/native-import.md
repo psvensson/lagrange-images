@@ -164,6 +164,47 @@ A shared name is never enough to claim equivalence. `Array`, `Dictionary`, `Stri
 
 Missing semantics are explicit failures, not reasons to silently execute in Cuis.
 
+#### The M3 forcing harness
+
+M3 has one fixed consumer: the pinned upstream Cuis JSON package that
+`scripts/integration-setup.sh` already downloads (Cuis-Smalltalk-Dev
+`6bcee3f38ce037c9714b997ccd3b5b3ff62965c8`, `Packages/Features/JSON.pck.st`, git blob
+`47fab65d0d9017d706aa07d39ab0451619488ccd`). Its source is never edited and none of its methods
+are copied into a fixture.
+
+`test/cuis-json-native-import-real.test.js` drives the whole path in one direction:
+
+```text
+pinned upstream JSON package
+      |
+      v
+real Cuis toolchain -> canonical smalltalk/cuis-semantic-export-v2
+      |
+      v
+importCuisNativePackage()  (no toolchain, no foreign-runtime provider)
+      |
+      v
+native Smalltalk class/method owners
+```
+
+Nothing between the canonical export and the adapter edits the manifest, and `CuisExport*`
+materialization is not part of the path. The live VM is used for extraction and as a reference
+oracle only; the provider's `json/render` operation records what real Cuis answers, and native
+execution never calls it.
+
+The M3 acceptance target is one behavior of the package's own public protocol —
+`Json render: <native integer>` answers the decimal text — not "all of JSON imports". The loop is:
+run the complete import, classify the first causally necessary unsupported semantic, repair it at
+its own owner in its own change, rerun the same JSON pressure. Compatibility work that the
+acceptance target does not demand is not started, and an unsupported semantic is always an explicit
+refusal rather than a silent skip or a live-VM fallback.
+
+The harness's current recorded first blocker is the import unit itself: the whole canonical
+manifest is imported or nothing is, so the real package's `JsonObject` — a class the acceptance
+target never uses — refuses the import at its `OrderedDictionary` superclass. The refusal leaves
+the native image's frontier unchanged, so the adapter's preflight-before-first-write rule now holds
+against a real package and not only against fixtures.
+
 ### 4. Native application state
 
 Application roots, globals/class state and domain objects must become ordinary image state when they are part of the native application domain.
