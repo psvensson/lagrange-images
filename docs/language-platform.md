@@ -263,7 +263,7 @@ The derived image keeps the unchanged base sources artifact as an explicit depen
 
 The authoritative integration proof does not stop after saving bytes. It launches the derived image in a fresh OpenSmalltalkVM runtime **without passing JSON as a runtime package**, then requires `json/package-proof` to succeed. So package compilation/loading is genuinely captured in the toolchain-produced image.
 
-The toolchain provider does not implement `cacheKey()` yet. Closed inputs are established, but Cuis snapshot byte determinism has not. Reuse will be enabled only after reproducible snapshot bytes or a safe normalization contract are demonstrated.
+The toolchain provider does not implement `cacheKey()`, by measurement rather than by omission (ADR 0083): identical closed inputs produce distinct image and changes bytes on every build — heap-base relocation, wall-clock stamps, the transient workspace path recorded inside the image, and allocation order downstream of those — while the semantic export below is byte-identical. `scripts/measure-cuis-snapshot-reproducibility.mjs` repeats the measurement; reuse is enabled only if it ever reports zero differing bytes over three independent builds.
 
 ### Structured semantic export
 
