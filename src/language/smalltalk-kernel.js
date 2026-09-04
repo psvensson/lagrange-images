@@ -1,5 +1,5 @@
 import {base64urlEncode, utf8Encode} from '../support/portable-bytes.js';
-import {SHAPE_INDEXED} from '../object/model.js';
+import {ensureShape as ensureRecordShape} from '../graph/ensure-records.js';
 import {VALUE_KIND, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {
   METHOD_DICTIONARY_SHAPE_ID,
@@ -105,22 +105,12 @@ function canonicalJson(value) {
   return JSON.stringify(value ?? null);
 }
 
-function shapeLayoutProjection(record) {
-  return canonicalJson({
-    slots: record.slots ?? [],
-    indexed: Object.hasOwn(record, 'indexed') ? record.indexed : SHAPE_INDEXED.NONE,
-  });
-}
-
+// Shape admission is owned by graph/ensure-records.js (layout = slots + indexed, ADR 0047; insert-
+// only; convergent under a concurrent first install). Only the conflict class is Smalltalk's.
 async function ensureShape(service, imageId, desired) {
-  const existing = await service.getShape(imageId, desired.id);
-  if (!existing) return await service.putShape(imageId, desired);
-  // ADR 0047: indexed is declared layout just like named slots. Absence remains the old `none`
-  // meaning, but a values Shape must never compare equal to a pre-0047/no-indexed Shape by accident.
-  if (shapeLayoutProjection(desired) !== shapeLayoutProjection(existing)) {
-    throw new SmalltalkKernelConflictError('shape', imageId, desired.id);
-  }
-  return existing;
+  return await ensureRecordShape(service, imageId, desired, {
+    conflict: (kind, image, id) => new SmalltalkKernelConflictError(kind, image, id),
+  });
 }
 
 // `putObject` does take expectedVersion, and 0 means "must not already exist" — belt and braces

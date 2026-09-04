@@ -3,6 +3,7 @@ import {SHAPE_INDEXED} from '../object/model.js';
 import {OBJECT_READ_OPERATION, OBJECT_WRITE_OPERATION, objectResource} from '../authority/object-resource.js';
 import {objectVersionToken, parseObjectVersionToken, putObjectAtExpectedVersion} from '../object/version-token.js';
 import {normalizeProjectDescriptor} from './model.js';
+import {ensureObject, ensureShape} from '../graph/ensure-records.js';
 
 // Durable Project working state: the image-level Project library/service
 // (ownership.md row "Image-level Project working-state semantics").
@@ -91,39 +92,34 @@ function projectMemberObjectId(projectId, key) {
 
 const PROJECT_NONE_SHAPE_ID = 'lagrange-project/none-shape/v1';
 
+// Shape/marker admission for the Project representation goes through the ONE ensure owner
+// (graph/ensure-records.js): insert-only, layout-checked, and convergent when two fresh-image
+// callers race — the loser adopts the winner's identical record instead of failing (bead ea8).
 async function ensureShapes(images, imageId) {
   const noneShapeRef = objectRef(imageId, PROJECT_NONE_SHAPE_ID);
-  if (!await images.getShape(imageId, PROJECT_NONE_SHAPE_ID)) {
-    await images.putShape(imageId, {id: PROJECT_NONE_SHAPE_ID, slots: []});
-  }
-  if (!await images.getObject(imageId, PROJECT_NONE_ID)) {
-    await images.putObject(imageId, {
-      id: PROJECT_NONE_ID, shape: noneShapeRef, behavior: null, slots: {}, metadata: {project: 'none'},
-    });
-  }
+  await ensureShape(images, imageId, {id: PROJECT_NONE_SHAPE_ID, slots: []});
+  await ensureObject(images, imageId, {
+    id: PROJECT_NONE_ID, shape: noneShapeRef, behavior: null, slots: {}, metadata: {project: 'none'},
+  });
   const projectShapeRef = objectRef(imageId, PROJECT_SHAPE_ID);
-  if (!await images.getShape(imageId, PROJECT_SHAPE_ID)) {
-    await images.putShape(imageId, {
-      id: PROJECT_SHAPE_ID,
-      slots: [
-        {id: SLOT.projectId, name: 'projectId'},
-        {id: SLOT.name, name: 'name'},
-        {id: SLOT.namespace, name: 'namespace'},
-      ],
-      indexed: SHAPE_INDEXED.VALUES,
-    });
-  }
+  await ensureShape(images, imageId, {
+    id: PROJECT_SHAPE_ID,
+    slots: [
+      {id: SLOT.projectId, name: 'projectId'},
+      {id: SLOT.name, name: 'name'},
+      {id: SLOT.namespace, name: 'namespace'},
+    ],
+    indexed: SHAPE_INDEXED.VALUES,
+  });
   const memberShapeRef = objectRef(imageId, PROJECT_MEMBER_SHAPE_ID);
-  if (!await images.getShape(imageId, PROJECT_MEMBER_SHAPE_ID)) {
-    await images.putShape(imageId, {
-      id: PROJECT_MEMBER_SHAPE_ID,
-      slots: [
-        {id: SLOT.memberKey, name: 'key'},
-        {id: SLOT.role, name: 'role'},
-        {id: SLOT.target, name: 'target'},
-      ],
-    });
-  }
+  await ensureShape(images, imageId, {
+    id: PROJECT_MEMBER_SHAPE_ID,
+    slots: [
+      {id: SLOT.memberKey, name: 'key'},
+      {id: SLOT.role, name: 'role'},
+      {id: SLOT.target, name: 'target'},
+    ],
+  });
   return {projectShapeRef, memberShapeRef};
 }
 

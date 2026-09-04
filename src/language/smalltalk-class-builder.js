@@ -24,6 +24,7 @@ import {
   codeArtifactProjection,
   ensureBlock as ensureBlockRecord,
   ensureCodeArtifact as ensureCodeArtifactRecord,
+  ensureShape as ensureRecordShape,
 } from '../graph/ensure-records.js';
 import {TupleSet} from '../support/tuple-map.js';
 import {sameRef} from './smalltalk-lookup.js';
@@ -630,14 +631,10 @@ async function methodBlockRef({images, imageId, classRef, selector} = {}) {
 // layout" has to mean one thing: a Shape carrying the right slots but a different indexed
 // declaration is a different layout, and adopting it would silently change what its instances are.
 async function ensureSmalltalkShape(images, imageId, desired) {
-  const existing = await images.getShape(imageId, desired.id);
-  if (!existing) return objectRef(imageId, (await images.putShape(imageId, desired)).id);
-  const layout = (shape) => canonicalJson({
-    slots: shape.slots,
-    indexed: Object.hasOwn(shape, 'indexed') ? shape.indexed : SHAPE_INDEXED.NONE,
+  const shape = await ensureRecordShape(images, imageId, desired, {
+    conflict: (kind, image, id) => new SmalltalkKernelConflictError(kind, image, id),
   });
-  if (layout(existing) !== layout(desired)) throw new SmalltalkKernelConflictError('shape', imageId, desired.id);
-  return objectRef(imageId, existing.id);
+  return objectRef(imageId, shape.id);
 }
 
 // Define a class, or rediscover one and validate its whole immutable definition.

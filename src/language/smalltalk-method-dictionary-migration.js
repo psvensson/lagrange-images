@@ -1,4 +1,5 @@
 import {isObjectRef, objectRef, textValue} from '../value/index.js';
+import {ensureShape} from '../graph/ensure-records.js';
 import {SHAPE_INDEXED} from '../object/model.js';
 import {
   SmalltalkKernelConflictError,
@@ -51,14 +52,8 @@ class SmalltalkMigrationConflictError extends TypeError {
 
 async function ensureMethodDictionaryShape(images, imageId) {
   const desired = {id: METHOD_DICTIONARY_SHAPE_ID, slots: [...METHOD_DICTIONARY_SHAPE_SLOTS], indexed: SHAPE_INDEXED.VALUES};
-  const existing = await images.getShape(imageId, desired.id);
-  if (!existing) return await images.putShape(imageId, desired);
-  const layout = (shape) => canonicalJson({
-    slots: shape.slots,
-    indexed: Object.hasOwn(shape, 'indexed') ? shape.indexed : SHAPE_INDEXED.NONE,
-  });
-  if (layout(existing) !== layout(desired)) throw new SmalltalkKernelConflictError('shape', imageId, desired.id);
-  return existing;
+  const shape = await ensureShape(images, imageId, desired, {conflict: (kind, image, id) => new SmalltalkKernelConflictError(kind, image, id)});
+  return shape;
 }
 
 // The legacy representation, read exactly as ADR 0044 dispatch reads it — including the selector

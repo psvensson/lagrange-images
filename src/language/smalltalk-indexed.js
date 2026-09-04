@@ -1,4 +1,5 @@
 import {SHAPE_INDEXED} from '../object/model.js';
+import {ensureShape} from '../graph/ensure-records.js';
 import {integerValue, objectRef, textValue} from '../value/index.js';
 import {
   defineClass,
@@ -9,7 +10,6 @@ import {
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {
   SmalltalkKernelConflictError,
-  canonicalJson,
   findSmalltalkKernel,
   readBehavior,
 } from './smalltalk-kernel.js';
@@ -96,16 +96,8 @@ function capturedMethod(selector, parameters, capture, args) {
 
 async function ensureArrayShape(images, imageId) {
   const desired = {id: ARRAY_INSTANCE_SHAPE_ID, slots: [], indexed: SHAPE_INDEXED.VALUES};
-  const existing = await images.getShape(imageId, desired.id);
-  if (!existing) return await images.putShape(imageId, desired);
-  const layout = (shape) => canonicalJson({
-    slots: shape.slots,
-    indexed: Object.hasOwn(shape, 'indexed') ? shape.indexed : SHAPE_INDEXED.NONE,
-  });
-  if (layout(existing) !== layout(desired)) {
-    throw new SmalltalkKernelConflictError('shape', imageId, desired.id);
-  }
-  return existing;
+  const shape = await ensureShape(images, imageId, desired, {conflict: (kind, image, id) => new SmalltalkKernelConflictError(kind, image, id)});
+  return shape;
 }
 
 function requireSameRef(actual, expected, imageId) {

@@ -1,5 +1,5 @@
-import {VersionConflictError} from '../backend/backend-contract.js';
-import {SHAPE_INDEXED, shapeIndexedKind} from '../object/model.js';
+import {ensureShape} from '../graph/ensure-records.js';
+import {SHAPE_INDEXED} from '../object/model.js';
 import {getDefaultCryptoProvider} from '../support/default-crypto.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {PROJECT_INSTALLATION_V1, normalizeProjectInstallation} from './model.js';
@@ -84,48 +84,16 @@ function installationHeadObjectId(projectId) {
   return `lagrange-project-installation/${requiredText(projectId, 'projectId')}/head`;
 }
 
-function sameSlots(actual, expected) {
-  return Array.isArray(actual)
-    && actual.length === expected.length
-    && actual.every((slot, index) => slot?.id === expected[index].id && slot?.name === expected[index].name);
-}
-
-function requireShapeDefinition(record, expected, targetImageId) {
-  let indexed;
-  try {
-    indexed = shapeIndexedKind(record);
-  } catch (cause) {
-    fail(`Project installation Shape ${expected.id} diverges from its fixed definition`, {cause});
-  }
-  if (
-    record.id !== expected.id
-    || record.imageId !== targetImageId
-    || !sameSlots(record.slots, expected.slots)
-    || indexed !== expected.indexed
-  ) {
-    fail(`Project installation Shape ${expected.id} diverges from its fixed definition`);
-  }
-  return record;
-}
-
+// Admission goes through the ONE Shape ensure owner (graph/ensure-records.js); this translator
+// contributes only its fixed definitions and its corruption taxonomy for a divergent occupant.
 async function ensureOneShape(images, targetImageId, expected) {
-  const existing = await images.getRecord(targetImageId, expected.id);
-  if (existing) return requireShapeDefinition(existing, expected, targetImageId);
-
-  try {
-    return await images.putShape(targetImageId, {
-      id: expected.id,
-      slots: expected.slots,
-      ...(expected.indexed === SHAPE_INDEXED.VALUES ? {indexed: expected.indexed} : {}),
-    });
-  } catch (error) {
-    if (!(error instanceof VersionConflictError)) throw error;
-    const winner = await images.getRecord(targetImageId, expected.id);
-    if (!winner) {
-      fail(`Project installation Shape ${expected.id} is missing after a concurrent bootstrap conflict`, {cause: error});
-    }
-    return requireShapeDefinition(winner, expected, targetImageId);
-  }
+  return await ensureShape(images, targetImageId, {
+    id: expected.id,
+    slots: expected.slots,
+    ...(expected.indexed === SHAPE_INDEXED.VALUES ? {indexed: expected.indexed} : {}),
+  }, {
+    conflict: () => new ProjectInstallationStateError(`Project installation Shape ${expected.id} diverges from its fixed definition`),
+  });
 }
 
 async function ensureInstallationShapes({images, targetImageId} = {}) {
