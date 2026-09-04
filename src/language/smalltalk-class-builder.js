@@ -703,6 +703,101 @@ async function ensureSmalltalkShape(images, imageId, desired) {
   return objectRef(imageId, shape.id);
 }
 
+// A declaration names local instance variables; it does not choose durable slot or Shape ids.
+// Initial slot identity belongs to the native class owner and follows from the defining Class
+// identity plus the declared name. The name remains a separate Shape field: a later rename is an
+// explicit migration that preserves this id, never a second declaration inferred to be equivalent.
+const declaredInstanceShapeId = (classObjectId) => `${classObjectId}/instance-shape`;
+const declaredInstanceSlotId = (classObjectId, name) =>
+  `${classObjectId}/instance-slot/${base64urlEncode(utf8Encode(name))}`;
+
+function normalizeLocalInstanceVariables(instanceVariables) {
+  if (!Array.isArray(instanceVariables)) throw new TypeError('instanceVariables must be an array of names');
+  const seen = new Set();
+  return instanceVariables.map((name) => {
+    requiredText(name, 'instance variable name');
+    if (seen.has(name)) throw new TypeError(`duplicate local instance variable: ${name}`);
+    seen.add(name);
+    return name;
+  });
+}
+
+// Build an instantiable native class from language declarations while keeping Shape admission and
+// class convergence in their existing owners. The caller supplies local names only. This owner
+// validates the superclass graph, preserves the nearest complete inherited layout, assigns initial
+// stable slot identities, and publishes the resulting immutable Shape before asking the ordinary
+// named-class owner to create or rediscover the Class/Metaclass pair.
+async function ensureClassFromDeclaration({
+  images,
+  imageId,
+  name,
+  superclassRef = null,
+  instanceVariables = [],
+} = {}) {
+  requiredText(name, 'class name');
+  requiredText(imageId, 'image id');
+  const localNames = normalizeLocalInstanceVariables(instanceVariables);
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  const superclass = superclassRef ?? kernel.objectClass;
+
+  // Match defineClass's pre-write checks before admitting a declaration Shape. A malformed direct
+  // superclass or metaclass must not leave even unreferenced immutable material behind.
+  const superBehavior = await requireLocalBehavior(
+    images, imageId, superclass, 'ensureClassFromDeclaration superclass',
+  );
+  await requireLocalBehavior(
+    images, imageId, superBehavior.behavior, 'ensureClassFromDeclaration superclass metaclass',
+  );
+
+  const inherited = await nearestDeclaredInstanceShape({
+    images, superclassRef: superclass, nilRef: kernel.nil, name,
+  });
+  const inheritedNames = new Set();
+  for (const {name: inheritedName} of inherited?.slots ?? []) {
+    if (inheritedNames.has(inheritedName)) {
+      throw new TypeError(
+        `ensureClassFromDeclaration ${name} inherited instance shape declares duplicate slot name: ${inheritedName}`,
+      );
+    }
+    inheritedNames.add(inheritedName);
+  }
+  for (const localName of localNames) {
+    if (inheritedNames.has(localName)) {
+      throw new TypeError(`class ${name} duplicates inherited instance variable: ${localName}`);
+    }
+  }
+
+  let instanceShapeRef;
+  if (localNames.length === 0) {
+    // No new layout means reuse the inherited Shape exactly. At the root, the kernel's explicit
+    // empty Shape makes a zero-slot declaration instantiable without minting a duplicate layout.
+    instanceShapeRef = inherited
+      ? objectRef(inherited.imageId, inherited.id)
+      : objectRef(imageId, EMPTY_SHAPE_ID);
+  } else {
+    const classObjectId = `smalltalk/class/${name}`;
+    const slots = [
+      ...(inherited?.slots ?? []),
+      ...localNames.map((localName) => ({
+        id: declaredInstanceSlotId(classObjectId, localName),
+        name: localName,
+      })),
+    ];
+    instanceShapeRef = await ensureSmalltalkShape(images, imageId, {
+      id: declaredInstanceShapeId(classObjectId),
+      slots,
+      ...(inherited && shapeIndexedKind(inherited) === SHAPE_INDEXED.VALUES
+        ? {indexed: SHAPE_INDEXED.VALUES}
+        : {}),
+    });
+  }
+
+  return await ensureNamedClass({
+    images, imageId, name, superclassRef: superclass, instanceShapeRef,
+  });
+}
+
 // Define a class, or rediscover one and validate its whole immutable definition.
 //
 // `defineClass` alone is not usable for rediscovery: it also ensures an *empty* method dictionary,
@@ -751,6 +846,19 @@ async function ensureNamedClass({images, imageId, name, superclassRef = null, in
   if (!sameRef(metaclass.record.behavior, kernel.metaclassClass)) throw conflict();
   if (!sameRef(metaclass.superclass, superBehavior.record.behavior)) throw conflict();
   if (!sameRef(metaclass.instanceShape, metaclassInstanceShape)) throw conflict();
+
+  // Class/Metaclass publication precedes hierarchy maintenance in defineClass. If an interruption
+  // lands between them, immutable rediscovery is not complete until the existing registry owner
+  // has repaired both this class's registry and its superclass membership. The registry owner
+  // retains all validation, CAS classification and idempotence policy.
+  await maintainSubclassRegistries({
+    images,
+    imageId,
+    className: name,
+    classRef,
+    superclassRef: superclass,
+    nilRef: kernel.nil,
+  });
   return Object.freeze({classRef, metaclassRef});
 }
 
@@ -973,6 +1081,7 @@ export {
   defineClass,
   defineMethods,
   ensureBlock,
+  ensureClassFromDeclaration,
   ensureNamedClass,
   ensureSmalltalkShape,
   methodBlockRef,

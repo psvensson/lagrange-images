@@ -1,7 +1,7 @@
 # ADR 0046: Allocation, initialization and class introspection
 
 Status: implemented — `basicNew`, `new` and `class` stay ordinary Smalltalk messages; allocation and class lookup use language-owned primitive Blocks registered at the composition root and image-local by one rule, instance shape is explicit durable class data, and image-native allocation is not an ADR 0037 capability check.
-Proven by: test/smalltalk-allocation.test.js, test/smalltalk-subclass-concurrency.test.js, test/steering-docs.test.js
+Proven by: test/smalltalk-allocation.test.js, test/smalltalk-class-declarations.test.js, test/smalltalk-subclass-concurrency.test.js, test/steering-docs.test.js
 
 ## Problem
 
@@ -206,6 +206,23 @@ For the current builder, omission of an instance shape keeps the existing meanin
 `kernel.nil`. A caller that wants an instantiable class supplies an explicit local Shape ref. That
 preserves retry/exactness semantics for class definitions created before this ADR instead of silently
 turning every old class into an empty class.
+
+#### Subsequent ADR 0085 M1 owner completion
+
+The original `defineClass()` contract above remains unchanged. ADR 0085's native-import vertical
+exposed one missing native owner boundary beside it: a language declaration has ordered local
+instance-variable names but must not choose native Shape or slot ids.
+
+`ensureClassFromDeclaration()` now owns that translation in the native class builder. Initial slot
+identity is derived from the defining native Class identity plus the declared name; the name is still
+stored separately as the Shape display/binding name. The builder composes those local slots after the
+nearest complete inherited Shape and admits the immutable result through the existing Shape and named
+Class owners. With no local additions it reuses the inherited Shape, or the kernel empty Shape at the
+root, rather than minting a duplicate layout.
+
+This deterministic initial binding is not a rename heuristic. A later rename with semantic continuity
+must explicitly preserve the existing slot id, as ADR 0050 requires; presenting a different declaration
+name is a divergent immutable class definition and conflicts.
 
 ### 5. `basicNew` creates one ordinary object and initializes every slot to that image's `nil`
 
