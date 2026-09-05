@@ -188,9 +188,10 @@ async function conditionSignal({images, primitiveImage, activation, context, pri
     // Name the condition's CLASS, not only the instance. An unhandled condition is a diagnostic
     // that has to survive into a stack trace and a test assertion, and an object id alone says
     // nothing about what was signalled; the class is what a reader greps for.
-    throw new SmalltalkUnhandledConditionError(
-      `${conditionClass.objectId} (${condition.imageId}/${condition.objectId})`,
-    );
+    // A record may legitimately carry a null behavior, so this never assumes one; an unhandled
+    // condition must not turn into a TypeError about the diagnostic itself.
+    const named = conditionClass ? `${conditionClass.imageId}/${conditionClass.objectId}` : 'an unknown class';
+    throw new SmalltalkUnhandledConditionError(`${named} (${condition.imageId}/${condition.objectId})`);
   }
 
   const occurrence = facade.runtime.beginOccurrence(condition, scope.scopeId);

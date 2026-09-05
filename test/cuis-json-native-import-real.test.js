@@ -584,7 +584,7 @@ test('the M3 acceptance target imports natively and stops at its first missing r
       );
     assert.match(
       failure.message,
-      /unhandled Smalltalk condition: smalltalk\/class\/WriteStreamContentsNeedsSpeciesPreservingResult/,
+      /unhandled Smalltalk condition: \S*smalltalk\/class\/WriteStreamContentsNeedsSpeciesPreservingResult/,
       'the next M3 blocker is a species-preserving result for a written stream',
     );
     // Specifically NOT either previous blocker. Execution now runs the whole imported path:

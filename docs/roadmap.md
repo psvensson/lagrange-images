@@ -170,8 +170,10 @@ feature must be demanded by that consumer and repaired at its own owner
   positive, zero, negative and 30-digit integers, and it composes existing arithmetic and the
   byte/text conversion rather than adding a primitive;
 - [x] add the one native `WriteStream >> nextPutAll:` execution named, and make `contents` refuse by
-  name once anything has been written rather than silently answer an empty collection; producing a
-  species-preserving result for a written stream is a separate open question;
+  name once anything has been written rather than answer an empty collection, which for a
+  Collection-backed stream would have been a silent wrong answer reachable by ordinary native code
+  (on the JSON path itself it would still have failed visibly, since native Text has no `species`);
+  producing a species-preserving result for a written stream is a separate open question;
 - [ ] add missing native library/kernel semantics only for real imported consumers;
 - [ ] use real OpenSmalltalkVM/Cuis as a semantic oracle where differential proof is useful;
 - [ ] keep FFI or other deliberately non-native facilities behind explicit interfaces rather than heap mirroring.

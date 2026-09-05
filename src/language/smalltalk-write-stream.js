@@ -14,12 +14,13 @@ import {objectRef} from '../value/index.js';
 //
 // SCOPE. Exactly the protocol the acceptance path sends, and nothing else:
 //
-//   WriteStream class >> on:      the stream the source constructs
-//   WriteStream       >> contents the answer it takes back out
+//   WriteStream class >> on:          the stream the source constructs
+//   WriteStream       >> nextPutAll:  the one write EXECUTION named (bead lagrange-images-nv1.8)
+//   WriteStream       >> contents     the answer it takes back out
 //
-// `nextPut:`, `nextPutAll:`, `with:`, positioning, resets, read streams and byte-stream breadth
-// are all real Cuis protocol that this consumer does not exercise here, and are deliberately
-// absent. Execution pressure adds them, one proven consumer at a time.
+// `nextPut:`, `with:`, positioning, resets, read streams and byte-stream breadth are all real Cuis
+// protocol that this consumer does not exercise, and are deliberately absent. Execution pressure
+// adds them, one proven consumer at a time — `nextPutAll:` is here because it did exactly that.
 //
 // RECORDED REAL-CUIS ORACLE (pinned VM + Cuis7.9-8090 image, probed directly; the full transcript
 // is on bead lagrange-images-nv1.4). These are measurements, not Squeak/Pharo recollection:
@@ -49,9 +50,9 @@ import {objectRef} from '../value/index.js';
 // this class can currently reach, `copyFrom: 1 to: 0` and `collection species new` agree exactly.
 // This is not an approximation that happens to pass; it is the same answer.
 //
-// Adding write protocol later MUST revisit this method: the moment a position can be non-zero the
-// two stop agreeing, an empty answer becomes wrong, and a real prefix copy is needed along with
-// whatever collection protocol that requires. This comment is the handoff.
+// That handoff has since been taken: write protocol exists, so `contents` no longer answers that
+// unconditionally. Unwritten it still does, exactly as above; written it REFUSES, because an empty
+// answer after data was written would be wrong. See `contents` below.
 //
 // KNOWN DIVERGENCE, asserted by a test rather than only described here. Cuis implements `species`
 // on OBJECT, so upstream every backing answers it and an Array-backed stream answers an Array.
@@ -64,9 +65,12 @@ import {objectRef} from '../value/index.js';
 // milestone forbids. It becomes legitimate when a real consumer needs it.
 //
 // NOT MODELLED. Cuis puts WriteStream under `PositionableStream`, and its `on:` also resets a
-// position and a read limit. This class is a direct subclass of Object with no position, because
-// nothing here can move one. That divergence is deliberate and stays true only while the write
-// protocol is absent.
+// position and a read limit. This class is a direct subclass of Object and models no position.
+// Writes exist now, so the earlier justification ("nothing here can move a position") has expired
+// and is replaced by a narrower one: nothing READS a position. No selector exposes one, `contents`
+// refuses rather than computing a prefix, and the accumulation below is append-only. A position
+// becomes necessary when something needs the written prefix — which is bead lagrange-images-nv1.7.
+
 // v2: the write protocol added an instance variable, and a Shape record is immutable, so the
 // structural change gets a new Shape identity rather than a rewrite (ADR 0047). An image that
 // already holds the v1 class gets an explicit definition conflict from the class owner, which is
@@ -150,12 +154,20 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
   // Existence first, then the method: `methodBlockRef` reads a Behavior, so asking it about a
   // class that was never defined raises `behavior not found` rather than answering "absent".
   // This is the exact two-step `smalltalk-library.js` uses for its own `Exception >> signal` check.
-  // Every method this class's source calls, in the class that must implement it. `species` for the
-  // unwritten answer, `add:` for the accumulation, `signal` for the refusal.
+  // Every method this class's source calls, in the class that must implement it. Checked as
+  // installed METHODS rather than as class or global existence, because publication says nothing
+  // about protocol and a half-installed image would otherwise compile cleanly and fail on first
+  // use. `isNil` needs BOTH halves: with only the `Object` one, `written isNil` answers false on a
+  // fresh stream and `contents` would refuse a stream nothing had written to.
   const required = [
     ['smalltalk/class/Collection', 'species'],
     ['smalltalk/class/OrderedCollection', 'add:'],
     ['smalltalk/class/Exception', 'signal'],
+    ['smalltalk/class/Object', 'isNil'],
+    ['smalltalk/class/UndefinedObject', 'isNil'],
+    ['smalltalk/class/True', 'ifTrue:'],
+    ['smalltalk/class/False', 'ifTrue:'],
+    ['smalltalk/class/Class', 'new'],
   ];
   for (const [objectId, selector] of required) {
     const classRef = objectRef(imageId, objectId);
@@ -164,8 +176,8 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
       throw new TypeError(`image ${imageId} has no ${objectId} ${selector} method; install the library first`);
     }
   }
-  // The source also NAMES these globals, which is a compile-time requirement distinct from the
-  // protocol above.
+  // The source also NAMES this global, which is a compile-time requirement distinct from the
+  // protocol above. The refusal condition's own global is satisfied by construction below.
   for (const name of ['OrderedCollection']) {
     if (!await resolveGlobal({images, imageId, name})) {
       throw new TypeError(`image ${imageId} has not published the global ${name}; publish it first`);
@@ -174,18 +186,10 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
 
   // The named refusal condition, an ordinary Error subclass. It carries no state and no protocol of
   // its own: its NAME is the whole point, so an unhandled signal reads as the gap it stands for.
-  // It reuses its superclass's instance Shape: a condition subclass declares no state of its own,
-  // and the class owner's complete-layout rule means it must still carry the inherited one, which
-  // is also what makes it instantiable.
   const errorClassRef = objectRef(imageId, 'smalltalk/class/Error');
-  const conditionClassRef = (await ensureNamedClass({
-    images,
-    imageId,
-    name: WRITE_STREAM_CONTENTS_CONDITION,
-    superclassRef: errorClassRef,
-    instanceShapeRef: (await readBehavior(images, errorClassRef)).instanceShape,
-  })).classRef;
-  await publishSmalltalkClassGlobals({images, imageId, names: [WRITE_STREAM_CONTENTS_CONDITION]});
+  if (!await images.getObject(imageId, errorClassRef.objectId)) {
+    throw new TypeError(`image ${imageId} has no Error class; install the condition protocol first`);
+  }
 
   const instanceShapeRef = await ensureSmalltalkShape(images, imageId, {
     id: WRITE_STREAM_SHAPE_ID,
@@ -198,6 +202,22 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
   const {classRef, metaclassRef} = await ensureNamedClass({
     images, imageId, name: 'WriteStream', superclassRef: null, instanceShapeRef,
   });
+
+  // The named refusal condition, created and published only AFTER the class it serves has been
+  // admitted. An image already holding a differently-shaped WriteStream conflicts above, so it
+  // does not gain a stray condition class and a stray published global on the way to that
+  // refusal — the same "nothing half-installed" property the prerequisite path already had.
+  // It reuses its superclass's instance Shape: a condition subclass declares no state of its own,
+  // and the class owner's complete-layout rule means it must still carry the inherited one, which
+  // is also what makes it instantiable.
+  const conditionClassRef = (await ensureNamedClass({
+    images,
+    imageId,
+    name: WRITE_STREAM_CONTENTS_CONDITION,
+    superclassRef: errorClassRef,
+    instanceShapeRef: (await readBehavior(images, errorClassRef)).instanceShape,
+  })).classRef;
+  await publishSmalltalkClassGlobals({images, imageId, names: [WRITE_STREAM_CONTENTS_CONDITION]});
 
   await defineMethodsFromSource({
     images, compilation, imageId, lane, classRef, methods: WRITE_STREAM_METHODS,
