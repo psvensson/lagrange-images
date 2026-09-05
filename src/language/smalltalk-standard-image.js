@@ -10,7 +10,7 @@ import {
 } from './smalltalk-globals.js';
 import {installSmalltalkArrayEnumerationProtocol, installSmalltalkIndexedProtocol} from './smalltalk-indexed.js';
 import {installSmalltalkInstanceVariableProtocol} from './smalltalk-instance-variables.js';
-import {installSmalltalkIntegerProtocol} from './smalltalk-integer.js';
+import {installSmalltalkIntegerPrintingProtocol, installSmalltalkIntegerProtocol} from './smalltalk-integer.js';
 import {findSmalltalkKernel, installSmalltalkKernel} from './smalltalk-kernel.js';
 import {installSmalltalkLibrary} from './smalltalk-library.js';
 import {installSmalltalkSubclassProtocol} from './smalltalk-subclasses.js';
@@ -128,6 +128,10 @@ async function installSymmetricSmalltalkStandardImage({
   const globals = await installSmalltalkGlobalNamespace(options);
   await publishSmalltalkClassGlobals({images, imageId, names: [...PRE_LIBRARY_PUBLIC_CLASSES]});
 
+  // Integer PRINTING, after the namespace because its source names the `Array` and `ByteArray`
+  // globals. Ownership is unchanged — the Integer module owns it; only the ordering lives here.
+  const integerPrinting = await installSmalltalkIntegerPrintingProtocol(options);
+
   const library = await installSmalltalkLibrary(options);
   await publishSmalltalkClassGlobals({images, imageId, names: [...LIBRARY_PUBLIC_CLASSES]});
 
@@ -165,6 +169,7 @@ async function installSymmetricSmalltalkStandardImage({
       blocks,
       integers,
       integerAddition,
+      integerPrinting,
       conditions,
       exceptionAccessors,
       dictionary,

@@ -165,6 +165,10 @@ feature must be demanded by that consumer and repaired at its own owner
   the result. With it the acceptance target's whole scope IMPORTS natively for the first time.
   Executing it still needs `printOn:base:` and then a Text that answers `species`, each at the
   native library owner;
+- [x] add native `Integer >> printOn:base:` at the native Integer owner, because the pinned
+  package's own `Integer>>jsonWriteOn:` sends it; base-10 output is proved against real Cuis for
+  positive, zero, negative and 30-digit integers, and it composes existing arithmetic and the
+  byte/text conversion rather than adding a primitive;
 - [ ] add missing native library/kernel semantics only for real imported consumers;
 - [ ] use real OpenSmalltalkVM/Cuis as a semantic oracle where differential proof is useful;
 - [ ] keep FFI or other deliberately non-native facilities behind explicit interfaces rather than heap mirroring.
