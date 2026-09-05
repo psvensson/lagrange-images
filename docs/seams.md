@@ -298,6 +298,99 @@ so Images owns neither a native method source nor a Cuis provenance association 
 provenance is optional metadata on a native result; a Cuis-imported class browses through this same
 seam with the same result shape, and its origin selects no second lane.
 
+## Authorized native Smalltalk method replacement
+
+`src/language/smalltalk-authorized-method-replacement.js` (ADR 0088, bead lagrange-images-qax slice C2,
+Object Environment E3, GitHub #218) is the public WRITE seam beside the ADR 0087 read seams. It advances ONE
+EXISTING method at `{Class/Metaclass, selector}` to explicitly supplied new source, and nothing else:
+no method addition, no removal, no class editing, no batch editing, no durable source, no
+protocol/category, no Cuis provenance, no public compiler and no public reconciliation API.
+
+```text
+authorizedReplaceSmalltalkMethod({images, compilation, imageId, classRef, selector,
+                                  source, expectedVersionToken, require})  ->  {replaced: true}
+```
+
+The workflow is the pair: `authorizedReadSmalltalkMethodForUpdate` answers
+`{descriptor, versionToken}`, and that token is handed back here unchanged. Both are published on
+`src/runtime.js` and `src/portable-runtime.js` as the exact owner functions.
+
+Order is the contract, and each step exists to kill a specific failure:
+
+```text
+1  validate caller-owned shape           pure; cannot be an existence oracle
+2  validate the token's scope            pure; a token for another position is REFUSED, never reinterpreted
+3  require object/write on the Class     before ANY record is read
+4  resolve the current binding           through the ONE current-binding reader (methodBlockRef)
+5  admit the token against it            the caller's observation, never a fresh substitute
+6  stale -> refuse                       BEFORE any compilation is invoked
+7  reconcileMethodsFromSource(...)       with expectedCurrent = the caller's ORIGINAL observation
+8  map only public semantic outcomes
+```
+
+Authority is ONE `object/write` on the declaring Class or Metaclass, because a replacement mutates
+that Behavior's selector-BINDING state. It is deliberately NOT demanded on the previously bound
+Block: that Block is immutable revision material (ADR 0086 decision 1) and is not what changes —
+the binding stops pointing at it. Write is never inferred from a class `object/read`, a Block
+`object/read`, possession of refs, Project membership, or possession of the token: **a version token
+is an assumption about state and confers zero authority.** Authorization precedes existence
+disclosure, so an implemented selector, an unimplemented one and a missing class are one
+`AuthorityError` to a denied caller.
+
+The seam owns no concurrency semantics. What "still current" means once a write is in flight, the
+unrelated-selector CAS rebase, the bounded contention budget and immutable revision publication all
+stay at the class builder (see the `reconcileMethods()` row above), reached by passing the caller's
+observation through as `expectedCurrent`. The pre-compilation admission in step 5 is not a second
+authority on staleness: the same observation is re-asserted by the owner at plan time and at every
+rebase boundary, and the owner's verdict is final. Step 6 exists so that a stale caller receives the
+stale verdict rather than a compiler diagnostic, and so that source already known to be inadmissible
+is never compiled. The caller's token is never replaced by a fresh read — that substitution would
+make a stale conflict unobservable, which is exactly what #218 asks this operation to prove it
+cannot do. An ABSENT selector is stale rather than a fresh definition, the same rule the owner
+applies, because E3 adds no method.
+
+**No execution lane is published**, and that has an observable consequence. `reconcileMethodsFromSource`
+compiles in its own default lane, so a method originally installed in the WASM lane — every
+Cuis-imported method is — is replaced by one in the neutral lane. It dispatches and answers exactly
+as before, because the executor registry selects by the artifact's representation, but the
+executable representation underneath does change. A `lane` parameter would publish a compiler knob
+on a seam that exposes no compiler, and preserving the current method's lane would mean decoding the
+bound Block's code artifact — the second-decoder path ADR 0087 rejected for the read seam. Which
+lane a REPLACEMENT should compile in is a question for the installer that owns lanes; see bead
+`lagrange-images-it3`.
+
+`source` is explicitly supplied NEW source and is not persisted: ADR 0087's `source: null` remains a
+truthful answer after a successful replacement, and #218 point 5 scopes E3 that way on purpose. The
+receipt is frozen `{replaced: true}` and carries no Block ref, descriptor, replacement token or
+source, because the consumer has committed to a fresh authorized reread as displayed truth (#218
+point 4) — and a successful replacement legitimately rebinds to a FRESH Block identity. The receipt
+says "the position now denotes the source you supplied", not "a record was written": source that
+means exactly what is already bound is ADR 0086 exact replay against the state the caller observed,
+so it is a write-free success with the same receipt and an unmoved binding.
+
+The public taxonomy is discriminated by `error.name`, which is the only discriminator available to a
+consumer reaching the seam through `src/portable-runtime.js` (these classes are internal):
+
+| `error.name` | Meaning |
+| --- | --- |
+| `SmalltalkMethodReplacementInputError` | malformed caller-owned input; its own class because the native semantic compiler also rejects bad SOURCE with a bare `TypeError` |
+| `SmalltalkMethodPositionTokenError` | malformed token, or one issued for another image/class/selector |
+| `AuthorityError` | the caller's own `require` denied `object/write` |
+| `SmalltalkMethodTargetError` | after authorization: no such native method position. Names only the caller's own position and forwards no owner diagnostic, because those name the class's MethodDictionary record |
+| `SmalltalkStaleMethodPositionError` | the observed binding is no longer current (the class builder's own class, unchanged) |
+| `SmalltalkMethodReplacementContentionError` | transient: the position is unchanged and was not advanced; retry from a fresh read. Covers BOTH an exhausted rebase budget and a dictionary sealed for migration, because the caller's response to either is the same and neither is a statement about the request. A position-scoped restatement of the owner's dictionary-scoped outcomes, which name the class's MethodDictionary record. It does not claim an empty write |
+| anything else | the native compiler/source owner rejected the source. Only the class builder's own semantic refusals are restated; a host or transport failure of the binding read propagates as raised, because it is not a statement about this position |
+
+No backend `VersionConflictError` escapes raw or as a `cause`, and no MethodDictionary ref,
+representation or version, backend version, winning Block ref or replacement token appears in any
+refusal. Current truth comes only from a fresh authorized read.
+
+The module is deliberately NOT listed in `src/language/index.js`: that barrel is `export *` and
+`src/runtime.js` re-exports it, so adding it there would publish the module's internal error classes
+— and any helper a later change adds — on the package's `.` and `./language` surfaces. The one
+public name is re-exported by name from both reviewed roots instead. See the barrel trap in
+[the runbook](runbook.md#traps).
+
 ## ABI and contract identifiers
 
 Not representations — these appear inside artifact content as an `abi` or contract tag.

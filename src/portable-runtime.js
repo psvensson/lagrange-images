@@ -90,6 +90,9 @@ import {
   authorizedDescribeSmalltalkMethod,
   authorizedReadSmalltalkMethodForUpdate,
 } from './language/smalltalk-browse.js';
+import {
+  authorizedReplaceSmalltalkMethod,
+} from './language/smalltalk-authorized-method-replacement.js';
 import {createDefaultLanguagePlatform} from './language/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './language/symmetric-smalltalk.js';
 import {createSymmetricSmalltalkDispatcher} from './language/symmetric-smalltalk-dispatcher.js';
@@ -279,4 +282,8 @@ export {
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
   authorizedReadSmalltalkMethodForUpdate,
+  // The authorized native method REPLACEMENT seam (bead lagrange-images-qax, Object Environment
+  // E3). The exact owner function from src/language/smalltalk-authorized-method-replacement.js;
+  // that module's error classes stay internal and are distinguished by `error.name`.
+  authorizedReplaceSmalltalkMethod,
 };

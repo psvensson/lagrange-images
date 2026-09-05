@@ -99,6 +99,15 @@ Cuis-shaped browsing lane appearing beside the native one.
 7. **Browsing only.** No edit, rename or recompile semantics enter this seam. E1 is a browser; a
    write lane needs its own consumer, its own owner decision and its own ADR.
 
+> Non-normative pointer (bead lagrange-images-qax, slice C2). Decision 7's condition has since been
+> met: the Object Environment named itself as the consumer (GitHub #218), and the write lane has its
+> own owner and its own ADR in [ADR 0088](0088-authorized-native-smalltalk-method-replacement.md).
+> Decision 7 is unchanged and still describes THIS seam — `src/language/smalltalk-browse.js` remains
+> read-only, and `authorizedDescribeSmalltalkMethod` still answers no token. Replacement lives at a
+> separate owner, `src/language/smalltalk-authorized-method-replacement.js`, which demands
+> `object/write` on the declaring Class/Metaclass and shares nothing with the read seams but the
+> canonical descriptor those seams answer.
+
 8. **Public through the existing roots.** `src/language/index.js` (hence `src/runtime.js`) and
    `src/portable-runtime.js` re-export the exact owner functions, never wrappers, so a portable
    Object Environment needs no private `src/...` path.
