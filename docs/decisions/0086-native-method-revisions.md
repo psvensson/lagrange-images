@@ -89,6 +89,14 @@ B material. If acknowledgement is lost after the CAS, retry observes B and is wr
 Unreferenced immutable material from a losing contender is an accepted create-before-publication
 property; this decision adds no rollback subsystem.
 
+> Non-normative pointer (bead lagrange-images-qax, slice C1). The lost-acknowledgement property
+> above describes an UNGUARDED write and remains true of one. A write that carries an
+> `expectedCurrent` observation is a different operation shape: after a lost acknowledgement the
+> position HAS moved — the caller moved it — so re-attempting with the same observation is
+> `SmalltalkStaleMethodPositionError`, not a write-free replay. That is the optimistic-concurrency
+> guarantee working, not an exception to it, and a fresh authorized read is how the caller learns
+> its write landed. See the `reconcileMethods` row in `docs/seams.md`.
+
 ### 4. The class builder interprets a lost backend CAS
 
 The backend remains authoritative for conditional persistence. On `VersionConflictError`, the
