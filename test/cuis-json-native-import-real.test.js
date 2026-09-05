@@ -584,15 +584,18 @@ test('the M3 acceptance target imports natively and stops at its first missing r
       );
     assert.match(
       failure.message,
-      /message not understood: nextPutAll:/,
-      'the next M3 blocker is the native stream write protocol, at the WriteStream owner',
+      /unhandled Smalltalk condition: \S*smalltalk\/class\/WriteStreamContentsNeedsSpeciesPreservingResult/,
+      'the next M3 blocker is a species-preserving result for a written stream',
     );
-    // Specifically NOT the previous blocker: native integer printing is present and was reached.
-    assert.doesNotMatch(
-      failure.message,
-      /printOn:base:/,
-      'native Integer printing closed the previous blocker; execution now runs through it',
-    );
+    // Specifically NOT either previous blocker. Execution now runs the whole imported path:
+    // `render:` evaluates `WriteStream on: String new`, dispatches `jsonWriteOn:` to a native
+    // integer, that extension sends `printOn:base:`, native printing writes through `nextPutAll:`,
+    // and `^ s contents` is reached. What is missing is only the ANSWER's representation — the
+    // species question bead lagrange-images-nv1.7 owns — and the stream refuses by name rather
+    // than answering an empty collection.
+    for (const closed of [/printOn:base:/, /message not understood: nextPutAll:/]) {
+      assert.doesNotMatch(failure.message, closed, 'the previous blockers are closed and were run through');
+    }
   } finally {
     await runtime.close();
   }

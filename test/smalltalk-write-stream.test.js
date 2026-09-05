@@ -17,6 +17,8 @@ import {
   publishSmalltalkClassGlobals,
   readBehavior,
   resolveGlobal,
+  textValue,
+  WRITE_STREAM_CONTENTS_CONDITION,
 } from '../src/runtime.js';
 
 // The native `WriteStream` (bead lagrange-images-nv1.4). It exists because a real imported
@@ -91,9 +93,11 @@ test('WriteStream is an ordinary native class, not a special representation', as
   // modelled, because nothing here has a position to be positionable about.
   assert.deepEqual(behavior.superclass, kernel.objectClass);
 
-  // One instance variable, by name and in order — the backing collection, nothing else.
+  // Two instance variables, by name and in order: the backing collection, and the PROVISIONAL
+  // internal accumulation the write protocol needs. The accumulation is deliberately not exposed
+  // by any selector, so bead lagrange-images-nv1.7 stays free to decide what `contents` answers.
   const shape = await runtime.images.getShape(behavior.instanceShape.imageId, behavior.instanceShape.objectId);
-  assert.deepEqual(shape.slots.map(({name}) => name), ['collection']);
+  assert.deepEqual(shape.slots.map(({name}) => name), ['collection', 'written']);
 });
 
 // SCOPE. The whole point of this bead is that breadth the acceptance target does not exercise
@@ -111,7 +115,10 @@ test('WriteStream implements exactly the consumer protocol plus its own initiali
     images: runtime.images, imageId: 'app', classRef: objectRef('app', objectId),
   })).map(({selector}) => selector).sort();
 
-  assert.deepEqual(await selectorsOf('smalltalk/class/WriteStream'), ['contents', 'on:']);
+  // `nextPutAll:` is here because EXECUTION named it: native Integer printing sends exactly one
+  // write per print and nothing else (bead lagrange-images-nv1.8). `nextPut:` is still absent —
+  // no consumer sends it, and it earns its own repair if one ever does.
+  assert.deepEqual(await selectorsOf('smalltalk/class/WriteStream'), ['contents', 'nextPutAll:', 'on:']);
   assert.deepEqual(await selectorsOf('smalltalk/metaclass/WriteStream'), ['on:']);
 });
 
@@ -245,11 +252,113 @@ test('installing without the library method contents depends on is refused', asy
       installSmalltalkWriteStreamProtocol({
         images: runtime.images, compilation: runtime.compilation, imageId: 'bare', lane: 'wasm',
       }),
-      /has no Collection species method; install the library first/,
+      /has no smalltalk\/class\/Collection species method; install the library first/,
     );
     // Refused before anything was written, so the bare image gains no half-installed class.
     assert.equal(await runtime.images.getObject('bare', 'smalltalk/class/WriteStream'), null);
   } finally {
     await runtime.close();
   }
+});
+
+// M3 blocker 6 (bead lagrange-images-nv1.8). Execution named exactly one write selector, and this
+// is it. Every expectation is the recorded real-Cuis oracle for `nextPutAll:` (transcript on the
+// bead), including the one that contradicts common recollection: it answers THE STREAM.
+test('nextPutAll: answers the stream, as the oracle records and not the argument', async () => {
+  assert.deepEqual(
+    await evaluate(`[ | s | s := WriteStream on: OrderedCollection new. (s nextPutAll: 'ab') == s ]`),
+    booleanValue(true),
+  );
+});
+
+// THE SILENT WINDOW THIS SLICE HAD TO CLOSE. Before writes existed, `contents` answering an empty
+// species-preserving collection was exactly right. The moment a write can happen it would be a
+// SILENT WRONG ANSWER — an empty collection after data was written — and available to any native
+// user of WriteStream, not only to the imported JSON path. So it refuses, visibly and by name.
+//
+// Producing the real answer is the species question bead lagrange-images-nv1.7 owns. This slice
+// deliberately does not settle it: the refusal is what turns that gap into executable pressure.
+test('contents refuses by name once anything has been written', async () => {
+  for (const backing of ['OrderedCollection new', "''"]) {
+    await assert.rejects(
+      evaluate(`[ | s | s := WriteStream on: ${backing}. s nextPutAll: 'ab'. s contents ]`),
+      /unhandled Smalltalk condition: \S*smalltalk\/class\/WriteStreamContentsNeedsSpeciesPreservingResult/,
+      `a written ${backing}-backed stream must refuse rather than answer`,
+    );
+  }
+});
+
+// ... and the refusal is a named condition class, not an incidental message-not-understood, so the
+// work that closes it has one obvious place to land.
+test('the refusal is a distinct named condition class, an ordinary Error subclass', async () => {
+  const runtime = await image();
+  const conditionClass = objectRef('app', `smalltalk/class/${WRITE_STREAM_CONTENTS_CONDITION}`);
+  const behavior = await readBehavior(runtime.images, conditionClass);
+  assert.equal(behavior.name.value, WRITE_STREAM_CONTENTS_CONDITION);
+  assert.deepEqual(behavior.superclass, objectRef('app', 'smalltalk/class/Error'));
+  assert.ok(await resolveGlobal({images: runtime.images, imageId: 'app', name: WRITE_STREAM_CONTENTS_CONDITION}));
+});
+
+// REGRESSION GUARD for the case nv1.4 proved. An unwritten stream keeps its oracle-proven answer
+// exactly: streaming over a NON-EMPTY collection still answers an EMPTY one of the same species,
+// which is what distinguishes `on:` from `with:`. Adding write protocol must not disturb it.
+test('an unwritten stream keeps the answer the previous slice proved', async () => {
+  assert.deepEqual(
+    await evaluate(`[ | backing |
+      backing := OrderedCollection new.
+      backing add: 1. backing add: 2. backing add: 3.
+      (WriteStream on: backing) contents size ]`),
+    integerValue(0),
+  );
+  // An empty write is still a write: this slice refuses rather than pretending it can answer.
+  // Upstream answers '' here, and that divergence is deliberate while the species question is open.
+  await assert.rejects(
+    evaluate(`[ | s | s := WriteStream on: OrderedCollection new. s nextPutAll: OrderedCollection new. s contents ]`),
+    /WriteStreamContentsNeedsSpeciesPreservingResult/,
+  );
+});
+
+// THE ACCUMULATION IS REAL, and this is the only thing that says so. No SELECTOR answers it — the
+// enumeration test above pins the protocol to exactly three, which is what keeps bead
+// lagrange-images-nv1.7 free to decide what `contents` answers — so the proof reads the stored
+// object directly. Without this, `nextPutAll:` could discard its argument entirely and every other
+// test here would still pass, which is not a contract worth shipping.
+test('nextPutAll: actually retains what it was given, in order', async () => {
+  const runtime = await image();
+  const {block} = await installSymmetricSmalltalkBlock({
+    images: runtime.images,
+    imageId: 'app',
+    id: `write-stream-retains-${counter += 1}`,
+    source: `[ | s | s := WriteStream on: OrderedCollection new. s nextPutAll: 'ab'. s nextPutAll: 'cd'. s ]`,
+  });
+  const stream = await runtime.executor.execute(await runtime.invocations.invokeBlock(
+    objectRef('app', block.id), [],
+  ));
+  const record = await runtime.images.getObject(stream.imageId, stream.objectId);
+  const written = record.slots['write-stream-written'];
+  assert.ok(written, 'the stream retains an accumulation slot');
+  const accumulation = await runtime.images.getObject(written.imageId, written.objectId);
+  // An OrderedCollection holds its elements in a backing Array behind its `contents` slot; the
+  // Array is over-allocated, so the writes are the text values in it, in order.
+  const backing = accumulation.slots['ordered-collection-contents'];
+  const elements = await runtime.images.getObject(backing.imageId, backing.objectId);
+  assert.deepEqual(
+    Object.values(elements.indexed ?? {}).filter((value) => value?.kind === 'text'),
+    [textValue('ab'), textValue('cd')],
+  );
+});
+
+// Stream REUSE. `on:` resets the accumulation, so a stream written to and then re-`on:`'d answers
+// the unwritten answer again rather than refusing — and, more importantly, never answers stale
+// content. This is the one place where a mistake would produce the exact lie this slice exists to
+// prevent, so it is asserted rather than reasoned about.
+test('re-sending on: resets the stream, so it neither refuses nor answers stale content', async () => {
+  assert.deepEqual(
+    await evaluate(`[ | s |
+      s := WriteStream on: OrderedCollection new.
+      s nextPutAll: 'ab'.
+      s on: OrderedCollection new.
+      s contents size ]`),
+    integerValue(0),
+  );
 });
