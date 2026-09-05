@@ -166,7 +166,28 @@ function canonicalMethodIdentity(packageName, classIdentity, side, selector) {
 //   any other class name is untouched. This table has exactly one entry and no name fallback.
 //
 // The match is on the TOKEN stream, not on text, so `'String new'` inside a string literal and
-// `"String new"` inside a comment are not rewritten.
+// `"String new"` inside a comment are not rewritten. An idiom is also about a GLOBAL name that the
+// package does NOT define, so it does not fire when the name is bound or declared: a parameter, a
+// temporary or a block parameter named `String`, or a class named `String` declared by the
+// manifest itself, all mean their own thing and need no translation. A cascade is excluded too,
+// because its later messages go to the receiver rather than to what `new` answered.
+//
+// HONEST ASYMMETRY with the class-mapping table above, which is keyed by COMPLETE semantic
+// identity precisely so that a class merely SPELLED `Integer` elsewhere is not this image's
+// Integer. This table cannot be keyed that way: a name inside a method body carries no package
+// attribution — the export records the source text, not a resolved binding for each name in it —
+// so the key is unavoidably the source token. What replaces identity keying is the narrowness of
+// the claim (one expression, not a class), the exclusions above (the package's own bindings and
+// declarations win), and the requirement that each entry be justified by a recorded measurement
+// that the expression's object contributes nothing observable to the covered path.
+//
+// WHAT THIS DOES NOT FIX, stated because the substitution's own justification depends on it: the
+// role the oracle established for the seed is that its SPECIES selects the result's
+// representation, and native `WriteStream >> contents` answers `collection species new` while
+// native Text does not implement `species` (the boundary bead lagrange-images-nv1.4 recorded and
+// asserted). So the covered path's `^ s contents` will need `species` to reach a Text before this
+// substitution is fully truthful. That is a real remaining gap at the native library owner, not
+// something this table settles, and it sits behind `printOn:base:` in execution order.
 const CUIS_DIALECT_IDIOMS = Object.freeze([Object.freeze({
   tokens: Object.freeze([
     Object.freeze({type: 'identifier', value: 'String'}),
@@ -175,19 +196,51 @@ const CUIS_DIALECT_IDIOMS = Object.freeze([Object.freeze({
   native: "''",
 })]);
 
+// A dialect idiom is about a GLOBAL name. If the method binds that name itself — as a parameter,
+// a temporary or a block parameter — then the source means something else entirely and needs no
+// translation at all, so the idiom must not fire. This scan deliberately OVER-detects: `|` is also
+// an ordinary binary selector, so an expression like `a | String | b` marks `String` bound and the
+// adaptation is skipped. Erring that way is safe — a skipped adaptation leaves an unbound name and
+// a visible refusal, while a missed binding would silently rewrite a legitimate variable.
+function boundNames(tokens, bodyTokenIndex, parameters) {
+  const bound = new Set(parameters);
+  let inTemporaries = false;
+  for (let at = bodyTokenIndex; at < tokens.length; at += 1) {
+    const token = tokens[at];
+    if (token.type === '|') {
+      inTemporaries = !inTemporaries;
+      continue;
+    }
+    if (token.type !== 'identifier') continue;
+    // `| a b |` temporaries, `[ :each | ... ]` block parameters, and assignment targets.
+    if (inTemporaries || tokens[at - 1]?.type === ':' || tokens[at + 1]?.type === 'assign') {
+      bound.add(token.value);
+    }
+  }
+  return bound;
+}
+
 function matchesIdiom(tokens, at, pattern) {
-  return pattern.every((expected, offset) => {
+  if (!pattern.every((expected, offset) => {
     const token = tokens[at + offset];
     return token !== undefined && token.type === expected.type && token.value === expected.value;
-  });
+  })) return false;
+  // A cascade continues to the RECEIVER of the last message, so in `String new; yourself` the
+  // later messages go to the class, not to what `new` answered. Substituting a literal there would
+  // silently change which object the rest of the cascade talks to, so the idiom does not fire.
+  return tokens[at + pattern.length]?.type !== ';';
 }
 
 // Right-to-left, so an earlier match's offsets stay valid while a later one is spliced out.
-function adaptDialectIdioms(bodySource, tokens, bodyTokenIndex, bodyStart) {
+function adaptDialectIdioms(bodySource, tokens, bodyTokenIndex, bodyStart, parameters, declaredNames) {
+  const bound = boundNames(tokens, bodyTokenIndex, parameters);
   const matches = [];
   for (let at = bodyTokenIndex; at < tokens.length; at += 1) {
     for (const idiom of CUIS_DIALECT_IDIOMS) {
       if (!matchesIdiom(tokens, at, idiom.tokens)) continue;
+      // The method binds the name itself, or the package declares a class of that name, so the
+      // source means its own thing and this is not the dialect idiom at all.
+      if (bound.has(tokens[at].value) || declaredNames.has(tokens[at].value)) continue;
       const last = tokens[at + idiom.tokens.length - 1];
       matches.push({start: tokens[at].start - bodyStart, end: last.end - bodyStart, native: idiom.native});
       break;
@@ -200,7 +253,7 @@ function adaptDialectIdioms(bodySource, tokens, bodyTokenIndex, bodyStart) {
   return adapted;
 }
 
-function nativeMethodSource({identity, selector, source}) {
+function nativeMethodSource({identity, selector, source, declaredNames}) {
   let tokens;
   try {
     tokens = tokenizeSymmetricSmalltalk(source);
@@ -238,7 +291,7 @@ function nativeMethodSource({identity, selector, source}) {
     fail(`method ${identity} source header declares ${parsedSelector}, not ${selector}`, identity);
   }
   const bodyStart = tokens[index - 1].end;
-  const body = adaptDialectIdioms(source.slice(bodyStart), tokens, index, bodyStart).trim();
+  const body = adaptDialectIdioms(source.slice(bodyStart), tokens, index, bodyStart, parameters, declaredNames).trim();
   if (body.length === 0) fail(`method ${identity} has no body`, identity);
   const parameterSource = parameters.length === 0 ? '' : ` ${parameters.map((name) => `:${name}`).join(' ')} |`;
   const bodyTokens = tokens.slice(index, -1);
@@ -437,7 +490,7 @@ function importPlan(manifest, scope) {
       classIdentity,
       side: item.side,
       selector,
-      source: nativeMethodSource({identity, selector, source}),
+      source: nativeMethodSource({identity, selector, source, declaredNames: nativeNames}),
     }));
   }
   if (requested) {

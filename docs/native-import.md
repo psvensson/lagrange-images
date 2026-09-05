@@ -283,7 +283,20 @@ itself, so no identity is established and nothing is copied; and swapping it for
 contributes no content, no behavior and no observable identity — only the species of the result.
 
 The table is matched on the TOKEN stream, so `'String new'` inside a literal and `"String new"`
-inside a comment are untouched. `String new: 16` is a different expression the measurement does not
+inside a comment are untouched. It does not fire when the package means its own thing: a parameter,
+temporary or block parameter named `String`, or a class named `String` the manifest itself
+declares. Nor does it fire on a cascade — in `String new; yourself` the later messages go to the
+class, so substituting a literal would change which object they reach. (The binding scan
+deliberately over-detects: `|` is also a binary selector, so an odd expression can mark the name
+bound and skip the adaptation. Erring that way leaves a visible unbound name, while missing a
+binding would silently rewrite a legitimate variable.)
+
+This table is keyed by a source token, which is an honest asymmetry with the class mapping above —
+that one is keyed by complete semantic identity precisely so a class merely *spelled* `Integer`
+elsewhere is not this image's Integer. A name inside a method body carries no package attribution,
+so identity keying is not available here. What stands in for it is the narrowness of the claim (one
+expression, not a class), the exclusions just listed, and the rule that every entry must be
+justified by a recorded measurement that the object contributes nothing observable to the path. `String new: 16` is a different expression the measurement does not
 cover and stays unbound, as does every other use of the name. No `String` global is published, no
 Cuis String class identity is mapped, and native `Text` is unchanged.
 
@@ -292,6 +305,16 @@ With that, the acceptance target's whole scope — the package's own class-side 
 exact replay stays write-free. The first missing semantic is no longer a name the compiler cannot
 bind but a method no native class implements: running `Json render: <native integer>` reaches
 `printOn:base:`, which is native Integer printing protocol and belongs to that owner.
+
+Two gaps remain on that path, and the second one qualifies the substitution above rather than
+merely following it. `printOn:base:` is the first. Behind it is `species`: the role the oracle
+established for the seed is that its species selects the result's representation, `contents`
+answers `collection species new`, and native Text does not implement `species` — the boundary
+recorded when `WriteStream` landed, which said it would become legitimate exactly when a real
+consumer streamed over a non-Collection backing. This is that consumer. So the seed substitution is
+truthful about what the expression contributes and is *not yet* sufficient on its own; the native
+library owner still has to let a Text answer `species` before `^ s contents` can work. Both are
+separate REDs at their own owners, in that execution order.
 
 ### 4. Native application state
 
