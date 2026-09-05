@@ -797,14 +797,16 @@ test('a declaration outside the scope cannot smuggle a malformed or duplicated c
   }
 });
 
-// Target resolution is by complete semantic identity against the adapter's mapping table. A Cuis
-// class whose NAME matches a native class is not thereby a native class: `Cuis-Base/Dictionary`
-// names a class this image really has and is still refused, and `Other/Integer` is refused even
-// though `Cuis-Base/Integer` is mapped.
+// Target resolution is by complete semantic identity against the adapter's mapping table, and the
+// table is a set of POSITIONS, not a set of names. The standard image is installed here on purpose:
+// every `Cuis-Base` identity below names a class this image really does have, so a refusal cannot
+// be explained away as "there was nothing to resolve to". `Cuis-Base/Object` is among them — it is
+// mapped, but only as a SUPERCLASS, and installing a package's selector on the root of the whole
+// native image is a claim no consumer has made.
 test('a covered method target outside the manifest is refused however native its name looks', async () => {
   const targets = [
-    // Each of these names a class this image really has, and none is mapped: the table is closed,
-    // not a name-matching rule that happens to list two entries today.
+    // Classes this image really has, none of which is a mapped METHOD TARGET.
+    'cuis-class/Cuis-Base/Object',
     'cuis-class/Cuis-Base/Dictionary',
     'cuis-class/Cuis-Base/Text',
     'cuis-class/Cuis-Base/Array',
@@ -816,10 +818,17 @@ test('a covered method target outside the manifest is refused however native its
     'cuis-class/Other/Integer',
     'cuis-class/Other/ZuluBase',
   ];
-  for (const target of targets) {
-    await withKernel(async (runtime) => {
-      const selector = 'value';
+  await withStandardImage(async (runtime) => {
+    for (const target of targets) {
       const className = target.slice(target.lastIndexOf('/') + 1);
+      // The premise of this test: the image really does have a class of that name to be tempted by.
+      if (target.startsWith('cuis-class/Cuis-Base/')) {
+        assert.ok(
+          await runtime.images.getObject('app', `smalltalk/class/${className}`),
+          `${className} must exist natively for this refusal to mean anything`,
+        );
+      }
+      const selector = 'value';
       const identity = `cuis-method/Fixture/${className}/instance/${selector}`;
       const input = manifest({methods: [{
         identity, package: 'Fixture', class: target, side: 'instance', selector, source: 'value\n\t^ 1',
@@ -837,7 +846,79 @@ test('a covered method target outside the manifest is refused however native its
           && new RegExp(`method target ${target.replace(/\//g, '\\/')} is outside the imported native class graph`).test(error.message),
         target,
       );
-      assert.equal(await runtime.images.frontier('app'), frontierBefore);
+      assert.equal(await runtime.images.frontier('app'), frontierBefore, target);
+    }
+  });
+});
+
+// The other half of the position rule. `Cuis-Base/Integer` is a mapped METHOD TARGET, not a mapped
+// superclass: native integers are Values whose dispatch class is fixed by their kind, so a class
+// declaring Integer as its parent would be an inert class no integer ever reaches. Nothing has
+// asked for it, so the adapter refuses instead of quietly constructing one.
+test('a mapped method-target identity is not thereby a legal superclass', async () => {
+  await withStandardImage(async (runtime) => {
+    const input = manifest({classes: [{
+      identity: 'cuis-class/Fixture/ZuluBase',
+      package: 'Fixture',
+      name: 'ZuluBase',
+      superclassName: 'Integer',
+      superclass: CUIS_NATIVE_INTEGER_IDENTITY,
+      instanceVariables: ['base'],
+    }]});
+    const frontierBefore = await runtime.images.frontier('app');
+    await assert.rejects(
+      importCuisNativePackage({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'app',
+        manifest: input,
+        scope: {classes: ['cuis-class/Fixture/ZuluBase'], methods: []},
+      }),
+      (error) => error instanceof CuisNativeImportError
+        && /unsupported superclass semantic identity cuis-class\/Cuis-Base\/Integer/.test(error.message)
+        // The refusal names the superclass position specifically, not the whole table.
+        && /only these map to a native superclass: cuis-class\/Cuis-Base\/Object$/.test(error.message)
+        && error.semanticIdentity === 'cuis-class/Fixture/ZuluBase',
+    );
+    assert.equal(await runtime.images.frontier('app'), frontierBefore);
+  });
+});
+
+// One authority per semantic identity. A mapped identity already denotes an existing native class,
+// so a manifest that also DECLARES it would make the same identity mean two different classes
+// depending on where it is read. Refused at preflight rather than resolved by precedence.
+test('a manifest may not declare a class whose identity the mapping already owns', async () => {
+  for (const identity of [CUIS_NATIVE_ROOT_OBJECT_IDENTITY, CUIS_NATIVE_INTEGER_IDENTITY]) {
+    await withStandardImage(async (runtime) => {
+      const name = identity.slice(identity.lastIndexOf('/') + 1);
+      const input = {
+        format: CUIS_SEMANTIC_EXPORT_V2,
+        packages: [{name: 'Cuis-Base', requires: []}],
+        classes: [{
+          identity,
+          package: 'Cuis-Base',
+          name,
+          superclassName: 'Object',
+          superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
+          instanceVariables: [],
+        }],
+        methods: [],
+      };
+      const frontierBefore = await runtime.images.frontier('app');
+      await assert.rejects(
+        importCuisNativePackage({
+          images: runtime.images,
+          compilation: runtime.compilation,
+          imageId: 'app',
+          manifest: input,
+          scope: {classes: [identity], methods: []},
+        }),
+        (error) => error instanceof CuisNativeImportError
+          && /is already mapped to an existing native class; a manifest may not also declare it/.test(error.message)
+          && error.semanticIdentity === identity,
+        identity,
+      );
+      assert.equal(await runtime.images.frontier('app'), frontierBefore, identity);
     });
   }
 });

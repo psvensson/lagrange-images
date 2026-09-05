@@ -16,35 +16,63 @@ const CUIS_NATIVE_INTEGER_IDENTITY = 'cuis-class/Cuis-Base/Integer';
 // root rule already said about `Object`. Nothing outside this table resolves to a native class, so
 // there is no name fallback and no caller-supplied alias.
 //
-// What each entry claims, at the narrowest boundary that is true:
+// Each entry also declares the POSITIONS it is proved for, because "this identity denotes that
+// native class" is not one claim but two, and the two are independently justified:
 //
-//   cuis-class/Cuis-Base/Object   the structural root for native class construction/allocation
-//                                 (ADR 0085 M1; a declared superclass position).
-//   cuis-class/Cuis-Base/Integer  the class an ordinary native integer's Behavior resolves to, so a
-//                                 Cuis package's extension method installed here is reached by real
-//                                 native integer receivers. Required by the pinned upstream JSON
-//                                 package: `Integer>>jsonWriteOn:` is an extension on a class that
-//                                 package does not define. This is NOT a claim that native Integer
+//   cuis-class/Cuis-Base/Object   `superclass` only. The structural root for native class
+//                                 construction/allocation (ADR 0085 M1) — a declared superclass
+//                                 position. It is deliberately NOT a method target: installing a
+//                                 package's extension selector on the root of the whole native
+//                                 image is a far larger claim than M1 made, and no consumer has
+//                                 demanded it.
+//   cuis-class/Cuis-Base/Integer  `method-target` only. The class an ordinary native integer's
+//                                 Behavior resolves to, so a Cuis package's extension method
+//                                 installed here is reached by real native integer receivers.
+//                                 Required by the pinned upstream JSON package:
+//                                 `Integer>>jsonWriteOn:` is an extension on a class that package
+//                                 does not define. This is NOT a claim that native Integer
 //                                 implements every Cuis Integer protocol — that method's own
 //                                 `printOn:base:` receiver requirement is a separate, unproven
 //                                 native-library semantic, and a missing one stays a visible
-//                                 failure rather than something this table papers over.
+//                                 failure rather than something this table papers over. Nor is it
+//                                 a claim that Integer is a sound SUPERCLASS: native integers are
+//                                 Values whose dispatch class is fixed by their kind, so a Cuis
+//                                 class declaring Integer as its parent would get an inert class
+//                                 no integer ever dispatches to. Refused until something proves
+//                                 otherwise.
 //
 // A Map, not an object literal, so a hostile identity such as `__proto__` cannot resolve.
+const CUIS_NATIVE_MAPPING_POSITION = Object.freeze({SUPERCLASS: 'superclass', METHOD_TARGET: 'method-target'});
 const CUIS_NATIVE_CLASS_MAPPINGS = new Map([
-  [CUIS_NATIVE_ROOT_OBJECT_IDENTITY, 'objectClass'],
-  [CUIS_NATIVE_INTEGER_IDENTITY, 'integerClass'],
+  [CUIS_NATIVE_ROOT_OBJECT_IDENTITY, Object.freeze({
+    slot: 'objectClass', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS]),
+  })],
+  [CUIS_NATIVE_INTEGER_IDENTITY, Object.freeze({
+    slot: 'integerClass', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.METHOD_TARGET]),
+  })],
 ]);
 
 function isMappedCuisClass(identity) {
   return CUIS_NATIVE_CLASS_MAPPINGS.has(identity);
 }
 
+function mappedCuisIdentities(position) {
+  return [...CUIS_NATIVE_CLASS_MAPPINGS]
+    .filter(([, entry]) => entry.positions.includes(position))
+    .map(([identity]) => identity);
+}
+
+function isMappedCuisClassAt(identity, position) {
+  const entry = CUIS_NATIVE_CLASS_MAPPINGS.get(identity);
+  return entry !== undefined && entry.positions.includes(position);
+}
+
 // Resolution needs the kernel, so it happens in the import phase; the plan phase asks only whether
-// an identity is mapped. The kernel owns the ref — this never creates, rewrites or names a class.
+// an identity is mapped at the position it appears in. The kernel owns the ref — this never
+// creates, rewrites or names a class.
 function resolveMappedCuisClass(identity, kernel) {
-  const slot = CUIS_NATIVE_CLASS_MAPPINGS.get(identity);
-  return slot === undefined ? null : kernel[slot];
+  const entry = CUIS_NATIVE_CLASS_MAPPINGS.get(identity);
+  return entry === undefined ? null : kernel[entry.slot];
 }
 
 class CuisNativeImportError extends TypeError {
@@ -210,6 +238,17 @@ function importPlan(manifest, scope) {
       fail(`class semantic identity ${identity} does not match its canonical package/name`, identity);
     }
     if (byIdentity.has(identity)) fail(`class semantic identity ${identity} appears more than once`, identity);
+    // A mapped identity ALREADY denotes an existing native class. If a manifest also declared it,
+    // the same semantic identity would mean the mapped kernel class in one position and a freshly
+    // constructed class in another, and the table would no longer be the single answer to "what
+    // native class is this identity". One authority per identity: refused, not silently preferred.
+    if (isMappedCuisClass(identity)) {
+      fail(
+        `class ${identity} is already mapped to an existing native class; `
+        + 'a manifest may not also declare it',
+        identity,
+      );
+    }
     if (nativeNames.has(name)) fail(`native class name ${name} appears more than once`, identity);
     nativeNames.add(name);
     const superclassName = text(item.superclassName, `class ${identity} superclassName`);
@@ -240,13 +279,13 @@ function importPlan(manifest, scope) {
     ? classes
     : classes.filter((declaration) => requested.classes.has(declaration.identity));
   for (const declaration of scopedClasses) {
-    if (isMappedCuisClass(declaration.superclass)) continue;
+    if (isMappedCuisClassAt(declaration.superclass, CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS)) continue;
     const parent = byIdentity.get(declaration.superclass);
     if (!parent) {
       fail(
         `unsupported superclass semantic identity ${declaration.superclass}; `
-        + `outside the imported graph only these map to native classes: `
-        + `${[...CUIS_NATIVE_CLASS_MAPPINGS.keys()].join(', ')}`,
+        + `outside the imported graph only these map to a native superclass: `
+        + `${mappedCuisIdentities(CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS).join(', ')}`,
         declaration.identity,
       );
     }
@@ -307,7 +346,7 @@ function importPlan(manifest, scope) {
     nativeBindings.add(binding);
     const source = text(item.source, `method ${identity} source`);
     if (requested && !requested.methods.has(identity)) continue;
-    if (isMappedCuisClass(classIdentity)) {
+    if (isMappedCuisClassAt(classIdentity, CUIS_NATIVE_MAPPING_POSITION.METHOD_TARGET)) {
       // An extension method on a class the package does not define is ordinary Smalltalk. The
       // target is an existing native class, so it needs no manifest declaration and no scope
       // entry: the covered METHOD is what this import requested. The native MethodDictionary
