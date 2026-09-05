@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 import {
   createRuntime,
   defineMethodsFromSource,
+  installSmalltalkAllocationProtocol,
+  installSmalltalkControlFlow,
+  installSmalltalkGlobalNamespace,
+  installSmalltalkIndexedProtocol,
+  installSmalltalkIntegerPrintingProtocol,
+  installSmalltalkKernel,
   ensureNamedClass,
   ensureSmalltalkShape,
   findSmalltalkKernel,
@@ -12,8 +18,10 @@ import {
   methodBlockRef,
   objectRef,
   publishSmalltalkClassGlobals,
+  resolveGlobal,
   textValue,
 } from '../src/runtime.js';
+import {SMALLTALK_KERNEL_PRIMITIVE_V1} from '../src/language/smalltalk-primitives.js';
 
 // Native Integer PRINTING protocol (bead lagrange-images-nv1.6). It exists because a real imported
 // consumer sends it — the pinned upstream Cuis JSON package's own extension is
@@ -139,9 +147,9 @@ test('the M3 acceptance oracle prints exactly', async () => {
   );
 });
 
-// The digit-to-byte step carries the ordinary letter branch, because emitting `48 + digit` for
-// every digit would silently produce nonsense above base 10. Base 10 is the only base a consumer
-// backs; this case exists so that branch does not ship unproven, and it is the real Cuis answer.
+// Within the declared 2..36 domain the digit-to-byte step needs the ordinary letter branch, since
+// `48 + digit` alone produces nonsense above 9. Base 10 is the only base a consumer backs; this
+// case exists so that branch does not ship unproven, and it is the real Cuis answer.
 test('the digit letter branch matches real Cuis rather than shipping unproven', async () => {
   assert.deepEqual(await printed('255', 16), textValue('FF'));
   assert.deepEqual(await printed('-255', 16), textValue('-FF'));
@@ -159,14 +167,97 @@ test('the method requires exactly one nextPutAll: and no other stream protocol',
 
 // No new primitive was introduced: the digits come from Integer arithmetic already installed and
 // the text from the existing Array -> ByteArray -> utf8Text conversion the byte-sequence protocol
-// already owns. A regression that reached for a host operation would show up as a new primitive.
-test('printing composes existing native protocol rather than adding a primitive', async () => {
+// already owns. Asserting that some invented primitive id is absent would prove nothing — it would
+// pass on any HEAD. What actually constrains this is the METHOD'S OWN representation: a composed
+// Smalltalk method compiles to an ordinary program, while a primitive would be a
+// `smalltalk-kernel-primitive/v1` code artifact.
+test('printing is a composed Smalltalk method, not a kernel primitive', async () => {
   const runtime = await image();
-  for (const id of ['smalltalk/primitive/integer-to-string', 'smalltalk/primitive/integer-print']) {
-    assert.equal(
-      await runtime.images.getObject('app', id),
-      null,
-      `${id} must not exist: printing is composed, not primitive`,
+  const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+  const method = await methodBlockRef({
+    images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: 'printOn:base:',
+  });
+  const block = await runtime.images.getBlock(method.imageId, method.objectId);
+  const code = await runtime.images.getCodeArtifact(method.imageId, block.code.objectId);
+  assert.notEqual(
+    code.representation,
+    SMALLTALK_KERNEL_PRIMITIVE_V1,
+    'integer printing must be composed from existing protocol, never a new host primitive',
+  );
+  // Positively: it is an ordinary compiled method in the lane this image was installed with.
+  assert.equal(code.representation, 'wasm-function/v2');
+});
+
+// The method answers its receiver, as the real protocol does. Nothing on the acceptance path reads
+// that value, so without this assertion the method could return anything and stay green.
+test('printOn:base: answers the receiver', async () => {
+  assert.deepEqual(
+    await evaluate('[ | s | s := PrintingSink new. 7 printOn: s base: 10 ]'),
+    integerValue(7),
+  );
+});
+
+// THE DECLARED DOMAIN. The digit recurrence is only meaningful for bases 2..36, and outside it the
+// failures are the worst kind: `base: 1` never terminates, because `value // 1` is `value` forever
+// and nothing in the executor imposes a step budget; a negative base silently answers punctuation,
+// because `48 + digit` for a negative digit is still a legal byte. The method therefore refuses,
+// visibly, by sending a selector nothing implements.
+test('a base outside the declared 2..36 domain is refused rather than guessed', {timeout: 60_000}, async () => {
+  for (const base of ['1', '0', '-10', '37', '100']) {
+    await assert.rejects(
+      printed('3', base),
+      /message not understood: printBaseOutOfRange:/,
+      `base ${base} must be refused`,
     );
+  }
+  // The boundaries themselves are inside the domain and still work.
+  assert.deepEqual(await printed('5', 2), textValue('101'));
+  assert.deepEqual(await printed('35', 36), textValue('Z'));
+});
+
+// The installer's restored prerequisite is a real guard, and it has to read the installed METHODS
+// rather than the globals. `ByteArray` is a KERNEL class whose global the namespace installer
+// publishes unconditionally, so an image can have both globals published and still lack the
+// byte-sequence protocol the method calls — the method would install, compile cleanly and die on
+// first use. This builds exactly that image.
+test('installing without the byte-sequence protocol the method calls is refused', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    await runtime.images.createImage({id: 'bare'});
+    const options = {images: runtime.images, compilation: runtime.compilation, imageId: 'bare', lane: 'wasm'};
+    await installSmalltalkKernel({images: runtime.images, imageId: 'bare'});
+    await installSmalltalkAllocationProtocol(options);
+    await installSmalltalkControlFlow(options);
+    await installSmalltalkIndexedProtocol(options);
+    await installSmalltalkGlobalNamespace(options);
+    await publishSmalltalkClassGlobals({images: runtime.images, imageId: 'bare', names: ['Array']});
+
+    // Both globals resolve — `ByteArray`'s because it is a kernel class the namespace publishes —
+    // so a global-only check would pass here. The protocol it needs is still absent.
+    assert.ok(await resolveGlobal({images: runtime.images, imageId: 'bare', name: 'ByteArray'}));
+    assert.equal(
+      await methodBlockRef({
+        images: runtime.images,
+        imageId: 'bare',
+        classRef: objectRef('bare', 'smalltalk/metaclass/ByteArray'),
+        selector: 'fromArray:',
+      }),
+      null,
+    );
+
+    await assert.rejects(
+      installSmalltalkIntegerPrintingProtocol(options),
+      /has no smalltalk\/metaclass\/ByteArray fromArray: method; install its protocol first/,
+    );
+    // Refused before anything was written: no half-installed printing method is left behind.
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'bare'});
+    assert.equal(
+      await methodBlockRef({
+        images: runtime.images, imageId: 'bare', classRef: kernel.integerClass, selector: 'printOn:base:',
+      }),
+      null,
+    );
+  } finally {
+    await runtime.close();
   }
 });
