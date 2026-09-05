@@ -157,17 +157,24 @@ class SmalltalkStaleMethodPositionError extends TypeError {
   }
 }
 
-// The guarded position never moved and nothing about the request is wrong — the dictionary is
-// simply being written faster than this operation can rebase onto it. A separate class rather than
-// the kernel conflict, because that one says "an existing record differs from the definition and
-// will not be overwritten", which is not what happened and would misdirect whoever reads it. A
-// fresh attempt from a fresh observation is the correct response, and, like every other outcome
-// here, this carries no backend error.
+// The guarded position never moved — that is re-asserted at every boundary including the last, so
+// this outcome cannot stand in for staleness — and nothing about the request is wrong. The
+// dictionary is simply being written faster than this operation can rebase onto it. A separate
+// class rather than the kernel conflict, because that one says "an existing record differs from the
+// definition and will not be overwritten", which is not what happened and would misdirect whoever
+// reads it. A fresh attempt from a fresh observation is the correct response, and, like every other
+// outcome here, this carries no backend error.
+//
+// It does NOT say "nothing was written". The replacement's immutable revision material is published
+// BEFORE the final CAS, so by the time contention is reported that material exists and is
+// addressable — it is simply not current. Promising an empty write here would reintroduce, in the
+// one error the honesty rule did not cover, exactly the claim this owner refuses to make elsewhere.
 class SmalltalkMethodDictionaryContentionError extends TypeError {
   constructor(dictionaryRef) {
     super(
       `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId} moved under this `
-      + 'replacement more often than it could be rebased; nothing was written, retry from a fresh read',
+      + 'replacement more often than it could be rebased; the observed position is unchanged and was '
+      + 'not advanced, retry from a fresh read',
     );
     this.name = 'SmalltalkMethodDictionaryContentionError';
   }
@@ -728,11 +735,16 @@ async function commitMethodDictionary({
           images, imageId, classRef, methods, capturesBySelector, lane,
         });
       }
-      // Not staleness: the guarded position never moved, so calling this stale would tell the
-      // caller its observation was overtaken when it was not.
-      if (rebases <= 0) throw new SmalltalkMethodDictionaryContentionError(attempt.dictionaryRef);
+      // EVERY boundary re-asserts the expectation, INCLUDING THE LAST one. Checking the budget
+      // first would leave exactly one lost CAS — the final one — unchecked, and a position that
+      // moved on that attempt would be reported as contention: "the dictionary is busy" when the
+      // truth is "your observation was overtaken". Contention may only be claimed once this reread
+      // has proven the guarded position is still exactly what the caller observed.
       const current = await readMethodDictionaryForUpdate({images, imageId, classRef});
       assertExpectedCurrentBindings({classRef, expected, bindings: current.merged});
+      // Only now is it true that the guarded position never moved and nothing about the request is
+      // wrong — the dictionary is simply being written faster than this operation can rebase.
+      if (rebases <= 0) throw new SmalltalkMethodDictionaryContentionError(attempt.dictionaryRef);
       for (const [selector, method] of installedRefs) current.merged.set(selector, method);
       attempt = {...current, bindings: current.merged};
     }

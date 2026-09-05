@@ -290,6 +290,50 @@ test('an external winner semantically EQUAL to the desired replacement is still 
 // Error boundary and input
 // ---------------------------------------------------------------------------------------------
 
+// WRONG IMPLEMENTATION THIS TEST MUST KILL: checking the rebase budget BEFORE re-asserting the
+// expectation, so the FINAL lost CAS is the one boundary never checked. A position that moves on
+// that last attempt is then reported as contention — "the dictionary is busy" — when the truth is
+// "your observation was overtaken", and the caller is told to retry a write that must not be
+// retried. Found by the gate review as live behaviour on unmodified code, with no test over it.
+test('a position that moves on the FINAL lost CAS is stale, not contention', async () => {
+  await withFixture(async (runtime, _kernel, options) => {
+    const observed = await methodBlockRef({...options, selector: GUARDED});
+    const putObject = runtime.images.putObject.bind(runtime.images);
+    // The rebase budget is 4, so the 5th put is the last. Moving the guarded position during that
+    // attempt lands the change on the ONE boundary a budget-first implementation never re-asserts.
+    // If the budget ever grows, this still exercises a real boundary and must still be stale.
+    const LAST_ATTEMPT = 5;
+    let attempts = 0;
+    let moved = false;
+    const failing = async (imageId, input, writeOptions) => {
+      if (input.id === `${options.classRef.objectId}/methods` && writeOptions?.expectedVersion !== undefined) {
+        attempts += 1;
+        if (attempts >= LAST_ATTEMPT && !moved) {
+          moved = true;
+          runtime.images.putObject = putObject;
+          await reconcileMethods({...options, methods: [method(GUARDED, 2)]});
+          runtime.images.putObject = failing;
+        }
+        throw versionConflict();
+      }
+      return await putObject(imageId, input, writeOptions);
+    };
+    runtime.images.putObject = failing;
+
+    const error = await reconcileMethods({...options, methods: [guarded(3, observed)]})
+      .then(() => null, (cause) => cause);
+    runtime.images.putObject = putObject;
+
+    assert.ok(moved, 'the interleaved move must actually have happened, or this proves nothing');
+    assert.ok(
+      error instanceof SmalltalkStaleMethodPositionError,
+      `a position that moved must be STALE, not contention; got ${error?.name}: ${error?.message}`,
+    );
+    // The winner is intact and the caller's replacement never became current.
+    await answers(runtime, GUARDED, 2, 'the interleaved winner survives');
+  });
+});
+
 // WRONG IMPLEMENTATION THIS TEST MUST KILL: letting the backend's VersionConflictError escape the
 // owner once the guarded path stops classifying and starts retrying — either raw, or smuggled out
 // as a `cause`.
