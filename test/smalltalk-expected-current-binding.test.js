@@ -15,7 +15,6 @@ import {
 } from '../src/runtime.js';
 import {
   SmalltalkMethodDictionaryContentionError,
-  MAX_UNRELATED_REBASE_ATTEMPTS,
   SmalltalkStaleMethodPositionError,
 } from '../src/language/smalltalk-class-builder.js';
 
@@ -84,6 +83,29 @@ async function revisionRefFor(answer) {
   return await withFixture(async (_runtime, _kernel, options) => {
     await reconcileMethods({...options, methods: [method(GUARDED, answer)]});
     return await methodBlockRef({...options, selector: GUARDED});
+  });
+}
+
+// How many MethodDictionary puts does a purely contended guarded write actually make? MEASURED in
+// its own fixture rather than derived from the owner's budget constant, for two reasons: that
+// constant must not be exported (this module's barrel reaches the package's published surface), and
+// a measurement is immune to a restructure of the retry loop's terminating comparison, which a
+// derivation from the budget alone is not. Whatever this answers IS the terminal attempt.
+async function terminalAttemptCount() {
+  return await withFixture(async (runtime, _kernel, options) => {
+    const observed = await methodBlockRef({...options, selector: GUARDED});
+    const putObject = runtime.images.putObject.bind(runtime.images);
+    let attempts = 0;
+    runtime.images.putObject = async (imageId, input, writeOptions) => {
+      if (input.id === `${options.classRef.objectId}/methods` && writeOptions?.expectedVersion !== undefined) {
+        attempts += 1;
+        throw versionConflict();
+      }
+      return await putObject(imageId, input, writeOptions);
+    };
+    await reconcileMethods({...options, methods: [guarded(3, observed)]}).then(() => null, () => null);
+    runtime.images.putObject = putObject;
+    return attempts;
   });
 }
 
@@ -297,15 +319,15 @@ test('an external winner semantically EQUAL to the desired replacement is still 
 // "your observation was overtaken", and the caller is told to retry a write that must not be
 // retried. Found by the gate review as live behaviour on unmodified code, with no test over it.
 test('a position that moves on the FINAL lost CAS is stale, not contention', async () => {
+  const LAST_ATTEMPT = await terminalAttemptCount();
   await withFixture(async (runtime, _kernel, options) => {
     const observed = await methodBlockRef({...options, selector: GUARDED});
     const putObject = runtime.images.putObject.bind(runtime.images);
-    // DERIVED, never a duplicated literal. The budget allows MAX+1 puts, so this aims the move at
-    // the LAST one — the single boundary a budget-first implementation never re-asserts. A hardcoded
-    // copy would silently stop aiming there if the budget grew: the move would land on a middle
-    // boundary, which even the wrong implementation re-asserts, so the test would pass while its
-    // kill was gone. That was measured, not theorised.
-    const LAST_ATTEMPT = MAX_UNRELATED_REBASE_ATTEMPTS + 1;
+    // MEASURED, never a duplicated literal and never derived from an exported knob. This aims the
+    // move at the LAST put — the single boundary a budget-first implementation never re-asserts. A
+    // hardcoded copy silently stopped aiming there when the budget grew: the move landed on a middle
+    // boundary, which even the wrong implementation re-asserts, so the test passed while its kill
+    // was gone. That was measured, not theorised.
     let attempts = 0;
     let moved = false;
     const failing = async (imageId, input, writeOptions) => {
