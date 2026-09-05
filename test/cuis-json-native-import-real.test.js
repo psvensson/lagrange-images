@@ -10,8 +10,11 @@ import {
   CUIS_SEMANTIC_EXPORT_V2,
   CUIS_SOURCES_V1,
   CuisNativeImportError,
+  OBJECT_READ_OPERATION,
   OPENSMALLTALK_CUIS_PROVIDER_ID,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
+  authorizedDescribeSmalltalkClass,
+  authorizedDescribeSmalltalkMethod,
   bytesValue,
   createOpenSmalltalkCuisProvider,
   createOpenSmalltalkCuisToolchainProvider,
@@ -20,7 +23,9 @@ import {
   importCuisNativePackage,
   installSymmetricSmalltalkStandardImage,
   integerValue,
+  methodBindings,
   objectRef,
+  objectResource,
   readBehavior,
   textValue,
 } from '../src/runtime.js';
@@ -262,6 +267,168 @@ test('a real upstream class imports natively from the canonical export with Cuis
       frontierBeforeReplay,
       'exact replay of a real scoped package import is write-free',
     );
+  } finally {
+    await runtime.close();
+  }
+});
+
+// The AUTHORIZED native browsing seam over REAL imported Cuis material (bead lagrange-images-jtz,
+// Object Environment E1). Proving it here rather than only on a fixture is the point: an
+// independently authored upstream class and one of its own methods must browse as ordinary native
+// Symmetric Smalltalk through the SAME public function an ordinary native class uses, in a runtime
+// that has no Cuis VM, provider or toolchain to fall back on.
+function browseRequire(runtime, objectIds) {
+  const context = runtime.authority.issue({
+    principal: 'environment-e1',
+    grants: objectIds.map((objectId) => ({
+      operation: OBJECT_READ_OPERATION,
+      resource: objectResource('native-image', objectId),
+    })),
+  });
+  return (demand) => runtime.authority.require(context, demand);
+}
+
+// Nothing about a native description may name the Cuis origin, and nothing may name storage.
+function assertOriginNeutralNativeDescription(description, label) {
+  const text = JSON.stringify(description);
+  for (const token of [
+    'cuis', 'Cuis', 'JSON', 'gitblob', 'oop',
+    '_version', 'behavior-', 'method-dictionary', 'instance-shape', 'instance-slot', 'selector:',
+  ]) {
+    assert.equal(text.includes(token), false, `${label} must not carry ${token}: ${text}`);
+  }
+}
+
+test('an M1-imported real Cuis class browses as an ordinary authorized native class', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await jsonSemanticExport());
+
+  const runtime = await nativeRuntime();
+  try {
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'native-image'});
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: ['cuis-class/JSON/Json'], methods: []},
+    });
+    const {classRef, metaclassRef} = imported.classes[0];
+
+    const description = await authorizedDescribeSmalltalkClass({
+      images: runtime.images,
+      imageId: 'native-image',
+      classRef,
+      require: browseRequire(runtime, [classRef.objectId]),
+    });
+
+    assert.equal(description.format, 'smalltalk-class-description/v1');
+    // Exact ref identity across the import result and the description: the seam reports the class
+    // the importer produced, it does not mint a second identity for it.
+    assert.deepEqual(description.class, classRef);
+    assert.equal(description.name, 'Json');
+    assert.equal(description.side, 'instance');
+    assert.deepEqual(description.superclass, kernel.objectClass);
+    assert.deepEqual(description.classSide, metaclassRef);
+    // The real upstream declared layout, by name and in order — never a slot id.
+    assert.deepEqual(description.layout, {instanceVariables: ['stream', 'ctorMap'], indexed: 'none'});
+    // This scope imported the class alone, so it publishes no protocol of its own yet.
+    assert.deepEqual(description.selectors, []);
+    // Cuis origin is optional metadata, and Images owns no durable association to report.
+    assert.equal(description.provenance, null);
+    assertOriginNeutralNativeDescription(description, 'imported class description');
+
+    // Authority does not follow the refs a description hands out: the superclass and the class side
+    // are locators, and browsing either needs its own object/read.
+    const classOnly = browseRequire(runtime, [classRef.objectId]);
+    for (const ref of [description.superclass, description.classSide]) {
+      await assert.rejects(
+        authorizedDescribeSmalltalkClass({images: runtime.images, imageId: 'native-image', classRef: ref, require: classOnly}),
+        (error) => error?.name === 'AuthorityError',
+        `browsing ${ref.objectId} must need its own grant`,
+      );
+    }
+    // A denied caller cannot tell the imported class from one this scope never constructed.
+    const denied = browseRequire(runtime, []);
+    for (const ref of [classRef, objectRef('native-image', 'smalltalk/class/JsonObject')]) {
+      await assert.rejects(
+        authorizedDescribeSmalltalkClass({images: runtime.images, imageId: 'native-image', classRef: ref, require: denied}),
+        (error) => error?.name === 'AuthorityError',
+      );
+    }
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('an M2-imported real Cuis method browses as an ordinary authorized native method', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await jsonSemanticExport());
+  // Two of the real package's own accessors on its own class — unmodified upstream source, and the
+  // part of this package that M2 can already compile natively on this HEAD.
+  const accessors = ['cuis-method/JSON/Json/instance/ctorMap', 'cuis-method/JSON/Json/instance/ctorMap:'];
+  for (const identity of accessors) {
+    assert.ok(manifest.methods.some((method) => method.identity === identity), `${identity} is real upstream material`);
+  }
+
+  const runtime = await nativeRuntime();
+  try {
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: ['cuis-class/JSON/Json'], methods: accessors},
+    });
+    const {classRef} = imported.classes[0];
+
+    // The class half: the imported protocol is ordinary published protocol of an ordinary class.
+    const classDescription = await authorizedDescribeSmalltalkClass({
+      images: runtime.images, imageId: 'native-image', classRef,
+      require: browseRequire(runtime, [classRef.objectId]),
+    });
+    assert.deepEqual(classDescription.selectors, ['ctorMap', 'ctorMap:']);
+
+    const binding = (await methodBindings({images: runtime.images, imageId: 'native-image', classRef}))
+      .find(({selector}) => selector === 'ctorMap');
+    assert.ok(binding);
+
+    // Class authority alone does not reach the method's Block: it is an independent semantic object.
+    await assert.rejects(
+      authorizedDescribeSmalltalkMethod({
+        images: runtime.images, imageId: 'native-image', classRef, selector: 'ctorMap',
+        require: browseRequire(runtime, [classRef.objectId]),
+      }),
+      (error) => error?.name === 'AuthorityError',
+    );
+
+    const description = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId: 'native-image',
+      classRef,
+      selector: 'ctorMap',
+      require: browseRequire(runtime, [classRef.objectId, binding.method.objectId]),
+    });
+    assert.equal(description.format, 'smalltalk-method-description/v1');
+    assert.deepEqual(description.class, classRef);
+    assert.equal(description.selector, 'ctorMap');
+    assert.equal(description.side, 'instance');
+    assert.deepEqual(description.method, binding.method, 'the exact Block the class MethodDictionary binds');
+    // Images owns no durable association from this native method back to the Cuis source it was
+    // translated from, nor to the package that supplied it. The seam says so rather than
+    // reconstructing either from the importer's transient output or from a deterministic id.
+    assert.equal(description.source, null);
+    assert.equal(description.provenance, null);
+    assertOriginNeutralNativeDescription(description, 'imported method description');
+
+    // A denied caller cannot distinguish an imported method from a selector nobody implements.
+    const denied = browseRequire(runtime, []);
+    for (const selector of ['ctorMap', 'neverImplementedByAnyPackage']) {
+      await assert.rejects(
+        authorizedDescribeSmalltalkMethod({
+          images: runtime.images, imageId: 'native-image', classRef, selector, require: denied,
+        }),
+        (error) => error?.name === 'AuthorityError',
+      );
+    }
   } finally {
     await runtime.close();
   }

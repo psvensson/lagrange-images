@@ -24,6 +24,10 @@ import {
   createProject,
   projectObjectId,
 } from '../src/project/working-state.js';
+import {
+  authorizedDescribeSmalltalkClass,
+  authorizedDescribeSmalltalkMethod,
+} from '../src/language/smalltalk-browse.js';
 import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
 import {createNodeSourceReader} from '../src/portable-artifact/node-source-reader.js';
 
@@ -55,6 +59,8 @@ const owned = Object.freeze({
   createProject,
   addProjectMember,
   projectObjectId,
+  authorizedDescribeSmalltalkClass,
+  authorizedDescribeSmalltalkMethod,
 });
 
 test('portable-runtime exposes the exact Object Environment composition owner bindings', () => {
@@ -82,9 +88,14 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // 111 after the wasm-function contract owner (src/wasm/function-contract.js, ADR 0082), the ONE
   // decoder/describer of the function representation, reached from the WASM producers already in
   // the closure. It imports only value/code modules and module-contract.js (no node:*).
-  assert.equal(modules.length, 111, 'the reviewed owner modules: two Project owners + the wasm-module and wasm-function contract owners');
+  // 112 after the authorized native Smalltalk browsing seam (src/language/smalltalk-browse.js,
+  // bead lagrange-images-jtz) — the ONE module is the seam itself: it composes owners the closure
+  // already carried (kernel, class builder, lookup, object model, object-resource) and adds no
+  // other dependency.
+  assert.equal(modules.length, 112, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, and the native browsing seam');
   assert.ok(paths.includes('src/wasm/module-contract.js'));
   assert.ok(paths.includes('src/wasm/function-contract.js'));
+  assert.ok(paths.includes('src/language/smalltalk-browse.js'));
   assert.deepEqual(projectPaths, [
     'src/project/model.js',
     'src/project/working-state.js',

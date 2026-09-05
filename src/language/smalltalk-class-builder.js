@@ -39,7 +39,6 @@ import {
   entriesFromBuckets,
   isMethodDictionary,
   isSealed,
-  lookupSelectorInTable,
   methodDictionaryRecordFields,
   validateMethodDictionary,
 } from './smalltalk-method-dictionary.js';
@@ -703,11 +702,21 @@ async function reconcileMethods(options = {}) {
   });
 }
 
-// The Block installed for a selector on a class, read through whichever representation the
-// dictionary actually uses. ADR 0049 makes two of those legal at once, so anything that reaches into
-// a method dictionary should ask rather than assume a layout.
-async function methodBlockRef({images, imageId, classRef, selector} = {}) {
-  const behavior = await readBehavior(images, classRef);
+// Every selector a Behavior's OWN method dictionary binds, read through whichever representation
+// that dictionary actually uses. ADR 0049 makes two of those legal at once, so anything that reaches
+// into a method dictionary should ask rather than assume a layout — and there is ONE such reader,
+// so a caller that asks "which selectors" and a caller that asks "which Block for this selector"
+// cannot disagree about what a class implements.
+//
+// Inheritance is deliberately absent. This answers what THIS Behavior implements; an inherited
+// selector belongs to the Behavior that declares it and is read from there. The lookup walk
+// (smalltalk-lookup.js) remains the sole owner of what a SEND resolves to.
+//
+// `behavior` is an optional already-read (and already-validated) Behavior, so a caller that has just
+// read the Class record for its own reasons describes it from ONE read rather than reading it again
+// here — the same single-read discipline the authorized Project read keeps.
+async function selectorBindings({images, imageId, classRef, behavior: readAlready = null}) {
+  const behavior = readAlready ?? await readBehavior(images, classRef);
   const dictionaryRef = behavior.methods;
   const record = await images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
   if (!record) throw new TypeError(`method dictionary not found: ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
@@ -715,27 +724,51 @@ async function methodBlockRef({images, imageId, classRef, selector} = {}) {
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   if (isMethodDictionary(record)) {
     const table = validateMethodDictionary(record, dictionaryRef, kernel.nil);
-    return lookupSelectorInTable(table, textValue(selector));
+    return new Map(entriesFromBuckets(table.buckets).map(([selector, method]) => [selector.value, method]));
   }
   // The legacy branch owes the same corruption semantics as dispatch: a missing Shape is a dangling
   // edge rather than a miss, and duplicate selector names are refused rather than resolved
-  // first-wins. This is now the recommended representation-neutral reader, so it must not be a
-  // laxer way to read the same records.
+  // first-wins. This is the recommended representation-neutral reader, so it must not be a laxer
+  // way to read the same records — which is why every declared slot is checked, not only the one a
+  // single-selector caller happened to ask for.
   const shape = await images.getShape(record.shape.imageId, record.shape.objectId);
   if (!shape) throw new TypeError(`method dictionary shape not found: ${record.shape.objectId}`);
   assertUniqueSelectorShape(shape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
-  const slot = shape.slots.find(({name}) => name === selector);
-  if (!slot) return null;
-  const method = record.slots[slot.id];
-  // Dispatch treats a slot holding something other than an unpinned Block ref as a malformed
-  // dictionary rather than a miss, and this reader owes the same semantics.
-  if (!isObjectRef(method)) {
-    throw new TypeError(
-      `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId} slot for ${selector} `
-      + 'must contain an unpinned Block ref',
-    );
+  const bindings = new Map();
+  for (const {id, name} of shape.slots) {
+    const method = record.slots[id];
+    // Dispatch treats a slot holding something other than an unpinned Block ref as a malformed
+    // dictionary rather than a miss, and this reader owes the same semantics.
+    if (!isObjectRef(method)) {
+      throw new TypeError(
+        `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId} slot for ${name} `
+        + 'must contain an unpinned Block ref',
+      );
+    }
+    bindings.set(name, method);
   }
-  return method;
+  return bindings;
+}
+
+// The Block installed for a selector on a class. `null` is an ordinary "this class does not
+// implement it", never a way to read a corrupt dictionary quietly.
+async function methodBlockRef({images, imageId, classRef, selector, behavior = null} = {}) {
+  requiredText(selector, 'selector');
+  return (await selectorBindings({images, imageId, classRef, behavior})).get(selector) ?? null;
+}
+
+// The selectors a class itself implements, in canonical (sorted) order, each with the exact Block
+// ref it is bound to. Sorted here rather than in storage order because bucket/slot order is a
+// representation artifact and no caller may come to depend on it.
+//
+// This is the class builder's public answer to "what does this class implement": the MethodDictionary
+// representation, its buckets and its slot ids stay private to this owner.
+async function methodBindings({images, imageId, classRef, behavior = null} = {}) {
+  const bindings = await selectorBindings({images, imageId, classRef, behavior});
+  return Object.freeze([...bindings.keys()].sort().map((selector) => Object.freeze({
+    selector,
+    method: bindings.get(selector),
+  })));
 }
 
 // Ensure-exact-or-create for a Smalltalk instance Shape. One implementation, because "the same
@@ -1130,6 +1163,7 @@ export {
   ensureClassFromDeclaration,
   ensureNamedClass,
   ensureSmalltalkShape,
+  methodBindings,
   methodBlockRef,
   ensureCodeArtifact,
 };
