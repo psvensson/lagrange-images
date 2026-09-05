@@ -392,31 +392,67 @@ function validateProgramTree(program, imageId) {
   for (const child of nested) validateProgramTree(child.program, imageId);
 }
 
-// Read whichever MethodDictionary representation the Behavior currently names and expose its
-// selector bindings under the class builder's one semantic view. This is used both before planning
-// a definition and after a lost dictionary CAS, so winner classification cannot drift from the
-// definition-time duplicate/replay rule.
+// THE CURRENT BINDING. What Block is bound at `{Class, selector}` right now is ONE question, so it
+// has one answer here, whichever of the two ADR 0049 representations the record uses. Everything
+// that needs it goes through this: the published-protocol reader the browse seam is built on
+// (`selectorBindings` -> `methodBindings`/`methodBlockRef`), and the read-for-update the write
+// planner uses before planning a definition and after a lost dictionary CAS.
+//
+// They used to be two implementations that disagreed. The write planner built its legacy map
+// straight from `record.slots[...]` with no check on the value, while the browse reader refused any
+// declared slot not holding an unpinned Block ref. On a malformed legacy dictionary that made the
+// same class WRITABLE BUT UNBROWSABLE — and worse, a write rewrote the record carrying the
+// malformed slot forward, making the corruption durable. A caller asking "what is bound here" got
+// different answers depending on which owner it asked, which is a correctness problem the moment
+// anything wants to REPLACE a binding (bead lagrange-images-jtz.2).
+//
+// The surviving rule is the stricter one, deliberately: it is what dispatch applies to the slot it
+// reads, so this reader is never a laxer way to read the same records. Dispatch still validates
+// only the slot for the selector being sent — it is answering one send, not describing a class —
+// so a dictionary with an unrelated malformed slot can still dispatch a good selector. This reader
+// describes the whole binding set, so it refuses the whole record; those are consistent, not
+// contradictory, and the direction that matters is that this reader never accepts what dispatch
+// would reject.
+async function currentSelectorBindings({images, dictionaryRef, record, nilRef}) {
+  if (isMethodDictionary(record)) {
+    const table = validateMethodDictionary(record, dictionaryRef, nilRef);
+    return new Map(entriesFromBuckets(table.buckets).map(([selector, method]) => [selector.value, method]));
+  }
+  // The legacy branch owes the same corruption semantics as dispatch: a missing Shape is a dangling
+  // edge rather than a miss, and duplicate selector names are refused rather than resolved
+  // first-wins. Every declared slot is checked, not only the one a single-selector caller happened
+  // to ask for, because this answers what the class binds.
+  const shape = await images.getShape(record.shape.imageId, record.shape.objectId);
+  if (!shape) throw new TypeError(`method dictionary shape not found: ${record.shape.objectId}`);
+  assertUniqueSelectorShape(shape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
+  const bindings = new Map();
+  for (const {id, name} of shape.slots) {
+    const method = record.slots[id];
+    if (!isObjectRef(method)) {
+      throw new TypeError(
+        `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId} slot for ${name} `
+        + 'must contain an unpinned Block ref',
+      );
+    }
+    bindings.set(name, method);
+  }
+  return bindings;
+}
+
+// The write planner's read-for-update: the same current bindings, plus the representation facts it
+// needs to plan the next write. The seal check stays here because it is a write-path rule — a
+// sealed dictionary may still be READ and browsed, it may just not be written.
 async function readMethodBindings({images, imageId, dictionaryRef, record}) {
   if (isSealed(record)) throw new SmalltalkSealedMethodDictionaryError(dictionaryRef);
   const hashed = isMethodDictionary(record);
   const dictionaryKernel = await findSmalltalkKernel({images, imageId});
   if (hashed && !dictionaryKernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
-  if (hashed) {
-    const table = validateMethodDictionary(record, dictionaryRef, dictionaryKernel.nil);
-    return {
-      hashed,
-      dictionaryKernel,
-      merged: new Map(entriesFromBuckets(table.buckets).map(([selector, method]) => [selector.value, method])),
-    };
-  }
-
-  const existingShape = await images.getShape(record.shape.imageId, record.shape.objectId);
-  if (!existingShape) throw new TypeError(`method dictionary shape not found: ${record.shape.objectId}`);
-  assertUniqueSelectorShape(existingShape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
   return {
     hashed,
     dictionaryKernel,
-    merged: new Map(existingShape.slots.map((slot) => [slot.name, record.slots[slot.id]])),
+    merged: await currentSelectorBindings({
+      images, dictionaryRef, record, nilRef: dictionaryKernel ? dictionaryKernel.nil : null,
+    }),
   };
 }
 
@@ -722,32 +758,8 @@ async function selectorBindings({images, imageId, classRef, behavior: readAlread
   if (!record) throw new TypeError(`method dictionary not found: ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
-  if (isMethodDictionary(record)) {
-    const table = validateMethodDictionary(record, dictionaryRef, kernel.nil);
-    return new Map(entriesFromBuckets(table.buckets).map(([selector, method]) => [selector.value, method]));
-  }
-  // The legacy branch owes the same corruption semantics as dispatch: a missing Shape is a dangling
-  // edge rather than a miss, and duplicate selector names are refused rather than resolved
-  // first-wins. This is the recommended representation-neutral reader, so it must not be a laxer
-  // way to read the same records — which is why every declared slot is checked, not only the one a
-  // single-selector caller happened to ask for.
-  const shape = await images.getShape(record.shape.imageId, record.shape.objectId);
-  if (!shape) throw new TypeError(`method dictionary shape not found: ${record.shape.objectId}`);
-  assertUniqueSelectorShape(shape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
-  const bindings = new Map();
-  for (const {id, name} of shape.slots) {
-    const method = record.slots[id];
-    // Dispatch treats a slot holding something other than an unpinned Block ref as a malformed
-    // dictionary rather than a miss, and this reader owes the same semantics.
-    if (!isObjectRef(method)) {
-      throw new TypeError(
-        `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId} slot for ${name} `
-        + 'must contain an unpinned Block ref',
-      );
-    }
-    bindings.set(name, method);
-  }
-  return bindings;
+  // A sealed dictionary is readable: sealing forbids writing it, not describing it.
+  return await currentSelectorBindings({images, dictionaryRef, record, nilRef: kernel.nil});
 }
 
 // The Block installed for a selector on a class. `null` is an ordinary "this class does not
