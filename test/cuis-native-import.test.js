@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CUIS_NATIVE_INTEGER_IDENTITY,
   CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
   CUIS_SEMANTIC_EXPORT_V2,
   CuisNativeImportError,
@@ -11,6 +12,7 @@ import {
   installSmalltalkInstanceVariableProtocol,
   installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
+  installSymmetricSmalltalkStandardImage,
   integerValue,
   methodBlockRef,
   objectRef,
@@ -795,10 +797,26 @@ test('a declaration outside the scope cannot smuggle a malformed or duplicated c
   }
 });
 
-// Target resolution is by complete semantic identity. A Cuis class whose NAME matches a native
-// class is not thereby a native class, exactly as the M1 root rule already states for Object.
+// Target resolution is by complete semantic identity against the adapter's mapping table. A Cuis
+// class whose NAME matches a native class is not thereby a native class: `Cuis-Base/Dictionary`
+// names a class this image really has and is still refused, and `Other/Integer` is refused even
+// though `Cuis-Base/Integer` is mapped.
 test('a covered method target outside the manifest is refused however native its name looks', async () => {
-  for (const target of ['cuis-class/Cuis-Base/Dictionary', 'cuis-class/Cuis-Base/Object', 'cuis-class/Other/ZuluBase']) {
+  const targets = [
+    // Each of these names a class this image really has, and none is mapped: the table is closed,
+    // not a name-matching rule that happens to list two entries today.
+    'cuis-class/Cuis-Base/Dictionary',
+    'cuis-class/Cuis-Base/Text',
+    'cuis-class/Cuis-Base/Array',
+    'cuis-class/Cuis-Base/Association',
+    'cuis-class/Cuis-Base/Collection',
+    'cuis-class/Cuis-Base/Float',
+    'cuis-class/Cuis-Base/Error',
+    // The mapped identity's own spelling from another package is not the mapped identity.
+    'cuis-class/Other/Integer',
+    'cuis-class/Other/ZuluBase',
+  ];
+  for (const target of targets) {
     await withKernel(async (runtime) => {
       const selector = 'value';
       const className = target.slice(target.lastIndexOf('/') + 1);
@@ -822,4 +840,175 @@ test('a covered method target outside the manifest is refused however native its
       assert.equal(await runtime.images.frontier('app'), frontierBefore);
     });
   }
+});
+
+// M3 blocker 2 (bead lagrange-images-nv1.3). A Cuis package routinely owns a method declaration on
+// a class it does not define. That is ordinary Smalltalk extension-method behavior, and the native
+// result must be ordinary too: the explicit identity mapping resolves the target, and the EXISTING
+// native class's EXISTING MethodDictionary owner installs the selector. No proxy subclass, no
+// second Integer, no importer-owned extension store, no behavior attached to a package object.
+async function withStandardImage(body) {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    await runtime.images.createImage({id: 'app'});
+    await installSymmetricSmalltalkStandardImage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane: 'wasm',
+    });
+    return await body(runtime);
+  } finally {
+    await runtime.close();
+  }
+}
+
+const extensionManifest = (body) => manifest({methods: [{
+  identity: 'cuis-method/Fixture/Integer/instance/fixtureDoubled',
+  package: 'Fixture',
+  class: CUIS_NATIVE_INTEGER_IDENTITY,
+  side: 'instance',
+  selector: 'fixtureDoubled',
+  source: `fixtureDoubled\n\t^ ${body}`,
+}]});
+
+const EXTENSION_SCOPE = Object.freeze({
+  // `Cuis-Base/Integer` is deliberately absent from the class scope: it is not a declaration this
+  // import makes native, it is an existing native class the covered METHOD extends.
+  classes: ['cuis-class/Fixture/ZuluBase'],
+  methods: ['cuis-method/Fixture/Integer/instance/fixtureDoubled'],
+});
+
+test('an imported extension method installs on the existing native class the mapping names', async () => {
+  await withStandardImage(async (runtime) => {
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+    const integerClassBefore = await runtime.images.getObject('app', 'smalltalk/class/Integer');
+    const behaviorBefore = await readBehavior(runtime.images, kernel.integerClass);
+    const boundBefore = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: 'fixtureDoubled',
+    });
+
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      manifest: extensionManifest('self + self'),
+      scope: EXTENSION_SCOPE,
+    });
+
+    // The mapped class is not part of the import result: it was resolved, not made native here.
+    assert.deepEqual(imported.classes.map(({identity}) => identity), ['cuis-class/Fixture/ZuluBase']);
+
+    // The mapping answered the ACTUAL kernel Integer ref, and that class was neither recreated nor
+    // rewritten: the Class record does not move when a method dictionary gains a selector.
+    const integerClassAfter = await runtime.images.getObject('app', 'smalltalk/class/Integer');
+    assert.deepEqual(integerClassAfter.behavior, integerClassBefore.behavior);
+    assert.equal(integerClassAfter._version, integerClassBefore._version, 'the mapped Class record does not move');
+    const behaviorAfter = await readBehavior(runtime.images, kernel.integerClass);
+    assert.deepEqual(behaviorAfter.superclass, behaviorBefore.superclass);
+    assert.deepEqual(behaviorAfter.instanceShape, behaviorBefore.instanceShape);
+    assert.deepEqual(
+      behaviorAfter.methods,
+      behaviorBefore.methods,
+      'the same MethodDictionary owns the binding; no second dictionary was introduced',
+    );
+
+    // The selector is bound in the existing kernel Integer method dictionary, and was not before.
+    assert.equal(boundBefore, null, 'the selector is the package\'s, not something the image already had');
+    const bound = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: 'fixtureDoubled',
+    });
+    assert.ok(bound, 'the imported extension selector is bound on the mapped native class');
+
+    // The behavioral proof of the mapping: an ORDINARY native integer reaches the imported method.
+    // A doesNotUnderstand here would mean the mapping named some other class.
+    const send = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'send-fixture-doubled', source: '[ :n | n fixtureDoubled ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', send.block.id), [integerValue(21)],
+      )),
+      integerValue(42),
+    );
+
+    const frontierBeforeReplay = await runtime.images.frontier('app');
+    const replayed = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      manifest: extensionManifest('self + self'),
+      scope: EXTENSION_SCOPE,
+    });
+    assert.deepEqual(replayed, imported);
+    assert.equal(
+      await runtime.images.frontier('app'),
+      frontierBeforeReplay,
+      'exact replay of a mapped-target extension import is write-free',
+    );
+  });
+});
+
+test('a changed extension method on a mapped native class reconciles through the existing dictionary owner', async () => {
+  await withStandardImage(async (runtime) => {
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+    const options = {
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', scope: EXTENSION_SCOPE,
+    };
+    const bindingOf = async () => await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: 'fixtureDoubled',
+    });
+    await importCuisNativePackage({...options, manifest: extensionManifest('self + self')});
+    const a = await readBehavior(runtime.images, kernel.integerClass);
+    const dictionaryA = await runtime.images.getObject(a.methods.imageId, a.methods.objectId);
+    const bindingA = await bindingOf();
+
+    await importCuisNativePackage({...options, manifest: extensionManifest('self + self + self')});
+    const b = await readBehavior(runtime.images, kernel.integerClass);
+    const dictionaryB = await runtime.images.getObject(b.methods.imageId, b.methods.objectId);
+    const bindingB = await bindingOf();
+
+    assert.deepEqual(b.methods, a.methods, 'the same MethodDictionary record is the position');
+    assert.equal(dictionaryB._version, dictionaryA._version + 1, 'exactly one authoritative advance');
+    assert.notDeepEqual(bindingB, bindingA, 'changed semantics get a new Block identity');
+
+    const send = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'send-fixture-doubled-b', source: '[ :n | n fixtureDoubled ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', send.block.id), [integerValue(7)],
+      )),
+      integerValue(21),
+    );
+
+    const frontierBeforeReplay = await runtime.images.frontier('app');
+    await importCuisNativePackage({...options, manifest: extensionManifest('self + self + self')});
+    assert.equal(await runtime.images.frontier('app'), frontierBeforeReplay, 'exact B replay is write-free');
+  });
+});
+
+test('class-side extension of a mapped native class is refused rather than guessed', async () => {
+  await withStandardImage(async (runtime) => {
+    const identity = 'cuis-method/Fixture/Integer/class/fixtureMake';
+    const input = manifest({methods: [{
+      identity,
+      package: 'Fixture',
+      class: CUIS_NATIVE_INTEGER_IDENTITY,
+      side: 'class',
+      selector: 'fixtureMake',
+      source: 'fixtureMake\n\t^ 1',
+    }]});
+    const frontierBefore = await runtime.images.frontier('app');
+    await assert.rejects(
+      importCuisNativePackage({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'app',
+        manifest: input,
+        scope: {classes: ['cuis-class/Fixture/ZuluBase'], methods: [identity]},
+      }),
+      (error) => error instanceof CuisNativeImportError
+        && /only instance-side extension of a mapped native class is proven/.test(error.message)
+        && error.semanticIdentity === identity,
+    );
+    assert.equal(await runtime.images.frontier('app'), frontierBefore);
+  });
 });

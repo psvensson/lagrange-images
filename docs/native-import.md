@@ -211,13 +211,33 @@ Omitting the scope imports the whole manifest, which is what M1/M2 proved.
 
 With that, the pinned package's own `Json` class imports natively from the canonical export with
 Cuis gone, keeping its declared `stream`/`ctorMap` layout, while `JsonObject` and `JsonSyntaxError`
-stay absent; exact replay of the scoped import is write-free. The harness's current recorded first
-blocker is the next one the acceptance target hits: most of this package's behavior is extension
-methods on classes it does not define, and the adapter maps exactly one base semantic identity
-(`cuis-class/Cuis-Base/Object`, and only as the structural superclass root), so
-`Integer>>jsonWriteOn:` has no native class to install on. That refusal leaves the native image's
-frontier unchanged, so the adapter's preflight-before-first-write rule holds against a real package
-and not only against fixtures.
+stay absent; exact replay of the scoped import is write-free. A refused import leaves the native
+image's frontier unchanged, so the adapter's preflight-before-first-write rule holds against a real
+package and not only against fixtures.
+
+Most of a real Cuis package's behavior lives in extension methods on classes it does not define, so
+the adapter owns one seam that corresponds a **complete** Cuis semantic class identity to an
+already-proven native class. It is a closed table, keyed by full identity and never by class name:
+`cuis-class/Cuis-Base/Object` (the M1 structural root, a superclass position) and
+`cuis-class/Cuis-Base/Integer`. Every other identity — including `cuis-class/Cuis-Base/Dictionary`,
+whose name this image really does have, and `cuis-class/Other/Integer` — stays refused. There is no
+name fallback and no caller-supplied alias.
+
+The Integer entry claims only what is proved: that identity denotes the class an ordinary native
+integer's Behavior resolves to, so the package's `Integer>>jsonWriteOn:` extension is reached by
+real native integer receivers. It is *not* a claim that native Integer implements every Cuis
+Integer protocol. Importing that method installs it through the existing kernel Integer's existing
+MethodDictionary owner — no second Integer, no proxy subclass, no importer-owned extension store,
+no behavior attached to a package object — and the Class record does not move. Sending
+`jsonWriteOn:` to an ordinary native integer then dispatches into the real upstream method and
+fails on that method's own `printOn:base:` requirement, which is a separate native-library gap the
+harness will classify in its turn rather than something the mapping papers over.
+
+The harness's current recorded first blocker for the acceptance target is `Json class>>render:`,
+which opens with `WriteStream on: String new`. That one is not an adapter refusal: `WriteStream`
+and `String` are global name references inside imported method source, resolved by the native
+compiler through this image's global namespace, so the gap belongs to the native library and
+namespace owners rather than to the Cuis mapping seam.
 
 ### 4. Native application state
 

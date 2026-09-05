@@ -8,6 +8,44 @@ import {tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
 // Class, Metaclass, Shape, slot and method identity and behavior.
 const CUIS_SEMANTIC_EXPORT_V2 = 'smalltalk/cuis-semantic-export-v2';
 const CUIS_NATIVE_ROOT_OBJECT_IDENTITY = 'cuis-class/Cuis-Base/Object';
+const CUIS_NATIVE_INTEGER_IDENTITY = 'cuis-class/Cuis-Base/Integer';
+
+// The ONE seam where a Cuis semantic class identity corresponds to an already-proven native class.
+// Keyed by the export owner's COMPLETE semantic identity and never by class name: a Cuis class
+// merely spelled `Integer` in some other package is not this image's Integer, exactly as the M1
+// root rule already said about `Object`. Nothing outside this table resolves to a native class, so
+// there is no name fallback and no caller-supplied alias.
+//
+// What each entry claims, at the narrowest boundary that is true:
+//
+//   cuis-class/Cuis-Base/Object   the structural root for native class construction/allocation
+//                                 (ADR 0085 M1; a declared superclass position).
+//   cuis-class/Cuis-Base/Integer  the class an ordinary native integer's Behavior resolves to, so a
+//                                 Cuis package's extension method installed here is reached by real
+//                                 native integer receivers. Required by the pinned upstream JSON
+//                                 package: `Integer>>jsonWriteOn:` is an extension on a class that
+//                                 package does not define. This is NOT a claim that native Integer
+//                                 implements every Cuis Integer protocol — that method's own
+//                                 `printOn:base:` receiver requirement is a separate, unproven
+//                                 native-library semantic, and a missing one stays a visible
+//                                 failure rather than something this table papers over.
+//
+// A Map, not an object literal, so a hostile identity such as `__proto__` cannot resolve.
+const CUIS_NATIVE_CLASS_MAPPINGS = new Map([
+  [CUIS_NATIVE_ROOT_OBJECT_IDENTITY, 'objectClass'],
+  [CUIS_NATIVE_INTEGER_IDENTITY, 'integerClass'],
+]);
+
+function isMappedCuisClass(identity) {
+  return CUIS_NATIVE_CLASS_MAPPINGS.has(identity);
+}
+
+// Resolution needs the kernel, so it happens in the import phase; the plan phase asks only whether
+// an identity is mapped. The kernel owns the ref — this never creates, rewrites or names a class.
+function resolveMappedCuisClass(identity, kernel) {
+  const slot = CUIS_NATIVE_CLASS_MAPPINGS.get(identity);
+  return slot === undefined ? null : kernel[slot];
+}
 
 class CuisNativeImportError extends TypeError {
   constructor(message, semanticIdentity = null) {
@@ -202,12 +240,13 @@ function importPlan(manifest, scope) {
     ? classes
     : classes.filter((declaration) => requested.classes.has(declaration.identity));
   for (const declaration of scopedClasses) {
-    if (declaration.superclass === CUIS_NATIVE_ROOT_OBJECT_IDENTITY) continue;
+    if (isMappedCuisClass(declaration.superclass)) continue;
     const parent = byIdentity.get(declaration.superclass);
     if (!parent) {
       fail(
         `unsupported superclass semantic identity ${declaration.superclass}; `
-        + `M1 maps only ${CUIS_NATIVE_ROOT_OBJECT_IDENTITY} outside the imported graph`,
+        + `outside the imported graph only these map to native classes: `
+        + `${[...CUIS_NATIVE_CLASS_MAPPINGS.keys()].join(', ')}`,
         declaration.identity,
       );
     }
@@ -268,10 +307,21 @@ function importPlan(manifest, scope) {
     nativeBindings.add(binding);
     const source = text(item.source, `method ${identity} source`);
     if (requested && !requested.methods.has(identity)) continue;
-    if (!byIdentity.has(classIdentity)) {
+    if (isMappedCuisClass(classIdentity)) {
+      // An extension method on a class the package does not define is ordinary Smalltalk. The
+      // target is an existing native class, so it needs no manifest declaration and no scope
+      // entry: the covered METHOD is what this import requested. The native MethodDictionary
+      // owner installs it exactly as it does for an imported class.
+      if (item.side === 'class') {
+        fail(
+          `class-side method ${identity} targets mapped native class ${classIdentity}; `
+          + 'only instance-side extension of a mapped native class is proven',
+          identity,
+        );
+      }
+    } else if (!byIdentity.has(classIdentity)) {
       fail(`method target ${classIdentity} is outside the imported native class graph`, identity);
-    }
-    if (requested && !requested.classes.has(classIdentity)) {
+    } else if (requested && !requested.classes.has(classIdentity)) {
       fail(`method target ${classIdentity} is outside the requested import scope`, identity);
     }
     methods.push(Object.freeze({
@@ -302,12 +352,14 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) fail(`image ${imageId} has no Smalltalk kernel`);
 
-  // The one M1 compatibility fact is keyed by the export owner's complete semantic identity, not
-  // by the spelling "Object". It establishes only the structural root required for native class
-  // construction/allocation; broader Cuis base protocol compatibility remains M3 pressure.
-  const resolved = new Map([
-    [CUIS_NATIVE_ROOT_OBJECT_IDENTITY, Object.freeze({classRef: kernel.objectClass})],
-  ]);
+  // The compatibility facts, resolved through the one seam. Each answers an EXISTING native class
+  // ref owned by the kernel; none is created, rewritten or renamed here.
+  const resolved = new Map();
+  for (const identity of CUIS_NATIVE_CLASS_MAPPINGS.keys()) {
+    const classRef = resolveMappedCuisClass(identity, kernel);
+    if (!classRef) fail(`image ${imageId} has no native class for ${identity}`, identity);
+    resolved.set(identity, Object.freeze({classRef}));
+  }
   for (const declaration of plan.ordered) {
     const superclass = resolved.get(declaration.superclass);
     if (!superclass) fail(`superclass ${declaration.superclass} was not resolved`, declaration.identity);
@@ -351,6 +403,7 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
 }
 
 export {
+  CUIS_NATIVE_INTEGER_IDENTITY,
   CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
   CuisNativeImportError,
   importCuisNativePackage,

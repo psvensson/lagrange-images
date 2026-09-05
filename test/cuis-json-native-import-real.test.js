@@ -21,9 +21,11 @@ import {
   createRuntime,
   findSmalltalkKernel,
   importCuisNativePackage,
+  installSymmetricSmalltalkBlock,
   installSymmetricSmalltalkStandardImage,
   integerValue,
   methodBindings,
+  methodBlockRef,
   objectRef,
   objectResource,
   readBehavior,
@@ -434,12 +436,85 @@ test('an M2-imported real Cuis method browses as an ordinary authorized native m
   }
 });
 
+// The package owns a method declaration on a class it does not define. That is ordinary Smalltalk
+// extension-method behavior, and the native result is ordinary too: the explicit identity mapping
+// resolves the target and the EXISTING kernel Integer's EXISTING MethodDictionary owns the binding.
+test('a real upstream extension method installs on the existing native class it extends', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await jsonSemanticExport());
+
+  const runtime = await nativeRuntime();
+  try {
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'native-image'});
+    const classRecordBefore = await runtime.images.getObject('native-image', 'smalltalk/class/Integer');
+    const behaviorBefore = await readBehavior(runtime.images, kernel.integerClass);
+    assert.equal(
+      await methodBlockRef({
+        images: runtime.images, imageId: 'native-image', classRef: kernel.integerClass, selector: 'jsonWriteOn:',
+      }),
+      null,
+      'jsonWriteOn: is the package\'s selector, not something this image already had',
+    );
+
+    const scope = {
+      // `cuis-class/Cuis-Base/Integer` is deliberately NOT a class this import makes native: it is
+      // an existing native class resolved through the adapter's exact-identity mapping, and the
+      // covered METHOD is what was requested.
+      classes: ['cuis-class/JSON/Json'],
+      methods: ['cuis-method/JSON/Integer/instance/jsonWriteOn:'],
+    };
+    const imported = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest, scope,
+    });
+    assert.deepEqual(imported.classes.map(({identity}) => identity), ['cuis-class/JSON/Json']);
+
+    const behaviorAfter = await readBehavior(runtime.images, kernel.integerClass);
+    const classRecordAfter = await runtime.images.getObject('native-image', 'smalltalk/class/Integer');
+    assert.equal(classRecordAfter._version, classRecordBefore._version, 'the mapped Class record does not move');
+    assert.deepEqual(behaviorAfter.superclass, behaviorBefore.superclass);
+    assert.deepEqual(behaviorAfter.instanceShape, behaviorBefore.instanceShape);
+    assert.deepEqual(
+      behaviorAfter.methods,
+      behaviorBefore.methods,
+      'the existing MethodDictionary owns the binding; no second Integer and no proxy subclass',
+    );
+    assert.ok(await methodBlockRef({
+      images: runtime.images, imageId: 'native-image', classRef: kernel.integerClass, selector: 'jsonWriteOn:',
+    }));
+
+    // The behavioral proof that the mapping named the right class: an ORDINARY native integer
+    // dispatches INTO the real upstream method. The failure is the method body's own
+    // `printOn:base:` requirement, not `jsonWriteOn:` — a message-not-understood on `jsonWriteOn:`
+    // would mean the extension landed on some other class. That inner gap is the next RED and is
+    // deliberately not pre-implemented here.
+    const send = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'native-image', id: 'send-json-write-on', source: '[ :n :s | n jsonWriteOn: s ]',
+    });
+    await assert.rejects(
+      runtime.invocations.invokeBlock(objectRef('native-image', send.block.id), [integerValue(3), integerValue(0)])
+        .then((activation) => runtime.executor.execute(activation)),
+      /message not understood: printOn:base: sent to a integer Value/,
+    );
+
+    const frontierBeforeReplay = await runtime.images.frontier('native-image');
+    const replayed = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest, scope,
+    });
+    assert.deepEqual(replayed, imported);
+    assert.equal(
+      await runtime.images.frontier('native-image'),
+      frontierBeforeReplay,
+      'exact replay of the mapped-target extension import is write-free',
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
 test('the M3 acceptance target refuses native import at its first unsupported semantic', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await jsonSemanticExport());
 
   const runtime = await nativeRuntime();
   try {
-    const frontierBefore = await runtime.images.frontier('native-image');
     const refusal = await importCuisNativePackage({
       images: runtime.images,
       compilation: runtime.compilation,
@@ -451,23 +526,21 @@ test('the M3 acceptance target refuses native import at its first unsupported se
       (error) => error,
     );
 
-    // M3 blocker 2 (Bead lagrange-images-nv1.3): most of this package's behavior is extension
-    // methods on classes it does not define, and the adapter maps exactly one base semantic
-    // identity — `cuis-class/Cuis-Base/Object`, and only as the M1 structural superclass root.
-    // `Integer>>jsonWriteOn:` therefore has no native class to install on.
-    assert.ok(refusal instanceof CuisNativeImportError, 'the target is refused, not partially imported');
-    assert.equal(refusal.semanticIdentity, 'cuis-method/JSON/Integer/instance/jsonWriteOn:');
-    assert.match(
-      refusal.message,
-      /method target cuis-class\/Cuis-Base\/Integer is outside the imported native class graph/,
-    );
+    // M3 blocker 3 (Bead lagrange-images-nv1.4): `Json class>>render:` opens with
+    // `WriteStream on: String new`. Unlike the two blockers before it, this is NOT an adapter
+    // refusal — `WriteStream` and `String` are global
+    // NAME references inside imported method source, which the native compiler resolves through
+    // this image's global namespace. The gap therefore belongs to the native library/namespace
+    // owners, not to the Cuis mapping seam, and it is classified in its own bead before any
+    // compatibility code is written.
+    assert.equal(refusal instanceof CuisNativeImportError, false, 'the native compiler refuses this, not the adapter');
+    assert.match(refusal.message, /unbound Symmetric Smalltalk name: WriteStream/);
 
-    // The adapter's preflight-before-first-write rule holds for a real package, not only for
-    // fixtures: a refused import leaves the native image exactly where it was.
-    assert.equal(
-      await runtime.images.frontier('native-image'),
-      frontierBefore,
-      'a refused real-package import writes nothing at the native owners',
+    // A native-owner rejection after preflight may leave already-valid immutable ancestors, exactly
+    // as the documented contract says; an ordinary retry converges through their admission rules.
+    assert.ok(
+      await runtime.images.getObject('native-image', 'smalltalk/class/Json'),
+      'the valid class was admitted before the compiler rejected the method',
     );
   } finally {
     await runtime.close();
