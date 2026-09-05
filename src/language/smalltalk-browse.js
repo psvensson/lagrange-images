@@ -4,6 +4,7 @@ import {isObjectRef} from '../value/index.js';
 import {findSmalltalkKernel, isLocalRef, readBehavior} from './smalltalk-kernel.js';
 import {methodBindings} from './smalltalk-class-builder.js';
 import {sameRef} from './smalltalk-lookup.js';
+import {smalltalkMethodPositionToken} from './smalltalk-method-position-token.js';
 
 // The AUTHORIZED native Symmetric Smalltalk browsing seam (ADR 0087, bead lagrange-images-jtz,
 // Object Environment E1).
@@ -176,11 +177,21 @@ async function authorizedDescribeSmalltalkClass({images, imageId, classRef, requ
 //
 // A caller holding only (1) can already see the selector, so learning "this selector exists but you
 // may not read its method" discloses nothing new; a caller holding neither learns only AuthorityError.
-async function authorizedDescribeSmalltalkMethod({images, imageId, classRef, selector, require} = {}) {
+// ONE authorized resolution of a current method position, so the read that DESCRIBES a method and
+// the read that prepares to REPLACE one cannot assemble different revisions by accident. Everything
+// below it is the same as it has always been; factoring it is what makes "the descriptor and the
+// token describe the same resolved binding, from one binding read" a structural fact rather than a
+// convention two call sites have to keep.
+//
+// The authority sequence is ADR 0087's and is unchanged: validate caller input, authorize the
+// Class/Metaclass read, resolve, then authorize the method's Block INDEPENDENTLY. Class-read
+// authority yields selector names and never the Block behind one, and a caller denied either half
+// cannot tell an existing method from a missing one.
+async function authorizedMethodPosition({images, imageId, classRef, selector, require, operation}) {
   requiredText(imageId, 'imageId');
-  assertLocalClassRef(classRef, imageId, 'authorizedDescribeSmalltalkMethod');
+  assertLocalClassRef(classRef, imageId, operation);
   requiredText(selector, 'selector');
-  assertRequire(require, 'authorizedDescribeSmalltalkMethod');
+  assertRequire(require, operation);
 
   require(readDemand(imageId, classRef.objectId));
 
@@ -208,20 +219,56 @@ async function authorizedDescribeSmalltalkMethod({images, imageId, classRef, sel
   }
 
   return Object.freeze({
-    format: SMALLTALK_METHOD_DESCRIPTION_V1,
-    // The Behavior that DECLARES this method, not the receiver class a send happened to start from.
-    class: classRef,
-    side: sameRef(behavior.record.behavior, kernel.metaclassClass) ? CLASS_SIDE.CLASS : CLASS_SIDE.INSTANCE,
-    selector,
-    // The exact Block ref the dictionary binds. It is the method's identity for a caller that wants
-    // to pin or re-read it; the code, lexical environment and compiled lane behind it are the
-    // execution owners' business and stay there.
-    method: binding.method,
-    // Absent, not empty: the class builder installs a method's semantic program and keeps no
-    // durable text it was compiled from, so there is no native method source for this seam to
-    // report. See the module header.
-    source: null,
-    provenance: null,
+    binding,
+    descriptor: Object.freeze({
+      format: SMALLTALK_METHOD_DESCRIPTION_V1,
+      // The Behavior that DECLARES this method, not the receiver class a send happened to start from.
+      class: classRef,
+      side: sameRef(behavior.record.behavior, kernel.metaclassClass) ? CLASS_SIDE.CLASS : CLASS_SIDE.INSTANCE,
+      selector,
+      // The exact Block ref the dictionary binds. It is the method's identity for a caller that
+      // wants to pin or re-read it; the code, lexical environment and compiled lane behind it are
+      // the execution owners' business and stay there.
+      method: binding.method,
+      // Absent, not empty: the class builder installs a method's semantic program and keeps no
+      // durable text it was compiled from, so there is no native method source for this seam to
+      // report. See the module header.
+      source: null,
+      provenance: null,
+    }),
+  });
+}
+
+// ADR 0087, unchanged and gaining nothing. It answers the canonical method description and no
+// version token: a reader is not a writer, and a caller that only wants to look at a method has no
+// business holding a replacement assumption.
+async function authorizedDescribeSmalltalkMethod({images, imageId, classRef, selector, require} = {}) {
+  return (await authorizedMethodPosition({
+    images, imageId, classRef, selector, require, operation: 'authorizedDescribeSmalltalkMethod',
+  })).descriptor;
+}
+
+// THE WRITER-FACING READ (bead lagrange-images-qax, Object Environment E3). The smallest possible
+// addition: exactly the canonical ADR 0087 descriptor, plus an opaque token for the method position
+// it just resolved.
+//
+// Both halves come from ONE resolution, so they cannot describe different revisions — the token is
+// minted from the very binding the descriptor reports, not from a second read of the same position.
+// That matters because the whole point of the token is to represent what the caller was shown.
+//
+// It demands exactly what ADR 0087's method read demands and nothing more. Reading in order to
+// write is still only reading, so this grants no write authority and asserts none; the replacement
+// operation authorizes its own write when it is called. `descriptor.source` stays `null` — this
+// seam is not a source editor and E3 is replacement from explicitly supplied source.
+async function authorizedReadSmalltalkMethodForUpdate({images, imageId, classRef, selector, require} = {}) {
+  const {descriptor, binding} = await authorizedMethodPosition({
+    images, imageId, classRef, selector, require, operation: 'authorizedReadSmalltalkMethodForUpdate',
+  });
+  return Object.freeze({
+    descriptor,
+    versionToken: smalltalkMethodPositionToken({
+      imageId, classRef, selector, method: binding.method,
+    }),
   });
 }
 
@@ -231,4 +278,5 @@ export {
   SMALLTALK_METHOD_DESCRIPTION_V1,
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
+  authorizedReadSmalltalkMethodForUpdate,
 };
