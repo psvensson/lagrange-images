@@ -31,6 +31,7 @@ import {
 // nothing wider, and not the Block ref, which the caller can already obtain from the browse seam.
 const CLASS_ID = 'smalltalk/class/TokenProbe';
 const OTHER_CLASS_ID = 'smalltalk/class/TokenProbeOther';
+const METACLASS_ID = 'smalltalk/metaclass/TokenProbe';
 
 async function image() {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
@@ -125,6 +126,30 @@ test('a token is refused for any position other than the one it was issued for',
         label,
       );
     }
+
+    // LOCALITY, asserted separately because it raises a different message and would silently pass
+    // the loop's regex above. The two axes must not move together: hold imageId at `app` and move
+    // ONLY the class ref. Without the locality check a token minted for `{app, C}` is accepted
+    // against `{app, elsewhere/C}`, because only the objectId would have been compared — and every
+    // other case in this file still passes with that check reverted.
+    assert.throws(
+      () => parseSmalltalkMethodPositionToken(versionToken, {
+        imageId: 'app', classRef: objectRef('elsewhere', CLASS_ID), selector: 'answer',
+      }),
+      (error) => error.name === 'SmalltalkMethodPositionTokenError'
+        && /is not local to app/.test(error.message),
+      'a class ref in another image is not this image\'s position',
+    );
+    // The same rule on the minting side.
+    assert.throws(
+      () => smalltalkMethodPositionToken({
+        imageId: 'app', classRef: objectRef('elsewhere', CLASS_ID), selector: 'answer',
+        method: objectRef('app', 'blk'),
+      }),
+      (error) => error.name === 'SmalltalkMethodPositionTokenError'
+        && /is not local to app/.test(error.message),
+      'a non-local class ref cannot mint a token either',
+    );
   } finally {
     await runtime.close();
   }
@@ -196,9 +221,20 @@ test('the token follows the position revision, and an unrelated selector does no
 
     // An UNRELATED selector changes. The dictionary record necessarily moves underneath — that is
     // the persistence mechanism — but this position did not, so its token must not move either.
+    //
+    // The unrelated edit must be PROVEN to have landed, or this arm is vacuous: if reconcile
+    // converged, no-opped or was skipped, the token would be unchanged for the trivial reason that
+    // nothing happened, and the selector-position-vs-dictionary-scope claim would go untested.
+    const otherBefore = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef, selector: 'other',
+    });
     await reconcileMethodsFromSource({
       ...options, classRef, methods: [{selector: 'other', source: '[ ^ 22 ]'}],
     });
+    const otherAfter = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef, selector: 'other',
+    });
+    assert.notDeepEqual(otherAfter, otherBefore, 'the unrelated edit must really have moved `other`');
     assert.equal(
       (await read()).versionToken,
       first.versionToken,
@@ -287,6 +323,85 @@ test('the descriptor and the token describe the same resolved binding', async ()
       parseSmalltalkMethodPositionToken(versionToken, {imageId: 'app', classRef, selector: 'answer'}),
       {imageId: descriptor.method.imageId, objectId: descriptor.method.objectId},
     );
+
+    // The above is a witness in a quiescent image: a SECOND resolution would agree with the first,
+    // so it would stay green even if the token were minted from its own separate read. What makes
+    // the one-read property observable is a binding that MOVES between two resolutions. Replacing
+    // the method under a paused read is not something this seam exposes, so assert the next best
+    // thing the property implies and a two-read implementation would break: across a real change,
+    // descriptor and token move TOGETHER, never one without the other.
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef,
+      methods: [{selector: 'answer', source: '[ ^ 99 ]'}],
+      lane: 'neutral',
+    });
+    const moved = await authorizedReadSmalltalkMethodForUpdate({
+      images: runtime.images,
+      imageId: 'app',
+      classRef,
+      selector: 'answer',
+      require: readerFor(runtime, await grantsFor(runtime, CLASS_ID, 'answer')),
+    });
+    assert.notDeepEqual(moved.descriptor.method, descriptor.method, 'the binding really moved');
+    assert.notEqual(moved.versionToken, versionToken, 'so the token moved too');
+    assert.deepEqual(
+      parseSmalltalkMethodPositionToken(moved.versionToken, {imageId: 'app', classRef, selector: 'answer'}),
+      {imageId: moved.descriptor.method.imageId, objectId: moved.descriptor.method.objectId},
+      'and they still name the SAME binding, not two resolutions of it',
+    );
+
+    // The result envelope is frozen, as docs/ownership.md claims.
+    assert.ok(Object.isFrozen(moved), 'the {descriptor, versionToken} result is frozen');
+  } finally {
+    await runtime.close();
+  }
+});
+
+// The token is scoped to a {Class/METACLASS, selector} position, and `descriptor.side` distinguishes
+// them. Nothing else here exercises the class side at all, so a mint or a scope compare that quietly
+// dropped the Metaclass half — or a descriptor reporting the wrong side for it — would pass.
+test('a class-side position is its own position, distinct from the instance side', async () => {
+  const runtime = await image();
+  try {
+    const classRef = objectRef('app', CLASS_ID);
+    const metaclassRef = objectRef('app', METACLASS_ID);
+    await defineMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef: metaclassRef,
+      methods: [{selector: 'answer', source: '[ ^ 7 ]'}],
+      lane: 'neutral',
+    });
+
+    const readSide = async (ref, id) => await authorizedReadSmalltalkMethodForUpdate({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: ref,
+      selector: 'answer',
+      require: readerFor(runtime, await grantsFor(runtime, id, 'answer')),
+    });
+    const instance = await readSide(classRef, CLASS_ID);
+    const klass = await readSide(metaclassRef, METACLASS_ID);
+
+    assert.equal(instance.descriptor.side, 'instance');
+    assert.equal(klass.descriptor.side, 'class');
+    // Same selector, same image, different Behavior: two positions, two tokens.
+    assert.notEqual(klass.versionToken, instance.versionToken);
+    // And neither token is accepted for the other's position.
+    assert.throws(
+      () => parseSmalltalkMethodPositionToken(klass.versionToken, {imageId: 'app', classRef, selector: 'answer'}),
+      (error) => error.name === 'SmalltalkMethodPositionTokenError',
+      'a class-side token is not an instance-side token',
+    );
+    assert.throws(
+      () => parseSmalltalkMethodPositionToken(instance.versionToken, {imageId: 'app', classRef: metaclassRef, selector: 'answer'}),
+      (error) => error.name === 'SmalltalkMethodPositionTokenError',
+      'nor the reverse',
+    );
   } finally {
     await runtime.close();
   }
@@ -296,15 +411,30 @@ test('the descriptor and the token describe the same resolved binding', async ()
 test('a malformed token is refused rather than ignored', async () => {
   const classRef = objectRef('app', CLASS_ID);
   const position = {imageId: 'app', classRef, selector: 'answer'};
-  // Including tokens whose parts are not base64url at all: the byte decoder raises a plain
-  // TypeError for those, and it must not cross this seam — a malformed token is an Images-native
-  // semantic outcome, not a foreign error from a helper.
-  const wrongScope = `${SMALLTALK_METHOD_POSITION_TOKEN_V0}:!!!:!!!`;
+  // The position half of a REAL token, so the cases below actually reach the observed half. An
+  // earlier version of this test put the bad bytes in the position half, where the scope compare
+  // rejects them first — so the try/catch and the canonicality guard they were written for were
+  // never executed at all, and deleting both left this test green.
+  const realScope = smalltalkMethodPositionToken({
+    imageId: 'app', classRef, selector: 'answer', method: objectRef('app', 'blk'),
+  }).split(':')[1];
+  const withObserved = (observed) => `${SMALLTALK_METHOD_POSITION_TOKEN_V0}:${realScope}:${observed}`;
   for (const bad of [
     '', 'nonsense', 'object-version/v0:a:b',
     `${SMALLTALK_METHOD_POSITION_TOKEN_V0}:only-two`,
-    wrongScope,
-    `${SMALLTALK_METHOD_POSITION_TOKEN_V0}:${wrongScope.split(':')[1]}:not base64url!`,
+    `${SMALLTALK_METHOD_POSITION_TOKEN_V0}:!!!:!!!`,
+    // Observed half is not base64url at all: the byte decoder raises a plain TypeError, which must
+    // NOT cross this seam — a malformed token is an Images-native semantic outcome.
+    withObserved('!!!'),
+    withObserved('not base64url!'),
+    // Observed half is well-formed base64url but the wrong SHAPE: one part, or three.
+    withObserved('YXBw'),
+    withObserved('YXBw.YmxrMQ.eA'),
+    // Observed half decodes to an empty half.
+    withObserved('.Ymxr'),
+    // NON-CANONICAL base64url that decodes to the same bytes as a valid observed half. Base64
+    // silently drops leftover bits, so without the re-encode guard this parses as if canonical.
+    withObserved('YXBw.Ymxr='),
   ]) {
     assert.throws(
       () => parseSmalltalkMethodPositionToken(bad, position),

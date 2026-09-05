@@ -94,7 +94,7 @@ function observedRevision(method) {
   return objectResource(method.imageId, method.objectId);
 }
 
-function smalltalkMethodPositionToken({imageId, classRef, selector, method}) {
+function smalltalkMethodPositionToken({imageId, classRef, selector, method} = {}) {
   return `${SMALLTALK_METHOD_POSITION_TOKEN_V0}:${positionScope(imageId, classRef, selector)}`
     + `:${observedRevision(method)}`;
 }
@@ -102,7 +102,7 @@ function smalltalkMethodPositionToken({imageId, classRef, selector, method}) {
 // Answers the observed binding ONLY when the token was issued for exactly this position. A token
 // for another class or selector is rejected rather than reinterpreted, and the caller learns
 // nothing about that other position from the failure.
-function parseSmalltalkMethodPositionToken(token, {imageId, classRef, selector}) {
+function parseSmalltalkMethodPositionToken(token, {imageId, classRef, selector} = {}) {
   const text = requiredText(token, 'method position token');
   const parts = text.split(':');
   if (parts.length !== 3 || parts[0] !== SMALLTALK_METHOD_POSITION_TOKEN_V0) {
