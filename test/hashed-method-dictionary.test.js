@@ -817,3 +817,241 @@ test('every write in a migration is recoverable by an identical retry', async ()
     await base.close();
   }
 });
+
+// ONE CURRENT-BINDING READER (bead lagrange-images-jtz.2). "What Block is bound at
+// {Class, selector} right now" is one question, and it used to have two answers: the published
+// protocol reader validated every declared legacy slot, while the write planner's read-for-update
+// built its map straight from the record's slots with no check. The same class was WRITABLE BUT
+// UNBROWSABLE, and a write carried the malformed slot forward into the rewritten record.
+//
+// These tests assert the bindings themselves, not merely that a call succeeded: a reader that
+// answered the WRONG Block would pass a success/failure check and fail these.
+const READER_METHOD = Object.freeze({
+  selector: 'readerProbe',
+  program: Object.freeze({parameters: [], captures: [], body: Object.freeze({op: 'receiver'})}),
+});
+
+// A legacy dictionary whose declared slot holds something that is not a Block ref at all.
+async function malformedLegacyDictionaryFor(runtime, imageId, classRef, goodBlock) {
+  const shape = await runtime.images.putShape(imageId, {
+    id: 'malformed-legacy-shape',
+    slots: [{id: 'selector:good', name: 'good'}, {id: 'selector:bad', name: 'bad'}],
+  });
+  const dictionary = await runtime.images.putObject(imageId, {
+    id: 'malformed-legacy-methods',
+    shape: objectRef(imageId, shape.id),
+    slots: {'selector:good': goodBlock, 'selector:bad': textValue('not a block ref')},
+    metadata: {smalltalk: 'method-dictionary'},
+  });
+  const behavior = await runtime.images.getObject(imageId, classRef.objectId);
+  await runtime.images.putObject(imageId, {
+    id: behavior.id,
+    shape: behavior.shape,
+    behavior: behavior.behavior,
+    slots: {...behavior.slots, 'behavior-methods': objectRef(imageId, dictionary.id)},
+    metadata: behavior.metadata,
+  }, {expectedVersion: behavior._version});
+  return objectRef(imageId, dictionary.id);
+}
+
+// THE DIVERGENCE THIS CLOSES, on the representation where it existed. Write planning must reach the
+// same verdict as browsing, and must not make the corruption durable by rewriting the record.
+test('a malformed legacy slot is refused by write planning exactly as browsing refuses it', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const good = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'reader-good-block', source: '[ 42 ]',
+    });
+    const dictionaryRef = await malformedLegacyDictionaryFor(
+      runtime, 'app', kernel.integerClass, objectRef('app', good.block.id),
+    );
+    const before = await runtime.images.getObject('app', dictionaryRef.objectId);
+
+    const browse = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: 'good',
+    }).then(() => null, (error) => error);
+    assert.ok(browse, 'browsing must refuse a dictionary with a malformed slot');
+    assert.match(browse.message, /slot for bad must contain an unpinned Block ref/);
+
+    // The write planner reads the same current bindings, so it reaches the same verdict — and it is
+    // the SAME message, because it is now the same reader rather than a second one that agrees.
+    const planned = await defineMethods({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      lane: 'neutral',
+      classRef: kernel.integerClass,
+      methods: [READER_METHOD],
+    }).then(() => null, (error) => error);
+    assert.ok(planned, 'write planning must refuse the same dictionary');
+    assert.match(planned.message, /slot for bad must contain an unpinned Block ref/);
+
+    // ... and nothing was written: the malformed slot is not carried forward, and the new selector
+    // did not land. Before this repair the write SUCCEEDED and rewrote the record keeping the bad
+    // slot, which is how a corrupt dictionary became durable.
+    const after = await runtime.images.getObject('app', dictionaryRef.objectId);
+    assert.equal(after._version, before._version, 'a refused write leaves the record untouched');
+    assert.deepEqual(after.slots, before.slots);
+  });
+});
+
+// AGREEMENT ON THE ACTUAL BINDING, both representations. The assertion is the Block ref itself:
+// a reader that answered a different Block, or dropped the selector, fails here.
+for (const representation of ['legacy', 'hashed']) {
+  test(`browse and write planning agree on the current binding (${representation})`, async () => {
+    await withRuntime(async (runtime) => {
+      const kernel = await seed(runtime, 'app');
+      const bound = await installSymmetricSmalltalkBlock({
+        images: runtime.images, imageId: 'app', id: `agree-${representation}`, source: '[ 7 ]',
+      });
+      const boundRef = objectRef('app', bound.block.id);
+      if (representation === 'legacy') {
+        await legacyDictionaryFor(runtime, 'app', kernel.integerClass, {agreed: boundRef});
+      } else {
+        // The hashed representation, reached the ordinary way.
+        await defineMethods({
+          images: runtime.images,
+          compilation: runtime.compilation,
+          imageId: 'app',
+          lane: 'neutral',
+          classRef: kernel.integerClass,
+          methods: [{selector: 'agreed', program: {parameters: [], captures: [], body: {op: 'receiver'}}}],
+        });
+      }
+
+      // What browsing says is bound.
+      const browsed = await methodBlockRef({
+        images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: 'agreed',
+      });
+      assert.ok(browsed, 'the selector is bound');
+
+      // What the write planner saw. `defineMethods` is add-only: an identical redefinition is a
+      // legal replay, but DIFFERENT semantics for a selector it can already see is refused. So the
+      // discriminating attempt is a different program — if the planner had NOT seen the current
+      // binding it would have accepted this and silently rebound the selector.
+      await assert.rejects(
+        defineMethods({
+          images: runtime.images,
+          compilation: runtime.compilation,
+          imageId: 'app',
+          lane: 'neutral',
+          classRef: kernel.integerClass,
+          methods: [{
+            selector: 'agreed',
+            program: {parameters: [{id: 'agreed:x', name: 'x'}], captures: [], body: {op: 'argument', index: 0}},
+          }],
+        }),
+        (error) => error instanceof SmalltalkKernelConflictError || /already|conflict/i.test(error.message),
+        'the write planner must see the same current binding browsing reports',
+      );
+
+      // THE VALUE, load-bearing on the write side. The rejection above only proves the planner saw
+      // SOME binding — a reader answering the wrong ref would reject identically. An identical
+      // redefinition, by contrast, is a legal write-free REPLAY, and it is legal only because the
+      // planner recognises the currently bound ref as this selector's own method. So a reader that
+      // returned a different Block would turn this replay into a conflict.
+      if (representation === 'hashed') {
+        const frontier = await runtime.images.frontier('app');
+        await defineMethods({
+          images: runtime.images,
+          compilation: runtime.compilation,
+          imageId: 'app',
+          lane: 'neutral',
+          classRef: kernel.integerClass,
+          methods: [{selector: 'agreed', program: {parameters: [], captures: [], body: {op: 'receiver'}}}],
+        });
+        assert.equal(
+          await runtime.images.frontier('app'),
+          frontier,
+          'an identical redefinition replays write-free, which requires the planner to have read the exact bound ref',
+        );
+      }
+
+      // And the binding did not move, and it is the exact Block that was installed.
+      const still = await methodBlockRef({
+        images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: 'agreed',
+      });
+      assert.deepEqual(still, browsed);
+      if (representation === 'legacy') {
+        assert.deepEqual(browsed, boundRef, 'the exact Block the legacy slot holds');
+      } else {
+        // The hashed case had no independently-known ref, so pin it against the method position the
+        // class builder owns rather than asserting nothing about the value.
+        assert.equal(still.imageId, 'app');
+        assert.match(still.objectId, /^smalltalk\/class\/Integer\/method\//);
+      }
+    });
+  });
+}
+
+// DISPATCH AGREEMENT, in the direction that matters: whatever the current-binding reader accepts,
+// dispatch resolves to the SAME Block. Dispatch validates only the slot for the selector being sent
+// — it answers one send rather than describing a class — so it remains able to resolve a good
+// selector in a dictionary this reader refuses as a whole. That is consistent, not contradictory:
+// the reader is never laxer than dispatch.
+test('dispatch resolves the same Block the current-binding reader reports', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    // TWO selectors bound to DIFFERENT Blocks, so the value each send answers identifies WHICH
+    // Block ran. With one selector a reader that reported the wrong ref would still look right.
+    const first = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'dispatch-agree-first', source: '[ 42 ]',
+    });
+    const second = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'dispatch-agree-second', source: '[ 7 ]',
+    });
+    await legacyDictionaryFor(runtime, 'app', kernel.integerClass, {
+      answerFirst: objectRef('app', first.block.id),
+      answerSecond: objectRef('app', second.block.id),
+    });
+
+    // What the reader says each selector binds.
+    assert.deepEqual(
+      await methodBlockRef({images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: 'answerFirst'}),
+      objectRef('app', first.block.id),
+    );
+    assert.deepEqual(
+      await methodBlockRef({images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: 'answerSecond'}),
+      objectRef('app', second.block.id),
+    );
+    // ... and what the SEND resolves to, through the lookup walk rather than through this reader.
+    // Distinct answers, so a reader/dispatch disagreement about which Block is bound would show.
+    assert.deepEqual(await evaluate(runtime, 'app', 'dispatch-first-send', '[ :n | n answerFirst ]', [integerValue(1)]), integerValue(42));
+    assert.deepEqual(await evaluate(runtime, 'app', 'dispatch-second-send', '[ :n | n answerSecond ]', [integerValue(1)]), integerValue(7));
+  });
+});
+
+// THE OTHER AXIS OF THE SAME BUG. The hashed representation has always required a LOCAL method ref
+// and a non-empty selector; the legacy branch required neither, so "which Block does this selector
+// bind" still had two corruption semantics inside the one function whose purpose is that it has
+// one. Both branches now apply the same rule set — which is also what the migration reader has
+// always applied, so a legacy dictionary that browses is one that can migrate.
+test('a foreign method ref in a legacy slot is refused by both readers, on the same rule', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    await runtime.images.createImage({id: 'elsewhere'});
+    const foreign = objectRef('elsewhere', 'some-foreign-block');
+    const dictionaryRef = await legacyDictionaryFor(runtime, 'app', kernel.integerClass, {foreignBound: foreign});
+    const before = await runtime.images.getObject('app', dictionaryRef.objectId);
+
+    await assert.rejects(
+      methodBlockRef({images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: 'foreignBound'}),
+      /is not local to app/,
+      'browsing must refuse a foreign method ref',
+    );
+    await assert.rejects(
+      defineMethods({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'app',
+        lane: 'neutral',
+        classRef: kernel.integerClass,
+        methods: [READER_METHOD],
+      }),
+      /is not local to app/,
+      'write planning must refuse it on the same rule, not carry it forward',
+    );
+    const after = await runtime.images.getObject('app', dictionaryRef.objectId);
+    assert.equal(after._version, before._version, 'a refused write leaves the record untouched');
+  });
+});
