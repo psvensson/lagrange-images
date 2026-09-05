@@ -15,6 +15,33 @@ npm run test:integration  # the real proofs; needs scripts/integration-setup.sh 
 npm run test:cargo-oci    # the real Cargo/rustc OCI proof; needs scripts/cargo-oci-setup.sh first
 ```
 
+### Local runs are paced; some files are CI-only on some hosts
+
+Local suite runs are a convenience, not the gate: `.github/workflows/test.yml` is the merge
+authority, and targeted tests plus the relevant real lane plus exact-head CI are sufficient merge
+evidence. `node --test` defaults to `availableParallelism() - 1` workers, which on a 20-core
+workstation starts nineteen CPU-bound files at once. Pace every local run:
+
+```sh
+nice -n 19 npm run test:fast -- --test-concurrency=1       # npm forwards the flag
+nice -n 19 node --test --test-concurrency=1 <files>        # targeted iteration
+```
+
+Run nothing else heavy at the same time (check `pgrep -af "node --test"` and `uptime` — another
+session may already be running one), start only when the CPU package is comfortably low, watch the
+temperature *during* the run rather than only before it, and stop well short of the package's
+`high` threshold rather than at it, because sampling and termination latency overshoot.
+
+**`test/cuis-native-import.test.js` is CI-only on a thermally constrained host.** It performs 26
+standard-image installs; three controlled local attempts on the reference workstation reached
+76/76/81 °C, above its 80 °C package `high`. On such a host, exercise it locally as small targeted
+cases or equivalent single-image proofs, and let CI's `node-test` lane run the complete file.
+
+This is a HOST policy, not a property of the test. The file carries no skip, its semantics are
+unchanged, and **product code and test semantics are never altered to accommodate workstation
+thermals**. If the inability to run it locally becomes a real developer-productivity problem, that
+is its own test-performance investigation — never a side change inside a compatibility PR.
+
 ### CI splits the suite; `npm test` does not
 
 CI runs `test:fast` and `test:recovery` as two required jobs, because the exhaustive
