@@ -1,7 +1,7 @@
 import {ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
-import {publishSmalltalkClassGlobals, resolveGlobal} from './smalltalk-globals.js';
+import {resolveGlobal} from './smalltalk-globals.js';
 import {objectRef} from '../value/index.js';
 
 // A native `WriteStream`, added because a real imported consumer names it: the pinned upstream
@@ -44,32 +44,28 @@ import {objectRef} from '../value/index.js';
 //              ^ (collection copyFrom: 1 to: position) asStreamResult.
 //   on: arg1   super on: arg1 thatCanBeModified. readLimit := 0. writeLimit := arg1 size.
 //
-// WHY `contents` IS WHAT IT IS. Upstream answers a PREFIX COPY, and its species preservation is a
+// WHY `contents` IS WHAT IT IS. Upstream answers a PREFIX COPY, and its class preservation is a
 // consequence of `copyFrom:to:` being class-preserving rather than of any explicit species send.
-// The written prefix of a stream with no write protocol is empty, always — so on the whole domain
-// this class can currently reach, `copyFrom: 1 to: 0` and `collection species new` agree exactly.
-// This is not an approximation that happens to pass; it is the same answer.
+// That is the shape this class now follows: build the answer, preserving the backing's class.
 //
-// That handoff has since been taken: write protocol exists, so `contents` no longer answers that
-// unconditionally. Unwritten it still does, exactly as above; written it REFUSES, because an empty
-// answer after data was written would be wrong. See `contents` below.
+// That handoff has since been taken, and taken further than the note expected: `contents` no longer
+// asks the backing to build anything. It constructs the answer itself, preserving the backing's
+// class, which is what upstream's copy does. See `contents` below.
 //
 // KNOWN DIVERGENCE, asserted by a test rather than only described here. Cuis implements `species`
-// on OBJECT, so upstream every backing answers it and an Array-backed stream answers an Array.
-// This image implements `species` only on COLLECTION: Array and Dictionary are direct Object
-// subclasses, and Text/ByteArray/Symbol are Values dispatching through kernel classes, so none of
-// them answers it. `contents` therefore works for a Collection backing and fails visibly — a
-// message-not-understood naming `species` — for anything else. Adding `Object >> species` would
-// close that gap and would match upstream, but no consumer here streams over a non-Collection
-// backing, and pre-adding kernel protocol for a case nothing exercises is the breadth this
-// milestone forbids. It becomes legitimate when a real consumer needs it.
+// on OBJECT, so upstream every backing answers it. This image implements `species` only on
+// COLLECTION. That no longer limits the two backings that matter — a text backing is built without
+// `species` at all, and a Collection answers it — but any OTHER backing (Array, Dictionary, Symbol,
+// ByteArray) still fails visibly with a message-not-understood naming `species`. Adding
+// `Object >> species` would close that, and would match upstream, but it would not have made a
+// text backing work (`Text new` is not instantiable) and no consumer streams over the others, so
+// it stays out as breadth this milestone forbids.
 //
 // NOT MODELLED. Cuis puts WriteStream under `PositionableStream`, and its `on:` also resets a
-// position and a read limit. This class is a direct subclass of Object and models no position.
-// Writes exist now, so the earlier justification ("nothing here can move a position") has expired
-// and is replaced by a narrower one: nothing READS a position. No selector exposes one, `contents`
-// refuses rather than computing a prefix, and the accumulation below is append-only. A position
-// becomes necessary when something needs the written prefix — which is bead lagrange-images-nv1.7.
+// position and a read limit. This class is a direct subclass of Object and models no position:
+// the accumulation is append-only and `contents` consumes all of it, so there is no prefix to
+// index. A position becomes necessary the first time something can write somewhere other than the
+// end — repositioning, truncation, a read stream — none of which any consumer sends.
 
 // v2: the write protocol added an instance variable, and a Shape record is immutable, so the
 // structural change gets a new Shape identity rather than a rewrite (ADR 0047). An image that
@@ -197,8 +193,10 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
   // Every method this class's source calls, in the class that must implement it. Checked as
   // installed METHODS rather than as class or global existence, because publication says nothing
   // about protocol and a half-installed image would otherwise compile cleanly and fail on first
-  // use. `isNil` needs BOTH halves: with only the `Object` one, `written isNil` answers false on a
-  // fresh stream and `contents` would refuse a stream nothing had written to.
+  // use — `ByteArray` in particular is a KERNEL class whose global the namespace publishes
+  // unconditionally, so a global check alone passes on an image that never ran the byte-sequence
+  // protocol. `isNil`, `ifTrue:` and `ifFalse:` each need BOTH halves, since the receiver may be
+  // either.
   const required = [
     ['smalltalk/class/Collection', 'species'],
     ['smalltalk/class/OrderedCollection', 'add:'],
@@ -213,6 +211,9 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
     ['smalltalk/class/UndefinedObject', 'isNil'],
     ['smalltalk/class/True', 'ifTrue:'],
     ['smalltalk/class/False', 'ifTrue:'],
+    ['smalltalk/class/True', 'ifFalse:'],
+    ['smalltalk/class/False', 'ifFalse:'],
+    ['smalltalk/class/Object', 'class'],
     ['smalltalk/class/Class', 'new'],
   ];
   for (const [objectId, selector] of required) {
@@ -230,13 +231,11 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
     }
   }
 
-  // The named refusal condition, an ordinary Error subclass. It carries no state and no protocol of
-  // its own: its NAME is the whole point, so an unhandled signal reads as the gap it stands for.
   const instanceShapeRef = await ensureSmalltalkShape(images, imageId, {
     id: WRITE_STREAM_SHAPE_ID,
     slots: [
       {id: 'write-stream-collection', name: 'collection'},
-      // Provisional, internal, unobservable: see the note on `nextPutAll:`.
+      // Internal, and exposed by no selector: see the note on `nextPutAll:`.
       {id: 'write-stream-written', name: 'written'},
     ],
   });

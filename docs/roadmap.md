@@ -163,8 +163,9 @@ feature must be demanded by that consumer and repaired at its own owner
   empty native Text value) at the import boundary that already owns dialect translation, measured
   rather than assumed: the seed is never mutated, compared or kept, and only its species reaches
   the result. With it the acceptance target's whole scope IMPORTS natively for the first time.
-  Executing it still needs `printOn:base:` and then a Text that answers `species`, each at the
-  native library owner;
+  Executing it still needed `printOn:base:` and then a result for a written stream, each at the
+  native library owner (the second turned out NOT to need a Text that answers `species` — see
+  below);
 - [x] add native `Integer >> printOn:base:` at the native Integer owner, because the pinned
   package's own `Integer>>jsonWriteOn:` sends it; base-10 output is proved against real Cuis for
   positive, zero, negative and 30-digit integers, and it composes existing arithmetic and the

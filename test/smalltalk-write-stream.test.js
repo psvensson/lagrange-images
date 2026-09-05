@@ -219,7 +219,11 @@ test('a backing that does not understand species fails visibly rather than guess
   );
 });
 
-// A fresh answer per call, not a view onto the stream's buffer and not the buffer itself.
+// A fresh answer per call, not a view onto the stream's buffer and not the buffer itself. This is
+// a COLLECTION backing on purpose: for a text backing the answer is a Value, and `==` on Values is
+// value equality by design, so two calls compare EQUAL there. That is a real divergence from the
+// recorded oracle's "not identical across two calls" and it is asserted below rather than hidden —
+// it follows from the Value model, not from anything this stream does.
 test('contents answers a fresh collection each call rather than the backing itself', async () => {
   assert.deepEqual(
     await evaluate(`[ | backing stream |
@@ -345,5 +349,18 @@ test('re-sending on: resets the stream, so it never answers stale content', asyn
       s on: ''.
       s contents ]`),
     textValue(''),
+  );
+});
+
+// THE VALUE-MODEL DIVERGENCE, stated. The recorded oracle says upstream `contents` answers a fresh
+// copy that is NOT identical across two calls. For a collection backing that holds here (above).
+// For a TEXT backing it cannot: the answer is a Value, and `==` on Values is value equality, so two
+// calls compare equal. Nothing is shared and nothing is mutable — an immutable Value has no
+// observable identity to distinguish — but the divergence is real and is recorded rather than left
+// for someone to discover.
+test('for a text backing two contents calls compare equal, because the answer is a Value', async () => {
+  assert.deepEqual(
+    await evaluate("[ | s | s := WriteStream on: ''. s nextPutAll: 'ab'. s contents == s contents ]"),
+    booleanValue(true),
   );
 });

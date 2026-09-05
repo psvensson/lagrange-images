@@ -45,7 +45,9 @@ const PRE_LIBRARY_PUBLIC_CLASSES = Object.freeze([
   'Dictionary',
 ]);
 const LIBRARY_PUBLIC_CLASSES = Object.freeze(['Association', 'Collection', 'OrderedCollection']);
-// After the library, because `WriteStream >> contents` answers through Collection's `species`.
+// After the library and the byte-sequence protocol: `contents` builds a text result through
+// `ByteArray`, answers a collection result through Collection's `species`, and names the
+// `OrderedCollection`, `Text` and `ByteArray` globals.
 const POST_LIBRARY_PUBLIC_CLASSES = Object.freeze(['WriteStream']);
 
 function requiredText(value, label) {
@@ -150,7 +152,7 @@ async function installSymmetricSmalltalkStandardImage({
   // imported consumer named it (bead lagrange-images-nv1.4: the pinned upstream Cuis JSON package
   // writes `WriteStream on: String new`), but nothing about it is Cuis-specific — the import
   // adapter resolves the name through this namespace exactly as it would `Array`. After the
-  // library because `contents` answers through Collection's `species`.
+  // library and the byte-sequence protocol, whose methods and globals `contents` both needs.
   const writeStream = await installSmalltalkWriteStreamProtocol(options);
   await publishSmalltalkClassGlobals({images, imageId, names: [...POST_LIBRARY_PUBLIC_CLASSES]});
 

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {
+  booleanValue,
   CUIS_BUILD_CONTRACT_V0,
   CUIS_BUILD_V1,
   CUIS_CHANGES_V1,
@@ -518,9 +519,16 @@ test('a real upstream extension method installs on the existing native class it 
 
 // THE M3 ACCEPTANCE TARGET, green. The pinned upstream package's own public behaviour —
 // `Json render: <integer>` — is produced entirely by native execution with Cuis absent, and equals
-// the recorded real-Cuis oracle. Both halves are the package's own unmodified upstream code: the
-// class-side `render:` entry point and the `Integer>>jsonWriteOn:` extension on a class the package
-// does not define.
+// the recorded real-Cuis oracle. Both halves are the package's own upstream code, taken from the
+// canonical export with nothing edited between: the class-side `render:` entry point and the
+// `Integer>>jsonWriteOn:` extension on a class the package does not define.
+//
+// ONE QUALIFICATION, stated because a milestone claim should carry it: `render:` is not compiled
+// byte-for-byte as written. The adapter translates one proven Cuis dialect idiom in method bodies
+// — the unary `String new` becomes an empty native Text value (bead lagrange-images-nv1.5) — and
+// this path depends on that translation. It is keyed on a source token rather than on a semantic
+// identity, which is the narrowest seam in the chain and is documented as such. Everything else in
+// both methods is compiled as the export delivered it.
 test('the M3 acceptance target imports AND EXECUTES natively, matching the recorded real-Cuis oracle', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await jsonSemanticExport());
 
@@ -587,10 +595,27 @@ test('the M3 acceptance target imports AND EXECUTES natively, matching the recor
       ['-3', '-3'],
       ['123456789012345678901234567890', '123456789012345678901234567890'],
     ]) {
-      const answer = await render(value);
-      assert.equal(answer.kind, 'text', `Json render: ${value} must answer a text Value`);
-      assert.deepEqual(answer, textValue(expected), `Json render: ${value}`);
+      assert.deepEqual(await render(value), textValue(expected), `Json render: ${value}`);
     }
+
+    // The RESULT CLASS, as a second and genuinely independent claim. The equality above is one
+    // Value-envelope comparison; this asks the answer itself, in Smalltalk, what class it belongs
+    // to. Real Cuis answers a String OBJECT (measured: `render 3 -> class=String value='3'`); the
+    // native counterpart is the text Value's class, and that correspondence is what the milestone
+    // means rather than a reduction to string contents.
+    const classOfAnswer = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'native-image',
+      id: 'm3-acceptance-class',
+      source: '[ :n | (Json render: n) class == Text ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('native-image', classOfAnswer.block.id), [integerValue(3)],
+      )),
+      booleanValue(true),
+      'the answer is a Text, asked of the answer rather than inferred from its envelope',
+    );
 
     // ... and it really was native the whole way: this runtime has no Cuis toolchain provider and
     // no foreign-runtime provider to have fallen back to (asserted when it was created), and the
