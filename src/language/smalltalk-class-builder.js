@@ -406,13 +406,24 @@ function validateProgramTree(program, imageId) {
 // different answers depending on which owner it asked, which is a correctness problem the moment
 // anything wants to REPLACE a binding (bead lagrange-images-jtz.2).
 //
-// The surviving rule is the stricter one, deliberately: it is what dispatch applies to the slot it
-// reads, so this reader is never a laxer way to read the same records. Dispatch still validates
-// only the slot for the selector being sent — it is answering one send, not describing a class —
-// so a dictionary with an unrelated malformed slot can still dispatch a good selector. This reader
-// describes the whole binding set, so it refuses the whole record; those are consistent, not
-// contradictory, and the direction that matters is that this reader never accepts what dispatch
-// would reject.
+// The surviving rule is the stricter one, deliberately, so this reader is never a laxer way to read
+// the same records than dispatch is. How it relates to dispatch differs BY REPRESENTATION, and the
+// difference is worth stating exactly rather than generalising:
+//
+//   hashed   dispatch validates the WHOLE table (`validateMethodDictionary`), so it already refuses
+//            a dictionary with any corrupt bucket — reader and dispatch refuse together.
+//   legacy   dispatch validates only the slot for the selector being SENT, because it is answering
+//            one send rather than describing a class, so it can still resolve a good selector in a
+//            dictionary this reader refuses whole.
+//
+// Those are consistent, not contradictory: the invariant is that this reader never ACCEPTS what
+// dispatch would reject, not that the two refuse identically.
+//
+// STILL A SEPARATE IMPLEMENTATION, and named here rather than left to be discovered: the migration
+// reader (`smalltalk-method-dictionary-migration.js`) reads all of a legacy dictionary's bindings
+// too, and `isLegacyMethodDictionary` (`smalltalk-kernel.js`) validates the shape of one. Their
+// rules now MATCH this reader's, but they are not this function, so "one reader" is a claim about
+// what the browse seam and the write planner share, not yet about the whole file.
 async function currentSelectorBindings({images, dictionaryRef, record, nilRef}) {
   if (isMethodDictionary(record)) {
     const table = validateMethodDictionary(record, dictionaryRef, nilRef);
@@ -427,11 +438,22 @@ async function currentSelectorBindings({images, dictionaryRef, record, nilRef}) 
   assertUniqueSelectorShape(shape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
   const bindings = new Map();
   for (const {id, name} of shape.slots) {
+    const label = `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`;
+    // ONE rule set, not one per representation. The hashed branch has always required a non-empty
+    // selector and a LOCAL method ref (`validateMethodDictionary`), and so does the migration
+    // reader; the legacy branch here required neither, which left the same asymmetry one field
+    // over from the one this reader was unified to remove.
+    if (typeof name !== 'string' || name.length === 0) {
+      throw new TypeError(`${label} selector must be non-empty text`);
+    }
     const method = record.slots[id];
     if (!isObjectRef(method)) {
+      throw new TypeError(`${label} slot for ${name} must contain an unpinned Block ref`);
+    }
+    if (method.imageId !== record.imageId) {
       throw new TypeError(
-        `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId} slot for ${name} `
-        + 'must contain an unpinned Block ref',
+        `${label} slot for ${name} refers to ${method.imageId}/${method.objectId}, `
+        + `which is not local to ${record.imageId}`,
       );
     }
     bindings.set(name, method);
