@@ -691,6 +691,10 @@ async function methodDictionaryInput({
 // How many times a guarded write may REBASE onto an unrelated winner before reporting contention.
 // Bounded and owner-local: unbounded retry would let one caller spin against a busy dictionary, and
 // no retry at all would make an unrelated `bar` edit fail a `foo` replacement (see below).
+// Exported ONLY so the proof that a moved position is stale at the FINAL boundary can aim at that
+// boundary by derivation rather than by a duplicated literal. A hardcoded copy silently stops
+// exercising the last attempt if this budget GROWS — the test still passes, and the wrong
+// implementation it exists to kill survives (measured). Tuning this number must not disarm it.
 const MAX_UNRELATED_REBASE_ATTEMPTS = 4;
 
 // Publish the new bindings through the ONE MethodDictionary CAS, and own what losing it means.
@@ -1382,6 +1386,7 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
 }
 
 export {
+  MAX_UNRELATED_REBASE_ATTEMPTS,
   SmalltalkMethodDictionaryContentionError,
   SmalltalkMethodRedefinitionError,
   SmalltalkSealedMethodDictionaryError,

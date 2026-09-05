@@ -15,6 +15,7 @@ import {
 } from '../src/runtime.js';
 import {
   SmalltalkMethodDictionaryContentionError,
+  MAX_UNRELATED_REBASE_ATTEMPTS,
   SmalltalkStaleMethodPositionError,
 } from '../src/language/smalltalk-class-builder.js';
 
@@ -299,10 +300,12 @@ test('a position that moves on the FINAL lost CAS is stale, not contention', asy
   await withFixture(async (runtime, _kernel, options) => {
     const observed = await methodBlockRef({...options, selector: GUARDED});
     const putObject = runtime.images.putObject.bind(runtime.images);
-    // The rebase budget is 4, so the 5th put is the last. Moving the guarded position during that
-    // attempt lands the change on the ONE boundary a budget-first implementation never re-asserts.
-    // If the budget ever grows, this still exercises a real boundary and must still be stale.
-    const LAST_ATTEMPT = 5;
+    // DERIVED, never a duplicated literal. The budget allows MAX+1 puts, so this aims the move at
+    // the LAST one — the single boundary a budget-first implementation never re-asserts. A hardcoded
+    // copy would silently stop aiming there if the budget grew: the move would land on a middle
+    // boundary, which even the wrong implementation re-asserts, so the test would pass while its
+    // kill was gone. That was measured, not theorised.
+    const LAST_ATTEMPT = MAX_UNRELATED_REBASE_ATTEMPTS + 1;
     let attempts = 0;
     let moved = false;
     const failing = async (imageId, input, writeOptions) => {
@@ -338,6 +341,7 @@ test('a position that moves on the FINAL lost CAS is stale, not contention', asy
 // owner once the guarded path stops classifying and starts retrying — either raw, or smuggled out
 // as a `cause`.
 test('sustained contention on the dictionary never leaks a backend conflict', async () => {
+  const orphan = await revisionRefFor(3);
   await withFixture(async (runtime, _kernel, options) => {
     const observed = await methodBlockRef({...options, selector: GUARDED});
     const putObject = runtime.images.putObject.bind(runtime.images);
@@ -361,6 +365,13 @@ test('sustained contention on the dictionary never leaks a backend conflict', as
     assert.ok(error instanceof SmalltalkMethodDictionaryContentionError, `unexpected: ${error}`);
     assert.deepEqual(await methodBlockRef({...options, selector: GUARDED}), observed,
       'the guarded position never moved');
+    // The error deliberately does NOT claim an empty write, so prove the claim it does make: the
+    // replacement's immutable material was published before the final CAS and is addressable, it is
+    // simply not current. Asserting this here is what stops "nothing was written" being reinstated.
+    assert.ok(await runtime.images.getBlock(orphan.imageId, orphan.objectId),
+      'the contender Block is addressable after contention');
+    assert.notDeepEqual(await methodBlockRef({...options, selector: GUARDED}), orphan,
+      'and it is not current');
     await answers(runtime, GUARDED, 1);
   });
 });
