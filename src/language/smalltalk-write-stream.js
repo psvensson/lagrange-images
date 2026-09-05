@@ -1,6 +1,6 @@
 import {ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
-import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
+import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {publishSmalltalkClassGlobals, resolveGlobal} from './smalltalk-globals.js';
 import {objectRef} from '../value/index.js';
 
@@ -77,10 +77,12 @@ import {objectRef} from '../value/index.js';
 // the designed outcome — never a silent adoption of a differently-shaped class.
 const WRITE_STREAM_SHAPE_ID = 'smalltalk/write-stream-instance-shape/v2';
 
-// The named refusal `contents` raises once something has been written. It exists so the gap is a
-// DISTINCT, greppable condition rather than an incidental message-not-understood, and so the work
-// that closes it (bead lagrange-images-nv1.7) has one obvious place to land.
-const WRITE_STREAM_CONTENTS_CONDITION = 'WriteStreamContentsNeedsSpeciesPreservingResult';
+// RETIRED: `WriteStreamContentsNeedsSpeciesPreservingResult`. The previous slice signalled that
+// named condition once anything had been written, because `contents` could not then produce a
+// result and answering an empty collection would have been a silent wrong answer. `contents` now
+// produces the result, so the condition is unreachable and is gone rather than left as a class
+// nothing can raise. Its NAME was never a decision about the repair, and the repair it named is
+// not the one that was taken.
 
 // `on:` is two-sided here for the reason it is two-sided in Cuis (verified against the pinned
 // image: the instance-side `on:` is implemented in `WriteStream` itself, the class-side one in
@@ -97,15 +99,13 @@ const WRITE_STREAM_METHODS = [
   // does — measured, because the widespread Squeak/Pharo recollection is that `nextPutAll:` answers
   // its argument, and the pinned image shows otherwise (`answerIsStream=true`).
   //
-  // PROVISIONAL ACCUMULATION, owned by bead lagrange-images-nv1.7's outcome. Upstream accumulates
-  // by mutating an indexed backing in place (`collection replaceFrom: position + 1 to: ... with:
-  // ... startingAt: 1`). The native path has no equivalent and cannot get one here: the acceptance
-  // path's backing is an empty native Text, which is an immutable VALUE, and this image has no text
-  // concatenation at all, no `replaceFrom:to:with:startingAt:`, and no mutable String. So the
-  // stream must own its accumulation, and the representation below is deliberately INTERNAL and
-  // unobservable through any selector this slice adds: nothing answers it, and `contents` refuses
-  // rather than exposing it. nv1.7 stays free to decide what `contents` answers and how species is
-  // preserved without being boxed in by this choice.
+  // THE ACCUMULATION. Upstream accumulates by mutating an indexed backing in place
+  // (`collection replaceFrom: position + 1 to: ... with: ... startingAt: 1`). The native path has
+  // no equivalent: the acceptance path's backing is an empty native Text, which is an immutable
+  // VALUE, and this image has no text concatenation, no `replaceFrom:to:with:startingAt:` and no
+  // mutable String. So the stream owns what it was given, in order, and `contents` builds the
+  // answer from it. Still exposed by no selector — the accumulation is how the stream works, not
+  // part of what it promises.
   {
     selector: 'nextPutAll:',
     source: `[ :aCollection |
@@ -113,22 +113,62 @@ const WRITE_STREAM_METHODS = [
       written add: aCollection.
       ^ self ]`,
   },
-  // Unwritten, this is unchanged from the slice that introduced it, and its oracle-proven
-  // behaviour must not regress: an empty, species-preserving collection is the exact written prefix
-  // of a stream nothing has written to. `species` is ordinary Collection protocol, so the answer
-  // follows the backing rather than being fixed to one representation; a backing that does not
-  // understand `species` fails visibly, which is this repository's usual way of refusing.
+  // THE ANSWER, built here rather than asked of the backing (bead lagrange-images-nv1.7).
   //
-  // WRITTEN, it REFUSES. It must not answer `collection species new` any more, because that would
-  // be an EMPTY collection after data had been written — a silent wrong answer available to any
-  // native user of WriteStream, not only to the JSON path. Producing the real answer is the
-  // species question bead lagrange-images-nv1.7 owns and this slice deliberately does not settle,
-  // so the honest behaviour in between is a named, visible refusal.
+  // This REMOVES AN INCORRECT MECHANISM rather than working around a missing one, and that is the
+  // part worth reading. Upstream `contents` is
+  //
+  //     ^ (collection copyFrom: 1 to: position) asStreamResult
+  //
+  // measured out of the pinned image — a CLASS-PRESERVING COPY of the written prefix. It never
+  // sends `species` at all. The earlier `collection species new` was a stand-in that was never a
+  // transcription of upstream: it happened to work only because `Collection >> species` exists,
+  // and it could never have worked for the acceptance path, because `Text new` raises
+  // SmalltalkNotInstantiableError — a Text is a Value, not an allocatable object. Adding
+  // `Object >> species` would not have fixed that; it would have turned one visible failure into
+  // another. So the stream constructs the result itself, preserving the backing's CLASS exactly as
+  // the upstream copy does.
+  //
+  // Two constructions, because this image has two kinds of backing and they are built differently:
+  //   a text backing   the accumulated chunks' bytes, through the existing
+  //                    `utf8Bytes` -> `ByteArray class >> fromArray:` -> `ByteArray >> utf8Text`
+  //                    conversion that `Integer >> printOn:base:` already uses. Nothing is added to
+  //                    Text, which stays an immutable Value with exactly the protocol it had.
+  //   a collection     `species new` filled from the chunks' elements. That is the ordinary
+  //                    Collection rule, already installed, and it is correct here because a
+  //                    Collection IS allocatable.
+  // Any other backing fails visibly on `species`, as before.
+  //
+  // ON SEED SPECIES, stated rather than papered over: upstream distinguishes a String-seeded from a
+  // UnicodeString-seeded stream, and the result follows the seed (measured:
+  // `unicodeSeedResultClass=UnicodeString` with the same textual value). This image has exactly ONE
+  // textual class — `Text` IS the text Value — so that distinction has no native counterpart to
+  // lose. What the native rule preserves is the only textual class there is, and a text-backed
+  // stream answers a Text. If a second native textual representation ever exists, this method is
+  // where the distinction has to be made, and it will need more than `class == Text`.
+  //
+  // An EMPTY accumulation is not a special case: zero chunks contribute zero elements, so an
+  // unwritten stream answers an empty result of the backing's class, which is what nv1.4 proved.
+  // An EMPTY WRITE contributes nothing either, so it answers empty too — which is exactly
+  // upstream, where `nextPutAll: ''` leaves `position` at 0 and `contents` answers ''. The
+  // call-based divergence the previous slice knowingly carried is gone.
   {
     selector: 'contents',
-    source: `[
-      written isNil ifTrue: [ ^ collection species new ].
-      ^ ${WRITE_STREAM_CONTENTS_CONDITION} new signal ]`,
+    source: `[ | bytes result |
+      collection class == Text ifTrue: [
+        bytes := OrderedCollection new.
+        written isNil ifFalse: [
+          written do: [ :chunk | | chunkBytes index |
+            chunkBytes := chunk utf8Bytes.
+            index := 1.
+            [ index <= chunkBytes size ] whileTrue: [
+              bytes add: (chunkBytes at: index).
+              index := index + 1 ] ] ].
+        ^ (ByteArray fromArray: bytes asArray) utf8Text ].
+      result := collection species new.
+      written isNil ifFalse: [
+        written do: [ :chunk | chunk do: [ :each | result add: each ] ] ].
+      ^ result ]`,
   },
 ];
 
@@ -162,7 +202,13 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
   const required = [
     ['smalltalk/class/Collection', 'species'],
     ['smalltalk/class/OrderedCollection', 'add:'],
-    ['smalltalk/class/Exception', 'signal'],
+    ['smalltalk/class/Text', 'utf8Bytes'],
+    ['smalltalk/class/ByteArray', 'utf8Text'],
+    ['smalltalk/class/ByteArray', 'size'],
+    ['smalltalk/class/ByteArray', 'at:'],
+    ['smalltalk/metaclass/ByteArray', 'fromArray:'],
+    ['smalltalk/class/OrderedCollection', 'do:'],
+    ['smalltalk/class/OrderedCollection', 'asArray'],
     ['smalltalk/class/Object', 'isNil'],
     ['smalltalk/class/UndefinedObject', 'isNil'],
     ['smalltalk/class/True', 'ifTrue:'],
@@ -176,9 +222,9 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
       throw new TypeError(`image ${imageId} has no ${objectId} ${selector} method; install the library first`);
     }
   }
-  // The source also NAMES this global, which is a compile-time requirement distinct from the
-  // protocol above. The refusal condition's own global is satisfied by construction below.
-  for (const name of ['OrderedCollection']) {
+  // The source also NAMES these globals, which is a compile-time requirement distinct from the
+  // protocol above.
+  for (const name of ['OrderedCollection', 'Text', 'ByteArray']) {
     if (!await resolveGlobal({images, imageId, name})) {
       throw new TypeError(`image ${imageId} has not published the global ${name}; publish it first`);
     }
@@ -186,11 +232,6 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
 
   // The named refusal condition, an ordinary Error subclass. It carries no state and no protocol of
   // its own: its NAME is the whole point, so an unhandled signal reads as the gap it stands for.
-  const errorClassRef = objectRef(imageId, 'smalltalk/class/Error');
-  if (!await images.getObject(imageId, errorClassRef.objectId)) {
-    throw new TypeError(`image ${imageId} has no Error class; install the condition protocol first`);
-  }
-
   const instanceShapeRef = await ensureSmalltalkShape(images, imageId, {
     id: WRITE_STREAM_SHAPE_ID,
     slots: [
@@ -203,21 +244,6 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
     images, imageId, name: 'WriteStream', superclassRef: null, instanceShapeRef,
   });
 
-  // The named refusal condition, created and published only AFTER the class it serves has been
-  // admitted. An image already holding a differently-shaped WriteStream conflicts above, so it
-  // does not gain a stray condition class and a stray published global on the way to that
-  // refusal — the same "nothing half-installed" property the prerequisite path already had.
-  // It reuses its superclass's instance Shape: a condition subclass declares no state of its own,
-  // and the class owner's complete-layout rule means it must still carry the inherited one, which
-  // is also what makes it instantiable.
-  const conditionClassRef = (await ensureNamedClass({
-    images,
-    imageId,
-    name: WRITE_STREAM_CONTENTS_CONDITION,
-    superclassRef: errorClassRef,
-    instanceShapeRef: (await readBehavior(images, errorClassRef)).instanceShape,
-  })).classRef;
-  await publishSmalltalkClassGlobals({images, imageId, names: [WRITE_STREAM_CONTENTS_CONDITION]});
 
   await defineMethodsFromSource({
     images, compilation, imageId, lane, classRef, methods: WRITE_STREAM_METHODS,
@@ -226,11 +252,10 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
     images, compilation, imageId, lane, classRef: metaclassRef, methods: WRITE_STREAM_CLASS_METHODS,
   });
 
-  return Object.freeze({classRef, metaclassRef, contentsConditionClassRef: conditionClassRef});
+  return Object.freeze({classRef, metaclassRef});
 }
 
 export {
-  WRITE_STREAM_CONTENTS_CONDITION,
   WRITE_STREAM_CLASS_METHODS,
   WRITE_STREAM_METHODS,
   WRITE_STREAM_SHAPE_ID,

@@ -169,11 +169,13 @@ feature must be demanded by that consumer and repaired at its own owner
   package's own `Integer>>jsonWriteOn:` sends it; base-10 output is proved against real Cuis for
   positive, zero, negative and 30-digit integers, and it composes existing arithmetic and the
   byte/text conversion rather than adding a primitive;
-- [x] add the one native `WriteStream >> nextPutAll:` execution named, and make `contents` refuse by
-  name once anything has been written rather than answer an empty collection, which for a
-  Collection-backed stream would have been a silent wrong answer reachable by ordinary native code
-  (on the JSON path itself it would still have failed visibly, since native Text has no `species`);
-  producing a species-preserving result for a written stream is a separate open question;
+- [x] add the one native `WriteStream >> nextPutAll:` execution named, and let `contents` BUILD its
+  answer from what was written, preserving the backing's class — upstream's own shape, since its
+  `contents` is a class-preserving copy that never sends `species`, and `species new` could never
+  have worked for a text backing because a native text Value is not allocatable;
+- [x] **M3 acceptance behaviour green**: `Json render: <native integer>` from the pinned upstream
+  Cuis JSON package executes entirely natively with Cuis absent and matches the recorded real-Cuis
+  oracle for 3, 0, -3 and the 30-digit integer, asserted as result kind and value;
 - [ ] add missing native library/kernel semantics only for real imported consumers;
 - [ ] use real OpenSmalltalkVM/Cuis as a semantic oracle where differential proof is useful;
 - [ ] keep FFI or other deliberately non-native facilities behind explicit interfaces rather than heap mirroring.

@@ -516,12 +516,12 @@ test('a real upstream extension method installs on the existing native class it 
   }
 });
 
-// THE M3 IMPORT MILESTONE. For the first time the acceptance target's whole scope — the package's
-// own class-side `render:` entry point and the package's own `Integer>>jsonWriteOn:` extension —
-// imports natively from the canonical export with Cuis absent. Nothing is refused any more at
-// import time, so what this test records is no longer a refusal but the first semantic that real
-// EXECUTION reaches.
-test('the M3 acceptance target imports natively and stops at its first missing runtime semantic', {skip: !enabled, timeout: 900_000}, async () => {
+// THE M3 ACCEPTANCE TARGET, green. The pinned upstream package's own public behaviour —
+// `Json render: <integer>` — is produced entirely by native execution with Cuis absent, and equals
+// the recorded real-Cuis oracle. Both halves are the package's own unmodified upstream code: the
+// class-side `render:` entry point and the `Integer>>jsonWriteOn:` extension on a class the package
+// does not define.
+test('the M3 acceptance target imports AND EXECUTES natively, matching the recorded real-Cuis oracle', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await jsonSemanticExport());
 
   const runtime = await nativeRuntime();
@@ -561,41 +561,42 @@ test('the M3 acceptance target imports natively and stops at its first missing r
     assert.deepEqual(replayed, imported);
     assert.equal(await runtime.images.frontier('native-image'), frontierBeforeReplay);
 
-    // Now RUN it. `Json render: <native integer>` is the milestone's acceptance behavior, and the
-    // path it takes is now real on both sides: the imported class-side `render:` evaluates
-    // `WriteStream on: String new`, dispatches `jsonWriteOn:` to an ordinary native integer, and
-    // that imported extension sends `printOn:base:` — which native Integer now implements (bead
-    // lagrange-images-nv1.6). Execution therefore travels THROUGH native integer printing and
-    // stops where that printing writes its answer.
+    // RUN IT. This is the M3 acceptance behaviour, and it is now green: the whole imported path
+    // executes natively with Cuis ABSENT. `render:` evaluates `WriteStream on: String new`,
+    // dispatches `jsonWriteOn:` to an ordinary native integer, that upstream extension sends
+    // `printOn:base:`, native Integer printing writes through `nextPutAll:`, and `contents` builds
+    // the answer preserving the backing's class.
     //
-    // The remaining gap is the native stream's write protocol. `WriteStream` deliberately shipped
-    // with only `on:`/`contents` (bead lagrange-images-nv1.4), because breadth the acceptance
-    // target does not exercise invalidates the repair — and this is the execution pressure that
-    // finally names which write selector it does exercise.
+    // The oracle is asserted as KIND AND VALUE, deliberately not as textual equality. Real Cuis
+    // answers a String OBJECT (measured: `render 3 -> class=String value='3'`); the native answer
+    // is a text VALUE. That correspondence is the milestone's intent — the recorded oracle and the
+    // Cuis bridge have always expressed a Cuis String result as a native Text — but it is a claim
+    // about the RESULT CLASS, so it is stated rather than quietly reduced to string contents.
     await publishSmalltalkClassGlobals({images: runtime.images, imageId: 'native-image', names: ['Json']});
     const {block} = await installSymmetricSmalltalkBlock({
       images: runtime.images, imageId: 'native-image', id: 'm3-acceptance', source: '[ :n | Json render: n ]',
     });
-    const failure = await runtime.invocations.invokeBlock(objectRef('native-image', block.id), [integerValue(3)])
-      .then((activation) => runtime.executor.execute(activation))
-      .then(
-        (result) => assert.fail(`the M3 acceptance target answered natively: ${JSON.stringify(result)}`),
-        (error) => error,
-      );
-    assert.match(
-      failure.message,
-      /unhandled Smalltalk condition: \S*smalltalk\/class\/WriteStreamContentsNeedsSpeciesPreservingResult/,
-      'the next M3 blocker is a species-preserving result for a written stream',
+    const render = async (value) => await runtime.executor.execute(
+      await runtime.invocations.invokeBlock(objectRef('native-image', block.id), [integerValue(value)]),
     );
-    // Specifically NOT either previous blocker. Execution now runs the whole imported path:
-    // `render:` evaluates `WriteStream on: String new`, dispatches `jsonWriteOn:` to a native
-    // integer, that extension sends `printOn:base:`, native printing writes through `nextPutAll:`,
-    // and `^ s contents` is reached. What is missing is only the ANSWER's representation — the
-    // species question bead lagrange-images-nv1.7 owns — and the stream refuses by name rather
-    // than answering an empty collection.
-    for (const closed of [/printOn:base:/, /message not understood: nextPutAll:/]) {
-      assert.doesNotMatch(failure.message, closed, 'the previous blockers are closed and were run through');
+
+    // The four recorded real-Cuis cases, verbatim.
+    for (const [value, expected] of [
+      ['3', '3'],
+      ['0', '0'],
+      ['-3', '-3'],
+      ['123456789012345678901234567890', '123456789012345678901234567890'],
+    ]) {
+      const answer = await render(value);
+      assert.equal(answer.kind, 'text', `Json render: ${value} must answer a text Value`);
+      assert.deepEqual(answer, textValue(expected), `Json render: ${value}`);
     }
+
+    // ... and it really was native the whole way: this runtime has no Cuis toolchain provider and
+    // no foreign-runtime provider to have fallen back to (asserted when it was created), and the
+    // Cuis build runtime was closed before this one existed.
+    assert.deepEqual(runtime.toolchainProviders.list(), []);
+    assert.deepEqual(runtime.foreignRuntimeProviders.list(), []);
   } finally {
     await runtime.close();
   }
