@@ -291,11 +291,20 @@ test('the descriptor and the token describe the same resolved binding', async ()
 test('a malformed token is refused rather than ignored', async () => {
   const classRef = objectRef('app', CLASS_ID);
   const position = {imageId: 'app', classRef, selector: 'answer'};
-  for (const bad of ['', 'nonsense', 'object-version/v0:a:b', `${SMALLTALK_METHOD_POSITION_TOKEN_V0}:only-two`]) {
+  // Including tokens whose parts are not base64url at all: the byte decoder raises a plain
+  // TypeError for those, and it must not cross this seam — a malformed token is an Images-native
+  // semantic outcome, not a foreign error from a helper.
+  const wrongScope = `${SMALLTALK_METHOD_POSITION_TOKEN_V0}:!!!:!!!`;
+  for (const bad of [
+    '', 'nonsense', 'object-version/v0:a:b',
+    `${SMALLTALK_METHOD_POSITION_TOKEN_V0}:only-two`,
+    wrongScope,
+    `${SMALLTALK_METHOD_POSITION_TOKEN_V0}:${wrongScope.split(':')[1]}:not base64url!`,
+  ]) {
     assert.throws(
       () => parseSmalltalkMethodPositionToken(bad, position),
       (error) => error.name === 'SmalltalkMethodPositionTokenError',
-      JSON.stringify(bad),
+      `${JSON.stringify(bad)} must be refused as a malformed token, not as a foreign error`,
     );
   }
 });
