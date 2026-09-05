@@ -212,8 +212,10 @@ Cuis native-import adapter
 ```
 
 M1/M2 now implement the first two arrows in `src/language/cuis-native-import.js`: one canonical v2 class
-graph is schema/identity/dependency-checked before publication, the exact `cuis-class/Cuis-Base/Object` identity is
-mapped for structural root compatibility, and ordered local declarations are handed to the native
+graph is schema/identity/dependency-checked before publication, a closed table of exact base-class
+identities is mapped per proved position (`cuis-class/Cuis-Base/Object` as the structural root
+superclass, `cuis-class/Cuis-Base/Integer` as an instance-side method target), and ordered local
+declarations are handed to the native
 class builder. Declaration legality remains that native owner's decision; the adapter does not
 duplicate it into a batch validator. The adapter stores no reconciliation table and makes no Shape/slot/allocation
 decision. Its real proof closes the Cuis build runtime before a separate provider-free runtime

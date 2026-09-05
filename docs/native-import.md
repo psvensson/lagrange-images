@@ -81,10 +81,11 @@ M1 and M2 are now implemented by `importCuisNativePackage()`. It consumes the ca
 directly, preflights its schema/semantic identities/dependency topology, and delegates each ordered
 local declaration to `ensureClassFromDeclaration()`. Native declaration legality remains in that
 class owner: the adapter neither duplicates inherited-slot rules nor promises a new batch
-transaction, and a corrected retry reuses any already-valid immutable ancestor. Its sole external compatibility mapping is the exact
-semantic identity `cuis-class/Cuis-Base/Object` to this image's native kernel Object, scoped to M1
-structural class construction/allocation; a class merely named `Object` is not equivalent. Import
-results are transient semantic-identity/native-ref associations, not a durable side table.
+transaction, and a corrected retry reuses any already-valid immutable ancestor. Its external
+compatibility mapping is a closed table of exact semantic identities, each declared for the
+POSITION it is proved in — see "Extension methods on classes the package does not define" below;
+a class merely named `Object` or `Integer` is not equivalent. Import results are transient
+semantic-identity/native-ref associations, not a durable side table.
 
 The real proof obtains v2 from OpenSmalltalkVM/Cuis, closes that build runtime, then imports into a
 separate runtime with no Cuis toolchain or foreign-runtime provider. Exact replay is write-free, and
@@ -211,13 +212,59 @@ Omitting the scope imports the whole manifest, which is what M1/M2 proved.
 
 With that, the pinned package's own `Json` class imports natively from the canonical export with
 Cuis gone, keeping its declared `stream`/`ctorMap` layout, while `JsonObject` and `JsonSyntaxError`
-stay absent; exact replay of the scoped import is write-free. The harness's current recorded first
-blocker is the next one the acceptance target hits: most of this package's behavior is extension
-methods on classes it does not define, and the adapter maps exactly one base semantic identity
-(`cuis-class/Cuis-Base/Object`, and only as the structural superclass root), so
-`Integer>>jsonWriteOn:` has no native class to install on. That refusal leaves the native image's
-frontier unchanged, so the adapter's preflight-before-first-write rule holds against a real package
-and not only against fixtures.
+stay absent; exact replay of the scoped import is write-free. An ADAPTER refusal leaves the native
+image's frontier unchanged, which is the preflight-before-first-write rule: every adapter-owned
+defect is decided before the first native call.
+
+That is deliberately NOT the promise that a failed import writes nothing. Once preflight passes,
+a NATIVE owner may still reject a later declaration, and everything the owners already admitted
+legitimately remains. The real acceptance-target import is exactly that case, and its residue is
+worth stating exactly, because it is more than newly created material: the canonical manifest is
+sorted by identity, so `cuis-method/JSON/Integer/instance/jsonWriteOn:` is reconciled — into the
+PRE-EXISTING kernel Integer's method dictionary — before `cuis-method/JSON/Json/class/render:`
+reaches the compiler and fails. A partial import can therefore leave an added selector on a base
+class the package did not define, not only an unreferenced new class. Nothing is corrupt and an
+ordinary corrected retry converges through the owners' own admission rules (the already-installed
+method is exact-replay write-free), but a caller that needs all-or-nothing must not read the
+adapter's preflight rule as providing it.
+
+### Extension methods on classes the package does not define
+
+Most of a real Cuis package's behavior lives in extension methods on classes it does not define, so
+the adapter owns one seam that corresponds a **complete** Cuis semantic class identity to an
+already-proven native class. It is a closed table, keyed by full identity and never by class name,
+and every entry also declares the POSITIONS it is proved in, because "this identity denotes that
+native class" is two independently justified claims rather than one:
+
+| Cuis semantic identity | Native class | Proved position |
+| --- | --- | --- |
+| `cuis-class/Cuis-Base/Object` | kernel `Object` | superclass only (the ADR 0085 M1 structural root) |
+| `cuis-class/Cuis-Base/Integer` | kernel `Integer` | instance-side method target only |
+
+Every other identity — including `cuis-class/Cuis-Base/Dictionary`, whose name this image really
+does have, and `cuis-class/Other/Integer` — stays refused. There is no name fallback and no
+caller-supplied alias. The positions are enforced in both directions: a method declared on
+`cuis-class/Cuis-Base/Object` is refused, because installing a package's selector on the root of
+the whole native image is a far larger claim than M1 made and no consumer has demanded it; and a
+class declaring `cuis-class/Cuis-Base/Integer` as its superclass is refused, because native
+integers are Values whose dispatch class is fixed by their kind, so such a class would be inert.
+A manifest may not itself DECLARE a mapped identity either — one identity, one authority.
+
+The Integer entry claims only what is proved: that identity denotes the class an ordinary native
+integer's Behavior resolves to, so the package's `Integer>>jsonWriteOn:` extension is reached by
+real native integer receivers. It is *not* a claim that native Integer implements every Cuis
+Integer protocol. Importing that method installs it through the existing kernel Integer's existing
+MethodDictionary owner — no second Integer, no proxy subclass, no importer-owned extension store,
+no behavior attached to a package object — and the Class record does not move. Sending
+`jsonWriteOn:` to an ordinary native integer then dispatches into the real upstream method and
+fails on that method's own `printOn:base:` requirement, which is a separate native-library gap the
+harness will classify in its turn rather than something the mapping papers over.
+
+The harness's current recorded first blocker for the acceptance target is `Json class>>render:`,
+which opens with `WriteStream on: String new`. That one is not an adapter refusal: `WriteStream`
+and `String` are global name references inside imported method source, resolved by the native
+compiler through this image's global namespace, so the gap belongs to the native library and
+namespace owners rather than to the Cuis mapping seam.
 
 ### 4. Native application state
 
