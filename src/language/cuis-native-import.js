@@ -181,13 +181,12 @@ function canonicalMethodIdentity(packageName, classIdentity, side, selector) {
 // declarations win), and the requirement that each entry be justified by a recorded measurement
 // that the expression's object contributes nothing observable to the covered path.
 //
-// WHAT THIS DOES NOT FIX, stated because the substitution's own justification depends on it: the
-// role the oracle established for the seed is that its SPECIES selects the result's
-// representation, and native `WriteStream >> contents` answers `collection species new` while
-// native Text does not implement `species` (the boundary bead lagrange-images-nv1.4 recorded and
-// asserted). So the covered path's `^ s contents` will need `species` to reach a Text before this
-// substitution is fully truthful. That is a real remaining gap at the native library owner, not
-// something this table settles, and it sits behind `printOn:base:` in execution order.
+// HOW THE REST OF THE PATH REALISES THIS, since the substitution's justification depends on it:
+// the seed's contribution is the result's REPRESENTATION, and the native stream owner is what
+// supplies it. `WriteStream >> contents` builds its answer preserving the backing's class, so a
+// text seed yields a text result. It does NOT go through `species` — measurement showed upstream's
+// own `contents` is a class-preserving copy that never sends it, and that a native text Value is
+// not allocatable — so nothing here depends on a Text ever answering `species`.
 const CUIS_DIALECT_IDIOMS = Object.freeze([Object.freeze({
   tokens: Object.freeze([
     Object.freeze({type: 'identifier', value: 'String'}),

@@ -306,15 +306,18 @@ exact replay stays write-free. The first missing semantic is no longer a name th
 bind but a method no native class implements: running `Json render: <native integer>` reaches
 `printOn:base:`, which is native Integer printing protocol and belongs to that owner.
 
-Two gaps remain on that path, and the second one qualifies the substitution above rather than
-merely following it. `printOn:base:` is the first. Behind it is `species`: the role the oracle
-established for the seed is that its species selects the result's representation, `contents`
-answers `collection species new`, and native Text does not implement `species` — the boundary
-recorded when `WriteStream` landed, which said it would become legitimate exactly when a real
-consumer streamed over a non-Collection backing. This is that consumer. So the seed substitution is
-truthful about what the expression contributes and is *not yet* sufficient on its own; the native
-library owner still has to let a Text answer `species` before `^ s contents` can work. Both are
-separate REDs at their own owners, in that execution order.
+Both gaps that once sat on that path are now closed at their own owners, and how the second one
+closed matters for reading the substitution above. `printOn:base:` was the first, and it is native
+Integer printing protocol. Behind it was the seed's *species* role — the reason the substitution is
+justified at all — and the repair was not what this paragraph once predicted: it is not that a Text
+learned to answer `species`. Measurement showed upstream's own `contents` is a class-preserving
+copy that never sends `species`, and that `Text new` is not instantiable, so the stream now builds
+its result itself, preserving the backing's class. The substitution's claim — that the seed
+contributes only the result's representation — survives intact; what changed is that the stream,
+not the seed, is what realises it.
+
+With that, `Json render: <native integer>` executes entirely natively with Cuis absent and matches
+the recorded real-Cuis oracle.
 
 ### 4. Native application state
 

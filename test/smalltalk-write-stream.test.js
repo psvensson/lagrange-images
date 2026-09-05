@@ -18,7 +18,6 @@ import {
   readBehavior,
   resolveGlobal,
   textValue,
-  WRITE_STREAM_CONTENTS_CONDITION,
 } from '../src/runtime.js';
 
 // The native `WriteStream` (bead lagrange-images-nv1.4). It exists because a real imported
@@ -220,7 +219,11 @@ test('a backing that does not understand species fails visibly rather than guess
   );
 });
 
-// A fresh answer per call, not a view onto the stream's buffer and not the buffer itself.
+// A fresh answer per call, not a view onto the stream's buffer and not the buffer itself. This is
+// a COLLECTION backing on purpose: for a text backing the answer is a Value, and `==` on Values is
+// value equality by design, so two calls compare EQUAL there. That is a real divergence from the
+// recorded oracle's "not identical across two calls" and it is asserted below rather than hidden —
+// it follows from the Value model, not from anything this stream does.
 test('contents answers a fresh collection each call rather than the backing itself', async () => {
   assert.deepEqual(
     await evaluate(`[ | backing stream |
@@ -271,94 +274,93 @@ test('nextPutAll: answers the stream, as the oracle records and not the argument
   );
 });
 
-// THE SILENT WINDOW THIS SLICE HAD TO CLOSE. Before writes existed, `contents` answering an empty
-// species-preserving collection was exactly right. The moment a write can happen it would be a
-// SILENT WRONG ANSWER — an empty collection after data was written — and available to any native
-// user of WriteStream, not only to the imported JSON path. So it refuses, visibly and by name.
+// THE RESULT (bead lagrange-images-nv1.7). `contents` builds the answer from what was written,
+// preserving the backing's CLASS, rather than asking the backing to build it. That is the upstream
+// shape: measured out of the pinned image, upstream `contents` is
+// `^ (collection copyFrom: 1 to: position) asStreamResult` — a class-preserving COPY that never
+// sends `species`. The earlier `collection species new` was a stand-in that could never have
+// worked here, because `Text new` raises SmalltalkNotInstantiableError: a Text is a Value.
 //
-// Producing the real answer is the species question bead lagrange-images-nv1.7 owns. This slice
-// deliberately does not settle it: the refusal is what turns that gap into executable pressure.
-test('contents refuses by name once anything has been written', async () => {
-  for (const backing of ['OrderedCollection new', "''"]) {
-    await assert.rejects(
-      evaluate(`[ | s | s := WriteStream on: ${backing}. s nextPutAll: 'ab'. s contents ]`),
-      /unhandled Smalltalk condition: \S*smalltalk\/class\/WriteStreamContentsNeedsSpeciesPreservingResult/,
-      `a written ${backing}-backed stream must refuse rather than answer`,
-    );
-  }
-});
-
-// ... and the refusal is a named condition class, not an incidental message-not-understood, so the
-// work that closes it has one obvious place to land.
-test('the refusal is a distinct named condition class, an ordinary Error subclass', async () => {
-  const runtime = await image();
-  const conditionClass = objectRef('app', `smalltalk/class/${WRITE_STREAM_CONTENTS_CONDITION}`);
-  const behavior = await readBehavior(runtime.images, conditionClass);
-  assert.equal(behavior.name.value, WRITE_STREAM_CONTENTS_CONDITION);
-  assert.deepEqual(behavior.superclass, objectRef('app', 'smalltalk/class/Error'));
-  assert.ok(await resolveGlobal({images: runtime.images, imageId: 'app', name: WRITE_STREAM_CONTENTS_CONDITION}));
-});
-
-// REGRESSION GUARD for the case nv1.4 proved. An unwritten stream keeps its oracle-proven answer
-// exactly: streaming over a NON-EMPTY collection still answers an EMPTY one of the same species,
-// which is what distinguishes `on:` from `with:`. Adding write protocol must not disturb it.
-test('an unwritten stream keeps the answer the previous slice proved', async () => {
+// These assertions are the real values, not shapes. A `contents` that discarded what was written
+// would fail every one of them.
+test('a text-backed stream answers the text that was written, as a Text', async () => {
+  assert.deepEqual(await evaluate("[ | s | s := WriteStream on: ''. s nextPutAll: 'ab'. s contents ]"), textValue('ab'));
   assert.deepEqual(
-    await evaluate(`[ | backing |
-      backing := OrderedCollection new.
-      backing add: 1. backing add: 2. backing add: 3.
-      (WriteStream on: backing) contents size ]`),
+    await evaluate("[ | s | s := WriteStream on: ''. s nextPutAll: 'ab'. s nextPutAll: 'cd'. s contents ]"),
+    textValue('abcd'),
+    'successive writes accumulate in order',
+  );
+  // The result is a Text, not merely text-shaped: the backing's class is preserved.
+  assert.deepEqual(
+    await evaluate("[ | s | s := WriteStream on: ''. s nextPutAll: 'ab'. s contents class == Text ]"),
+    booleanValue(true),
+  );
+});
+
+// THE EMPTY-WRITE CASE, which the previous slice knowingly diverged on and this one repairs.
+// Upstream is POSITION-based: `nextPutAll: ''` leaves `position` at 0 and `contents` answers ''
+// (measured: afterEmptyWritePosition=0 contents=''). Building the result from the accumulation
+// reproduces that exactly — zero chunks and empty chunks both contribute nothing — so there is no
+// longer any call-based notion of "written" to diverge.
+test('an empty write answers empty, exactly as upstream does', async () => {
+  assert.deepEqual(await evaluate("[ | s | s := WriteStream on: ''. s nextPutAll: ''. s contents ]"), textValue(''));
+  assert.deepEqual(await evaluate("[ (WriteStream on: '') contents ]"), textValue(''), 'and so does an unwritten stream');
+  assert.deepEqual(
+    await evaluate('[ | s | s := WriteStream on: OrderedCollection new. s nextPutAll: OrderedCollection new. s contents size ]'),
     integerValue(0),
-  );
-  // An empty write is still a write: this slice refuses rather than pretending it can answer.
-  // Upstream answers '' here, and that divergence is deliberate while the species question is open.
-  await assert.rejects(
-    evaluate(`[ | s | s := WriteStream on: OrderedCollection new. s nextPutAll: OrderedCollection new. s contents ]`),
-    /WriteStreamContentsNeedsSpeciesPreservingResult/,
+    'the same for a collection backing',
   );
 });
 
-// THE ACCUMULATION IS REAL, and this is the only thing that says so. No SELECTOR answers it — the
-// enumeration test above pins the protocol to exactly three, which is what keeps bead
-// lagrange-images-nv1.7 free to decide what `contents` answers — so the proof reads the stored
-// object directly. Without this, `nextPutAll:` could discard its argument entirely and every other
-// test here would still pass, which is not a contract worth shipping.
-test('nextPutAll: actually retains what it was given, in order', async () => {
-  const runtime = await image();
-  const {block} = await installSymmetricSmalltalkBlock({
-    images: runtime.images,
-    imageId: 'app',
-    id: `write-stream-retains-${counter += 1}`,
-    source: `[ | s | s := WriteStream on: OrderedCollection new. s nextPutAll: 'ab'. s nextPutAll: 'cd'. s ]`,
-  });
-  const stream = await runtime.executor.execute(await runtime.invocations.invokeBlock(
-    objectRef('app', block.id), [],
-  ));
-  const record = await runtime.images.getObject(stream.imageId, stream.objectId);
-  const written = record.slots['write-stream-written'];
-  assert.ok(written, 'the stream retains an accumulation slot');
-  const accumulation = await runtime.images.getObject(written.imageId, written.objectId);
-  // An OrderedCollection holds its elements in a backing Array behind its `contents` slot; the
-  // Array is over-allocated, so the writes are the text values in it, in order.
-  const backing = accumulation.slots['ordered-collection-contents'];
-  const elements = await runtime.images.getObject(backing.imageId, backing.objectId);
+// A collection backing is built the other way — `species new` filled from the written elements —
+// because a Collection IS allocatable where a Text is not. The elements written must come back.
+test('a collection-backed stream answers the elements that were written, in its own species', async () => {
   assert.deepEqual(
-    Object.values(elements.indexed ?? {}).filter((value) => value?.kind === 'text'),
-    [textValue('ab'), textValue('cd')],
+    await evaluate(`[ | s chunk |
+      s := WriteStream on: OrderedCollection new.
+      chunk := OrderedCollection new. chunk add: 7. chunk add: 8.
+      s nextPutAll: chunk.
+      s contents size ]`),
+    integerValue(2),
+  );
+  assert.deepEqual(
+    await evaluate(`[ | s chunk |
+      s := WriteStream on: OrderedCollection new.
+      chunk := OrderedCollection new. chunk add: 7. chunk add: 8.
+      s nextPutAll: chunk.
+      s contents first ]`),
+    integerValue(7),
+    'in order, not merely the right count',
+  );
+  assert.deepEqual(
+    await evaluate(`[ | s | s := WriteStream on: OrderedCollection new.
+      s nextPutAll: OrderedCollection new. s contents class == OrderedCollection ]`),
+    booleanValue(true),
   );
 });
 
 // Stream REUSE. `on:` resets the accumulation, so a stream written to and then re-`on:`'d answers
-// the unwritten answer again rather than refusing — and, more importantly, never answers stale
-// content. This is the one place where a mistake would produce the exact lie this slice exists to
-// prevent, so it is asserted rather than reasoned about.
-test('re-sending on: resets the stream, so it neither refuses nor answers stale content', async () => {
+// the unwritten answer again and never stale content.
+test('re-sending on: resets the stream, so it never answers stale content', async () => {
   assert.deepEqual(
     await evaluate(`[ | s |
-      s := WriteStream on: OrderedCollection new.
+      s := WriteStream on: ''.
       s nextPutAll: 'ab'.
-      s on: OrderedCollection new.
-      s contents size ]`),
-    integerValue(0),
+      s on: ''.
+      s contents ]`),
+    textValue(''),
+  );
+});
+
+// THE VALUE-MODEL DIVERGENCE, stated. The recorded oracle says upstream `contents` answers a fresh
+// copy that is NOT identical across two calls. For a collection backing that holds here (above).
+// For a TEXT backing it cannot: the answer is a Value, and `==` on Values is value equality, so two
+// calls compare equal. Nothing is shared and nothing is mutable — an immutable Value has no
+// observable identity to distinguish — but the divergence is real and is recorded rather than left
+// for someone to discover.
+test('for a text backing two contents calls compare equal, because the answer is a Value', async () => {
+  assert.deepEqual(
+    await evaluate("[ | s | s := WriteStream on: ''. s nextPutAll: 'ab'. s contents == s contents ]"),
+    booleanValue(true),
   );
 });
