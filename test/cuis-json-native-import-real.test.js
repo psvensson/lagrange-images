@@ -9,7 +9,6 @@ import {
   CUIS_PACKAGE_V1,
   CUIS_SEMANTIC_EXPORT_V2,
   CUIS_SOURCES_V1,
-  CuisNativeImportError,
   OBJECT_READ_OPERATION,
   OPENSMALLTALK_CUIS_PROVIDER_ID,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
@@ -28,6 +27,7 @@ import {
   methodBlockRef,
   objectRef,
   objectResource,
+  publishSmalltalkClassGlobals,
   readBehavior,
   textValue,
 } from '../src/runtime.js';
@@ -510,59 +510,67 @@ test('a real upstream extension method installs on the existing native class it 
   }
 });
 
-test('the M3 acceptance target refuses native import at its first unsupported semantic', {skip: !enabled, timeout: 900_000}, async () => {
+// THE M3 IMPORT MILESTONE. For the first time the acceptance target's whole scope — the package's
+// own class-side `render:` entry point and the package's own `Integer>>jsonWriteOn:` extension —
+// imports natively from the canonical export with Cuis absent. Nothing is refused any more at
+// import time, so what this test records is no longer a refusal but the first semantic that real
+// EXECUTION reaches.
+test('the M3 acceptance target imports natively and stops at its first missing runtime semantic', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await jsonSemanticExport());
 
   const runtime = await nativeRuntime();
   try {
-    const refusal = await importCuisNativePackage({
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'native-image'});
+    const imported = await importCuisNativePackage({
       images: runtime.images,
       compilation: runtime.compilation,
       imageId: 'native-image',
       manifest,
       scope: ACCEPTANCE_TARGET_SCOPE,
-    }).then(
-      (imported) => assert.fail(`the M3 acceptance target imported natively: ${JSON.stringify(imported)}`),
-      (error) => error,
-    );
+    });
+    assert.deepEqual(imported.classes.map(({identity}) => identity), ['cuis-class/JSON/Json']);
 
-    // M3 blocker 4 (Bead lagrange-images-nv1.5). `Json class>>render:` opens with
-    // `WriteStream on: String new`. `WriteStream` is now an ordinary native global
-    // (lagrange-images-nv1.4), so the real source compiles PAST it and stops at the next global
-    // name this image has no class for. Like its predecessor this is NOT an adapter refusal:
-    // both are global NAME references inside imported method source, resolved by the native
-    // compiler through this image's global namespace, so the gap belongs to the native
-    // library/namespace owners rather than to the Cuis mapping seam.
+    // Both real upstream methods are now installed at their own owners: the class-side entry point
+    // on the imported class's Metaclass, and the extension on the PRE-EXISTING kernel Integer.
+    assert.ok(await methodBlockRef({
+      images: runtime.images,
+      imageId: 'native-image',
+      classRef: objectRef('native-image', 'smalltalk/metaclass/Json'),
+      selector: 'render:',
+    }), 'the package\'s own class-side entry point compiled natively');
+    assert.ok(await methodBlockRef({
+      images: runtime.images, imageId: 'native-image', classRef: kernel.integerClass, selector: 'jsonWriteOn:',
+    }), 'the package\'s own Integer extension compiled natively');
+
+    // Exact replay of the whole acceptance-target scope is write-free, the guarantee every earlier
+    // slice established and this one must not lose now that the scope actually succeeds.
+    const frontierBeforeReplay = await runtime.images.frontier('native-image');
+    const replayed = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: ACCEPTANCE_TARGET_SCOPE,
+    });
+    assert.deepEqual(replayed, imported);
+    assert.equal(await runtime.images.frontier('native-image'), frontierBeforeReplay);
+
+    // Now RUN it. `Json render: <native integer>` is the milestone's acceptance behavior, and the
+    // first thing it lacks is no longer a name the compiler cannot bind but a method no native
+    // class implements. `Integer>>jsonWriteOn:` is `^ self printOn: aWriteStream base: 10`, and
+    // nothing in this image implements `printOn:base:`.
     //
-    // `String` is deliberately a separate bead rather than the same repair: native `Text` is a
-    // Value, while the recorded real-Cuis oracle shows `String new` behaving as a MUTABLE
-    // collection that `WriteStream on:` writes through. Aliasing one to the other on the
-    // strength of both being textual is the mapping ADR 0085 M3 forbids.
-    assert.equal(refusal instanceof CuisNativeImportError, false, 'the native compiler refuses this, not the adapter');
-    assert.match(refusal.message, /unbound Symmetric Smalltalk name: String/);
-    assert.doesNotMatch(
-      refusal.message,
-      /WriteStream/,
-      'the native WriteStream global closed the previous blocker; this source now compiles past it',
-    );
-
-    // A native-owner rejection after preflight leaves whatever the owners already admitted, and
-    // this case's residue is worth pinning because it is MORE than newly created material. The
-    // canonical manifest is sorted by identity, so `.../Integer/instance/jsonWriteOn:` reconciles
-    // before `.../Json/class/render:` reaches the compiler: the class was admitted, AND the
-    // extension selector is already installed on the PRE-EXISTING kernel Integer. The adapter's
-    // preflight-before-first-write rule is about adapter-owned defects; it is not an
-    // all-or-nothing import promise, and the docs say so rather than implying otherwise.
-    assert.ok(
-      await runtime.images.getObject('native-image', 'smalltalk/class/Json'),
-      'the valid class was admitted before the compiler rejected the method',
-    );
-    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'native-image'});
-    assert.ok(
-      await methodBlockRef({
-        images: runtime.images, imageId: 'native-image', classRef: kernel.integerClass, selector: 'jsonWriteOn:',
-      }),
-      'the earlier method group had already reconciled onto the pre-existing kernel Integer',
+    // Reaching THIS failure is itself the proof that the imported class-side `render:` ran: the
+    // send happens inside its body, after `WriteStream on: String new` has already been evaluated.
+    await publishSmalltalkClassGlobals({images: runtime.images, imageId: 'native-image', names: ['Json']});
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'native-image', id: 'm3-acceptance', source: '[ :n | Json render: n ]',
+    });
+    await assert.rejects(
+      runtime.invocations.invokeBlock(objectRef('native-image', block.id), [integerValue(3)])
+        .then((activation) => runtime.executor.execute(activation)),
+      /message not understood: printOn:base: sent to a integer Value/,
+      'the next M3 blocker is native Integer printing protocol, at the native Integer owner',
     );
   } finally {
     await runtime.close();

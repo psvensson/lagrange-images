@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  booleanValue,
   CUIS_NATIVE_INTEGER_IDENTITY,
   CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
   CUIS_SEMANTIC_EXPORT_V2,
@@ -17,6 +18,7 @@ import {
   methodBlockRef,
   objectRef,
   readBehavior,
+  resolveGlobal,
   textValue,
 } from '../src/runtime.js';
 
@@ -1091,5 +1093,203 @@ test('class-side extension of a mapped native class is refused rather than guess
         && error.semanticIdentity === identity,
     );
     assert.equal(await runtime.images.frontier('app'), frontierBefore);
+  });
+});
+
+// M3 blocker 4 (bead lagrange-images-nv1.5). ONE Cuis dialect idiom is translated at the boundary
+// that already owns dialect translation. It is NOT a `String` mapping: no `String` global is
+// published, no Cuis String identity is mapped to a native class, and native Text is untouched.
+//
+// The claim is only about the role `String new` plays, measured against the pinned Cuis VM and
+// recorded on the bead: it is an EMPTY textual seed that the path never mutates (being empty, the
+// first write grows the stream onto a new collection and the original still reads ''), never
+// compares, and never keeps — its only contribution is the species of the eventual result, and
+// swapping it for an empty UnicodeString changes that species while leaving the textual value
+// identical. So an empty native Text value is the exact native counterpart for this expression.
+const seedMethod = (source) => manifest({methods: [{
+  identity: 'cuis-method/Fixture/ZuluBase/instance/seed',
+  package: 'Fixture',
+  class: 'cuis-class/Fixture/ZuluBase',
+  side: 'instance',
+  selector: 'seed',
+  source,
+}]});
+
+const SEED_SCOPE = Object.freeze({
+  classes: ['cuis-class/Fixture/ZuluBase'],
+  methods: ['cuis-method/Fixture/ZuluBase/instance/seed'],
+});
+
+async function importSeed(runtime, source) {
+  return await importCuisNativePackage({
+    images: runtime.images,
+    compilation: runtime.compilation,
+    imageId: 'app',
+    manifest: seedMethod(source),
+    scope: SEED_SCOPE,
+  });
+}
+
+// Ordinary Smalltalk throughout: allocate through the class the import produced, then send the
+// imported selector to the instance. Nothing here reaches past the language to inspect the
+// compiled body — the adaptation is judged by what the method ANSWERS.
+let counter = 0;
+
+async function seedAnswer(runtime, source) {
+  const imported = await importSeed(runtime, source);
+  const {block} = await installSymmetricSmalltalkBlock({
+    images: runtime.images, imageId: 'app', id: `seed-send-${counter += 1}`, source: '[ :class | class basicNew seed ]',
+  });
+  return await runtime.executor.execute(await runtime.invocations.invokeBlock(
+    objectRef('app', block.id), [imported.classes[0].classRef],
+  ));
+}
+
+test('the Cuis `String new` seed idiom imports as an empty native Text value', async () => {
+  await withStandardImage(async (runtime) => {
+    assert.deepEqual(await seedAnswer(runtime, 'seed\n\t^ String new'), textValue(''));
+    // Nothing published a `String` global: the name is gone from the source, not bound in the image.
+    assert.equal(await resolveGlobal({images: runtime.images, imageId: 'app', name: 'String'}), null);
+  });
+});
+
+// The idiom is matched on the TOKEN stream, so text that merely spells it is untouched.
+test('the seed idiom is matched as tokens, not as text', async () => {
+  await withStandardImage(async (runtime) => {
+    // Inside a string literal the words are data and must survive verbatim.
+    assert.deepEqual(await seedAnswer(runtime, "seed\n\t^ 'String new'"), textValue('String new'));
+  });
+});
+
+test('a comment spelling the idiom is not rewritten', async () => {
+  await withStandardImage(async (runtime) => {
+    assert.deepEqual(await seedAnswer(runtime, 'seed\n\t"String new is the idiom"\n\t^ 7'), integerValue(7));
+  });
+});
+
+// EVERY other use of the name stays exactly as unsupported as it was. These are the falsification
+// cases: if any of them started resolving, the narrow idiom would have become a `String` mapping.
+test('only the exact unary `String new` idiom is adapted; every other use of the name stays unbound', async () => {
+  await withStandardImage(async (runtime) => {
+    const unsupported = [
+      // A SIZED buffer is a different expression the oracle does not cover.
+      'seed\n\t^ String new: 16',
+      // The class itself, as a value.
+      'seed\n\t^ String',
+      // Any other message to it.
+      'seed\n\t^ String name',
+      // `new` sent to something else is not this idiom either.
+      'seed\n\t^ Strings new',
+    ];
+    for (const source of unsupported) {
+      await assert.rejects(
+        importSeed(runtime, source),
+        (error) => /unbound Symmetric Smalltalk name: Strings?/.test(error.message),
+        source,
+      );
+    }
+  });
+});
+
+test('two occurrences of the idiom in one body are both adapted', async () => {
+  await withStandardImage(async (runtime) => {
+    assert.deepEqual(
+      await seedAnswer(runtime, 'seed\n\t| a b |\n\ta := String new.\n\tb := String new.\n\t^ a = b'),
+      booleanValue(true),
+    );
+  });
+});
+
+// A dialect idiom is about a GLOBAL name. A method that BINDS that name itself means something
+// else entirely and must not be rewritten — silently turning a legitimate variable reference into
+// a literal would be the worst failure this seam could have, because it would compile.
+test('a method that binds the name itself is not adapted', async () => {
+  await withStandardImage(async (runtime) => {
+    // The temporary is assigned and read back. If the idiom had fired, `String := 5` would have
+    // been corrupted and this could not answer 5.
+    assert.deepEqual(
+      await seedAnswer(runtime, 'seed\n\t| String |\n\tString := 5.\n\t^ String'),
+      integerValue(5),
+    );
+  });
+});
+
+test('a bound name shadows the idiom even where the idiom would otherwise match', async () => {
+  await withStandardImage(async (runtime) => {
+    // `String new` here is a send to the TEMPORARY, not the global idiom. The adapter leaves it
+    // alone and the compiler binds the temporary, so the import succeeds rather than being
+    // rewritten to a Text literal.
+    await importSeed(runtime, 'seed\n\t| String |\n\t^ String new');
+    assert.ok(await methodBlockRef({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: objectRef('app', 'smalltalk/class/ZuluBase'),
+      selector: 'seed',
+    }), 'the method compiled with the name bound to its own temporary');
+  });
+});
+
+// A cascade continues to the RECEIVER of the last message, so in `String new; yourself` the later
+// messages go to the class rather than to what `new` answered. Substituting a literal there would
+// silently change which object the rest of the cascade talks to, so the idiom must not fire — and
+// the name then stays unbound, which is the visible refusal.
+test('a cascade on the idiom receiver is not adapted', async () => {
+  await withStandardImage(async (runtime) => {
+    await assert.rejects(
+      importSeed(runtime, 'seed\n\t^ String new; yourself'),
+      /unbound Symmetric Smalltalk name: String/,
+    );
+  });
+});
+
+// A package that declares its OWN class of that name means its own class. The adapter holds the
+// manifest, so it can tell, and the idiom does not fire.
+test('a manifest that declares its own class of the name is not adapted', async () => {
+  await withStandardImage(async (runtime) => {
+    const input = {
+      format: CUIS_SEMANTIC_EXPORT_V2,
+      packages: [{name: 'Fixture', requires: ['Cuis-Base']}],
+      classes: [
+        {
+          identity: 'cuis-class/Fixture/String',
+          package: 'Fixture',
+          name: 'String',
+          superclassName: 'Object',
+          superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
+          instanceVariables: [],
+        },
+        {
+          identity: 'cuis-class/Fixture/ZuluBase',
+          package: 'Fixture',
+          name: 'ZuluBase',
+          superclassName: 'Object',
+          superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
+          instanceVariables: ['base'],
+        },
+      ],
+      methods: [{
+        identity: 'cuis-method/Fixture/ZuluBase/instance/seed',
+        package: 'Fixture',
+        class: 'cuis-class/Fixture/ZuluBase',
+        side: 'instance',
+        selector: 'seed',
+        source: 'seed\n\t^ String new',
+      }],
+    };
+    // The package's own `String` is not published as a global, so the name stays unbound rather
+    // than being quietly turned into a Text literal. What matters is that it is NOT adapted.
+    await assert.rejects(
+      importCuisNativePackage({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'app',
+        manifest: input,
+        scope: {
+          classes: ['cuis-class/Fixture/String', 'cuis-class/Fixture/ZuluBase'],
+          methods: ['cuis-method/Fixture/ZuluBase/instance/seed'],
+        },
+      }),
+      /unbound Symmetric Smalltalk name: String/,
+    );
   });
 });

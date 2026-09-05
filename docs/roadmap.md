@@ -159,6 +159,12 @@ feature must be demanded by that consumer and repaired at its own owner
   and publish it through the ordinary global namespace, because the pinned package's own
   `Json class>>render:` names it; its semantics are anchored to a recorded real-Cuis oracle rather
   than to Squeak/Pharo recollection, and the acceptance path now compiles past `WriteStream`;
+- [x] translate the one proven Cuis dialect idiom the acceptance path needs (`String new` -> an
+  empty native Text value) at the import boundary that already owns dialect translation, measured
+  rather than assumed: the seed is never mutated, compared or kept, and only its species reaches
+  the result. With it the acceptance target's whole scope IMPORTS natively for the first time.
+  Executing it still needs `printOn:base:` and then a Text that answers `species`, each at the
+  native library owner;
 - [ ] add missing native library/kernel semantics only for real imported consumers;
 - [ ] use real OpenSmalltalkVM/Cuis as a semantic oracle where differential proof is useful;
 - [ ] keep FFI or other deliberately non-native facilities behind explicit interfaces rather than heap mirroring.
