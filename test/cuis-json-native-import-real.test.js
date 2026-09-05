@@ -536,11 +536,23 @@ test('the M3 acceptance target refuses native import at its first unsupported se
     assert.equal(refusal instanceof CuisNativeImportError, false, 'the native compiler refuses this, not the adapter');
     assert.match(refusal.message, /unbound Symmetric Smalltalk name: WriteStream/);
 
-    // A native-owner rejection after preflight may leave already-valid immutable ancestors, exactly
-    // as the documented contract says; an ordinary retry converges through their admission rules.
+    // A native-owner rejection after preflight leaves whatever the owners already admitted, and
+    // this case's residue is worth pinning because it is MORE than newly created material. The
+    // canonical manifest is sorted by identity, so `.../Integer/instance/jsonWriteOn:` reconciles
+    // before `.../Json/class/render:` reaches the compiler: the class was admitted, AND the
+    // extension selector is already installed on the PRE-EXISTING kernel Integer. The adapter's
+    // preflight-before-first-write rule is about adapter-owned defects; it is not an
+    // all-or-nothing import promise, and the docs say so rather than implying otherwise.
     assert.ok(
       await runtime.images.getObject('native-image', 'smalltalk/class/Json'),
       'the valid class was admitted before the compiler rejected the method',
+    );
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'native-image'});
+    assert.ok(
+      await methodBlockRef({
+        images: runtime.images, imageId: 'native-image', classRef: kernel.integerClass, selector: 'jsonWriteOn:',
+      }),
+      'the earlier method group had already reconciled onto the pre-existing kernel Integer',
     );
   } finally {
     await runtime.close();

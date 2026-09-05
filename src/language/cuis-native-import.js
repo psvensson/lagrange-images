@@ -192,8 +192,11 @@ function normalizeScope(scope) {
   exactKeys(scope, ['classes', 'methods'], 'import scope');
   const classes = textArray(scope.classes, 'import scope classes');
   const methods = textArray(scope.methods, 'import scope methods');
-  // A method can only be installed on an in-scope class, so a scope naming no class imports
-  // nothing. That is a caller mistake, not a successful empty import.
+  // A scope is a positive statement about what this import covers, and the covering unit is a
+  // class. Note that this is now a deliberate constraint rather than a consequence: since a
+  // mapped method target needs no class-scope entry, a methods-only scope WOULD describe a real
+  // import (an extension on an existing native class). No consumer has asked for one, so it stays
+  // refused rather than silently proven by the classes-plus-methods path.
   if (classes.length === 0) fail('import scope must name at least one class');
   return Object.freeze({classes: new Set(classes), methods: new Set(methods)});
 }

@@ -214,10 +214,19 @@ With that, the pinned package's own `Json` class imports natively from the canon
 Cuis gone, keeping its declared `stream`/`ctorMap` layout, while `JsonObject` and `JsonSyntaxError`
 stay absent; exact replay of the scoped import is write-free. An ADAPTER refusal leaves the native
 image's frontier unchanged, which is the preflight-before-first-write rule: every adapter-owned
-defect is decided before the first native call. That is not the same promise as "a failed import
-writes nothing" — once preflight passes, a NATIVE owner may still reject a later declaration, and
-the valid immutable ancestors admitted before it legitimately remain (an ordinary retry converges
-through their own admission rules). The real acceptance-target import is exactly that case today.
+defect is decided before the first native call.
+
+That is deliberately NOT the promise that a failed import writes nothing. Once preflight passes,
+a NATIVE owner may still reject a later declaration, and everything the owners already admitted
+legitimately remains. The real acceptance-target import is exactly that case, and its residue is
+worth stating exactly, because it is more than newly created material: the canonical manifest is
+sorted by identity, so `cuis-method/JSON/Integer/instance/jsonWriteOn:` is reconciled — into the
+PRE-EXISTING kernel Integer's method dictionary — before `cuis-method/JSON/Json/class/render:`
+reaches the compiler and fails. A partial import can therefore leave an added selector on a base
+class the package did not define, not only an unreferenced new class. Nothing is corrupt and an
+ordinary corrected retry converges through the owners' own admission rules (the already-installed
+method is exact-replay write-free), but a caller that needs all-or-nothing must not read the
+adapter's preflight rule as providing it.
 
 ### Extension methods on classes the package does not define
 
