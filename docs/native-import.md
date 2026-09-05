@@ -260,11 +260,38 @@ no behavior attached to a package object — and the Class record does not move.
 fails on that method's own `printOn:base:` requirement, which is a separate native-library gap the
 harness will classify in its turn rather than something the mapping papers over.
 
-The harness's current recorded first blocker for the acceptance target is `Json class>>render:`,
-which opens with `WriteStream on: String new`. That one is not an adapter refusal: `WriteStream`
-and `String` are global name references inside imported method source, resolved by the native
-compiler through this image's global namespace, so the gap belongs to the native library and
-namespace owners rather than to the Cuis mapping seam.
+### Dialect idioms
+
+`Json class>>render:` opens with `WriteStream on: String new`, and neither name resolved. Both are
+global NAME references inside imported method source, resolved by the native compiler through the
+image's global namespace — not method targets and not superclasses — so neither belonged to the
+mapping seam above. They were answered differently, and the difference is the point.
+
+`WriteStream` became an ordinary native class published as an ordinary global (bead
+lagrange-images-nv1.4), because a stream is a facility any native code can want.
+
+`String` did not. Native `Text` is a Value and a Cuis `String` is a mutable collection class, so
+publishing one as the other would claim an equivalence nothing had established. What the adapter
+owns instead is a CLOSED table of Cuis DIALECT IDIOMS translated inside method bodies — today
+exactly one entry, the unary `String new`, translated to an empty native Text value. The claim is
+not about the class but about the ROLE that expression plays, and it was measured against the
+pinned Cuis image before it was written (bead lagrange-images-nv1.5): the seed is empty; writing
+through the stream never mutates it, because being empty the first write grows the stream onto a
+new collection and the original still reads `''`; the only message `on:` sends it answers with
+itself, so no identity is established and nothing is copied; and swapping it for an empty
+`UnicodeString` changes the result's species while leaving its textual value identical. The seed
+contributes no content, no behavior and no observable identity — only the species of the result.
+
+The table is matched on the TOKEN stream, so `'String new'` inside a literal and `"String new"`
+inside a comment are untouched. `String new: 16` is a different expression the measurement does not
+cover and stays unbound, as does every other use of the name. No `String` global is published, no
+Cuis String class identity is mapped, and native `Text` is unchanged.
+
+With that, the acceptance target's whole scope — the package's own class-side `render:` and its own
+`Integer>>jsonWriteOn:` extension — imports natively from the canonical export with Cuis gone, and
+exact replay stays write-free. The first missing semantic is no longer a name the compiler cannot
+bind but a method no native class implements: running `Json render: <native integer>` reaches
+`printOn:base:`, which is native Integer printing protocol and belongs to that owner.
 
 ### 4. Native application state
 

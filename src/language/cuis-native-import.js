@@ -135,6 +135,71 @@ function canonicalMethodIdentity(packageName, classIdentity, side, selector) {
 // answers its last expression, so make the method return rule explicit at this dialect boundary.
 // Parsing/lowering the body and binding native state remain the existing Symmetric Smalltalk
 // compiler's responsibility.
+// ONE Cuis dialect idiom, translated at the boundary that already owns dialect translation (the
+// method header and the implicit-receiver return rule are translated here too). It is NOT a
+// `String` mapping and NOT a claim that `String` is `Text`.
+//
+// The idiom is the unary send `String new`, and the claim is only about the role that expression
+// plays. Measured against the pinned Cuis VM and image and recorded on bead lagrange-images-nv1.5:
+//
+//   seedSize=0, seedPrint=''                  `String new` is an EMPTY textual seed
+//   seedSizeAfterWrite=0, seedAfterWrite=''   writing through the stream does NOT mutate it: the
+//                                             seed is empty, so the first write grows the stream
+//                                             onto a NEW collection and the original is discarded
+//   contentsIdenticalToSeed=false             the answer is not the seed either
+//   thatCanBeModifiedIdentical=true           the only message `on:` sends it answers with itself,
+//                                             so no identity is established and nothing is copied
+//   unicodeSeedContentsClass=UnicodeString    swapping the seed for an empty UnicodeString changes
+//   unicodeSeedContents='3'                   the result's SPECIES and not its textual VALUE
+//
+// So in this idiom the seed contributes no content, no behavior and no observable identity — only
+// the species of the eventual result. The smallest truthful native counterpart is therefore an
+// empty native Text value, and the substitution is exact for the covered expression, because the
+// milestone's own acceptance oracle already treats a Cuis String result as a native Text value.
+//
+// DELIBERATELY NARROW, and each of these is a separate unproven question that stays refused:
+//   `String new: 16`   a SIZED buffer. A different expression (keyword `new:`), not covered by the
+//                      oracle above, and left to fail as an unbound name.
+//   `String` anywhere else — as a receiver of any other message, as an argument, as a superclass,
+//                      as a method target — is untouched and remains `unbound Symmetric Smalltalk
+//                      name: String`. Nothing publishes a `String` global.
+//   any other class name is untouched. This table has exactly one entry and no name fallback.
+//
+// The match is on the TOKEN stream, not on text, so `'String new'` inside a string literal and
+// `"String new"` inside a comment are not rewritten.
+const CUIS_DIALECT_IDIOMS = Object.freeze([Object.freeze({
+  tokens: Object.freeze([
+    Object.freeze({type: 'identifier', value: 'String'}),
+    Object.freeze({type: 'identifier', value: 'new'}),
+  ]),
+  native: "''",
+})]);
+
+function matchesIdiom(tokens, at, pattern) {
+  return pattern.every((expected, offset) => {
+    const token = tokens[at + offset];
+    return token !== undefined && token.type === expected.type && token.value === expected.value;
+  });
+}
+
+// Right-to-left, so an earlier match's offsets stay valid while a later one is spliced out.
+function adaptDialectIdioms(bodySource, tokens, bodyTokenIndex, bodyStart) {
+  const matches = [];
+  for (let at = bodyTokenIndex; at < tokens.length; at += 1) {
+    for (const idiom of CUIS_DIALECT_IDIOMS) {
+      if (!matchesIdiom(tokens, at, idiom.tokens)) continue;
+      const last = tokens[at + idiom.tokens.length - 1];
+      matches.push({start: tokens[at].start - bodyStart, end: last.end - bodyStart, native: idiom.native});
+      break;
+    }
+  }
+  let adapted = bodySource;
+  for (const {start, end, native} of matches.reverse()) {
+    adapted = `${adapted.slice(0, start)}${native}${adapted.slice(end)}`;
+  }
+  return adapted;
+}
+
 function nativeMethodSource({identity, selector, source}) {
   let tokens;
   try {
@@ -172,7 +237,8 @@ function nativeMethodSource({identity, selector, source}) {
   if (parsedSelector !== selector) {
     fail(`method ${identity} source header declares ${parsedSelector}, not ${selector}`, identity);
   }
-  const body = source.slice(tokens[index - 1].end).trim();
+  const bodyStart = tokens[index - 1].end;
+  const body = adaptDialectIdioms(source.slice(bodyStart), tokens, index, bodyStart).trim();
   if (body.length === 0) fail(`method ${identity} has no body`, identity);
   const parameterSource = parameters.length === 0 ? '' : ` ${parameters.map((name) => `:${name}`).join(' ')} |`;
   const bodyTokens = tokens.slice(index, -1);
