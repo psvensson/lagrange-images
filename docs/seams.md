@@ -242,6 +242,60 @@ zero-length form, `basicNew:` establishes the length and fills every element wit
 The object model remains 0-based; ordinary Smalltalk `at:`/`at:put:` methods translate their 1-based
 indices before invoking the language-owned primitives.
 
+## Authorized native Smalltalk browsing
+
+`src/language/smalltalk-browse.js` (ADR 0087) is the public read seam an inspector, class browser or headless
+tool uses to describe a native Symmetric Smalltalk class or one of its methods. It is an Images
+semantic API — origin-neutral native Smalltalk facts, not an Object Environment DTO and not a Cuis
+API — and it is read-only.
+
+| Identifier | Meaning |
+| --- | --- |
+| `smalltalk-class-description/v1` | `{format, class, name, side, superclass, classSide, layout, selectors, provenance}` |
+| `smalltalk-method-description/v1` | `{format, class, side, selector, method, source, provenance}` |
+
+`side` is `instance` or `class`, decided the way the kernel ties the metaclass knot
+(`behavior(aMetaclass) == Metaclass`), never by an object-id spelling. `superclass` is `null` at the
+root rather than the kernel `nil`. `classSide` is the metaclass of an instance-side class and `null`
+for a Metaclass. `layout` is `null` for a Behavior that declares no instance layout at all and
+`{instanceVariables, indexed}` otherwise — the complete native instance layout by NAME and in order,
+never a slot id. `selectors` is the class's OWN protocol in canonical order; inherited protocol
+belongs to the Behavior that declares it and is browsed there. `method` is the exact Block ref the
+class's method dictionary binds.
+
+The seam composes owners rather than decoding records: `readBehavior` and `findSmalltalkKernel` for
+class identity and the kernel's `nil`/`Metaclass`, the class builder's `methodBindings` for
+representation-neutral selector bindings, the instance Shape for layout, and
+`authority/object-resource.js` for the operation and resource name. Behavior slot ids,
+MethodDictionary representation/buckets/tally/seal, backend `_version`, instance-Shape ids, a
+method's code artifact or compiled WASM representation, Spur/Cuis object identity and the Cuis
+import adapter's transient mappings all stay behind it.
+
+Authority is two independent checks, and neither is inherited from the other:
+
+```text
+class browsing    object/read on the Class (or Metaclass) OBJECT
+method browsing   that same class check, AND object/read on the method's Block
+```
+
+A class's own MethodDictionary is covered by the class's single check — it is the Class's storage
+representation, at an id derived from the Class, with no behavior edge of its own — for the same
+reason a Project's member records are covered by the Project's read. The Blocks it BINDS are not:
+a Block is an independent, executable object that may legitimately sit in two dictionaries, so class
+authority yields selector NAMES and never the method behind one. A `superclass`, `classSide` or
+`method` ref in a description is a locator; browsing what it names needs that object's own grant, and
+nothing is inferred from Project membership or graph reachability.
+
+Every entry point validates caller-supplied input, then authorizes, then reads. A denied caller
+therefore cannot tell an existing class or method from a missing one — both are `AuthorityError`.
+
+`source` and `provenance` are `null` today, and that is a truthful answer rather than a placeholder:
+the class builder installs a method's semantic program without retaining the text it was compiled
+from, and `importCuisNativePackage` returns transient associations and writes no durable side table,
+so Images owns neither a native method source nor a Cuis provenance association to report. Cuis
+provenance is optional metadata on a native result; a Cuis-imported class browses through this same
+seam with the same result shape, and its origin selects no second lane.
+
 ## ABI and contract identifiers
 
 Not representations — these appear inside artifact content as an `abi` or contract tag.

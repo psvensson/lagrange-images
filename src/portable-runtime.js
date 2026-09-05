@@ -85,6 +85,10 @@ import {
   installSmalltalkKernel,
 } from './language/smalltalk-kernel.js';
 import {defineClass} from './language/smalltalk-class-builder.js';
+import {
+  authorizedDescribeSmalltalkClass,
+  authorizedDescribeSmalltalkMethod,
+} from './language/smalltalk-browse.js';
 import {createDefaultLanguagePlatform} from './language/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './language/symmetric-smalltalk.js';
 import {createSymmetricSmalltalkDispatcher} from './language/symmetric-smalltalk-dispatcher.js';
@@ -268,4 +272,9 @@ export {
   createProject,
   addProjectMember,
   projectObjectId,
+  // The authorized native Smalltalk browsing seam (bead lagrange-images-jtz): the Object
+  // Environment's production read for a native class and for one of its methods. Exact owner
+  // functions from src/language/smalltalk-browse.js, never portable-runtime wrappers.
+  authorizedDescribeSmalltalkClass,
+  authorizedDescribeSmalltalkMethod,
 };
