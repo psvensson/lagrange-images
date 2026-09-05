@@ -210,6 +210,12 @@ export * from './execution/executor.js';
 export * from './execution/model.js';
 export * from './language/index.js';
 export * from './language/cuis-native-import.js';
+// The AUTHORIZED native Smalltalk method replacement seam (bead lagrange-images-qax, Object
+// Environment E3). Exported BY NAME, and deliberately not through `src/language/index.js`: that
+// barrel is `export *`, so listing the module there would publish its internal error classes on
+// this root, on `src/index.js` and on the package's `./language` surface as well. See the barrel
+// trap in docs/runbook.md.
+export {authorizedReplaceSmalltalkMethod} from './language/smalltalk-authorized-method-replacement.js';
 export * from './object/index.js';
 export * from './project/index.js';
 export * from './toolchain/index.js';

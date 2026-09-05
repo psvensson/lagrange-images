@@ -29,6 +29,9 @@ import {
   authorizedDescribeSmalltalkMethod,
   authorizedReadSmalltalkMethodForUpdate,
 } from '../src/language/smalltalk-browse.js';
+import {
+  authorizedReplaceSmalltalkMethod,
+} from '../src/language/smalltalk-authorized-method-replacement.js';
 import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
 import {createNodeSourceReader} from '../src/portable-artifact/node-source-reader.js';
 
@@ -63,6 +66,7 @@ const owned = Object.freeze({
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
   authorizedReadSmalltalkMethodForUpdate,
+  authorizedReplaceSmalltalkMethod,
 });
 
 test('portable-runtime exposes the exact Object Environment composition owner bindings', () => {
@@ -114,12 +118,18 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // bead lagrange-images-qax) — the ONE module minting and parsing the opaque selector-position
   // token the writer-facing read answers. It imports only the authority resource namer and the
   // portable byte helpers, both already in the closure, and no node:*.
-  assert.equal(modules.length, 114, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner and the method-position token owner');
+  // 115 after the authorized method-replacement seam
+  // (src/language/smalltalk-authorized-method-replacement.js, bead lagrange-images-qax slice C2) —
+  // the ONE module is the seam itself: it composes owners the closure already carried (the class
+  // builder, the from-source compiler owner, the lookup helper, the token owner, the value model
+  // and the authority resource namer) and adds no other dependency and no node:*.
+  assert.equal(modules.length, 115, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position token owner and the authorized method-replacement seam');
   assert.ok(paths.includes('src/wasm/module-contract.js'));
   assert.ok(paths.includes('src/wasm/function-contract.js'));
   assert.ok(paths.includes('src/language/smalltalk-browse.js'));
   assert.ok(paths.includes('src/language/smalltalk-write-stream.js'));
   assert.ok(paths.includes('src/language/smalltalk-method-position-token.js'));
+  assert.ok(paths.includes('src/language/smalltalk-authorized-method-replacement.js'));
   assert.deepEqual(projectPaths, [
     'src/project/model.js',
     'src/project/working-state.js',
