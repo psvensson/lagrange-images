@@ -47,6 +47,7 @@ for (const lane of ['neutral', 'wasm']) {
       assert.deepEqual(image.classes.Dictionary, objectRef('app', 'smalltalk/class/Dictionary'));
       assert.deepEqual(image.classes.Association, objectRef('app', 'smalltalk/class/Association'));
       assert.deepEqual(image.classes.OrderedCollection, objectRef('app', 'smalltalk/class/OrderedCollection'));
+      assert.deepEqual(image.classes.WriteStream, objectRef('app', 'smalltalk/class/WriteStream'));
 
       // One ordinary source program uses the main pieces the old test seeds had to assemble by hand:
       // globals, allocation, Array, Dictionary, Association, OrderedCollection, higher-order

@@ -526,15 +526,25 @@ test('the M3 acceptance target refuses native import at its first unsupported se
       (error) => error,
     );
 
-    // M3 blocker 3 (Bead lagrange-images-nv1.4): `Json class>>render:` opens with
-    // `WriteStream on: String new`. Unlike the two blockers before it, this is NOT an adapter
-    // refusal — `WriteStream` and `String` are global
-    // NAME references inside imported method source, which the native compiler resolves through
-    // this image's global namespace. The gap therefore belongs to the native library/namespace
-    // owners, not to the Cuis mapping seam, and it is classified in its own bead before any
-    // compatibility code is written.
+    // M3 blocker 4 (Bead lagrange-images-nv1.5). `Json class>>render:` opens with
+    // `WriteStream on: String new`. `WriteStream` is now an ordinary native global
+    // (lagrange-images-nv1.4), so the real source compiles PAST it and stops at the next global
+    // name this image has no class for. Like its predecessor this is NOT an adapter refusal:
+    // both are global NAME references inside imported method source, resolved by the native
+    // compiler through this image's global namespace, so the gap belongs to the native
+    // library/namespace owners rather than to the Cuis mapping seam.
+    //
+    // `String` is deliberately a separate bead rather than the same repair: native `Text` is a
+    // Value, while the recorded real-Cuis oracle shows `String new` behaving as a MUTABLE
+    // collection that `WriteStream on:` writes through. Aliasing one to the other on the
+    // strength of both being textual is the mapping ADR 0085 M3 forbids.
     assert.equal(refusal instanceof CuisNativeImportError, false, 'the native compiler refuses this, not the adapter');
-    assert.match(refusal.message, /unbound Symmetric Smalltalk name: WriteStream/);
+    assert.match(refusal.message, /unbound Symmetric Smalltalk name: String/);
+    assert.doesNotMatch(
+      refusal.message,
+      /WriteStream/,
+      'the native WriteStream global closed the previous blocker; this source now compiles past it',
+    );
 
     // A native-owner rejection after preflight leaves whatever the owners already admitted, and
     // this case's residue is worth pinning because it is MORE than newly created material. The

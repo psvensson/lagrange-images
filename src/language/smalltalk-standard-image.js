@@ -16,6 +16,7 @@ import {installSmalltalkLibrary} from './smalltalk-library.js';
 import {installSmalltalkSubclassProtocol} from './smalltalk-subclasses.js';
 import {installSmalltalkSymbolProtocol} from './smalltalk-symbol.js';
 import {installSmalltalkTextByteArrayProtocol} from './smalltalk-text-bytearray.js';
+import {installSmalltalkWriteStreamProtocol} from './smalltalk-write-stream.js';
 
 // The normal, complete Symmetric Smalltalk image. This is composition, not a new semantic layer:
 // every record is still owned by the installer that defines it, and all of those low-level
@@ -44,6 +45,8 @@ const PRE_LIBRARY_PUBLIC_CLASSES = Object.freeze([
   'Dictionary',
 ]);
 const LIBRARY_PUBLIC_CLASSES = Object.freeze(['Association', 'Collection', 'OrderedCollection']);
+// After the library, because `WriteStream >> contents` answers through Collection's `species`.
+const POST_LIBRARY_PUBLIC_CLASSES = Object.freeze(['WriteStream']);
 
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be non-empty text`);
@@ -139,6 +142,14 @@ async function installSymmetricSmalltalkStandardImage({
   // introspectable the moment this protocol lands.
   const subclasses = await installSmalltalkSubclassProtocol(options);
 
+  // An ordinary native stream class, published as an ordinary global. It is here because a real
+  // imported consumer named it (bead lagrange-images-nv1.4: the pinned upstream Cuis JSON package
+  // writes `WriteStream on: String new`), but nothing about it is Cuis-specific — the import
+  // adapter resolves the name through this namespace exactly as it would `Array`. After the
+  // library because `contents` answers through Collection's `species`.
+  const writeStream = await installSmalltalkWriteStreamProtocol(options);
+  await publishSmalltalkClassGlobals({images, imageId, names: [...POST_LIBRARY_PUBLIC_CLASSES]});
+
   return Object.freeze({
     protocol: SYMMETRIC_SMALLTALK_STANDARD_IMAGE_V1,
     imageId,
@@ -162,6 +173,7 @@ async function installSymmetricSmalltalkStandardImage({
       globals,
       arrayEnumeration,
       subclasses,
+      writeStream,
     }),
     classes: Object.freeze({
       Array: indexed.arrayClass,
@@ -169,6 +181,7 @@ async function installSymmetricSmalltalkStandardImage({
       Association: library.association,
       Collection: library.collection,
       OrderedCollection: library.orderedCollection,
+      WriteStream: writeStream.classRef,
       ...Object.fromEntries(CONDITION_CLASSES.map(({name}) => [name, conditions[name]])),
     }),
     library,
@@ -178,6 +191,7 @@ async function installSymmetricSmalltalkStandardImage({
 export {
   INTEGER_PLUS_METHOD as SMALLTALK_STANDARD_INTEGER_PLUS_METHOD,
   LIBRARY_PUBLIC_CLASSES as SMALLTALK_STANDARD_LIBRARY_PUBLIC_CLASSES,
+  POST_LIBRARY_PUBLIC_CLASSES as SMALLTALK_STANDARD_POST_LIBRARY_PUBLIC_CLASSES,
   PRE_LIBRARY_PUBLIC_CLASSES as SMALLTALK_STANDARD_PRE_LIBRARY_PUBLIC_CLASSES,
   SYMMETRIC_SMALLTALK_STANDARD_IMAGE_V1,
   installSymmetricSmalltalkStandardImage,
