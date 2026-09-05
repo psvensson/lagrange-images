@@ -13,10 +13,15 @@ import {
   objectRef,
   objectResource,
   reconcileMethodsFromSource,
+} from '../src/runtime.js';
+// Deliberately imported from the owning module, NOT from a public root: minting and parsing a
+// token are the owner's business, and a caller may only compare and round-trip one. If these ever
+// become reachable through `src/runtime.js`, the module header's claim stops being true.
+import {
   SMALLTALK_METHOD_POSITION_TOKEN_V0,
   parseSmalltalkMethodPositionToken,
   smalltalkMethodPositionToken,
-} from '../src/runtime.js';
+} from '../src/language/smalltalk-method-position-token.js';
 
 // The version-aware READ for update (bead lagrange-images-qax, Object Environment E3, Slice B).
 //
