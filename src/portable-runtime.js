@@ -88,6 +88,7 @@ import {defineClass} from './language/smalltalk-class-builder.js';
 import {
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
+  authorizedReadSmalltalkMethodForUpdate,
 } from './language/smalltalk-browse.js';
 import {createDefaultLanguagePlatform} from './language/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './language/symmetric-smalltalk.js';
@@ -277,4 +278,5 @@ export {
   // functions from src/language/smalltalk-browse.js, never portable-runtime wrappers.
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
+  authorizedReadSmalltalkMethodForUpdate,
 };

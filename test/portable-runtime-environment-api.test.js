@@ -27,6 +27,7 @@ import {
 import {
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
+  authorizedReadSmalltalkMethodForUpdate,
 } from '../src/language/smalltalk-browse.js';
 import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
 import {createNodeSourceReader} from '../src/portable-artifact/node-source-reader.js';
@@ -61,12 +62,24 @@ const owned = Object.freeze({
   projectObjectId,
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
+  authorizedReadSmalltalkMethodForUpdate,
 });
 
 test('portable-runtime exposes the exact Object Environment composition owner bindings', () => {
   for (const [name, owner] of Object.entries(owned)) {
     assert.equal(typeof portable[name], 'function', `required public export ${name}`);
     assert.equal(portable[name], owner, `${name} must be a re-export, never a wrapper`);
+  }
+});
+
+// Both reviewed public roots must publish the SAME function, by identity. A consumer that reaches
+// the seam through `src/runtime.js` and one that reaches it through `src/portable-runtime.js` must
+// be calling the owner itself, not two wrappers that could drift.
+test('both public roots publish the identical owner function', async () => {
+  const runtime = await import('../src/runtime.js');
+  for (const [name, owner] of Object.entries(owned)) {
+    assert.equal(runtime[name], owner, `${name} must be the owner's own function through src/runtime.js`);
+    assert.equal(runtime[name], portable[name], `${name} must be one function through both roots`);
   }
 });
 
@@ -97,11 +110,16 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // installer, already in the closure, now composes. It adds exactly ONE module: it imports only
   // the class builder, the instance-variable method installer, the kernel finder and the value
   // model, every one of which the closure already carried, and no node:*.
-  assert.equal(modules.length, 113, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam and the native WriteStream library owner');
+  // 114 after the method-position token owner (src/language/smalltalk-method-position-token.js,
+  // bead lagrange-images-qax) — the ONE module minting and parsing the opaque selector-position
+  // token the writer-facing read answers. It imports only the authority resource namer and the
+  // portable byte helpers, both already in the closure, and no node:*.
+  assert.equal(modules.length, 114, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner and the method-position token owner');
   assert.ok(paths.includes('src/wasm/module-contract.js'));
   assert.ok(paths.includes('src/wasm/function-contract.js'));
   assert.ok(paths.includes('src/language/smalltalk-browse.js'));
   assert.ok(paths.includes('src/language/smalltalk-write-stream.js'));
+  assert.ok(paths.includes('src/language/smalltalk-method-position-token.js'));
   assert.deepEqual(projectPaths, [
     'src/project/model.js',
     'src/project/working-state.js',
