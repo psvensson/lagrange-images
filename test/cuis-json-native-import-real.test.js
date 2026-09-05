@@ -482,18 +482,24 @@ test('a real upstream extension method installs on the existing native class it 
     }));
 
     // The behavioral proof that the mapping named the right class: an ORDINARY native integer
-    // dispatches INTO the real upstream method. The failure is the method body's own
-    // `printOn:base:` requirement, not `jsonWriteOn:` — a message-not-understood on `jsonWriteOn:`
-    // would mean the extension landed on some other class. That inner gap is the next RED and is
-    // deliberately not pre-implemented here.
+    // dispatches INTO the real upstream method, which then sends `printOn:base:` to itself. Native
+    // Integer now implements that (bead lagrange-images-nv1.6), so execution travels one level
+    // deeper: the printing method writes its answer to the argument it was handed. Here that
+    // argument is deliberately an integer rather than a stream, so the failure names the WRITE it
+    // attempted. What this pins is the dispatch chain — a message-not-understood on `jsonWriteOn:`
+    // would mean the extension landed on some other class, and one on `printOn:base:` would mean
+    // the native Integer protocol had gone missing.
     const send = await installSymmetricSmalltalkBlock({
       images: runtime.images, imageId: 'native-image', id: 'send-json-write-on', source: '[ :n :s | n jsonWriteOn: s ]',
     });
-    await assert.rejects(
-      runtime.invocations.invokeBlock(objectRef('native-image', send.block.id), [integerValue(3), integerValue(0)])
-        .then((activation) => runtime.executor.execute(activation)),
-      /message not understood: printOn:base: sent to a integer Value/,
-    );
+    const inner = await runtime.invocations
+      .invokeBlock(objectRef('native-image', send.block.id), [integerValue(3), integerValue(0)])
+      .then((activation) => runtime.executor.execute(activation))
+      .then((result) => assert.fail(`writing to an integer answered ${JSON.stringify(result)}`), (error) => error);
+    assert.match(inner.message, /message not understood: nextPutAll: sent to a integer Value/);
+    for (const selector of [/jsonWriteOn:/, /printOn:base:/]) {
+      assert.doesNotMatch(inner.message, selector, 'both methods were found and entered');
+    }
 
     const frontierBeforeReplay = await runtime.images.frontier('native-image');
     const replayed = await importCuisNativePackage({
@@ -556,21 +562,36 @@ test('the M3 acceptance target imports natively and stops at its first missing r
     assert.equal(await runtime.images.frontier('native-image'), frontierBeforeReplay);
 
     // Now RUN it. `Json render: <native integer>` is the milestone's acceptance behavior, and the
-    // first thing it lacks is no longer a name the compiler cannot bind but a method no native
-    // class implements. `Integer>>jsonWriteOn:` is `^ self printOn: aWriteStream base: 10`, and
-    // nothing in this image implements `printOn:base:`.
+    // path it takes is now real on both sides: the imported class-side `render:` evaluates
+    // `WriteStream on: String new`, dispatches `jsonWriteOn:` to an ordinary native integer, and
+    // that imported extension sends `printOn:base:` — which native Integer now implements (bead
+    // lagrange-images-nv1.6). Execution therefore travels THROUGH native integer printing and
+    // stops where that printing writes its answer.
     //
-    // Reaching THIS failure is itself the proof that the imported class-side `render:` ran: the
-    // send happens inside its body, after `WriteStream on: String new` has already been evaluated.
+    // The remaining gap is the native stream's write protocol. `WriteStream` deliberately shipped
+    // with only `on:`/`contents` (bead lagrange-images-nv1.4), because breadth the acceptance
+    // target does not exercise invalidates the repair — and this is the execution pressure that
+    // finally names which write selector it does exercise.
     await publishSmalltalkClassGlobals({images: runtime.images, imageId: 'native-image', names: ['Json']});
     const {block} = await installSymmetricSmalltalkBlock({
       images: runtime.images, imageId: 'native-image', id: 'm3-acceptance', source: '[ :n | Json render: n ]',
     });
-    await assert.rejects(
-      runtime.invocations.invokeBlock(objectRef('native-image', block.id), [integerValue(3)])
-        .then((activation) => runtime.executor.execute(activation)),
-      /message not understood: printOn:base: sent to a integer Value/,
-      'the next M3 blocker is native Integer printing protocol, at the native Integer owner',
+    const failure = await runtime.invocations.invokeBlock(objectRef('native-image', block.id), [integerValue(3)])
+      .then((activation) => runtime.executor.execute(activation))
+      .then(
+        (result) => assert.fail(`the M3 acceptance target answered natively: ${JSON.stringify(result)}`),
+        (error) => error,
+      );
+    assert.match(
+      failure.message,
+      /message not understood: nextPutAll:/,
+      'the next M3 blocker is the native stream write protocol, at the WriteStream owner',
+    );
+    // Specifically NOT the previous blocker: native integer printing is present and was reached.
+    assert.doesNotMatch(
+      failure.message,
+      /printOn:base:/,
+      'native Integer printing closed the previous blocker; execution now runs through it',
     );
   } finally {
     await runtime.close();

@@ -1,7 +1,8 @@
 import {booleanValue, objectRef, textValue} from '../value/index.js';
-import {defineMethods, ensureBlock, ensureCodeArtifact} from './smalltalk-class-builder.js';
+import {defineMethods, ensureBlock, ensureCodeArtifact, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
+import {resolveGlobal} from './smalltalk-globals.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
   SMALLTALK_PRIMITIVE,
@@ -213,8 +214,112 @@ async function installSmalltalkIntegerProtocol({images, compilation, imageId, la
   return Object.freeze({integerClass: kernel.integerClass, ...primitives});
 }
 
+// Native Integer PRINTING protocol, added because a real imported consumer sends it: the pinned
+// upstream Cuis JSON package's own extension is
+//
+//   jsonWriteOn: aWriteStream
+//       ^ self printOn: aWriteStream base: 10
+//
+// and nothing in this image implemented `printOn:base:` (bead lagrange-images-nv1.6). This is
+// ordinary native Integer protocol usable by any native code — not a JSON helper, not a Cuis
+// compatibility method, and not something the stream owns. It writes to its argument through
+// ordinary message sends, exactly as the real protocol does, so the stream it is handed decides
+// what write protocol is actually required.
+//
+// RECORDED REAL-CUIS ORACLE (pinned VM + Cuis7.9-8090 image; the transcript is on the bead), taken
+// through the real `WriteStream on: String new` ... `printOn:base:` ... `contents` route:
+//
+//   3    -> '3'          0   -> '0'          1  -> '1'      9   -> '9'      10  -> '10'
+//   -3   -> '-3'         -1  -> '-1'         -10 -> '-10'   100 -> '100'    1073741823 -> '1073741823'
+//   123456789012345678901234567890  -> '123456789012345678901234567890'
+//   -123456789012345678901234567890 -> '-123456789012345678901234567890'
+//
+// Base 10 is the only base a consumer backs, and it is the only base the proof claims. The digit
+// arithmetic is base-generic because it is written with `//` and `\\`, so the method DECLARES the
+// domain it is correct on — 2 to 36 — and refuses anything else by sending a selector nothing
+// implements, which is this repository's usual way of refusing rather than guessing. That range is
+// not decoration: without it `base: 1` never terminates (`value // 1` is `value` forever, and
+// nothing in the executor imposes a step budget), and a negative base silently answers punctuation
+// because `48 + digit` for a negative digit is still a legal byte. Within the declared range the
+// digit-to-byte step needs the ordinary letter branch, since `48 + digit` alone would produce
+// nonsense above 9; one base-16 case is checked against real Cuis so that branch is not unproven.
+//
+// No new primitive. Digits come from the Integer arithmetic this file already installs, and the
+// text comes from the existing `Array` -> `ByteArray class >> fromArray:` -> `ByteArray >> utf8Text`
+// conversion the byte-sequence protocol already owns. Nothing here invents character or text
+// semantics; if a digit could not have been turned into text with what already exists, that would
+// have been a gap to classify at the byte/text owner rather than to hide inside Integer.
+const INTEGER_PRINTING_METHODS = Object.freeze([Object.freeze({
+  selector: 'printOn:base:',
+  source: `[ :aStream :base | | value negative digits index bytes digit |
+    (base between: 2 and: 36) ifFalse: [ ^ self printBaseOutOfRange: base ].
+    negative := self < 0.
+    value := negative ifTrue: [ self negated ] ifFalse: [ self ].
+    digits := 1.
+    index := value // base.
+    [ index > 0 ] whileTrue: [ digits := digits + 1. index := index // base ].
+    bytes := Array new: (negative ifTrue: [ digits + 1 ] ifFalse: [ digits ]).
+    negative ifTrue: [ bytes at: 1 put: 45 ].
+    index := bytes size.
+    digits timesRepeat: [
+      digit := value \\\\ base.
+      bytes at: index put: (digit < 10 ifTrue: [ 48 + digit ] ifFalse: [ 55 + digit ]).
+      value := value // base.
+      index := index - 1 ].
+    aStream nextPutAll: (ByteArray fromArray: bytes) utf8Text.
+    ^ self ]`,
+})]);
+
+// Separate from the protocol installer above only because of ORDER: this method names the `Array`
+// and `ByteArray` globals, and global publication happens after the Integer protocol is installed.
+// Ownership is unchanged — native Integer semantics stay in this module; the standard image just
+// sequences this stage after the namespace exists.
+async function installSmalltalkIntegerPrintingProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
+  requiredText(imageId, 'image id');
+  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+
+  // Restored prerequisites, checked where the cause is still visible rather than as a
+  // doesNotUnderstand inside a method body on first use. Two different things are required and
+  // they fail differently, so both are checked:
+  //
+  //   the GLOBALS, because the source names `Array` and `ByteArray` and an unpublished name is a
+  //   compile-time unbound name;
+  //   the installed METHODS, because publication says nothing about protocol. `ByteArray` in
+  //   particular is a KERNEL class whose global the namespace installer publishes unconditionally,
+  //   so a global check alone passes on an image that never ran the byte-sequence protocol and the
+  //   method then dies on first use with `fromArray:` not understood. That is exactly the
+  //   half-installed hazard `smalltalk-library.js` documents, and checking the global is both too
+  //   weak here and no substitute for reading the method.
+  for (const name of ['Array', 'ByteArray']) {
+    if (!await resolveGlobal({images, imageId, name})) {
+      throw new TypeError(`image ${imageId} has not published the global ${name}; publish it first`);
+    }
+  }
+  const required = [
+    ['smalltalk/metaclass/ByteArray', 'fromArray:'],
+    ['smalltalk/class/ByteArray', 'utf8Text'],
+    ['smalltalk/metaclass/Array', 'new:'],
+    ['smalltalk/class/Array', 'at:put:'],
+  ];
+  for (const [objectId, selector] of required) {
+    const classRef = objectRef(imageId, objectId);
+    if (!await images.getObject(imageId, objectId)
+      || !await methodBlockRef({images, imageId, classRef, selector})) {
+      throw new TypeError(`image ${imageId} has no ${objectId} ${selector} method; install its protocol first`);
+    }
+  }
+  await defineMethodsFromSource({
+    images, compilation, imageId, lane, classRef: kernel.integerClass, methods: INTEGER_PRINTING_METHODS,
+  });
+  return Object.freeze({integerClass: kernel.integerClass});
+}
+
 export {
   INTEGER_METHODS,
+  INTEGER_PRINTING_METHODS,
   PRIMITIVE_BLOCK_ID as SMALLTALK_INTEGER_PRIMITIVE_BLOCK_ID,
+  installSmalltalkIntegerPrintingProtocol,
   installSmalltalkIntegerProtocol,
 };
