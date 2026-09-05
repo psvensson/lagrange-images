@@ -1,13 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  booleanValue,
   createRuntime,
+  defineMethodsFromSource,
+  ensureNamedClass,
   findSmalltalkKernel,
+  installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
   installSymmetricSmalltalkStandardImage,
+  installSmalltalkWriteStreamProtocol,
   integerValue,
+  methodBindings,
   methodBlockRef,
   objectRef,
+  publishSmalltalkClassGlobals,
   readBehavior,
   resolveGlobal,
 } from '../src/runtime.js';
@@ -68,7 +75,7 @@ test('WriteStream is an ordinary published global, so an ordinary method body ca
   // name resolution this exercises), and the name resolves to the class its instances belong to.
   assert.deepEqual(
     await evaluate('[ (WriteStream on: OrderedCollection new) class == WriteStream ]'),
-    await evaluate('[ true ]'),
+    booleanValue(true),
   );
   assert.deepEqual(binding, objectRef('app', 'smalltalk/global-binding/WriteStream'), 'published through the ordinary global-binding machinery');
 });
@@ -90,25 +97,22 @@ test('WriteStream is an ordinary native class, not a special representation', as
 });
 
 // SCOPE. The whole point of this bead is that breadth the acceptance target does not exercise
-// invalidates the repair, so the absence of the rest of the stream protocol is itself asserted.
-test('WriteStream publishes exactly the two selectors the consumer exercises', async () => {
+// invalidates the repair, so the absence of the rest of the stream protocol is asserted — and
+// asserted by ENUMERATING both method dictionaries, not by listing selectors that happen to be
+// absent. A hand-written absent-list cannot notice an eleventh selector; this can.
+//
+// Three selectors, not two: the two the consumer sends, plus the instance-side `on:` the
+// class-side one delegates to. That split is upstream's own (measured: the instance-side `on:` is
+// implemented in `WriteStream`, the class-side in `PositionableStream class`) and it is forced
+// here too, because a metaclass method cannot assign an instance variable.
+test('WriteStream implements exactly the consumer protocol plus its own initializer', async () => {
   const runtime = await image();
-  const classRef = objectRef('app', 'smalltalk/class/WriteStream');
-  const metaclassRef = objectRef('app', 'smalltalk/metaclass/WriteStream');
+  const selectorsOf = async (objectId) => (await methodBindings({
+    images: runtime.images, imageId: 'app', classRef: objectRef('app', objectId),
+  })).map(({selector}) => selector).sort();
 
-  assert.ok(await methodBlockRef({images: runtime.images, imageId: 'app', classRef: metaclassRef, selector: 'on:'}));
-  assert.ok(await methodBlockRef({images: runtime.images, imageId: 'app', classRef, selector: 'contents'}));
-
-  // Real Cuis protocol this consumer does not reach. Each is a legitimate future addition under
-  // its own consumer pressure; none is present now, and `contents` must be revisited when the
-  // first write selector lands, because an empty answer stops being the written prefix.
-  for (const selector of ['nextPut:', 'nextPutAll:', 'with:', 'position', 'position:', 'reset', 'next', 'atEnd', 'size', 'isEmpty']) {
-    assert.equal(
-      await methodBlockRef({images: runtime.images, imageId: 'app', classRef, selector}),
-      null,
-      `${selector} is stream breadth this acceptance target does not exercise`,
-    );
-  }
+  assert.deepEqual(await selectorsOf('smalltalk/class/WriteStream'), ['contents', 'on:']);
+  assert.deepEqual(await selectorsOf('smalltalk/metaclass/WriteStream'), ['on:']);
 });
 
 // The acceptance path's own shape, with a native collection standing in for the `String` the
@@ -148,11 +152,64 @@ test('on: discards the backing collection\'s existing content, exactly as the or
 });
 
 // `contents` answers through the backing's `species`, so the result follows the backing rather
-// than being fixed to one representation — the oracle's String/Array/OrderedCollection result.
-test('contents preserves the backing collection\'s species', async () => {
+// than being fixed to its class. Asserting that against an OrderedCollection alone would be
+// VACUOUS — a hard-coded `OrderedCollection new`, or `collection class new`, would pass it too.
+// So this uses the discriminating technique the library's own species proof uses
+// (test/smalltalk-library.test.js): a subclass that OVERRIDES `species` to answer something else.
+// Only a real `species` send can satisfy it.
+test('contents answers through the backing\'s species, not its class', async () => {
+  const runtime = await image();
+  // TWO ordinary OrderedCollection subclasses, both reusing their superclass's instance Shape so
+  // each is a real allocatable collection. The probe's SPECIES is the target — a class that is
+  // neither the probe's own class nor `OrderedCollection`. That is what makes the assertion
+  // discriminating: `collection class new` answers the probe, a hard-coded `OrderedCollection new`
+  // answers OrderedCollection, and only a real `species` send answers the target.
+  const orderedCollection = objectRef('app', 'smalltalk/class/OrderedCollection');
+  const {instanceShape} = await readBehavior(runtime.images, orderedCollection);
+  for (const name of ['WriteStreamSpeciesTarget', 'WriteStreamSpeciesProbe']) {
+    await ensureNamedClass({
+      images: runtime.images, imageId: 'app', name, superclassRef: orderedCollection, instanceShapeRef: instanceShape,
+    });
+  }
+  // Publication first: the override's source NAMES the target, and globals resolve at compile time.
+  await publishSmalltalkClassGlobals({
+    images: runtime.images, imageId: 'app', names: ['WriteStreamSpeciesTarget', 'WriteStreamSpeciesProbe'],
+  });
+  await defineMethodsFromSource({
+    images: runtime.images,
+    compilation: runtime.compilation,
+    imageId: 'app',
+    lane: 'wasm',
+    classRef: objectRef('app', 'smalltalk/class/WriteStreamSpeciesProbe'),
+    methods: [{selector: 'species', source: '[ WriteStreamSpeciesTarget ]'}],
+  });
+
   assert.deepEqual(
-    await evaluate('[ (WriteStream on: OrderedCollection new) contents class = OrderedCollection ]'),
-    await evaluate('[ true ]'),
+    await evaluate('[ (WriteStream on: WriteStreamSpeciesProbe new) contents class == WriteStreamSpeciesTarget ]'),
+    booleanValue(true),
+    'contents follows species: neither the backing\'s class nor a hard-coded collection satisfies this',
+  );
+  // ... and the three candidate answers really are three different classes, so the assertion above
+  // is not passing by coincidence.
+  assert.deepEqual(
+    await evaluate('[ WriteStreamSpeciesProbe new class == WriteStreamSpeciesTarget ]'),
+    booleanValue(false),
+  );
+  assert.deepEqual(
+    await evaluate('[ WriteStreamSpeciesTarget == OrderedCollection ]'),
+    booleanValue(false),
+  );
+});
+
+// THE HONEST BOUNDARY, asserted rather than only described in a comment. Upstream implements
+// `species` on Object, so every backing answers it there. This image implements it only on
+// Collection, so a non-Collection backing — Array, for one, an ordinary published native class —
+// fails visibly instead of quietly answering something wrong. Closing that gap means adding
+// `Object >> species`, which no consumer here has asked for.
+test('a backing that does not understand species fails visibly rather than guessing', async () => {
+  await assert.rejects(
+    evaluate('[ (WriteStream on: (Array new: 3)) contents ]'),
+    /message not understood: species/,
   );
 });
 
@@ -163,25 +220,36 @@ test('contents answers a fresh collection each call rather than the backing itse
       backing := OrderedCollection new.
       stream := WriteStream on: backing.
       stream contents == backing ]`),
-    await evaluate('[ false ]'),
+    booleanValue(false),
     'contents is not the backing collection',
   );
   assert.deepEqual(
     await evaluate(`[ | stream |
       stream := WriteStream on: OrderedCollection new.
       stream contents == stream contents ]`),
-    await evaluate('[ false ]'),
+    booleanValue(false),
     'two calls answer two collections',
   );
 });
 
-// The class is state-per-instance like any other, not a singleton or a shared buffer.
-test('two streams over two collections are independent instances', async () => {
-  assert.deepEqual(
-    await evaluate(`[ | a b |
-      a := WriteStream on: OrderedCollection new.
-      b := WriteStream on: OrderedCollection new.
-      a == b ]`),
-    await evaluate('[ false ]'),
-  );
+// The installer's restored prerequisite is a real guard, not decoration: `contents` answers
+// through `Collection >> species`, so installing this class into an image that has no such method
+// would produce a class that compiles and then fails on first use. Refused where the cause is
+// still visible. Deleting the check makes this test go red.
+test('installing without the library method contents depends on is refused', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    await runtime.images.createImage({id: 'bare'});
+    await installSmalltalkKernel({images: runtime.images, imageId: 'bare'});
+    await assert.rejects(
+      installSmalltalkWriteStreamProtocol({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'bare', lane: 'wasm',
+      }),
+      /has no Collection species method; install the library first/,
+    );
+    // Refused before anything was written, so the bare image gains no half-installed class.
+    assert.equal(await runtime.images.getObject('bare', 'smalltalk/class/WriteStream'), null);
+  } finally {
+    await runtime.close();
+  }
 });

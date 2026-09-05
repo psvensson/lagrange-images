@@ -1,7 +1,7 @@
-import {ensureNamedClass, ensureSmalltalkShape} from './smalltalk-class-builder.js';
+import {ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
-import {resolveGlobal} from './smalltalk-globals.js';
+import {objectRef} from '../value/index.js';
 
 // A native `WriteStream`, added because a real imported consumer names it: the pinned upstream
 // Cuis JSON package opens `Json class>>render:` with `WriteStream on: String new` and closes it
@@ -36,16 +36,31 @@ import {resolveGlobal} from './smalltalk-globals.js';
 //   contents is the WRITTEN PREFIX only              after one write over a 5-element backing it
 //                                                    answers 1 element.
 //
-// WHY `contents` IS WHAT IT IS. The written prefix of a stream with no write protocol is empty,
-// always — so for the class this bead defines, "a fresh, species-preserving copy of the written
-// prefix" IS `collection species new`, exactly and not approximately. That is also the observable
-// half of the `on:`-discards-content fact above: streaming over a NON-EMPTY collection answers an
-// EMPTY one, which is what distinguishes `on:` from `with:` and is what the proof asserts.
+// and the upstream source itself, read out of the pinned image rather than paraphrased:
 //
-// Adding write protocol later MUST revisit this method: once a position can be non-zero, an empty
-// answer becomes wrong, and a real prefix copy (Cuis spells it `collection copyFrom: 1 to:
-// position`) is needed along with whatever collection protocol that requires. This comment is the
-// handoff; the method is not a placeholder for the protocol that exists today.
+//   contents   readLimit := readLimit max: position.
+//              ^ (collection copyFrom: 1 to: position) asStreamResult.
+//   on: arg1   super on: arg1 thatCanBeModified. readLimit := 0. writeLimit := arg1 size.
+//
+// WHY `contents` IS WHAT IT IS. Upstream answers a PREFIX COPY, and its species preservation is a
+// consequence of `copyFrom:to:` being class-preserving rather than of any explicit species send.
+// The written prefix of a stream with no write protocol is empty, always — so on the whole domain
+// this class can currently reach, `copyFrom: 1 to: 0` and `collection species new` agree exactly.
+// This is not an approximation that happens to pass; it is the same answer.
+//
+// Adding write protocol later MUST revisit this method: the moment a position can be non-zero the
+// two stop agreeing, an empty answer becomes wrong, and a real prefix copy is needed along with
+// whatever collection protocol that requires. This comment is the handoff.
+//
+// KNOWN DIVERGENCE, asserted by a test rather than only described here. Cuis implements `species`
+// on OBJECT, so upstream every backing answers it and an Array-backed stream answers an Array.
+// This image implements `species` only on COLLECTION: Array and Dictionary are direct Object
+// subclasses, and Text/ByteArray/Symbol are Values dispatching through kernel classes, so none of
+// them answers it. `contents` therefore works for a Collection backing and fails visibly — a
+// message-not-understood naming `species` — for anything else. Adding `Object >> species` would
+// close that gap and would match upstream, but no consumer here streams over a non-Collection
+// backing, and pre-adding kernel protocol for a case nothing exercises is the breadth this
+// milestone forbids. It becomes legitimate when a real consumer needs it.
 //
 // NOT MODELLED. Cuis puts WriteStream under `PositionableStream`, and its `on:` also resets a
 // position and a read limit. This class is a direct subclass of Object with no position, because
@@ -83,11 +98,21 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 
-  // Restored prerequisite, checked where the cause is still visible rather than as an unbound name
-  // or a doesNotUnderstand inside a method body later: `contents` answers through `species`, which
-  // is Collection protocol installed by the library.
-  if (!await resolveGlobal({images, imageId, name: 'Collection'})) {
-    throw new TypeError(`image ${imageId} has not published the global Collection; install the library first`);
+  // Restored prerequisite, checked where the cause is still visible rather than as a
+  // doesNotUnderstand inside a method body later. `contents` answers through `species`, which this
+  // image installs on Collection, so what must exist is that installed METHOD — not the Collection
+  // global. Checking the global would be both too weak and too strong: a Collection class whose
+  // methods are not yet defined would pass it, and an image with the library fully installed but
+  // Collection unpublished would fail it although `species` works there perfectly well. This is
+  // the same read-the-installed-method rule `smalltalk-library.js` applies to its own
+  // prerequisites, and for the same stated reason.
+  // Existence first, then the method: `methodBlockRef` reads a Behavior, so asking it about a
+  // class that was never defined raises `behavior not found` rather than answering "absent".
+  // This is the exact two-step `smalltalk-library.js` uses for its own `Exception >> signal` check.
+  const collectionClass = objectRef(imageId, 'smalltalk/class/Collection');
+  if (!await images.getObject(imageId, collectionClass.objectId)
+    || !await methodBlockRef({images, imageId, classRef: collectionClass, selector: 'species'})) {
+    throw new TypeError(`image ${imageId} has no Collection species method; install the library first`);
   }
 
   const instanceShapeRef = await ensureSmalltalkShape(images, imageId, {

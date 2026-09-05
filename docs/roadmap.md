@@ -154,7 +154,8 @@ feature must be demanded by that consumer and repaired at its own owner
   in, so the package's own `Integer>>jsonWriteOn:` extension installs through the existing kernel
   Integer's existing MethodDictionary and real native integer receivers dispatch into it;
 - [ ] map Cuis base classes/protocols to existing native classes only when required behavior is explicitly equivalent and tested;
-- [x] add a native `WriteStream` (`on:`, `contents`) at the ordinary Smalltalk class/library owner
+- [x] add a native `WriteStream` (`class>>on:`, `contents`, plus the instance-side `on:` initializer
+  those two need) at the ordinary Smalltalk class/library owner
   and publish it through the ordinary global namespace, because the pinned package's own
   `Json class>>render:` names it; its semantics are anchored to a recorded real-Cuis oracle rather
   than to Squeak/Pharo recollection, and the acceptance path now compiles past `WriteStream`;

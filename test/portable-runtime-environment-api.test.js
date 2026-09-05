@@ -92,10 +92,16 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // bead lagrange-images-jtz) — the ONE module is the seam itself: it composes owners the closure
   // already carried (kernel, class builder, lookup, object model, object-resource) and adds no
   // other dependency.
-  assert.equal(modules.length, 112, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, and the native browsing seam');
+  // 113 after the native WriteStream library owner (src/language/smalltalk-write-stream.js, bead
+  // lagrange-images-nv1.4) — an ordinary image-resident Smalltalk class the standard-image
+  // installer, already in the closure, now composes. It adds exactly ONE module: it imports only
+  // the class builder, the instance-variable method installer, the kernel finder and the value
+  // model, every one of which the closure already carried, and no node:*.
+  assert.equal(modules.length, 113, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam and the native WriteStream library owner');
   assert.ok(paths.includes('src/wasm/module-contract.js'));
   assert.ok(paths.includes('src/wasm/function-contract.js'));
   assert.ok(paths.includes('src/language/smalltalk-browse.js'));
+  assert.ok(paths.includes('src/language/smalltalk-write-stream.js'));
   assert.deepEqual(projectPaths, [
     'src/project/model.js',
     'src/project/working-state.js',
