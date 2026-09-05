@@ -360,6 +360,61 @@ test('the descriptor and the token describe the same resolved binding', async ()
   }
 });
 
+// WRONG IMPLEMENTATION THIS TEST MUST KILL: minting the token from a SECOND resolution of the same
+// position — e.g. a second `methodBindings` read — instead of from the binding the descriptor
+// reports. `smalltalk-browse.js` already imports `methodBindings`, so that is a two-line drift.
+//
+// Every value-equality assertion is blind to it: a second resolution of an unchanged image agrees
+// with the first, so descriptor and token still name the same ref and every deepEqual stays green.
+// Even the authority-demand count misses a raw re-read, because a second `methodBindings` call
+// issues no new demand. The observable difference is that the same records are FETCHED TWICE, so
+// that is what this asserts: one resolution reads each record once.
+//
+// docs/ownership.md says these "can never name different revisions". This is the assertion that
+// makes that sentence enforceable rather than aspirational.
+test('the descriptor and the token come from ONE resolution, not two that agree', async () => {
+  const runtime = await image();
+  try {
+    const classRef = objectRef('app', CLASS_ID);
+    const fetched = [];
+    const counting = new Proxy(runtime.images, {
+      get(target, property) {
+        const value = target[property];
+        if (typeof value !== 'function') return value;
+        return (...args) => {
+          if (property === 'getObject') fetched.push(`${args[0]}/${args[1]}`);
+          return value.apply(target, args);
+        };
+      },
+    });
+
+    await authorizedReadSmalltalkMethodForUpdate({
+      images: counting,
+      imageId: 'app',
+      classRef,
+      selector: 'answer',
+      require: readerFor(runtime, await grantsFor(runtime, CLASS_ID, 'answer')),
+    });
+
+    // The kernel record is deliberately excluded, and only it: `findSmalltalkKernel` is
+    // unmemoized by design and is reached twice on this path, which is the separately tracked
+    // read amplification of bead lagrange-images-jtz.3 — a cost, not a second resolution of the
+    // BINDING. Everything else here is the binding: the Behavior and its method dictionary, which
+    // are exactly what a second `methodBindings` call would fetch again.
+    const binding = fetched.filter((id) => !id.endsWith('/smalltalk-kernel/v1'));
+    const twice = binding.filter((id, at) => binding.indexOf(id) !== at);
+    assert.deepEqual(
+      twice, [],
+      `one resolution reads each binding record once; these were read again: ${JSON.stringify(twice)}`,
+    );
+    // Non-vacuous: the read really did fetch the Behavior and its dictionary, so an implementation
+    // that fetched nothing could not pass by having nothing to repeat.
+    assert.ok(binding.length >= 2, `the read must actually have fetched binding records: ${JSON.stringify(binding)}`);
+  } finally {
+    await runtime.close();
+  }
+});
+
 // The token is scoped to a {Class/METACLASS, selector} position, and `descriptor.side` distinguishes
 // them. Nothing else here exercises the class side at all, so a mint or a scope compare that quietly
 // dropped the Metaclass half — or a descriptor reporting the wrong side for it — would pass.
