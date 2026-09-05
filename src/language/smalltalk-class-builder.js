@@ -137,6 +137,49 @@ class SmalltalkMethodRedefinitionError extends TypeError {
   }
 }
 
+// The logical method position moved out from under a caller that told this owner which binding it
+// had OBSERVED. Distinct from `SmalltalkMethodRedefinitionError`, which says "you asked to define
+// something already defined differently" without any claim about what the caller had seen.
+//
+// It carries the position the caller already supplied and NOTHING it did not: no current Block ref,
+// no replacement assumption, no MethodDictionary version, no backend version, and no `cause`.
+// Current truth comes from a fresh read, not from the refusal — a refusal that hands back the
+// winning ref would let a caller "recover" by adopting a binding it never read, which is exactly the
+// observation the expectation exists to protect.
+class SmalltalkStaleMethodPositionError extends TypeError {
+  constructor(classRef, selector) {
+    super(
+      `${classRef.imageId}/${classRef.objectId} ${selector} no longer binds the method that was `
+      + 'observed; the current native method was not replaced',
+    );
+    this.name = 'SmalltalkStaleMethodPositionError';
+    this.selector = selector;
+  }
+}
+
+// The guarded position never moved — that is re-asserted at every boundary including the last, so
+// this outcome cannot stand in for staleness — and nothing about the request is wrong. The
+// dictionary is simply being written faster than this operation can rebase onto it. A separate
+// class rather than the kernel conflict, because that one says "an existing record differs from the
+// definition and will not be overwritten", which is not what happened and would misdirect whoever
+// reads it. A fresh attempt from a fresh observation is the correct response, and, like every other
+// outcome here, this carries no backend error.
+//
+// It does NOT say "nothing was written". The replacement's immutable revision material is published
+// BEFORE the final CAS, so by the time contention is reported that material exists and is
+// addressable — it is simply not current. Promising an empty write here would reintroduce, in the
+// one error the honesty rule did not cover, exactly the claim this owner refuses to make elsewhere.
+class SmalltalkMethodDictionaryContentionError extends TypeError {
+  constructor(dictionaryRef) {
+    super(
+      `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId} moved under this `
+      + 'replacement more often than it could be rebased; the observed position is unchanged and was '
+      + 'not advanced, retry from a fresh read',
+    );
+    this.name = 'SmalltalkMethodDictionaryContentionError';
+  }
+}
+
 // A logical method position is class + selector (`methodId`). A changed definition receives an
 // immutable revision identity beneath that position. The encoded material is the class builder's
 // existing semantic input after capture normalization: compiled native program, lane and capture
@@ -478,18 +521,87 @@ async function readMethodBindings({images, imageId, dictionaryRef, record}) {
   };
 }
 
-// The backend remains authoritative for the conditional write. The class builder owns what a lost
-// CAS means: reread the Behavior's CURRENT dictionary once, then adopt only a complete semantic
-// winner. There is deliberately no internal retry loop. An unrelated/different winner is a visible
-// Smalltalk-domain conflict and an explicit caller retry may start a fresh definition attempt.
+// EXPECTED CURRENT BINDING — "replace `foo`, but only if `foo` is still bound to exactly the Block
+// I observed" (bead lagrange-images-qax, slice C1).
+//
+// This is the class builder's own optimistic-concurrency precondition, and it lives here for the
+// same reason the CAS classification does: what is bound at `{Class, selector}` right now, what a
+// changed definition is allowed to overwrite and what a lost dictionary CAS means are one owner's
+// questions. A caller that wanted to express this outside the owner would have to read the binding,
+// decide staleness and then hope nothing moved before its write — a second decider of the same rule
+// and a race in the gap. Nothing about the precondition is authority-aware; an authorized wrapper
+// supplies the observation it verified and adds no concurrency semantics of its own.
+//
+// It is deliberately NOT the same question as ADR 0086 convergence. Convergence asks "is the
+// desired semantics already current"; the expectation asks "is the binding I SAW still current".
+// Those differ exactly when someone else replaced the method with something that happens to match
+// what this caller wanted, and that case must still be stale: the caller's observation history is
+// what it holds, not its luck. So the precondition is checked BEFORE the exact-replay branch, and
+// exact replay stays a write-free success only when the expectation ALSO holds — which is the
+// genuine replay ADR 0086 decided, an identical definition against the state the caller read.
+//
+// A caller may supply the expectation for every method in the call or for none. Mixed is refused
+// rather than interpreted: a call in which some positions are guarded and some are not has no
+// single meaning for a lost CAS, and choosing one silently would be the owner inventing policy.
+function readExpectedCurrentBindings({methods, imageId, allowRedefinition, operation}) {
+  const expected = new Map();
+  let guarded = 0;
+  for (const {selector, expectedCurrent} of methods) {
+    if (expectedCurrent === undefined || expectedCurrent === null) continue;
+    guarded += 1;
+    if (!allowRedefinition) {
+      throw new TypeError(
+        `${operation} does not accept expectedCurrent: an expected current binding is a `
+        + 'replacement precondition, and defining a method is add-only',
+      );
+    }
+    if (!isObjectRef(expectedCurrent) || expectedCurrent.imageId !== imageId) {
+      throw new TypeError(`method ${selector} expectedCurrent must be an unpinned ref in ${imageId}`);
+    }
+    expected.set(selector, expectedCurrent);
+  }
+  if (guarded !== 0 && guarded !== methods.length) {
+    throw new TypeError(
+      `${operation} must supply expectedCurrent for every method in the call or for none; `
+      + `${guarded} of ${methods.length} were guarded`,
+    );
+  }
+  return expected;
+}
+
+// Every guarded position, against the bindings just read. Applied at plan time and again at every
+// rebase boundary, ALWAYS against the caller's original expectation — never against a binding
+// observed later, which would silently refresh the assumption the caller is holding and turn an
+// optimistic write into a blind one.
+//
+// An absent selector is stale too, not a fresh definition: the caller said it was replacing
+// something it had seen.
+function assertExpectedCurrentBinding({classRef, selector, expectedCurrent, bindings}) {
+  if (!expectedCurrent) return;
+  if (!sameRef(bindings.get(selector) ?? null, expectedCurrent)) {
+    throw new SmalltalkStaleMethodPositionError(classRef, selector);
+  }
+}
+
+function assertExpectedCurrentBindings({classRef, expected, bindings}) {
+  for (const [selector, expectedCurrent] of expected) {
+    assertExpectedCurrentBinding({classRef, selector, expectedCurrent, bindings});
+  }
+}
+
+// What a lost CAS means for an UNGUARDED write, which is ADR 0086 decision 4 exactly: the backend
+// remains authoritative for the conditional write; this reads the Behavior's CURRENT dictionary
+// once and adopts only a complete semantic winner. There is deliberately no retry loop on this
+// path. An unrelated/different winner is a visible Smalltalk-domain conflict and an explicit caller
+// retry may start a fresh definition attempt.
+//
+// A write that supplied an expected current binding does NOT come here: it has a per-position
+// precondition rather than a whole-dictionary one, so it rebases instead (`commitMethodDictionary`).
 async function classifyLostMethodDictionaryCas({
   images, imageId, classRef, methods, capturesBySelector, lane,
 }) {
-  const currentBehavior = await requireLocalBehavior(images, imageId, classRef, 'defineMethods class');
-  const currentRef = currentBehavior.slots['behavior-methods'];
-  const current = await images.getObject(currentRef.imageId, currentRef.objectId);
-  if (!current) throw new TypeError(`method dictionary not found: ${currentRef.imageId}/${currentRef.objectId}`);
-  const {merged} = await readMethodBindings({images, imageId, dictionaryRef: currentRef, record: current});
+  const {dictionaryRef: currentRef, existing: current, merged} =
+    await readMethodDictionaryForUpdate({images, imageId, classRef});
 
   for (const {selector, program} of methods) {
     const installed = merged.get(selector);
@@ -512,18 +624,130 @@ async function classifyLostMethodDictionaryCas({
   return current;
 }
 
-async function putMethodDictionary({
-  images, imageId, classRef, methods, capturesBySelector, lane, input, expectedVersion,
+// The Behavior's current method dictionary, read for update. One place, because a rebase after a
+// lost CAS has to reread exactly what the first plan read — including the Behavior's methods edge,
+// which a concurrent migration may have moved to a hashed dictionary.
+async function readMethodDictionaryForUpdate({images, imageId, classRef}) {
+  const behavior = await requireLocalBehavior(images, imageId, classRef, 'defineMethods class');
+  const dictionaryRef = behavior.slots['behavior-methods'];
+  const existing = await images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
+  if (!existing) throw new TypeError(`method dictionary not found: ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
+  return {
+    dictionaryRef,
+    existing,
+    ...await readMethodBindings({images, imageId, dictionaryRef, record: existing}),
+  };
+}
+
+// The record this write would publish, derived from a COMPLETE selector -> Block map. Both ADR 0049
+// representations are built from that one map, so rebuilding after a rebase differs from the first
+// attempt only in which bindings the map holds.
+async function methodDictionaryInput({
+  images, imageId, classRef, dictionaryRef, existing, hashed, dictionaryKernel, bindings,
 }) {
-  try {
-    return await images.putObject(imageId, input, {expectedVersion});
-  } catch (error) {
-    // Embedders may supply their own backend implementation through the public service seam, so
-    // match the backend contract by error name rather than by this package's class identity.
-    if (error?.name !== 'VersionConflictError') throw error;
-    return await classifyLostMethodDictionaryCas({
-      images, imageId, classRef, methods, capturesBySelector, lane,
-    });
+  // ADR 0049: a hashed dictionary carries its selector set in its own indexed part, so there is no
+  // per-selector-set Shape to derive and no new Shape written per method.
+  if (hashed) {
+    const {buckets} = buildMethodBuckets(
+      [...bindings.entries()].map(([selector, method]) => [textValue(selector), method]),
+    );
+    return {
+      id: dictionaryRef.objectId,
+      ...methodDictionaryRecordFields({
+        buckets,
+        shapeRef: objectRef(imageId, METHOD_DICTIONARY_SHAPE_ID),
+        nilRef: dictionaryKernel.nil,
+        metadata: existing.metadata,
+      }),
+    };
+  }
+
+  // The shape id encodes the canonical selector *set*, not its cardinality. Keying on the count
+  // would make two unrelated one-selector dictionaries — say a failed `foo` and a later `bar` —
+  // want the same durable id and conflict.
+  // Sorted once, and used for BOTH the identity and the persisted slot array. Fingerprinting a
+  // sorted list while building slots in insertion order would give [foo, bar] and [bar, foo] the
+  // same shape id but different slot arrays, so ensureShape would reject the second description of
+  // what is meant to be the same canonical selector set.
+  const selectors = [...bindings.keys()].sort();
+  const slots = methodDictionarySlots(selectors);
+  // Injective, not probabilistic: this is durable identity, and the canonical selector array
+  // encodes directly. A truncated digest would make two distinct selector sets collide with some
+  // small probability, which is not a property durable ids should have.
+  const fingerprint = base64urlEncode(utf8Encode(JSON.stringify(selectors)));
+  const shape = await ensureShape(images, imageId, {
+    id: `${methodsId(classRef.objectId)}/shape/${fingerprint}`,
+    slots,
+  });
+  const bySelector = new Map(slots.map((slot) => [slot.name, slot.id]));
+  return {
+    id: dictionaryRef.objectId,
+    shape: objectRef(imageId, shape.id),
+    slots: Object.fromEntries(selectors.map((selector) => [bySelector.get(selector), bindings.get(selector)])),
+    metadata: existing.metadata,
+  };
+}
+
+// How many times a guarded write may REBASE onto an unrelated winner before reporting contention.
+// Bounded and owner-local: unbounded retry would let one caller spin against a busy dictionary, and
+// no retry at all would make an unrelated `bar` edit fail a `foo` replacement (see below).
+const MAX_UNRELATED_REBASE_ATTEMPTS = 4;
+
+// Publish the new bindings through the ONE MethodDictionary CAS, and own what losing it means.
+//
+// UNGUARDED (no expectedCurrent) — exactly ADR 0086 decision 4, unchanged: classify the winner once,
+// adopt an identical one, refuse a divergent one, never retry.
+//
+// GUARDED — the storage CAS covers the WHOLE dictionary while the caller's precondition covers ONE
+// selector position, and conflating the two is the defect this slice fixes. An unrelated actor
+// binding `bar` moves the dictionary's version without touching `foo`, so treating that lost CAS as
+// staleness would report a semantic conflict for a change that never reached the caller's position.
+// So on a lost CAS this rereads through the same read-for-update, re-asserts the caller's ORIGINAL
+// expectation, and — if it still holds — REBASES: the freshly read bindings are the base, this
+// operation's published Blocks are laid over them, and the write is retried against the new version.
+// Rebuilding from the stale map instead would republish `bar`'s old binding and silently destroy the
+// unrelated winner.
+//
+// If the expectation has stopped holding at any boundary, that is a stale method position and the
+// loop ends immediately — the winner at that position is never overwritten, and the expectation is
+// never quietly refreshed to whatever is current now.
+//
+// COMPILATION HAS ALREADY PUBLISHED by the time this runs. The immutable revision material for the
+// desired definition — the `:semantic` CodeArtifact, the derived code/WASM artifacts, the capture
+// environment and the Block — was written before the final CAS, and a stale or exhausted outcome
+// leaves it in the image, addressable but not current. That is ADR 0086's stated create-before-
+// publication property and this slice adds no rollback or transaction to hide it. The load-bearing
+// invariant is narrower and exact: a failed or stale replacement never makes its revision CURRENT.
+async function commitMethodDictionary({
+  images, imageId, classRef, methods, capturesBySelector, lane, expected, installedRefs, read,
+}) {
+  let attempt = read;
+  for (let rebases = MAX_UNRELATED_REBASE_ATTEMPTS; ; rebases -= 1) {
+    const input = await methodDictionaryInput({images, imageId, classRef, ...attempt});
+    try {
+      return await images.putObject(imageId, input, {expectedVersion: attempt.existing._version});
+    } catch (error) {
+      // Embedders may supply their own backend implementation through the public service seam, so
+      // match the backend contract by error name rather than by this package's class identity.
+      if (error?.name !== 'VersionConflictError') throw error;
+      if (expected.size === 0) {
+        return await classifyLostMethodDictionaryCas({
+          images, imageId, classRef, methods, capturesBySelector, lane,
+        });
+      }
+      // EVERY boundary re-asserts the expectation, INCLUDING THE LAST one. Checking the budget
+      // first would leave exactly one lost CAS — the final one — unchecked, and a position that
+      // moved on that attempt would be reported as contention: "the dictionary is busy" when the
+      // truth is "your observation was overtaken". Contention may only be claimed once this reread
+      // has proven the guarded position is still exactly what the caller observed.
+      const current = await readMethodDictionaryForUpdate({images, imageId, classRef});
+      assertExpectedCurrentBindings({classRef, expected, bindings: current.merged});
+      // Only now is it true that the guarded position never moved and nothing about the request is
+      // wrong — the dictionary is simply being written faster than this operation can rebase.
+      if (rebases <= 0) throw new SmalltalkMethodDictionaryContentionError(attempt.dictionaryRef);
+      for (const [selector, method] of installedRefs) current.merged.set(selector, method);
+      attempt = {...current, bindings: current.merged};
+    }
   }
 }
 
@@ -543,17 +767,14 @@ async function installMethods({
   if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
   requiredText(imageId, 'image id');
   if (!Array.isArray(methods) || methods.length === 0) throw new TypeError('methods must be a non-empty array');
-  const behavior = await requireLocalBehavior(images, imageId, classRef, 'defineMethods class');
-
-  const dictionaryRef = behavior.slots['behavior-methods'];
-  const existing = await images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
-  if (!existing) throw new TypeError(`method dictionary not found: ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
+  // Caller-supplied input first, before anything is read: a malformed or mixed expectation is a
+  // malformed CALL, and diagnosing it must not depend on what the image currently holds.
+  const expected = readExpectedCurrentBindings({methods, imageId, allowRedefinition, operation});
 
   // Whichever representation the record says it is. Both are readable throughout migration, so a
   // class that has not been migrated keeps accepting methods exactly as before.
-  const {hashed, dictionaryKernel, merged} = await readMethodBindings({
-    images, imageId, dictionaryRef, record: existing,
-  });
+  const read = await readMethodDictionaryForUpdate({images, imageId, classRef});
+  const {existing, merged} = read;
 
   // Preflight covers duplicates *within this call* as well as against what is stored: two new
   // entries naming the same selector would otherwise both pass and the second silently win.
@@ -571,6 +792,15 @@ async function installMethods({
     }
     incoming.add(selector);
     capturesBySelector.set(selector, normalizeMethodCaptures(selector, program, captures));
+    // BEFORE the exact-replay branch below, deliberately. A guarded caller that observed A and asks
+    // for C must be refused when someone else has already moved the position to B — INCLUDING when
+    // that B happens to mean the same thing as C. Checking convergence first would silently report
+    // success for a replacement that never applied and was never even needed, erasing the one fact
+    // an optimistic write exists to detect. Nothing has been published at this point, so a plan-time
+    // refusal leaves no new immutable material behind at all.
+    assertExpectedCurrentBinding({
+      classRef, selector, expectedCurrent: expected.get(selector), bindings: merged,
+    });
     if (merged.has(selector)) {
       // A lost acknowledgement leaves the dictionary already updated while the caller believes it
       // failed, so an identical definition must be an idempotent success. Only a different program
@@ -606,6 +836,7 @@ async function installMethods({
 
   if (alreadyInstalled.size === methods.length) return existing;
 
+  const installedRefs = new Map();
   for (const {selector, program} of methods) {
     if (alreadyInstalled.has(selector)) continue;
     const captures = capturesBySelector.get(selector);
@@ -676,67 +907,23 @@ async function installMethods({
       environment: environmentRef,
       metadata: {smalltalk: 'method', selector, lane},
     });
+    // What this operation wants bound, kept separately from the planning snapshot. A rebase after a
+    // lost CAS lays exactly these over FRESHLY read bindings; replaying the whole snapshot instead
+    // would carry every unrelated selector's stale binding back over an unrelated winner.
+    installedRefs.set(selector, objectRef(imageId, block.id));
     merged.set(selector, objectRef(imageId, block.id));
   }
 
-  // ADR 0049: a hashed dictionary carries its selector set in its own indexed part, so there is no
-  // per-selector-set Shape to derive and no new Shape written per method.
-  if (hashed) {
-    const kernel = dictionaryKernel;
-    const {buckets} = buildMethodBuckets([...merged.entries()].map(([selector, method]) => [textValue(selector), method]));
-    return await putMethodDictionary({
-      images,
-      imageId,
-      classRef,
-      methods,
-      capturesBySelector,
-      lane,
-      expectedVersion: existing._version,
-      input: {
-        id: dictionaryRef.objectId,
-        ...methodDictionaryRecordFields({
-          buckets,
-          shapeRef: objectRef(imageId, METHOD_DICTIONARY_SHAPE_ID),
-          nilRef: kernel.nil,
-          metadata: existing.metadata,
-        }),
-      },
-    });
-  }
-
-  // The shape id encodes the canonical selector *set*, not its cardinality. Keying on the count
-  // would make two unrelated one-selector dictionaries — say a failed `foo` and a later `bar` —
-  // want the same durable id and conflict.
-  // Sorted once, and used for BOTH the identity and the persisted slot array. Fingerprinting a
-  // sorted list while building slots in insertion order would give [foo, bar] and [bar, foo] the
-  // same shape id but different slot arrays, so ensureShape would reject the second description of
-  // what is meant to be the same canonical selector set.
-  const selectors = [...merged.keys()].sort();
-  const slots = methodDictionarySlots(selectors);
-  // Injective, not probabilistic: this is durable identity, and the canonical selector array
-  // encodes directly. A truncated digest would make two distinct selector sets collide with some
-  // small probability, which is not a property durable ids should have.
-  const fingerprint = base64urlEncode(utf8Encode(JSON.stringify(selectors)));
-  const shape = await ensureShape(images, imageId, {
-    id: `${methodsId(classRef.objectId)}/shape/${fingerprint}`,
-    slots,
-  });
-  const bySelector = new Map(slots.map((slot) => [slot.name, slot.id]));
-
-  return await putMethodDictionary({
+  return await commitMethodDictionary({
     images,
     imageId,
     classRef,
     methods,
     capturesBySelector,
     lane,
-    expectedVersion: existing._version,
-    input: {
-      id: dictionaryRef.objectId,
-      shape: objectRef(imageId, shape.id),
-      slots: Object.fromEntries(selectors.map((selector) => [bySelector.get(selector), merged.get(selector)])),
-      metadata: existing.metadata,
-    },
+    expected,
+    installedRefs,
+    read: {...read, bindings: merged},
   });
 }
 
@@ -752,6 +939,13 @@ async function defineMethods(options = {}) {
 // CAS. Exact current semantics are a write-free success; changed semantics publish immutable
 // revision material and move the one authoritative selector binding. The importer only requests
 // this operation and owns none of its identity, history or concurrency decisions.
+//
+// A method entry may carry `expectedCurrent`: the binding the caller OBSERVED at that position,
+// which this owner then requires to still be current — at plan time and again at every rebase
+// boundary — before the position advances. Unguarded calls (the importer's, and every existing
+// caller) behave exactly as they did. The guarded form is a trusted internal operation with no
+// authority of its own; a later authorized wrapper supplies an observation it has verified and adds
+// no concurrency semantics, because all of them are here.
 async function reconcileMethods(options = {}) {
   return await installMethods({
     ...options,
@@ -1188,8 +1382,10 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
 }
 
 export {
+  SmalltalkMethodDictionaryContentionError,
   SmalltalkMethodRedefinitionError,
   SmalltalkSealedMethodDictionaryError,
+  SmalltalkStaleMethodPositionError,
   defineClass,
   defineMethods,
   reconcileMethods,

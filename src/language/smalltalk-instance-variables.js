@@ -234,7 +234,7 @@ async function methodsFromSource({
   // namespace the batch compiles in, defaulting to the root.
   const globals = await globalDeclarations({images, imageId, namespaceId});
   const compiled = [];
-  for (const {selector, source, captures} of methods) {
+  for (const {selector, source, captures, expectedCurrent} of methods) {
     const declared = normalizeCaptureDeclarations(captures ?? {});
     const supplied = new Map(declared.map(({id, value}) => [id, value]));
     const method = await compileSymmetricSmalltalkMethod({
@@ -267,7 +267,15 @@ async function methodsFromSource({
       }
       return {id, name, value};
     });
-    compiled.push({selector: method.selector, program: method.program, captures: bound});
+    // Pass-through, not policy: `expectedCurrent` is the caller's observed binding and the class
+    // builder owns entirely what it means. Compilation neither reads it nor is affected by it, and
+    // dropping it here would silently turn a guarded replacement into an unguarded one.
+    compiled.push({
+      selector: method.selector,
+      program: method.program,
+      captures: bound,
+      ...(expectedCurrent === undefined ? {} : {expectedCurrent}),
+    });
   }
   return await install({images, compilation, imageId, classRef, lane, methods: compiled});
 }
