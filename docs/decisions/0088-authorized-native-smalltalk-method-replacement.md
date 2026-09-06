@@ -1,7 +1,7 @@
 # ADR 0088: Authorized native Smalltalk method replacement
 
 Status: implemented
-Proven by: test/smalltalk-authorized-method-replacement.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js, test/smalltalk-replacement-lane.test.js, test/cuis-json-native-import-real.test.js (the last runs only with LAGRANGE_OPENSMALLTALK_INTEGRATION=1)
+Proven by: test/smalltalk-authorized-method-replacement.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js, test/smalltalk-replacement-lane.test.js, test/cuis-json-native-import-real.test.js
 
 ## Problem
 
