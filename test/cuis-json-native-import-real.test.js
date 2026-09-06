@@ -683,9 +683,14 @@ function recordingRequire(runtime, grants) {
 const readGrant = (objectId) => ({operation: OBJECT_READ_OPERATION, resource: objectResource('native-image', objectId)});
 const writeGrant = (objectId) => ({operation: OBJECT_WRITE_OPERATION, resource: objectResource('native-image', objectId)});
 
-// A delegate compilation service that records every artifact compilation asked of it. Prototype
-// delegation, so the owner's own instance keeps working behind it. This is the compiler owner's
-// admission point: if it records nothing, nothing was compiled.
+// A delegate compilation service that records every CODE ARTIFACT compilation asked of it. Prototype
+// delegation, so the owner's own instance keeps working behind it.
+//
+// Be precise about what this can see. `compileArtifact` is where executable material is produced; it
+// is NOT the semantic source compiler, which lowers Smalltalk text to a program before any artifact
+// exists. So an empty record means no replacement artifact was produced — it does not by itself
+// order the stale verdict against source compilation. The uncompilable-source leg below is what
+// does that, and this comment exists because the weaker reading is easy to make.
 function countingCompilation(compilation) {
   const compiled = [];
   const delegate = Object.create(compilation);
@@ -951,7 +956,7 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     assert.equal(staleUncompilable?.name, 'SmalltalkStaleMethodPositionError',
       'an overtaken observation is stale even when its source is also bad, which is what puts the '
       + `stale verdict in front of compilation; got ${staleUncompilable?.name}: ${staleUncompilable?.message}`);
-    assert.deepEqual(compiled, [], 'and still nothing was compiled');
+    assert.deepEqual(compiled, [], 'and still no replacement code artifact exists');
     assert.deepEqual((await describeCurrent()).method, b, 'B is still the current binding');
 
     // ---- 6. A FRESH PUBLIC READ OF B ------------------------------------------------------------
