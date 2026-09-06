@@ -18,15 +18,18 @@ import {
   createRuntime,
   ensureClassFromDeclaration,
   findSmalltalkKernel,
+  globalDeclarations,
   importCuisNativePackage,
+  installSymmetricSmalltalkBlock,
   installSymmetricSmalltalkStandardImage,
+  integerValue,
   objectRef,
   readBehavior,
   reconcileMethodsFromSource,
   textValue,
 } from '../src/runtime.js';
 
-// ADR 0085 M4 forcing harness (Bead lagrange-images-xxm), FIRST SLICE.
+// ADR 0085 M4 forcing harness (Bead lagrange-images-xxm).
 //
 // The pressure source is the pinned upstream Cuis YAXO package that scripts/integration-setup.sh
 // downloads — not a fixture written here, and not the JSON package M3 used. It was selected and
@@ -48,11 +51,15 @@ import {
 //   closure      : Cuis-Base -> YAXO -> Tests-YAXO. YAXO declares no `!requires:` line at all,
 //                  which the canonical export below confirms by answering `requires: []`.
 //
-// WHAT THIS FILE IS FOR, and deliberately not for. This is the FIRST M4 slice: pin, measured
-// oracle, scoped native import attempt, and ONE classified first RED. It implements no YAXO
-// compatibility. The refusal it records is not a permanent contract that a real package must be
-// refused — repairing that semantic at its owner is meant to make this file go red so the next
-// blocker has to be classified deliberately, exactly as the M3 harness works.
+// WHAT THIS FILE IS FOR, and deliberately not for. It carries the M4 vertical: pin, measured oracle,
+// scoped native import, and ONE classified first RED at a time. It implements no YAXO compatibility.
+// A refusal it records is never a permanent contract that a real package must be refused — repairing
+// that semantic at its owner is meant to make this file go red so the NEXT blocker has to be
+// classified deliberately, exactly as the M3 harness works.
+//
+// It has moved once already. The first RED was a super send (`unbound Symmetric Smalltalk name:
+// super`), repaired at the language owner by ADR 0089 / bead lagrange-images-xxm.1; the section
+// below now proves the entry point imports and records the next RED in its place.
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';
@@ -418,74 +425,82 @@ test('the M4 minimum import scope constructs the real DOM class graph natively w
 });
 
 // ==================================================================================================
-// THE FIRST RED OF THE M4 VERTICAL, classified.
+// THE FIRST RED IS REPAIRED, AND THE VERTICAL MOVED ON. (ADR 0089, bead lagrange-images-xxm.1)
 //
-// The vertical's very first method is the package's own public entry point, and it does not
-// compile. The missing thing is `super`, an ordinary Smalltalk send that native Symmetric Smalltalk
-// does not implement — ADR 0006 deferred it explicitly ("inheritance and `super`") and nothing has
-// implemented it since. This is NOT the export's problem and NOT the import adapter's problem: the
-// manifest carries the source verbatim, the adapter translates the header faithfully, and the
-// refusal comes from the native semantic compiler resolving a name it has no binding for.
+// The vertical's first RED was `unbound Symmetric Smalltalk name: super`, recorded here by the
+// previous slice: the package's own public entry point opens with a real super send, and native
+// Symmetric Smalltalk had none. ADR 0006 had deferred it explicitly ("inheritance and `super`").
+// ADR 0089 implements it at the language owner — `super` is a reserved pseudo-variable, `self` is
+// unchanged, and lookup starts above the running method's DEFINING Behavior — with nothing added to
+// the Cuis adapter, nothing changed in the canonical export, and no YAXO-shaped case anywhere.
 //
-// WORTH RECORDING, because it was PREDICTED to be the first blocker and measurably is not: the
-// canonical v2 export carries no class-variable facts and no package load-time expressions (proved
-// separately below). YAXO's tokenizer cannot scan without them, so that gap is real — but it sits
-// BEHIND this one on the executable vertical, and this slice does not schedule it.
-const M4_FIRST_RED = /unbound Symmetric Smalltalk name: super/;
+// This file's job is unchanged: carry the vertical to its FIRST unsupported native semantic and stop
+// there. So the section below proves the entry point imports, and records the NEXT first RED.
+const M4_INHERITED_ENTRY_POINT = 'cuis-method/YAXO/SAXHandler/class/parseDocumentFrom:';
 
-test('the M4 vertical stops at its first unsupported native semantic: a super send', {skip: !enabled, timeout: 900_000}, async () => {
+test('the M4 entry point and the implementation its super send names now import natively', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
+
+  // The unedited upstream material, re-asserted here so the import below cannot be passing on
+  // something this repository wrote.
+  const entry = manifest.methods.find(({identity}) => identity === M4_ENTRY_POINT);
+  assert.equal(entry.source, M4_ENTRY_POINT_UPSTREAM_SOURCE);
+  assert.ok(entry.source.includes('^(super parseDocumentFrom: aStream) document'));
+  const inherited = manifest.methods.find(({identity}) => identity === M4_INHERITED_ENTRY_POINT);
+  assert.equal(inherited.class, 'cuis-class/YAXO/SAXHandler');
+  assert.equal(inherited.side, 'class');
 
   const runtime = await nativeRuntime();
   try {
-    // The MINIMUM import scope for the one measured path: the DOM/parse class graph, plus the one
-    // public entry point method. The scope names nothing the vertical does not need — no DTD, no
-    // namespaces, no writer, no exception classes — so the refusal cannot be an artefact of having
-    // asked for material the path never reaches.
-    const scope = {classes: [...M4_SCOPE_CLASSES], methods: [M4_ENTRY_POINT]};
-    const error = await importCuisNativePackage({
+    // The MINIMUM import scope for the one measured path: the DOM/parse class graph, the public
+    // entry point, and the class-side implementation its super send actually resolves to. A super
+    // send is only meaningful when the overridden implementation exists, and it does — in the same
+    // canonical manifest, on a class already in this scope.
+    const scope = {
+      classes: [...M4_SCOPE_CLASSES],
+      methods: [M4_ENTRY_POINT, M4_INHERITED_ENTRY_POINT],
+    };
+    await importCuisNativePackage({
       images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest, scope,
-    }).then(
-      () => assert.fail('the M4 entry point compiled natively; this slice recorded that it does not'),
-      (thrown) => thrown,
-    );
-    assert.match(error.message, M4_FIRST_RED);
+    });
 
-    // The real consumer, named. The failing line is upstream YAXO source, unedited, and it is the
-    // only way into the DOM path — `XMLDOMParser class>>parseDocumentFrom:` delegates to the
-    // SAXHandler class-side implementation it overrides and then asks the parser for its document.
-    const entry = manifest.methods.find(({identity}) => identity === M4_ENTRY_POINT);
-    assert.equal(entry.source, M4_ENTRY_POINT_UPSTREAM_SOURCE);
-    assert.ok(entry.source.includes('^(super parseDocumentFrom: aStream) document'));
-
-    // ... and the semantic really is missing rather than merely unbound in this scope: the
-    // superclass whose implementation the send is asking for IS in the scope, imported, and its own
-    // `parseDocumentFrom:` is present in the same manifest. Nothing about the class graph, the
-    // scope or the export is short here.
-    const inherited = manifest.methods.find(({identity}) => identity === 'cuis-method/YAXO/SAXHandler/class/parseDocumentFrom:');
-    assert.ok(inherited, 'the overridden implementation is real upstream material in the same manifest');
-    assert.equal(inherited.class, 'cuis-class/YAXO/SAXHandler');
-    assert.ok(scope.classes.includes('cuis-class/YAXO/SAXHandler'));
+    // Both are installed as ordinary native methods, and exact replay stays write-free — the import
+    // rule ADR 0085 keeps for everything else holds for a method containing a super send too.
+    const frontier = await runtime.images.frontier('native-image');
+    await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'native-image', manifest, scope,
+    });
+    assert.equal(await runtime.images.frontier('native-image'), frontier, 'exact replay is write-free');
   } finally {
     await runtime.close();
   }
 });
 
-// THE SECOND INSTRUMENT, at the seam the gap actually belongs to. The E3 lesson is that a spy on
-// the wrong seam can look convincing for rounds: watching the IMPORT is watching the messenger, and
-// an implementation that "fixed" this by rewriting `super` to `self` inside the adapter would make
-// the test above pass while silently changing which method the package calls. So this leg names no
-// Cuis material at all. It declares an ordinary native class, hands the ORDINARY native method
-// compiler a body written here, and gets the same refusal — which is what makes the owner claim
-// (the Symmetric Smalltalk personality, not the export and not the Cuis import adapter) a
-// measurement rather than an opinion.
-test('super is missing at the native language owner, not at the Cuis import boundary', {skip: !enabled, timeout: 300_000}, async () => {
+// THE SECOND INSTRUMENT, at the seam the gap actually belonged to, and now green.
+//
+// The E3 lesson is that a spy on the wrong seam can look convincing for rounds: watching the IMPORT
+// is watching the messenger, and an implementation that "fixed" the first RED by rewriting `super`
+// to `self` inside the adapter would make the import test above pass while silently changing which
+// method the package calls. So this leg names no Cuis material at all. It declares an ordinary
+// native class, hands the ORDINARY native method compiler bodies written here, and proves the
+// SEMANTIC rather than the compile: the super send must answer the SUPERCLASS implementation.
+//
+// Deliberately NOT gated on the integration environment. It needs no Cuis image, no VM and no
+// package — gating it would mean the owner-level claim only ran in the lane that cannot make it.
+test('super works at the native language owner, not by anything at the Cuis import boundary', async () => {
   const runtime = await nativeRuntime();
   try {
-    const {classRef} = await ensureClassFromDeclaration({
-      images: runtime.images, imageId: 'native-image', name: 'M4SuperSendProbe', instanceVariables: [],
+    const parent = await ensureClassFromDeclaration({
+      images: runtime.images, imageId: 'native-image', name: 'M4SuperSendProbeParent', instanceVariables: [],
     });
-    const defineMethod = async (selector, body) => await reconcileMethodsFromSource({
+    const child = await ensureClassFromDeclaration({
+      images: runtime.images,
+      imageId: 'native-image',
+      name: 'M4SuperSendProbe',
+      superclassRef: parent.classRef,
+      instanceVariables: [],
+    });
+    const defineMethod = async (classRef, selector, body) => await reconcileMethodsFromSource({
       images: runtime.images,
       compilation: runtime.compilation,
       imageId: 'native-image',
@@ -494,17 +509,149 @@ test('super is missing at the native language owner, not at the Cuis import boun
       methods: [{selector, source: `[\n${body}\nself\n]`}],
     });
 
-    await assert.rejects(
-      defineMethod('probeSuper', '^ super probe.'),
-      (error) => M4_FIRST_RED.test(error.message),
-      'an ordinary native method with no Cuis provenance is refused for exactly the same reason',
+    await defineMethod(parent.classRef, 'probe', '^ 41.');
+    // The identical body with `self` still compiles, so nothing below is an accident of body shape.
+    await defineMethod(child.classRef, 'probeSelf', '^ self probe.');
+    // ... and the one that used to be refused with `unbound Symmetric Smalltalk name: super`.
+    await defineMethod(child.classRef, 'probeSuper', '^ super probe.');
+
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'native-image', id: 'm4-super-probe', source: '[ :k | k basicNew probeSuper ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(
+        await runtime.invocations.invokeBlock(objectRef('native-image', block.id), [child.classRef]),
+      ),
+      integerValue(41),
+      'the super send answered the SUPERCLASS implementation, which a rewrite to `self` could not',
     );
-    // The comparison case, so the refusal above is about the name `super` and not about the method
-    // body shape, the non-local return, or the installer: the identical body with `self` compiles.
-    await defineMethod('probeSelf', '^ self probe.');
   } finally {
     await runtime.close();
   }
+});
+
+// ==================================================================================================
+// THE NEXT FIRST RED OF THE M4 VERTICAL, classified but deliberately NOT repaired here.
+//
+// Walking the measured parse path one method at a time from the entry point, everything compiles
+// until `XMLDOMParser>>startDocument`, whose upstream body is `self document: XMLDocument new`. The
+// refusal is:
+//
+//     unbound Symmetric Smalltalk name: XMLDocument
+//
+// XMLDocument is IN this scope and IS imported as an ordinary native class — the class-graph proof
+// above asserts its upstream layout. What is missing is that a natively imported class's NAME never
+// becomes resolvable. The native global namespace (src/language/smalltalk-globals.js, ADR 0057/0061)
+// already owns name -> object bindings and `publishSmalltalkClassGlobals` already publishes a class
+// as one; the Cuis native import adapter simply never calls it. So the OWNER is the import adapter's
+// own arrow — canonical manifest -> native image structures — and the mechanism it needs already
+// exists at a generic owner that needs no change at all.
+//
+// The REAL CONSUMER is unedited upstream YAXO source. Within the nine-class minimum scope alone,
+// `XMLDOMParser>>startDocument` (XMLDocument), `XMLElement>>contentString` (XMLStringNode),
+// `SAXDriver>>scope` (XMLNamespaceScope) and `XMLTokenizer>>malformedError:` (SAXMalformedException)
+// each name a class the package itself declares. M3's JSON package never did — its executable source
+// names only base-image classes — which is why this gap could not appear before now.
+//
+// Not this slice's work. It is recorded so the next slice starts from a measurement.
+const M4_NEXT_RED = /unbound Symmetric Smalltalk name: XMLDocument/;
+
+// The measured parse path in causal order, from the public entry point. Every entry is upstream
+// material in the canonical manifest; `XMLTokenizer>>saxHandler:` is deliberately absent from the
+// list because the package does not declare it.
+const M4_PARSE_PATH = Object.freeze([
+  M4_ENTRY_POINT,
+  M4_INHERITED_ENTRY_POINT,
+  'cuis-method/YAXO/SAXHandler/class/on:',
+  'cuis-method/YAXO/XMLTokenizer/class/on:',
+  'cuis-method/YAXO/XMLTokenizer/instance/initialize',
+  'cuis-method/YAXO/XMLTokenizer/instance/parseStream:',
+  'cuis-method/YAXO/XMLTokenizer/instance/validating:',
+  'cuis-method/YAXO/SAXHandler/instance/initialize',
+  'cuis-method/YAXO/XMLDOMParser/instance/initialize',
+  'cuis-method/YAXO/SAXHandler/instance/driver:',
+  'cuis-method/YAXO/SAXHandler/instance/startDocument',
+]);
+const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/XMLDOMParser/instance/startDocument';
+
+test('the M4 vertical now stops at its NEXT unsupported native semantic: a package class is not a global', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await yaxoSemanticExport());
+
+  const runtime = await nativeRuntime();
+  try {
+    // Everything the measured path reaches BEFORE the refusal imports natively. Asserted as one
+    // scope rather than described, so "the next RED is further along" is a measurement — and one of
+    // these, `XMLDOMParser>>initialize`, is a SECOND unedited upstream super send (`super
+    // initialize.`), on the instance side this time.
+    assert.equal(
+      manifest.methods.find(({identity}) => identity === 'cuis-method/YAXO/XMLDOMParser/instance/initialize').source,
+      'initialize\n\tsuper initialize.\n\tstack _ OrderedCollection new.\n\tincremental _ false',
+    );
+    await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PARSE_PATH]},
+    });
+
+    // ... and the next method on the path is where it stops.
+    const error = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PARSE_PATH, M4_NEXT_RED_METHOD]},
+    }).then(
+      () => assert.fail('the M4 parse path compiled past startDocument; this slice recorded that it does not'),
+      (thrown) => thrown,
+    );
+    assert.match(error.message, M4_NEXT_RED);
+
+    // The real consumer, named, and unedited upstream source.
+    const startDocument = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
+    assert.equal(startDocument.source, 'startDocument\n\tself document: XMLDocument new.\n\tself push: self document');
+
+    // ... and the class really is imported rather than merely out of scope, so the refusal is about
+    // NAME RESOLUTION and not about a short import scope.
+    assert.ok(M4_SCOPE_CLASSES.includes('cuis-class/YAXO/XMLDocument'));
+    assert.ok(
+      await runtime.images.getObject('native-image', 'smalltalk/class/XMLDocument'),
+      'XMLDocument is an ordinary native class in this image',
+    );
+    // The mechanism the adapter does not use: the native global namespace publishes base classes and
+    // nothing the import created.
+    const globals = await globalDeclarations({images: runtime.images, imageId: 'native-image'});
+    assert.ok(Object.hasOwn(globals, 'OrderedCollection'), 'base classes are published globals');
+    assert.equal(Object.hasOwn(globals, 'XMLDocument'), false, 'an imported class is not');
+  } finally {
+    await runtime.close();
+  }
+});
+
+// DIAGNOSTIC, and a warning the refusal-shaped instrument above structurally cannot give. Carried
+// forward from the E3 lesson about instruments that watch the wrong thing: a harness that stops at
+// the first REFUSAL cannot see a SILENT miscompile, and there is one causally EARLIER on this path.
+//
+// 93 of YAXO's 341 methods assign with Cuis's legacy arrow (`validating _ false`). The native
+// tokenizer treats `_` as an identifier character, so `a _ b` parses as two unary sends to `a` and
+// compiles without complaint into something that means nothing like an assignment. Two of the
+// methods the parse path already imports above do exactly this. Nothing here repairs it; it is
+// measured so the next slice cannot mistake "it compiled" for "it is right".
+test('DIAGNOSTIC: the Cuis assignment arrow is silently absorbed, not refused', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await yaxoSemanticExport());
+  const arrowMethods = manifest.methods.filter(({source}) => / _ /.test(source));
+  assert.ok(arrowMethods.length > 50, `${arrowMethods.length} upstream methods assign with the legacy arrow`);
+  const initialize = manifest.methods.find(({identity}) => identity === 'cuis-method/YAXO/XMLTokenizer/instance/initialize');
+  assert.ok(initialize.source.includes('validating _ false'), 'and one of them is on the measured parse path');
+
+  // The parse, at the language owner and with no Cuis material: `b _ a foo` is not an assignment.
+  const {parseSymmetricSmalltalk} = await import('../src/language/symmetric-smalltalk-parser.js');
+  const syntax = parseSymmetricSmalltalk('[ | a b | b _ a foo. b ]');
+  const [statement] = syntax.body.statements;
+  assert.notEqual(statement.kind, 'assign');
+  assert.equal(statement.kind, 'send', 'the statement is a chain of unary sends');
+  assert.equal(statement.receiver.receiver.selector, '_', '`_` became a unary selector');
 });
 
 // DIAGNOSTIC, not a work queue. The epic recorded one open question — whether the canonical v2

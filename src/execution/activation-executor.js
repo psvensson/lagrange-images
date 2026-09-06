@@ -468,6 +468,33 @@ class ActivationExecutor {
         // method activation this operation is acting for, never a capability.
         invocationFrame: activeFrame,
         createClosure: whileActive('createClosure', async (request) => await this.createClosure(request, cells, arena, activeFrame)),
+        // ADR 0089. The activation half of a language-resolved send, and the only reason a
+        // Symmetric Smalltalk super send needs no execution path of its own.
+        //
+        // Lookup happened at the language's own lookup owner, because a super send starts above the
+        // running method's DEFINING Behavior rather than at the receiver's — a starting point
+        // ordinary dispatch cannot express. Everything after lookup is identical to an ordinary
+        // nested send and stays here: the depth guard, the shared arena and condition runtime, the
+        // inherited authority, and the dispatch image. The frame is neither built nor attached here;
+        // it travels through `prepareResolvedDispatch`'s existing normalization and envelope, so the
+        // callee discovers it by the same priority walk as any dispatched method and OWNS it.
+        invokeResolvedMethod: whileActive('invokeResolvedMethod', async ({
+          languageId, block, receiver, message, arguments: args = [], frame,
+        }) => {
+          if (!this.invocations) throw new TypeError('activation executor has no message runtime');
+          if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
+          const nextDispatchImage = isObjectRef(receiver) ? receiver.imageId : activeDispatchImage;
+          const resolved = await this.invocations.prepareResolvedDispatch({
+            languageId, block, receiver, message, arguments: args, frame, images: view,
+          });
+          return await this.execute(resolved.activation, {
+            depth: depth + 1,
+            authority,
+            cellArena: arena,
+            conditionRuntime: conditions,
+            dispatchImage: nextDispatchImage,
+          });
+        }),
         // A nested send inherits the current authority. An executor may ask for a narrower
         // child, but never receives one: the attenuation happens here, so no executor ever
         // holds a context. Since attenuation only narrows, a nested send can lose rights and

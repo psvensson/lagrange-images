@@ -91,6 +91,10 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   BYTEARRAY_AT: 'bytearray-at',
   // `fromArray:` backing: an Array/OrderedCollection of integers 0..255 -> a native bytes Value.
   ARRAY_TO_BYTEARRAY: 'array-to-bytearray',
+  // ADR 0089. Reached by the send the compiler lowers `super <selector>` to; never written by a
+  // programmer. Arguments are the selector Text followed by the message's own arguments, so one
+  // primitive covers unary, binary and keyword super sends.
+  SUPER_SEND: 'super-send',
 });
 
 const SMALLTALK_PRIMITIVE_NAMES = Object.freeze(Object.values(SMALLTALK_PRIMITIVE));
@@ -139,7 +143,16 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.BYTEARRAY_SIZE]: 1,
   [SMALLTALK_PRIMITIVE.BYTEARRAY_AT]: 2,
   [SMALLTALK_PRIMITIVE.ARRAY_TO_BYTEARRAY]: 1,
+  // Variadic (see below): this is the MINIMUM — the selector Text — and a super send adds one
+  // argument per keyword or binary operand.
+  [SMALLTALK_PRIMITIVE.SUPER_SEND]: 1,
 });
+
+// ADR 0089. The one primitive whose argument count is not fixed, because the message it forwards is
+// not fixed: `super foo`, `super + x` and `super at: k put: v` are one operation with one, two and
+// three arguments. Spelled as an explicit set rather than by giving the arity map a second shape, so
+// every other primitive keeps its exact-arity guard untouched and the variadic case is enumerable.
+const SMALLTALK_PRIMITIVE_VARIADIC = Object.freeze(new Set([SMALLTALK_PRIMITIVE.SUPER_SEND]));
 
 // One locality rule for every primitive. A foreign primitive Block must fail rather than answer a
 // foreign kernel's class, allocate into somebody else's image, or mutate a foreign indexed object.
@@ -228,6 +241,16 @@ function requireSendMessage(context, primitive, purpose = 'send hash and =') {
     throw new TypeError(`Symmetric Smalltalk ${primitive} primitive requires a message runtime to ${purpose}`);
   }
   return context.sendMessage;
+}
+
+// ADR 0089. Deliberately NOT `sendMessage`: this activates a method the LANGUAGE already resolved,
+// and re-entering ordinary dispatch would look the selector up again from the receiver's own
+// Behavior — the exact starting point a super send exists to avoid.
+function requireInvokeResolvedMethod(context, primitive, purpose = 'activate the method it resolved') {
+  if (typeof context?.invokeResolvedMethod !== 'function') {
+    throw new TypeError(`Symmetric Smalltalk ${primitive} primitive requires a message runtime to ${purpose}`);
+  }
+  return context.invokeResolvedMethod;
 }
 
 // ADR 0054 decision 8. A host failure that has a condition class becomes an ordinary Smalltalk
@@ -346,6 +369,7 @@ export {
   SMALLTALK_PRIMITIVE,
   SMALLTALK_PRIMITIVE_ARITY,
   SMALLTALK_PRIMITIVE_NAMES,
+  SMALLTALK_PRIMITIVE_VARIADIC,
   SmalltalkPrimitiveLocalityError,
   SmalltalkPrimitiveReceiverError,
   assertLocalRef,
@@ -353,6 +377,7 @@ export {
   parsePrimitiveCode,
   primitiveCodeContent,
   promoted,
+  requireInvokeResolvedMethod,
   requireSendMessage,
   signalHostCondition,
 };

@@ -155,7 +155,7 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `installSmalltalkAllocationProtocol()` | the `class-of`/`basic-new` primitive Blocks, plus `Object >> class`, `Object >> initialize`, `Class >> basicNew` and `Class >> new` (ADR 0046) |
 | `installSmalltalkEqualityProtocol()` | the `built-in-equals`/`built-in-hash` primitive Blocks, plus `Object >> =` and `Object >> hash` (ADR 0048) |
 | `installSmalltalkDictionaryProtocol()` | the Dictionary/DictionaryTable Shapes, the six Dictionary primitive Blocks, the `Dictionary` class, and `initialize`, `size`, `includesKey:`, `at:`, `at:put:`, `keysAndValuesDo:` (ADR 0048; enumeration snapshots the pairs before the Block runs, re-sends neither `hash` nor `=`, and promises no iteration order) |
-| `installSmalltalkInstanceVariableProtocol()` | the `instance-slot-read`/`instance-slot-write` primitive Blocks (ADR 0050) and the `non-local-return` primitive Block (ADR 0055), which the class-scoped binder makes available to `^` through the same reserved-capture seam |
+| `installSmalltalkInstanceVariableProtocol()` | the `instance-slot-read`/`instance-slot-write` primitive Blocks (ADR 0050), the `non-local-return` primitive Block (ADR 0055) and the `super-send` primitive Block (ADR 0089), the last two made available to `^` and to `super` by the class-scoped binder through the same reserved-capture seam |
 | `installSmalltalkLibrary()` | `Association` and a minimal `OrderedCollection`, written in Smalltalk over the kernel protocols; adds no primitive |
 | `migrateMethodDictionary()` | rewrites one Behavior's shape-backed method dictionary into the ADR 0049 hashed form |
 | `installSmalltalkIndexedProtocol()` | `Array`, `Class >> basicNew:`, `Array class >> new:`, and `Array >> size`/`at:`/`at:put:` over four more `smalltalk-kernel-primitive/v1` Blocks (ADR 0047) |
@@ -229,6 +229,19 @@ stable slot **id** rather than the source name. Slot access rides two further
 `smalltalk-kernel-primitive/v1` operations, and the primitive proves at execution that the target is
 the activation's own `self` *and* that the slot is declared by the method's defining Behavior — the
 two facts travelling from dispatch in a transient invocation envelope that reaches no record.
+
+ADR 0089 adds no executable representation and no `lagrange-code` operation either. `super` is a
+reserved pseudo-variable, never a Value, and `super <selector>` lowers to an ordinary send of one
+further `smalltalk-kernel-primitive/v1` operation reached through the `$superSend` reserved capture —
+the same seam `^` uses. It is the one VARIADIC primitive, because the message it forwards is: its
+arguments are the selector Text plus the message's own, so unary, binary and keyword super sends are
+one operation. The primitive reads the *same* transient invocation envelope the slot primitives read,
+takes `superclass(frame.definingBehavior)` and hands it to `lookupSelector` — it owns no superclass
+walk and decodes no MethodDictionary — then activates the resolved method through the invocation
+owner's `prepareResolvedDispatch`, which is the one internal seam for "activate a method the language
+already resolved, with the frame that lookup produced". The callee therefore owns a frame naming the
+Behavior that ACTUALLY supplied the method, which is what makes a chained `super` walk the chain, and
+class-side works over the derived metaclass hierarchy with no separate rule.
 
 ADR 0048 adds no executable representation: the equality, hash and Dictionary operations are further
 `smalltalk-kernel-primitive/v1` primitives reached the same way. A `Dictionary` keeps stable identity

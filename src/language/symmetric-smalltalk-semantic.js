@@ -113,6 +113,13 @@ const GLOBAL_CAPTURE_PREFIX = '$global:';
 // Internal capture key for a resolved class variable. Same prefixing rationale as globals.
 const CLASS_VAR_CAPTURE_PREFIX = '$classVar:';
 const INSTANCE_SLOT_WRITE_CAPTURE = '$instanceSlotWrite';
+// ADR 0089. `super` is a receiver MARKER, not a value, so it lowers exactly the way `^` does: to an
+// ordinary send of a language-owned primitive reached through a reserved capture the class-scoped
+// binder makes available. `lagrange-code` therefore learns nothing about Smalltalk inheritance, and
+// the compiled artifact names no class — WHICH Behavior lookup must start above is the running
+// method's defining Behavior, a trusted runtime fact of the invocation frame that neither source
+// nor a compiled artifact may state.
+const SUPER_SEND_CAPTURE = '$superSend';
 
 class SemanticScope {
   constructor({
@@ -249,6 +256,29 @@ class SemanticScope {
       receiver: this.requireIntrinsic(NON_LOCAL_RETURN_CAPTURE),
       message: textValue('value:'),
       arguments: Object.freeze([valueExpression]),
+    });
+  }
+
+  // ADR 0089. `super foo: a bar: b` lowers to `$superSend value: 'foo:bar:' value: a value: b`.
+  //
+  // The selector travels as an ordinary Text literal and the arguments as ordinary expressions; the
+  // RECEIVER of the resulting message is not mentioned at all, because a super send does not change
+  // it — the primitive sends to the invoking method's own `self`. `requireIntrinsic` walks the
+  // capture chain exactly as `^` does, so a nested Block inherits the binding by ordinary
+  // propagation rather than by a second mechanism.
+  superSend(selector, argumentExpressions) {
+    const values = [
+      Object.freeze({op: 'literal', value: textValue(selector)}),
+      ...argumentExpressions,
+    ];
+    return Object.freeze({
+      op: 'send',
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: this.requireIntrinsic(SUPER_SEND_CAPTURE),
+      // The Block-application selector for this argument count, spelled here exactly as the slot
+      // primitives spell theirs: one `value:` for the selector plus one per message argument.
+      message: textValue('value:'.repeat(values.length)),
+      arguments: Object.freeze(values),
     });
   }
 
@@ -581,6 +611,13 @@ function compileExpression(syntax, scope, state) {
     }
     case 'name':
       return scope.resolveName(syntax.name);
+    // ADR 0089. `super` is not a value. It exists only as the receiver marker of a message send, and
+    // `case 'send'` consumes it there; reaching this point means the source used it as an ordinary
+    // expression — a bare `super`, an argument, the right-hand side of an assignment. There is no
+    // object to answer, and inventing a proxy would make `super` a second RECEIVER, which is
+    // precisely what it is not.
+    case 'super':
+      throw new TypeError('super is not a value: it may only be the receiver of a message send');
     case 'return': {
       // A Block compiled with no method context has no home to return from, and never could have —
       // that is a fact about the compilation, so it is reported here rather than at invocation. It
@@ -599,6 +636,22 @@ function compileExpression(syntax, scope, state) {
       return Object.freeze({op: 'binding-write', id: target.id, value});
     }
     case 'send':
+      // ADR 0089, and the only place the super receiver marker is consumed. Unary, binary and
+      // keyword sends all arrive here, so all three forms fall out of one lowering. `self` is
+      // unchanged — the primitive sends to the running method's own `self` — so the ONLY difference
+      // from the ordinary case below is where selector lookup starts.
+      if (syntax.receiver.kind === 'super') {
+        // The same rule, and the same reason, as `^`: a compilation with no method home has no
+        // defining Behavior to start above, and never could have. Reported here rather than at
+        // invocation, because it is a fact about the compilation.
+        if (!scope.canReturn()) {
+          throw new TypeError('super requires a method home: `super` is only valid inside a method');
+        }
+        return scope.superSend(
+          syntax.selector,
+          syntax.arguments.map((argument) => compileExpression(argument, scope, state)),
+        );
+      }
       return compileSend(
         compileExpression(syntax.receiver, scope, state), syntax.selector, syntax.arguments, scope, state,
       );
@@ -614,6 +667,17 @@ function compileExpression(syntax, scope, state) {
     // that object in source order, and the cascade answers the first message's value. Hidden
     // temporaries carry both, so nothing the source wrote is rewritten and no name can collide.
     case 'cascade': {
+      // ADR 0089 records this boundary rather than widening quietly. The cascade lowering evaluates
+      // its receiver ONCE into a hidden temporary, and a super send has no receiver value to put
+      // there — `super` moves lookup, it does not denote an object — so a cascade on `super` would
+      // need cascade semantics of its own. The forcing consumer is an ordinary keyword super send,
+      // so this is refused deterministically instead of being half-supported.
+      if (syntax.receiver.kind === 'super') {
+        throw new TypeError(
+          'a cascade receiver may not be super: a cascade evaluates its receiver once into a '
+          + 'temporary, and super denotes no value to evaluate',
+        );
+      }
       const receiverId = scope.declareHiddenTemporary(`$cascadeReceiver:${state.nextCascade}`);
       const answerId = scope.declareHiddenTemporary(`$cascadeAnswer:${state.nextCascade}`);
       state.nextCascade += 1;
@@ -749,6 +813,7 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
 export {
   ARRAY_BINDING_ID,
   ARRAY_CAPTURE,
+  SUPER_SEND_CAPTURE,
   CLASS_VAR_CAPTURE_PREFIX,
   INSTANCE_SLOT_READ_CAPTURE,
   NIL_BINDING_ID,

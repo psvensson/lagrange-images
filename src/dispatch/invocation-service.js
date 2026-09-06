@@ -194,6 +194,39 @@ class InvocationService {
     });
   }
 
+  // ADR 0089. The one seam through which a language personality activates a method IT already
+  // resolved, and the reason `super` needs no second activation path.
+  //
+  // A Symmetric Smalltalk super send cannot go through `prepareDispatch`: that asks the dispatcher
+  // to look the selector up, and the dispatcher starts from the receiver's own Behavior — precisely
+  // the starting point a super send exists to avoid. What the language must NOT do instead is build
+  // its own activation and hang its own frame beside it, because those rules are this service's.
+  //
+  // So the split is: the language supplies the Block its own lookup owner chose and the frame that
+  // lookup produced; everything after that is identical to an ordinary dispatch. The frame goes
+  // through the SAME `normalizeDispatchResolution` validation, lands in the SAME weakly-held
+  // envelope keyed on the SAME activation identity, and is therefore discovered by the executor's
+  // existing priority walk — which is what makes the callee OWN its frame, so a second `super`
+  // inside it starts above its own defining Behavior rather than the caller's.
+  async prepareResolvedDispatch({
+    languageId, block, receiver, message, arguments: args = [], frame, images = null,
+  }) {
+    // Present-and-valid, not optional: a resolution with no frame would produce a method activation
+    // whose `self`/`definingBehavior` are unknown, which is exactly the state this path exists to
+    // avoid manufacturing.
+    if (!frame) throw new TypeError('a resolved dispatch must carry the frame its lookup produced');
+    const resolution = normalizeDispatchResolution({block, frame});
+    const activation = await this.prepareActivation({
+      images,
+      block: resolution.block,
+      arguments: args,
+      receiver: canonicalizeValue(receiver),
+      dispatch: {languageId, message},
+    });
+    this.invocationFrames.set(activation, resolution.frame);
+    return Object.freeze({activation, frame: resolution.frame});
+  }
+
   async prepareActivation({block, arguments: args = [], receiver = null, dispatch = null, images = null}) {
     const resolver = images ?? this.images;
     const blockRef = normalizeObjectRef(block, 'activation block');

@@ -221,6 +221,10 @@ class Parser {
       // The reserved words read as identifiers and are not names: each becomes its own syntax
       // node, so no later stage can mistake one for something bindable.
       if (token.value === 'self') return node('self');
+      // ADR 0089. `super` becomes its own node exactly as `self` does, and deliberately carries no
+      // value of its own: the compiler consumes it only as a send's receiver and refuses it
+      // anywhere else. Making it a node here is what stops a later stage mistaking it for a name.
+      if (token.value === 'super') return node('super');
       if (token.value === 'true') return node('true');
       if (token.value === 'false') return node('false');
       if (token.value === 'nil') return node('nil');
