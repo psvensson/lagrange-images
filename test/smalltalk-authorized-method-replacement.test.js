@@ -37,7 +37,10 @@ import {SmalltalkStaleMethodPositionError} from '../src/language/smalltalk-class
 // whose SCOPE names a position the public read cannot issue one for — a class that does not exist,
 // a selector nothing implements, another image — so they mint it here rather than editing the text
 // of a real one, which would only prove something about string surgery.
-import {smalltalkMethodPositionToken} from '../src/language/smalltalk-method-position-token.js';
+import {
+  parseSmalltalkMethodPositionToken,
+  smalltalkMethodPositionToken,
+} from '../src/language/smalltalk-method-position-token.js';
 
 // C2 of bead lagrange-images-qax: the AUTHORIZED public seam for replacing ONE existing native
 // method (Object Environment E3, GitHub #218).
@@ -930,13 +933,24 @@ test('E3 is replacement-only: an absent selector is refused, never defined', asy
     })).selectors;
     assert.equal(selectorsBefore.includes(MISSING), false);
 
+    // The observation is a REAL Block ref this image actually holds — the guarded method's own
+    // current binding — so the token carries a well-formed observed identity rather than a
+    // fabricated one. What makes the position unobservable is that nothing is bound at MISSING.
+    const observed = await methodBlockRef({...options, selector: GUARDED});
+    assert.ok(observed, 'the observation must be a real Block this image holds');
     const token = smalltalkMethodPositionToken({
-      imageId: 'app',
-      classRef: options.classRef,
-      selector: MISSING,
-      // Any well-formed observation; the point is that NOTHING is bound at this position.
-      method: await methodBlockRef({...options, selector: GUARDED}),
+      imageId: 'app', classRef: options.classRef, selector: MISSING, method: observed,
     });
+    // NON-VACUITY: the token must be accepted far enough that the refusal genuinely comes from
+    // resolving the absent position, not from the token being malformed or wrongly scoped. A
+    // wrong-scope token would fail earlier and this test would prove nothing about absence.
+    assert.deepEqual(
+      parseSmalltalkMethodPositionToken(token, {
+        imageId: 'app', classRef: options.classRef, selector: MISSING,
+      }),
+      {imageId: observed.imageId, objectId: observed.objectId},
+      'the token parses for exactly this position, so the refusal below is about the ABSENT method',
+    );
 
     const {compilation, compiled} = countingCompilation(runtime.compilation);
     const error = await failure(authorizedReplaceSmalltalkMethod({
@@ -952,9 +966,18 @@ test('E3 is replacement-only: an absent selector is refused, never defined', asy
 
     // Refused as a semantic verdict about this position, per ADR 0088.
     assert.ok(error, 'the call must not succeed');
+    // PINNED, not "either refusal will do". ADR 0088 decision 5 says an absent selector is STALE
+    // rather than a fresh definition, and its rejected-alternatives list names "report an absent
+    // selector as a missing target" precisely because that would make the public verdict depend on
+    // whether the selector vanished before or during the call. Accepting either class here would
+    // have permitted the exact alternative the ADR rejects.
     assert.ok(
-      error instanceof SmalltalkMethodTargetError || error instanceof SmalltalkStaleMethodPositionError,
-      `an absent selector must be a target or stale verdict; got ${error?.name}: ${error?.message}`,
+      error instanceof SmalltalkStaleMethodPositionError,
+      `ADR 0088: an absent selector is STALE, not a missing target; got ${error?.name}: ${error?.message}`,
+    );
+    assert.ok(
+      !(error instanceof SmalltalkMethodTargetError),
+      'and specifically not the target verdict the ADR rejects for this case',
     );
 
     // Nothing was defined. Each of these fails independently if the seam fell through and created it.
