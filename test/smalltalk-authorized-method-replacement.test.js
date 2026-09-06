@@ -37,7 +37,10 @@ import {SmalltalkStaleMethodPositionError} from '../src/language/smalltalk-class
 // whose SCOPE names a position the public read cannot issue one for — a class that does not exist,
 // a selector nothing implements, another image — so they mint it here rather than editing the text
 // of a real one, which would only prove something about string surgery.
-import {smalltalkMethodPositionToken} from '../src/language/smalltalk-method-position-token.js';
+import {
+  parseSmalltalkMethodPositionToken,
+  smalltalkMethodPositionToken,
+} from '../src/language/smalltalk-method-position-token.js';
 
 // C2 of bead lagrange-images-qax: the AUTHORIZED public seam for replacing ONE existing native
 // method (Object Environment E3, GitHub #218).
@@ -900,6 +903,100 @@ test('a valid token with invalid source is a source rejection, and the exact old
     assert.deepEqual(await recordFingerprint(runtime), before, 'a rejected source published nothing');
     assert.deepEqual(await methodBlockRef({...options, selector: GUARDED}), observed);
     await answers(runtime, GUARDED, 1, 'the current binding is untouched by a compile failure');
+  });
+});
+
+// REPLACEMENT-ONLY. ADR 0088 states normatively that this seam replaces an EXISTING
+// {Class/Metaclass, selector} position and that an absent selector is not a definition opportunity.
+// Until now that rule was carried only by a probe recorded in a bead, which is not a proof.
+//
+// WRONG IMPLEMENTATION THIS TEST MUST KILL: the authorized seam falls through to an unguarded
+// reconcile or define path and CREATES the absent selector. That is the whole failure mode — E3
+// silently becoming a method-authoring API — and it is invisible to every other test here, all of
+// which target a selector that already exists.
+//
+// The token is minted rather than read, deliberately: the public read cannot issue a token for a
+// position nothing implements, which is exactly why this is a BOUNDARY proof rather than an
+// ordinary user flow. Minting one is the only way to put a well-formed, correctly-scoped token in
+// front of the seam and ask what it does with an absent target.
+test('E3 is replacement-only: an absent selector is refused, never defined', async () => {
+  await withFixture(async (runtime, options) => {
+    const MISSING = 'missingSelector';
+    // The class really is a live native class with real methods; only THIS selector is absent.
+    assert.equal(await methodBlockRef({...options, selector: MISSING}), null, 'the fixture must start absent');
+    const before = await recordFingerprint(runtime);
+    const selectorsBefore = (await authorizedDescribeSmalltalkClass({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: options.classRef,
+      require: requireFor(runtime, [readDemand('app', options.classRef.objectId)]),
+    })).selectors;
+    assert.equal(selectorsBefore.includes(MISSING), false);
+
+    // The observation is a REAL Block ref this image actually holds — the guarded method's own
+    // current binding — so the token carries a well-formed observed identity rather than a
+    // fabricated one. What makes the position unobservable is that nothing is bound at MISSING.
+    const observed = await methodBlockRef({...options, selector: GUARDED});
+    assert.ok(observed, 'the observation must be a real Block this image holds');
+    const token = smalltalkMethodPositionToken({
+      imageId: 'app', classRef: options.classRef, selector: MISSING, method: observed,
+    });
+    // NON-VACUITY: the token must be accepted far enough that the refusal genuinely comes from
+    // resolving the absent position, not from the token being malformed or wrongly scoped. A
+    // wrong-scope token would fail earlier and this test would prove nothing about absence.
+    assert.deepEqual(
+      parseSmalltalkMethodPositionToken(token, {
+        imageId: 'app', classRef: options.classRef, selector: MISSING,
+      }),
+      {imageId: observed.imageId, objectId: observed.objectId},
+      'the token parses for exactly this position, so the refusal below is about the ABSENT method',
+    );
+
+    const {compilation, compiled} = countingCompilation(runtime.compilation);
+    const error = await failure(authorizedReplaceSmalltalkMethod({
+      images: runtime.images,
+      compilation,
+      imageId: 'app',
+      classRef: options.classRef,
+      selector: MISSING,
+      source: '[ ^ 99 ]',
+      expectedVersionToken: token,
+      require: writerFor(runtime, options),
+    }));
+
+    // Refused as a semantic verdict about this position, per ADR 0088.
+    assert.ok(error, 'the call must not succeed');
+    // PINNED, not "either refusal will do". ADR 0088 decision 5 says an absent selector is STALE
+    // rather than a fresh definition, and its rejected-alternatives list names "report an absent
+    // selector as a missing target" precisely because that would make the public verdict depend on
+    // whether the selector vanished before or during the call. Accepting either class here would
+    // have permitted the exact alternative the ADR rejects.
+    assert.ok(
+      error instanceof SmalltalkStaleMethodPositionError,
+      `ADR 0088: an absent selector is STALE, not a missing target; got ${error?.name}: ${error?.message}`,
+    );
+    assert.ok(
+      !(error instanceof SmalltalkMethodTargetError),
+      'and specifically not the target verdict the ADR rejects for this case',
+    );
+
+    // Nothing was defined. Each of these fails independently if the seam fell through and created it.
+    assert.equal(await methodBlockRef({...options, selector: MISSING}), null,
+      'the absent selector must STILL be absent');
+    const selectorsAfter = (await authorizedDescribeSmalltalkClass({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: options.classRef,
+      require: requireFor(runtime, [readDemand('app', options.classRef.objectId)]),
+    })).selectors;
+    assert.deepEqual(selectorsAfter, selectorsBefore, 'the selector set is unchanged');
+    assert.deepEqual(await recordFingerprint(runtime), before,
+      'and no record was written at all: not the method, not the dictionary');
+    // Decided before compilation, so no replacement material was even produced.
+    assert.deepEqual(compiled, [], 'the source was never compiled for an absent target');
+    // The neighbours are untouched.
+    await answers(runtime, GUARDED, 1, 'the existing method is unaffected');
+    await answers(runtime, UNRELATED, 10, 'and so is its neighbour');
   });
 });
 

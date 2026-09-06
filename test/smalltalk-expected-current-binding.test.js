@@ -310,6 +310,35 @@ test('an external winner semantically EQUAL to the desired replacement is still 
 });
 
 // ---------------------------------------------------------------------------------------------
+// WRONG IMPLEMENTATION THIS TEST MUST KILL: treating an ABSENT selector as a fresh definition
+// opportunity — `reconcileMethods` is add-capable, so a guarded write whose position holds nothing
+// could plausibly just install the method. It must not: the caller said it was REPLACING something
+// it had observed, and an observation of nothing is not an observation.
+//
+// The owner is pinned here as well as at the authorized seam because C1 is the one that must own
+// the rule; the seam refusing first is a convenience, not the guarantee.
+test('an absent selector is stale, never a definition', async () => {
+  await withFixture(async (runtime, _kernel, options) => {
+    const ABSENT = 'neverImplemented';
+    const observed = await methodBlockRef({...options, selector: GUARDED});
+    assert.equal(await methodBlockRef({...options, selector: ABSENT}), null, 'the fixture must start absent');
+    const before = await runtime.images.listRecords('app');
+
+    const error = await reconcileMethods({
+      ...options,
+      methods: [{...method(ABSENT, 99), expectedCurrent: observed}],
+    }).then(() => null, (cause) => cause);
+
+    assert.ok(error instanceof SmalltalkStaleMethodPositionError,
+      `an absent position must be stale; got ${error?.name}: ${error?.message}`);
+    assert.equal(await methodBlockRef({...options, selector: ABSENT}), null,
+      'and it must STILL be absent — no definition happened');
+    assert.equal((await runtime.images.listRecords('app')).length, before.length,
+      'no record was written');
+    await answers(runtime, GUARDED, 1, 'the existing method is untouched');
+  });
+});
+
 // Error boundary and input
 // ---------------------------------------------------------------------------------------------
 
