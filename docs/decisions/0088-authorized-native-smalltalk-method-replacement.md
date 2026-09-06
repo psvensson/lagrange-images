@@ -1,7 +1,7 @@
 # ADR 0088: Authorized native Smalltalk method replacement
 
 Status: implemented
-Proven by: test/smalltalk-authorized-method-replacement.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js, test/smalltalk-replacement-lane.test.js
+Proven by: test/smalltalk-authorized-method-replacement.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js, test/smalltalk-replacement-lane.test.js, test/cuis-json-native-import-real.test.js
 
 ## Problem
 
@@ -318,9 +318,101 @@ scoped contention error re-thrown unmapped; the sealed-dictionary refusal escapi
 target verdict forwarding the owner diagnostic as a `cause`; and the non-semantic-failure narrowing
 removed.
 
+`test/cuis-json-native-import-real.test.js` (real pinned upstream lane,
+`LAGRANGE_OPENSMALLTALK_INTEGRATION=1`) is the CUIS-ORIGIN ACCEPTANCE, slice D of bead
+`lagrange-images-qax`. Its subject is the genuine pinned upstream method `Json>>ctorMap`, taken from
+the canonical `smalltalk/cuis-semantic-export-v2` manifest that this file's own real toolchain build
+produced and asserted against its upstream source. It is imported at the minimum native scope, and
+the setter `ctorMap:` is deliberately left OUT of that scope so nothing in the test can assign the
+instance variable the accessor reads: revision A's answer is therefore MEASURED — this image's `nil`
+on a freshly allocated receiver — rather than manufactured. A stays the unedited upstream method
+because the manifest identity and byte-exact source are asserted and nothing between the import and
+the first read writes to that position; the measurement does not establish that and is not asked to.
+`nil` is the image's universal default, so the measurement is fenced on both sides — the receiver is
+asserted to be an instance of the imported class, and an unimplemented selector sent to that same
+receiver is required to RAISE — which rules out a send that never dispatched and a receiver of the
+wrong class. It does NOT discriminate the upstream accessor from another nil-answering body in the
+same lane, measured by substituting one. The claim it supports is therefore the narrow one: A is the
+current imported `ctorMap` binding, and an ordinary imported Json receiver dispatches it and answers
+nil. The toolchain runtime is closed
+before the native one exists, and both provider registries are asserted empty BEFORE and AFTER the
+sequence. Scope that second assertion honestly: these are the provider REGISTRIES, so what it rules
+out is a Cuis provider having been registered and used through this runtime — which is the only route
+the seams under test have to one — and it is paired with a scan showing the native image holds no
+Cuis-representation artifact.
+
+The sequence: an ordinary native `Json` allocated through the ordinary `basicNew` protocol, with
+every A/B/C behaviour claim made by SENDING `ctorMap` to that receiver through normal dispatch and
+never by invoking a Block directly; A read through the public read-for-update, whose result is
+asserted to be exactly the ADR 0087 description plus a token; a competing editor replacing A with
+`[ ^ 11 ]` through the trusted Images-native owner path NAMING NO LANE, so B's lane can only come
+from decision 6's observed-revision rule; the public writer then refused as
+`SmalltalkStaleMethodPositionError` on A's now-overtaken token; a fresh read of B yielding a
+different token; the public replacement to `[ ^ 22 ]` answering the frozen one-key receipt under
+exactly one `object/write` demand on the declaring class; and C discovered by a FRESH authorized read
+rather than predicted from the receipt. A and B remain addressable, unchanged immutable revisions
+throughout; `descriptor.source` is still `null` and the supplied source appears nowhere in the
+description; and no grant, the full
+ADR 0087 read authority that minted the token, `object/write` on the current revision and
+`object/write` on the superseded revisions are each refused with the same single class-write demand,
+so neither a token, a Block read, a class read nor possession of refs conveys write.
+
+WHAT THE COMPILATION SPY THERE DOES AND DOES NOT SHOW, because the weaker reading is the easy one
+and this file states it rather than trading on it. `compilation.compileArtifact` is the CODE-ARTIFACT
+admission point, not the semantic source compiler, so an empty record means no replacement artifact
+was produced for a doomed call. It is NOT the instrument that orders the stale verdict against
+compilation: MEASURED on this path, deleting decision 5's pre-compilation admission leaves that
+assertion green, because the class builder still refuses at plan time and plan time is before any
+code artifact exists (bead `lagrange-images-qax.2`'s first recorded gap, confirmed against real
+imported material). The instrument that does separate the two orderings is the VERDICT under an
+UNCOMPILABLE source, which the acceptance also demands of the same overtaken token; with the
+admission deleted it answers the compiler's rejection instead of staleness. The spy is kept for what
+it truthfully says, and a successful replacement through the same instrumented service records a
+compilation, so it is not a spy that could never fire. That leg in turn rests on the source really
+being uncompilable, which the acceptance pins in its own fixture rather than borrowing from another
+file: the same source under a FRESH, VALID token is refused as a source rejection and not as
+staleness, and the binding does not move.
+
+Every revision A -> B -> C is proven WASM TWICE OVER: by the lane this substrate recorded on the
+Block, and by resolving the function artifact that Block is BOUND TO down to its module's
+implementation BYTES and requiring the host's own WebAssembly decoder to accept them and to export
+the artifact's declared entry as a function. The three revisions are also required to bind three
+DIFFERENT compiled programs, so "a fresh revision" is not merely a fresh id over the same code. Bead
+`lagrange-images-it3` established that a metadata label alone is satisfied by an implementation that
+merely labelled the other lane's artifact, so the label is never the whole
+claim. The lane stays out of the Environment-facing contract in the same test: the descriptor's field
+set is exactly ADR 0087's, the receipt's is one key, no key or value of any surface the consumer
+receives names a lane, and the replacement's argument set publishes none. The acceptance deliberately
+does not pin what happens to an unknown extra property: that an ignored property stays ignored is a
+fact about JavaScript destructuring, not a semantic guarantee, and pinning it would make an accident
+contractual. The token is not exempted by claim: decision 6's lane is an input to ADR 0086 revision
+identity and therefore travels, encoded, inside the opaque Block id the token names. What is
+guaranteed is that no lane reaches the Environment as something it can read or act on, and the token
+is opaque BY CONTRACT — a distinct semantic token, not the Block locator, whose mint and parse
+operations are not public and which consumers are limited to comparing and round-tripping. That is
+not a secrecy claim: someone who reimplemented the internal format could construct one, and the
+acceptance's requirement that the token is neither the Block ref nor contains it is evidence about
+what the token IS, not proof that deriving one is impossible.
+
+Deliberate breaks for the acceptance, each applied, run and reverted, and each reddening its own
+intended proof: revision A manufactured during setup rather than imported — which reddens the
+MEASURED answer only when the manufactured A answers something other than `nil`, measured;
+the manifest edited before import (the upstream-source assertion); the token minted AFTER the
+competing replacement, so it was never stale (the stale verdict); B and C made indistinguishable
+(the winner-preservation send); the Cuis toolchain provider left registered (the before-E3 provider
+assertion); decision 5's pre-compilation admission deleted (the uncompilable-source verdict, and
+nothing else); a fresh read substituted for the caller's observation (the stale call succeeds);
+the shipped `neutral` default restored for an observed revision (B's recorded lane); a LABEL-ONLY
+WASM implementation, `metadata.lane` still `wasm` with the artifact produced by the neutral branch
+(the code artifact's representation); `object/read` demanded where the contract demands
+`object/write` (the class-write caller refused); a richer receipt carrying the new method ref (the
+frozen one-key receipt); and the execution lane published in the ADR 0087 descriptor (the
+descriptor's field set).
+
 ## Not in scope
 
 Method addition, removal, class editing, batch editing, durable native method source,
 protocol/category, a durable Cuis provenance association, a public compiler or a generic
-reconciliation API. Real Cuis-origin E3 acceptance over the pinned upstream import path is the next
-slice of bead `lagrange-images-qax`; GitHub #218 stays open until it lands.
+reconciliation API. Real Cuis-origin E3 acceptance over the pinned upstream import path has landed as
+slice D of bead `lagrange-images-qax` and is described in the Proof section; the handback on GitHub
+#218 is a separate step and no decision here depends on it.
