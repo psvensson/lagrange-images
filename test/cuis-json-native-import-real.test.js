@@ -826,7 +826,13 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     // The receiver is genuinely an instance of the imported class, and `nil` is not simply what
     // every send to it answers. Both matter because A's measured answer IS this image's `nil`: a
     // receiver of the wrong class, or a dispatch that quietly answered `nil` for anything, would
-    // otherwise satisfy the measurement below without the upstream accessor doing any work.
+    // otherwise satisfy the measurement below: a send that never dispatched, and a receiver of the
+    // wrong class. What it does NOT rule out is a different nil-answering body in the same lane —
+    // measured, by replacing A with a WASM-lane `[ ^ nil ]` stub, which leaves this green. A's
+    // provenance is carried by the manifest identity and byte-exact source above plus the absence
+    // of any intervening write, NOT by this measurement. The narrow claim here is only: A is the
+    // current imported `ctorMap` binding, and an ordinary imported Json receiver dispatches it and
+    // answers nil.
     const isInstanceOfImportedClass = await installSymmetricSmalltalkBlock({
       images: runtime.images, imageId: 'native-image', id: 'e3-class-of',
       source: '[ :receiver :aClass | receiver class == aClass ]',
@@ -1117,24 +1123,11 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     }
     assert.notEqual(tokenC, tokenB, 'and each observation mints its own token');
 
-    // The replacement ARGUMENTS name no lane either — and cannot. The seam accepts a fixed argument
-    // set, so a consumer that tried to choose one would be ignored rather than obeyed: this call
-    // supplies `lane: 'neutral'` and the position stays genuinely WASM.
-    const laneWriter = recordingRequire(runtime, [writeGrant(classRef.objectId)]);
-    assert.deepEqual(await authorizedReplaceSmalltalkMethod({
-      images: runtime.images,
-      compilation: runtime.compilation,
-      imageId: 'native-image',
-      classRef,
-      selector: 'ctorMap',
-      source: '[ ^ 44 ]',
-      expectedVersionToken: tokenC,
-      require: laneWriter,
-      lane: 'neutral',
-    }), {replaced: true});
-    const afterLaneAttempt = (await describeCurrent()).method;
-    await assertGenuinelyWasm(runtime, afterLaneAttempt, 'the revision following a caller-named lane');
-    assert.deepEqual(await sendCtorMap(), integerValue(44), 'the source was applied; only the lane request was inert');
+    // The replacement ARGUMENTS name no lane either: the seam accepts a fixed argument set and
+    // publishes no lane in it. That absence is the whole claim here — this acceptance deliberately
+    // does NOT pin what happens to an unknown extra property, because "an ignored property stays
+    // ignored" is a fact about JavaScript destructuring rather than a semantic E3 guarantee, and
+    // pinning it would turn an accident into a public contract. The vertical ends at C.
 
     // ---- 11. CUIS IS STILL ABSENT, AT THE END OF EVERYTHING --------------------------------------
     // The pair matters: step 1 proves the sequence STARTED without Cuis, and this proves nothing

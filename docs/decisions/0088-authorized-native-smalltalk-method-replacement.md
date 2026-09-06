@@ -325,10 +325,16 @@ the canonical `smalltalk/cuis-semantic-export-v2` manifest that this file's own 
 produced and asserted against its upstream source. It is imported at the minimum native scope, and
 the setter `ctorMap:` is deliberately left OUT of that scope so nothing in the test can assign the
 instance variable the accessor reads: revision A's answer is therefore MEASURED — this image's `nil`
-on a freshly allocated receiver — rather than manufactured, so A stays the unedited upstream method.
-That answer is the image's universal default, so it is fenced on both sides: the receiver is asserted
-to be an instance of the imported class, and an unimplemented selector sent to that same receiver is
-required to RAISE, so `nil` is known not to be what any send answers. The toolchain runtime is closed
+on a freshly allocated receiver — rather than manufactured. A stays the unedited upstream method
+because the manifest identity and byte-exact source are asserted and nothing between the import and
+the first read writes to that position; the measurement does not establish that and is not asked to.
+`nil` is the image's universal default, so the measurement is fenced on both sides — the receiver is
+asserted to be an instance of the imported class, and an unimplemented selector sent to that same
+receiver is required to RAISE — which rules out a send that never dispatched and a receiver of the
+wrong class. It does NOT discriminate the upstream accessor from another nil-answering body in the
+same lane, measured by substituting one. The claim it supports is therefore the narrow one: A is the
+current imported `ctorMap` binding, and an ordinary imported Json receiver dispatches it and answers
+nil. The toolchain runtime is closed
 before the native one exists, and both provider registries are asserted empty BEFORE and AFTER the
 sequence. Scope that second assertion honestly: these are the provider REGISTRIES, so what it rules
 out is a Cuis provider having been registered and used through this runtime — which is the only route
@@ -376,15 +382,21 @@ DIFFERENT compiled programs, so "a fresh revision" is not merely a fresh id over
 merely labelled the other lane's artifact, so the label is never the whole
 claim. The lane stays out of the Environment-facing contract in the same test: the descriptor's field
 set is exactly ADR 0087's, the receipt's is one key, no key or value of any surface the consumer
-receives names a lane, and a caller that supplies `lane` to the replacement is ignored rather than
-obeyed — the position it replaces stays genuinely WASM. The token is not exempted by claim: decision
-6's lane is an input to ADR 0086 revision identity and therefore travels, encoded, inside the opaque
-Block id the token names. What is guaranteed is that no lane reaches the Environment as something it
-can read or act on, and the token is opaque by contract in the first place — the acceptance also
-requires it to be neither the Block ref nor to contain it, so a consumer cannot derive one locally.
+receives names a lane, and the replacement's argument set publishes none. The acceptance deliberately
+does not pin what happens to an unknown extra property: that an ignored property stays ignored is a
+fact about JavaScript destructuring, not a semantic guarantee, and pinning it would make an accident
+contractual. The token is not exempted by claim: decision 6's lane is an input to ADR 0086 revision
+identity and therefore travels, encoded, inside the opaque Block id the token names. What is
+guaranteed is that no lane reaches the Environment as something it can read or act on, and the token
+is opaque BY CONTRACT — a distinct semantic token, not the Block locator, whose mint and parse
+operations are not public and which consumers are limited to comparing and round-tripping. That is
+not a secrecy claim: someone who reimplemented the internal format could construct one, and the
+acceptance's requirement that the token is neither the Block ref nor contains it is evidence about
+what the token IS, not proof that deriving one is impossible.
 
 Deliberate breaks for the acceptance, each applied, run and reverted, and each reddening its own
-intended proof: revision A manufactured during setup rather than imported (the MEASURED answer);
+intended proof: revision A manufactured during setup rather than imported — which reddens the
+MEASURED answer only when the manufactured A answers something other than `nil`, measured;
 the manifest edited before import (the upstream-source assertion); the token minted AFTER the
 competing replacement, so it was never stale (the stale verdict); B and C made indistinguishable
 (the winner-preservation send); the Cuis toolchain provider left registered (the before-E3 provider
