@@ -56,6 +56,29 @@ function isIdentifierPart(char) {
   return /[A-Za-z0-9_]/.test(char ?? '');
 }
 
+// The two assignment spellings a token stream can carry: native `:=` and the Cuis legacy arrow,
+// which the tokenizer keeps as the DISTINCT `legacyAssign` token below. Token-level
+// declaration/binding scans (the Cuis import adapter's bound-names analysis) must recognize both
+// through this ONE predicate rather than re-deciding the pair at every scan site.
+function isAssignmentToken(token) {
+  return token?.type === 'assign' || token?.type === 'legacyAssign';
+}
+
+// The Cuis legacy assignment arrow, measured against the pinned Cuis scanner/parser (bead
+// lagrange-images-xxm.3, oracle executed on the pinned Cuis7.9-8090 image): at a token boundary,
+// a standalone `_` token scans as the assignment arrow IFF the next character is NOT a letter,
+// digit, underscore or colon (Scanner>>xUnderscore, stamp jmv 26/Apr/2023: #leftArrow when the following
+// character's type is outside {xLetter, xDigit, xUnderscore, xColon}). Every other underscore form
+// is a Cuis-legal identifier/keyword form — `_foo`, `_7`, `__`, `foo_`, `a_b`, the `_:` keyword —
+// and stays on the ordinary identifier path, which is why `_` remains an identifier character
+// above. Measured: `a _ b` assigns 7; `a _7` SENDS the unary selector `_7`; `a_7` is ONE
+// identifier; a bare `_` is not a legal selector. The tokenizer emits the arrow as a distinct
+// token and decides nothing further: the native parser refuses it outright, and the Cuis import
+// adapter translates it to canonical `:=` at the import boundary.
+function isLegacyAssignmentArrowAt(source, index) {
+  return source[index] === '_' && !/[A-Za-z0-9_:]/.test(source[index + 1] ?? '');
+}
+
 function tokenizeSymmetricSmalltalk(source) {
   if (typeof source !== 'string') throw new TypeError('source must be text');
   const tokens = [];
@@ -197,6 +220,17 @@ function tokenizeSymmetricSmalltalk(source) {
       continue;
     }
 
+    // The measured legacy assignment arrow comes first once `_` is at a token boundary: a bare
+    // `_` NOT followed by an identifier character is never an identifier. `_foo` and friends fall
+    // through to the ordinary identifier path below, exactly as the pinned Cuis oracle answers;
+    // an underscore already reached inside `a_b` was consumed by that identifier's scan.
+    if (isLegacyAssignmentArrowAt(source, index)) {
+      const start = index;
+      index += 1;
+      push('legacyAssign', '_', start);
+      continue;
+    }
+
     if (isIdentifierStart(char)) {
       const start = index;
       index += 1;
@@ -253,6 +287,7 @@ function tokenizeSymmetricSmalltalk(source) {
 export {
   RESERVED_WORDS,
   isReservedWord,
+  isAssignmentToken,
   isNegativeIntegerLiteralAt,
   SymmetricSmalltalkSyntaxError,
   tokenizeSymmetricSmalltalk,

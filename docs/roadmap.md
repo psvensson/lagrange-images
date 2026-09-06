@@ -208,11 +208,13 @@ of classes the package itself defines — which is what an M4 restart proof has 
   send of a language-owned primitive that delegates to the existing lookup and invocation owners —
   so the unedited upstream entry point and the class-side implementation its super send names now
   import natively with Cuis gone, with no importer rewrite;
+- [x] measure and repair Cuis's legacy assignment arrow before widening name resolution (bead
+  `lagrange-images-xxm.3`): preserve the pinned oracle's legal underscore identifier forms, emit a
+  distinct token refused by direct native syntax, translate only at the Cuis adapter, share one
+  drift-free replacement plan with `String new`, and execute a real pinned YAXO setter/read-back;
 - [ ] make a natively imported class's NAME resolvable, so a package method may name a class the same
-  package declares (bead `lagrange-images-xxm.2`, the vertical's next classified RED: `unbound
-  Symmetric Smalltalk name: XMLDocument` from upstream `XMLDOMParser>>startDocument`);
-- [ ] stop silently miscompiling Cuis's legacy assignment arrow, which the refusal-shaped harness
-  structurally cannot see (bead `lagrange-images-xxm.3`);
+  package declares (bead `lagrange-images-xxm.2`, the repaired vertical's next classified RED:
+  `unbound Symmetric Smalltalk name: SAXDriver` from upstream `SAXHandler class>>on:`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;

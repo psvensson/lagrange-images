@@ -59,7 +59,9 @@ import {
 //
 // It has moved once already. The first RED was a super send (`unbound Symmetric Smalltalk name:
 // super`), repaired at the language owner by ADR 0089 / bead lagrange-images-xxm.1; the section
-// below now proves the entry point imports and records the next RED in its place.
+// below now proves the entry point imports and records the next RED in its place. The legacy-arrow
+// repair moved that RED once more: the exact same forcing scope now stops at the earlier masked
+// `SAXDriver` name in `SAXHandler class>>on:` rather than reaching `XMLDocument` later in the path.
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';
@@ -531,15 +533,16 @@ test('super works at the native language owner, not by anything at the Cuis impo
 });
 
 // ==================================================================================================
-// THE NEXT FIRST RED OF THE M4 VERTICAL, classified but deliberately NOT repaired here.
+// THE NEXT FIRST RED OF THE M4 VERTICAL, classified afresh after the legacy-arrow repair and
+// deliberately NOT repaired here.
 //
-// Walking the measured parse path one method at a time from the entry point, everything compiles
-// until `XMLDOMParser>>startDocument`, whose upstream body is `self document: XMLDocument new`. The
-// refusal is:
+// The exact forcing scope this harness used before the repair now stops earlier, at
+// `SAXHandler class>>on:`. Its upstream first statement is `driver _ SAXDriver on: aStream`.
+// Translating the arrow to canonical `:=` restores ordinary native name resolution, which refuses:
 //
-//     unbound Symmetric Smalltalk name: XMLDocument
+//     unbound Symmetric Smalltalk name: SAXDriver
 //
-// XMLDocument is IN this scope and IS imported as an ordinary native class — the class-graph proof
+// SAXDriver is IN this scope and IS imported as an ordinary native class — the class-graph proof
 // above asserts its upstream layout. What is missing is that a natively imported class's NAME never
 // becomes resolvable. The native global namespace (src/language/smalltalk-globals.js, ADR 0057/0061)
 // already owns name -> object bindings and `publishSmalltalkClassGlobals` already publishes a class
@@ -548,13 +551,15 @@ test('super works at the native language owner, not by anything at the Cuis impo
 // exists at a generic owner that needs no change at all.
 //
 // The REAL CONSUMER is unedited upstream YAXO source. Within the nine-class minimum scope alone,
-// `XMLDOMParser>>startDocument` (XMLDocument), `XMLElement>>contentString` (XMLStringNode),
+// `SAXHandler class>>on:` (SAXDriver), `XMLDOMParser>>startDocument` (XMLDocument),
+// `XMLElement>>contentString` (XMLStringNode),
 // `SAXDriver>>scope` (XMLNamespaceScope) and `XMLTokenizer>>malformedError:` (SAXMalformedException)
 // each name a class the package itself declares. M3's JSON package never did — its executable source
 // names only base-image classes — which is why this gap could not appear before now.
 //
-// Not this slice's work. It is recorded so the next slice starts from a measurement.
-const M4_NEXT_RED = /unbound Symmetric Smalltalk name: XMLDocument/;
+// Not this slice's work. It is recorded so the next slice starts from the repaired instrument's
+// measurement, not from the earlier gate's prediction.
+const M4_NEXT_RED = /unbound Symmetric Smalltalk name: SAXDriver/;
 
 // The measured parse path in causal order, from the public entry point. Every entry is upstream
 // material in the canonical manifest; `XMLTokenizer>>saxHandler:` is deliberately absent from the
@@ -572,86 +577,104 @@ const M4_PARSE_PATH = Object.freeze([
   'cuis-method/YAXO/SAXHandler/instance/driver:',
   'cuis-method/YAXO/SAXHandler/instance/startDocument',
 ]);
-const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/XMLDOMParser/instance/startDocument';
+const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/SAXHandler/class/on:';
+const M4_PATH_BEFORE_NEXT_RED = Object.freeze(
+  M4_PARSE_PATH.slice(0, M4_PARSE_PATH.indexOf(M4_NEXT_RED_METHOD)),
+);
 
-test('the M4 vertical now stops at its NEXT unsupported native semantic: a package class is not a global', {skip: !enabled, timeout: 900_000}, async () => {
+test('the repaired M4 forcing scope exposes its true next RED: SAXDriver is not a global', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
 
   const runtime = await nativeRuntime();
   try {
-    // Everything the measured path reaches BEFORE the refusal imports natively. Asserted as one
-    // scope rather than described, so "the next RED is further along" is a measurement — and one of
-    // these, `XMLDOMParser>>initialize`, is a SECOND unedited upstream super send (`super
-    // initialize.`), on the instance side this time.
-    assert.equal(
-      manifest.methods.find(({identity}) => identity === 'cuis-method/YAXO/XMLDOMParser/instance/initialize').source,
-      'initialize\n\tsuper initialize.\n\tstack _ OrderedCollection new.\n\tincremental _ false',
-    );
+    // Everything the measured path reaches BEFORE the refusal imports natively.
     await importCuisNativePackage({
       images: runtime.images,
       compilation: runtime.compilation,
       imageId: 'native-image',
       manifest,
-      scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PARSE_PATH]},
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PATH_BEFORE_NEXT_RED]},
     });
 
-    // ... and the next method on the path is where it stops.
+    // Re-run the SAME forcing scope the pre-repair instrument admitted. It now refuses at the
+    // masked name inside the first arrow-bearing method rather than reaching the later
+    // `XMLDocument` occurrence. This is the central vertical proof for the repair.
     const error = await importCuisNativePackage({
       images: runtime.images,
       compilation: runtime.compilation,
       imageId: 'native-image',
       manifest,
-      scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PARSE_PATH, M4_NEXT_RED_METHOD]},
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PARSE_PATH]},
     }).then(
-      () => assert.fail('the M4 parse path compiled past startDocument; this slice recorded that it does not'),
+      () => assert.fail('the repaired M4 forcing scope compiled past its first unresolved package class'),
       (thrown) => thrown,
     );
     assert.match(error.message, M4_NEXT_RED);
 
     // The real consumer, named, and unedited upstream source.
-    const startDocument = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
-    assert.equal(startDocument.source, 'startDocument\n\tself document: XMLDocument new.\n\tself push: self document');
+    const on = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
+    assert.equal(
+      on.source,
+      'on: aStream\n\t| driver parser |\n\tdriver _ SAXDriver on: aStream.\n\tdriver validating: true.\n\tparser _ self new driver: driver.\n\t^parser',
+    );
 
     // ... and the class really is imported rather than merely out of scope, so the refusal is about
     // NAME RESOLUTION and not about a short import scope.
-    assert.ok(M4_SCOPE_CLASSES.includes('cuis-class/YAXO/XMLDocument'));
+    assert.ok(M4_SCOPE_CLASSES.includes('cuis-class/YAXO/SAXDriver'));
     assert.ok(
-      await runtime.images.getObject('native-image', 'smalltalk/class/XMLDocument'),
-      'XMLDocument is an ordinary native class in this image',
+      await runtime.images.getObject('native-image', 'smalltalk/class/SAXDriver'),
+      'SAXDriver is an ordinary native class in this image',
     );
     // The mechanism the adapter does not use: the native global namespace publishes base classes and
     // nothing the import created.
     const globals = await globalDeclarations({images: runtime.images, imageId: 'native-image'});
     assert.ok(Object.hasOwn(globals, 'OrderedCollection'), 'base classes are published globals');
-    assert.equal(Object.hasOwn(globals, 'XMLDocument'), false, 'an imported class is not');
+    assert.equal(Object.hasOwn(globals, 'SAXDriver'), false, 'an imported class is not');
   } finally {
     await runtime.close();
   }
 });
 
-// DIAGNOSTIC, and a warning the refusal-shaped instrument above structurally cannot give. Carried
-// forward from the E3 lesson about instruments that watch the wrong thing: a harness that stops at
-// the first REFUSAL cannot see a SILENT miscompile, and there is one causally EARLIER on this path.
-//
-// 93 of YAXO's 341 methods assign with Cuis's legacy arrow (`validating _ false`). The native
-// tokenizer treats `_` as an identifier character, so `a _ b` parses as two unary sends to `a` and
-// compiles without complaint into something that means nothing like an assignment. Two of the
-// methods the parse path already imports above do exactly this. Nothing here repairs it; it is
-// measured so the next slice cannot mistake "it compiled" for "it is right".
-test('DIAGNOSTIC: the Cuis assignment arrow is silently absorbed, not refused', {skip: !enabled, timeout: 900_000}, async () => {
+// The strongest assignment proof uses the unchanged pinned application, not only a fixture.
+// `SAXHandler>>document:` is the smallest real YAXO arrow method whose remaining semantics already
+// work: it assigns one instance variable and sends nothing else. Import its ordinary getter beside
+// it, execute the setter, and read through native behavior. This proves the translated arrow did
+// not merely disappear or compile — it changed the intended native state.
+test('a real pinned YAXO arrow method executes a native assignment and reads it back', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const arrowMethods = manifest.methods.filter(({source}) => / _ /.test(source));
   assert.ok(arrowMethods.length > 50, `${arrowMethods.length} upstream methods assign with the legacy arrow`);
-  const initialize = manifest.methods.find(({identity}) => identity === 'cuis-method/YAXO/XMLTokenizer/instance/initialize');
-  assert.ok(initialize.source.includes('validating _ false'), 'and one of them is on the measured parse path');
+  const setterId = 'cuis-method/YAXO/SAXHandler/instance/document:';
+  const getterId = 'cuis-method/YAXO/SAXHandler/instance/document';
+  assert.equal(manifest.methods.find(({identity}) => identity === setterId).source, 'document: aDocument\n\tdocument _ aDocument');
+  assert.equal(manifest.methods.find(({identity}) => identity === getterId).source, 'document\n\t^document');
 
-  // The parse, at the language owner and with no Cuis material: `b _ a foo` is not an assignment.
-  const {parseSymmetricSmalltalk} = await import('../src/language/symmetric-smalltalk-parser.js');
-  const syntax = parseSymmetricSmalltalk('[ | a b | b _ a foo. b ]');
-  const [statement] = syntax.body.statements;
-  assert.notEqual(statement.kind, 'assign');
-  assert.equal(statement.kind, 'send', 'the statement is a chain of unary sends');
-  assert.equal(statement.receiver.receiver.selector, '_', '`_` became a unary selector');
+  const runtime = await nativeRuntime();
+  try {
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [setterId, getterId]},
+    });
+    const saxHandler = imported.classes.find(({identity}) => identity === 'cuis-class/YAXO/SAXHandler');
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'native-image',
+      id: 'm4-real-arrow-assignment-probe',
+      source: '[ :class | | instance | instance := class basicNew. instance document: 41. instance document ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(
+        await runtime.invocations.invokeBlock(objectRef('native-image', block.id), [saxHandler.classRef]),
+      ),
+      integerValue(41),
+      'the translated real YAXO arrow changed native state observed through ordinary native behavior',
+    );
+  } finally {
+    await runtime.close();
+  }
 });
 
 // DIAGNOSTIC, not a work queue. The epic recorded one open question — whether the canonical v2
