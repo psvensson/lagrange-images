@@ -352,16 +352,46 @@ already import natively with Cuis gone, keeping their upstream declared layouts 
 real inheritance, and exact replay is write-free. The DTD, namespace, writer and exception classes
 stay out, and with them the unmapped `Error`/`Warning` superclass identities.
 
-The first unsupported native semantic on that vertical is a **`super` send**, and the consumer is the
-entry point itself: `XMLDOMParser class>>parseDocumentFrom:` is `^(super parseDocumentFrom: aStream)
-document`. ADR 0006 deferred `super` explicitly and nothing has implemented it since, so this belongs
-to the Symmetric Smalltalk personality — not to the export and not to the import adapter. The harness
-proves that at the right seam rather than at the messenger: it also hands an ORDINARY native method
-body with no Cuis provenance to the native method compiler and gets the same refusal, while the
-identical body with `self` compiles.
+The first unsupported native semantic on that vertical was a **`super` send**, and the consumer was
+the entry point itself: `XMLDOMParser class>>parseDocumentFrom:` is `^(super parseDocumentFrom:
+aStream) document`. ADR 0006 deferred `super` explicitly and nothing had implemented it since, so it
+belonged to the Symmetric Smalltalk personality — not to the export and not to the import adapter.
+The harness proved that at the right seam rather than at the messenger: it also hands an ORDINARY
+native method body with no Cuis provenance to the native method compiler.
+
+**ADR 0089 implemented it there**, and the import adapter is unchanged by it. `super` is a reserved
+pseudo-variable and not a Value; `self` is unchanged and only lookup moves, starting above the running
+method's DEFINING Behavior. Nothing about a super send is translated, rewritten or special-cased at
+this boundary: the canonical manifest carries the source verbatim, the adapter translates the header
+faithfully, and the native compiler now has a binding for the word. The entry point and the class-side
+implementation its super send resolves to (`SAXHandler class>>parseDocumentFrom:`, in the same
+manifest and the same scope) both import natively with Cuis gone, and exact replay stays write-free.
+
+The vertical's NEXT unsupported semantic, classified and not yet repaired, is that **a natively
+imported class's NAME never becomes resolvable**:
+
+    unbound Symmetric Smalltalk name: XMLDocument
+
+from unedited upstream `XMLDOMParser>>startDocument` (`self document: XMLDocument new`). `XMLDocument`
+is in the minimum scope and IS imported as an ordinary native class; what is missing is the binding.
+The native global namespace (ADR 0057/0061) already owns name -> object bindings and
+`publishSmalltalkClassGlobals` already publishes a class as one — this adapter simply never calls it,
+so the gap is on THIS arrow with a generic mechanism that needs no change. M3's JSON package could
+never expose it: its executable source names only base-image classes. Bead
+`lagrange-images-xxm.2` owns it, including the decisions it must make about which namespace an
+imported class is published into and what a collision means.
+
+One further finding, recorded because the harness structurally cannot see it. A vertical that stops at
+the first REFUSAL is blind to a SILENT miscompile, and there is one causally earlier on this same
+path: 93 of YAXO's 341 methods assign with Cuis's legacy arrow (`validating _ false`), the native
+tokenizer treats `_` as an identifier character, and `a _ b` therefore parses as a chain of unary
+sends and compiles without complaint. Two methods already imported on the measured path do exactly
+this. Bead `lagrange-images-xxm.3` owns it and names both candidate owners — the native tokenizer
+(refuse a bare `_`) and this adapter (translate the dialect arrow, as it already does for one
+`String new` idiom) — without prejudging which.
 
 Two facts worth recording because they were predicted to block first and measurably do not — they sit
-BEHIND the `super` send on the executable vertical, and neither is scheduled by that slice:
+BEHIND all of the above on the executable vertical, and none of it is scheduled by this slice:
 
 - the canonical v2 export carries **no class-variable facts**. YAXO's `XMLTokenizer` declares four
   class variables that its class-side `initialize` builds and its tokenizer cannot scan without, and
