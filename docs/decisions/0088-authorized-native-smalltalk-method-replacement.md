@@ -1,7 +1,7 @@
 # ADR 0088: Authorized native Smalltalk method replacement
 
 Status: implemented
-Proven by: test/smalltalk-authorized-method-replacement.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js, test/smalltalk-replacement-lane.test.js, test/cuis-json-native-import-real.test.js
+Proven by: test/smalltalk-authorized-method-replacement.test.js, test/smalltalk-method-position-authority.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js, test/smalltalk-replacement-lane.test.js, test/cuis-json-native-import-real.test.js
 
 ## Problem
 
@@ -29,6 +29,12 @@ bound Block is the immutable current revision) and bead `lagrange-images-qax` su
 slices below this one: the opaque selector-position token minted by
 `authorizedReadSmalltalkMethodForUpdate` (slice B), and the class builder's `expectedCurrent`
 precondition with its rebase, staleness and contention semantics (slice C1).
+
+**Read-authority correction.** Consumer implementation later reopened #218 because both first read
+and the fresh rereads required by this ADR were circular under ADR 0087's original current-Block
+grant. ADR 0087 now owns one corrected read rule for every phase: Class `object/read` plus exact
+`smalltalk-method/read` on the stable `{imageId, Class/Metaclass, selector}` position, both checked
+before selector resolution. This ADR introduces no E3-specific bootstrap or reread grant.
 
 ## Decision
 
@@ -177,8 +183,10 @@ precondition with its rebase, staleness and contention semantics (slice C1).
 
 8. **The receipt is frozen `{replaced: true}`.** No new Block ref, no descriptor, no replacement
    token, no source. A successful replacement legitimately rebinds to a FRESH Block identity, and the
-   consumer has already committed to a fresh authorized reread as displayed truth (#218 point 4); a
-   richer receipt would only tempt it to skip that reread and patch local state from a write result.
+   consumer has already committed to a fresh authorized reread as displayed truth (#218 point 4).
+   That reread uses ADR 0087's same stable logical-position authority before and after replacement;
+   it predicts no new Block and receives no new Block grant. A richer receipt would only tempt it to
+   skip that reread and patch local state from a write result.
 
    It says "the position now denotes the source you supplied", not "a record was written": supplying
    source that means exactly what is already bound is ADR 0086 exact replay against the very state
@@ -267,7 +275,7 @@ sibling does not, with a frozen one-key receipt and a fresh Block identity; `des
 `null` afterwards; a WASM-lane method replaced, still dispatching, with the replacement still in the
 WASM lane; replacing a method with what it already means answering the same receipt write-free; denial before existence, with an implemented selector, an unimplemented one and a
 missing class producing refusals that are a pure function of caller input; class read, class read
-plus Block read, and write on the OLD BLOCK all refused, while the class write succeeds; a valid
+plus method-position read, and write on the OLD BLOCK all refused, while the class write succeeds; a valid
 current token with no grant refused; exactly one demand, issued with zero records read; wrong-scope,
 malformed, non-base64url and absent tokens all refused as token verdicts with nothing mutated; a
 stale position refused with the compiler owner never invoked, using an uncompilable source so the
@@ -353,7 +361,7 @@ exactly one `object/write` demand on the declaring class; and C discovered by a 
 rather than predicted from the receipt. A and B remain addressable, unchanged immutable revisions
 throughout; `descriptor.source` is still `null` and the supplied source appears nowhere in the
 description; and no grant, the full
-ADR 0087 read authority that minted the token, `object/write` on the current revision and
+ADR 0087 logical-position read authority that minted the token, `object/write` on the current revision and
 `object/write` on the superseded revisions are each refused with the same single class-write demand,
 so neither a token, a Block read, a class read nor possession of refs conveys write.
 

@@ -4,6 +4,10 @@ import {isObjectRef} from '../value/index.js';
 import {findSmalltalkKernel, isLocalRef, readBehavior} from './smalltalk-kernel.js';
 import {methodBindings} from './smalltalk-class-builder.js';
 import {sameRef} from './smalltalk-lookup.js';
+import {
+  SMALLTALK_METHOD_READ_OPERATION,
+  smalltalkMethodPositionResource,
+} from './smalltalk-method-position-resource.js';
 import {smalltalkMethodPositionToken} from './smalltalk-method-position-token.js';
 
 // The AUTHORIZED native Symmetric Smalltalk browsing seam (ADR 0087, bead lagrange-images-jtz,
@@ -20,7 +24,8 @@ import {smalltalkMethodPositionToken} from './smalltalk-method-position-token.js
 //   the image's nil terminator and Metaclass identity              findSmalltalkKernel   (kernel)
 //   selector -> Block bindings, representation-neutral             methodBindings        (class builder)
 //   declared instance layout                                       the instance Shape    (object model)
-//   authority operation + resource naming                          object-resource.js    (authority)
+//   object authority operation + resource naming                   object-resource.js    (authority)
+//   logical method-position authority vocabulary                   method-position resource (language)
 //
 // Nothing in this module decodes a Behavior slot id, a MethodDictionary bucket, a Block's code
 // artifact or a compiled WASM representation, and nothing here writes.
@@ -33,15 +38,17 @@ import {smalltalkMethodPositionToken} from './smalltalk-method-position-token.js
 // AUTHORITY. Two operations, two checks, no transitive authority (ADR 0039 §2):
 //
 //   class browsing   ONE `object/read` on the Class (or Metaclass) OBJECT.
-//   method browsing  that SAME class check, AND an independent `object/read` on the method's Block.
+//   method browsing  that SAME class check, AND an independent `smalltalk-method/read` on the
+//                    exact logical {image, Class/Metaclass, selector} position.
 //
 // A class's own MethodDictionary is covered by the class's single check for the same reason a
 // Project's member records are covered by the Project's (see project/working-state.js): it is the
 // Class's storage representation, sitting at an id derived from the Class, carrying no behavior edge
 // of its own (ADR 0049 decision 3), and it is not an independently addressable semantic object. The
-// Blocks it BINDS are: a Block is executable, may legitimately sit in two dictionaries, and is
-// exactly the kind of independent target ADR 0039 §2 refuses to reach by ref-following. So class
-// authority yields selector NAMES and never the method behind one.
+// Blocks it BINDS are independently addressable semantic objects. Class authority therefore yields
+// selector NAMES and never the method behind one. The method-position grant authorizes resolving
+// and reading only the CURRENT method through this semantic seam; it is not `object/read` on the
+// returned Block and cannot authorize direct inspection of that Block or a historical revision.
 //
 // Nothing is inferred from Project membership, from a class reference, or from graph reachability.
 // A superclass ref, a class-side ref and a Block ref are LOCATORS: browsing what they name requires
@@ -168,25 +175,26 @@ async function authorizedDescribeSmalltalkClass({images, imageId, classRef, requ
 
 // AUTHORIZED native method browsing.
 //
-// Two independent checks, in this order:
+// Two independent checks, in this order and BEFORE selector resolution:
 //   1. `object/read` on the CLASS object — before any existence disclosure, and the same check
 //      class browsing makes. It authorizes resolving the selector against the class's own method
 //      dictionary, which is the class's storage representation.
-//   2. `object/read` on the method's BLOCK object — before the Block is read. A Block is an
-//      independent semantic object, so class authority does not reach it.
+//   2. `smalltalk-method/read` on the exact logical {image, Class/Metaclass, selector} position.
+//      Its canonical resource is pure public vocabulary, so the caller never has to predict which
+//      immutable Block revision currently occupies the position.
 //
-// A caller holding only (1) can already see the selector, so learning "this selector exists but you
-// may not read its method" discloses nothing new; a caller holding neither learns only AuthorityError.
+// Only after BOTH checks succeed may Images resolve whether the selector exists, which Block is
+// current, or whether its edge is dangling. A denied caller therefore learns only AuthorityError.
 // ONE authorized resolution of a current method position, so the read that DESCRIBES a method and
 // the read that prepares to REPLACE one cannot assemble different revisions by accident. Everything
 // below it is the same as it has always been; factoring it is what makes "the descriptor and the
 // token describe the same resolved binding, from one binding read" a structural fact rather than a
 // convention two call sites have to keep.
 //
-// The authority sequence is ADR 0087's and is unchanged: validate caller input, authorize the
-// Class/Metaclass read, resolve, then authorize the method's Block INDEPENDENTLY. Class-read
-// authority yields selector names and never the Block behind one, and a caller denied either half
-// cannot tell an existing method from a missing one.
+// This is ADR 0087's corrected authority sequence: validate caller input, authorize the
+// Class/Metaclass read, authorize the stable logical position independently, then resolve. Class
+// authority yields selector names and never the method behind one. A method-position grant follows
+// that position across immutable revisions until revoked, but confers no generic Block authority.
 async function authorizedMethodPosition({images, imageId, classRef, selector, require, operation}) {
   requiredText(imageId, 'imageId');
   assertLocalClassRef(classRef, imageId, operation);
@@ -194,6 +202,10 @@ async function authorizedMethodPosition({images, imageId, classRef, selector, re
   assertRequire(require, operation);
 
   require(readDemand(imageId, classRef.objectId));
+  require({
+    operation: SMALLTALK_METHOD_READ_OPERATION,
+    resource: smalltalkMethodPositionResource(imageId, classRef, selector),
+  });
 
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
@@ -206,10 +218,8 @@ async function authorizedMethodPosition({images, imageId, classRef, selector, re
     throw new TypeError(`native class ${classRef.imageId}/${classRef.objectId} does not implement ${selector}`);
   }
 
-  require(readDemand(binding.method.imageId, binding.method.objectId));
-
   // The binding is only truthful if the Block it names is actually there; a dangling method edge is
-  // corrupt graph state, correctly disclosed to a caller authorized for both ends of it.
+  // corrupt graph state, correctly disclosed to a caller authorized for the class and position.
   const block = await images.getBlock(binding.method.imageId, binding.method.objectId);
   if (!block) {
     throw new TypeError(
@@ -239,7 +249,7 @@ async function authorizedMethodPosition({images, imageId, classRef, selector, re
   });
 }
 
-// ADR 0087, unchanged and gaining nothing. It answers the canonical method description and no
+// ADR 0087's canonical method description, gaining nothing. It answers no
 // version token: a reader is not a writer, and a caller that only wants to look at a method has no
 // business holding a replacement assumption.
 async function authorizedDescribeSmalltalkMethod({images, imageId, classRef, selector, require} = {}) {
@@ -256,8 +266,8 @@ async function authorizedDescribeSmalltalkMethod({images, imageId, classRef, sel
 // minted from the very binding the descriptor reports, not from a second read of the same position.
 // That matters because the whole point of the token is to represent what the caller was shown.
 //
-// It demands exactly what ADR 0087's method read demands and nothing more. Reading in order to
-// write is still only reading, so this grants no write authority and asserts none; the replacement
+// It demands exactly what ADR 0087's corrected method read demands and nothing more. Reading in
+// order to write is still only reading, so this grants no write authority and asserts none; the replacement
 // operation authorizes its own write when it is called. `descriptor.source` stays `null` — this
 // seam is not a source editor and E3 is replacement from explicitly supplied source.
 async function authorizedReadSmalltalkMethodForUpdate({images, imageId, classRef, selector, require} = {}) {

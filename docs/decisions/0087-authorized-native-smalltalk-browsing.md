@@ -1,7 +1,7 @@
 # ADR 0087: authorized native Smalltalk browsing
 
 Status: implemented
-Proven by: test/smalltalk-authorized-browse.test.js, test/cuis-json-native-import-real.test.js, test/portable-runtime-environment-api.test.js
+Proven by: test/smalltalk-authorized-browse.test.js, test/smalltalk-method-position-authority.test.js, test/cuis-json-native-import-real.test.js, test/portable-runtime-environment-api.test.js
 
 ## Problem
 
@@ -23,6 +23,15 @@ method inspector — cannot consume any of it through a truthful authorized sema
 The failure mode to avoid is specific: an Environment pinned before M1 learning the kernel's storage
 conventions (Behavior slot ids, `<classId>/methods`, MethodDictionary buckets, `_version`), or a
 Cuis-shaped browsing lane appearing beside the native one.
+
+**Corrected 2026-09-06 by bead `lagrange-images-31l`, after consumer implementation reopened GitHub
+#218.** The originally implemented decision 3 required `object/read` on the current Block. That was
+circular: before a method read the public consumer knows only `{imageId, classRef, selector}`, while
+the current Block identity is disclosed only by the read after both demands succeed. Object
+Environment therefore had to cheat by calling `boundBlockFor` for first reads and predicting future
+revision grants for rereads. The same defect affected first read, reread after successful replacement
+and reread after staleness. The correction below records the superseding rule explicitly; it does not
+reinterpret the old rule as if it had always worked.
 
 ## Decision
 
@@ -52,8 +61,9 @@ Cuis-shaped browsing lane appearing beside the native one.
    `readBehavior` (Class/Metaclass identity, superclass, methods edge, instance-shape edge),
    `findSmalltalkKernel` (the image's `nil` terminator and `Metaclass` identity), the class builder's
    `methodBindings` (selector -> Block, representation-neutral across both ADR 0049 dictionary
-   formats), the instance Shape (layout), and `authority/object-resource.js` (operation and resource
-   name). The seam never decodes a Behavior slot id, a MethodDictionary bucket, a Block's code
+   formats), the instance Shape (layout), `authority/object-resource.js` (object operation/resource
+   naming), and `smalltalk-method-position-resource.js` (logical-position operation/resource naming).
+   The seam never decodes a Behavior slot id, a MethodDictionary bucket, a Block's code
    artifact or a compiled WASM representation. One consequence at the class builder: its
    single-selector reader and its selector enumerator are now ONE implementation
    (`selectorBindings`), so "which selectors does this class implement" and "which Block does this
@@ -63,25 +73,37 @@ Cuis-shaped browsing lane appearing beside the native one.
 
    ```text
    class browsing    object/read on the Class (or Metaclass) OBJECT
-   method browsing   that same class check, AND object/read on the method's Block
+   method browsing   that same class check, AND smalltalk-method/read on the exact
+                     {imageId, Class/Metaclass, selector} logical position
    ```
 
    A class's own MethodDictionary is covered by the class's single check, for the reason a Project's
    member records are covered by the Project's (ADR 0080 / `project/working-state.js`): it sits at an
    id derived from the Class, carries no behavior edge of its own (ADR 0049 decision 3) and is not an
-   independently addressable semantic object — it is the Class's storage representation. The Blocks
-   it BINDS are the opposite: a Block is executable and may legitimately sit in two dictionaries, so
-   it is exactly the independent target ADR 0039 §2 refuses to reach by ref-following. Class
-   authority therefore yields selector NAMES and never the method behind one. Authority is never
-   inferred from Project membership, from a class reference, or from graph reachability: the
-   `superclass`, `classSide` and `method` refs a description hands out are LOCATORS, and browsing what
-   they name needs that object's own grant.
+   independently addressable semantic object — it is the Class's storage representation. Class
+   authority therefore yields selector NAMES and never the method behind one.
 
-4. **Authorization strictly precedes existence disclosure.** Each entry point validates
-   caller-supplied input (which touches no record), then requires, then reads. A denied caller cannot
-   distinguish an existing class or method from a missing one — both are `AuthorityError`. Existence,
-   malformed records and dangling edges are disclosed only to a caller already authorized for the
-   object concerned.
+   A method-position grant independently authorizes reading the CURRENT binding at exactly one
+   semantic position through this seam. Its canonical resource is a pure, injective function of the
+   public locator, so it can be granted before existence or revision identity is known. It follows
+   that logical position across immutable Block revisions until revoked, which makes first read,
+   successful-replacement reread and stale-conflict reread one contract rather than three bootstrap
+   APIs. Exact-match `authority-grant/v0` is unchanged: image, Class versus Metaclass, class object id
+   and selector all remain distinct resource identity.
+
+   This grant is NOT `object/read` on the Block occupying the position. The returned Block ref
+   remains a locator; direct generic inspection of that independently addressable Block still needs
+   its own `object/read`, and the position grant authorizes neither another selector/class/side/image
+   nor a historical or superseded revision addressed as an object. Authority is never inferred from
+   Project membership, a class reference, graph reachability, a returned ref or a version token.
+
+4. **Authorization strictly precedes existence disclosure.** Class reads validate caller input,
+   require Class `object/read`, then read. Method reads validate caller input, require Class
+   `object/read`, require exact `smalltalk-method/read`, and only then read the kernel, Behavior,
+   MethodDictionary/current binding or Block. In particular the selector is not resolved between
+   the two checks. A caller lacking position authority cannot distinguish present, absent, dangling
+   or A-versus-B-current — all are `AuthorityError`. Naming a resource for an unimplemented selector
+   is not evidence that it exists.
 
 5. **`selectors` is the class's OWN protocol, never an inheritance walk.** An inherited selector is
    the declaring class's fact; reporting it here would let one grant speak for objects the caller was
@@ -109,8 +131,10 @@ Cuis-shaped browsing lane appearing beside the native one.
 > canonical descriptor those seams answer.
 
 8. **Public through the existing roots.** `src/language/index.js` (hence `src/runtime.js`) and
-   `src/portable-runtime.js` re-export the exact owner functions, never wrappers, so a portable
-   Object Environment needs no private `src/...` path.
+   `src/portable-runtime.js` re-export the exact owner functions and the canonical
+   `smalltalk-method/read` / `smalltalkMethodPositionResource(...)` vocabulary, never wrappers. A
+   portable host can name authority from the semantic locator but cannot resolve the current binding,
+   mint/parse a token, derive a revision identity or mint a Block grant.
 
 ## Alternatives rejected
 
@@ -122,9 +146,15 @@ Cuis-shaped browsing lane appearing beside the native one.
 - **Reconstruct method source by walking the Block's code-artifact `derivedFrom` chain.** That makes
   the browsing seam a second CodeArtifact decoder, contradicting decision 2, and would report a
   source for some methods and not others by accident of which installer wrote them.
-- **Let class authority cover the method Blocks it binds ("the methods are the class's own").** They
-  are not: a Block is independently addressable and independently shareable. Rejected as the
-  transitive ref-follow ADR 0039 §2 exists to prevent.
+- **Let class authority cover every method it binds.** Rejected as transitive authority: selector
+  browsing and semantic method reading remain independently authorized.
+- **Require the current Block's `object/read` for semantic browsing.** This was the original decision
+  and is now rejected because it requires the consumer to know a revision identity that only the
+  authorized read may disclose. Direct Block reads still require it.
+- **Put authority in the version token or replacement receipt, or return the next Block from the
+  write.** Concurrency data is zero authority, and displayed truth remains a fresh authorized read.
+- **Widen `authority-grant/v0` with wildcards, hierarchy, enumeration or hidden derivation.** The
+  stable exact semantic resource satisfies the required flows without weakening exact-match grants.
 - **Include inherited selectors so a browser sees the full protocol at once.** Requires reading every
   ancestor under one grant. The browser composes the walk from separately authorized reads instead.
 - **Persist a durable Cuis provenance association now, so `provenance` has something to carry.** No
@@ -138,14 +168,22 @@ selector order (defined out of alphabetical order, described in it); complete na
 `layout: null` for a Metaclass versus `{instanceVariables: [], indexed: 'none'}` for a class
 declaring none; the class side browsed through the same function with `side: 'class'`; inherited
 protocol absent from the subclass and present on the declaring class; class authority yielding the
-selector list but refused for the Block, the Block grant alone refused because the class check comes
-first, and both grants together succeeding; `superclass`/`classSide` refs refused under the
+selector list but refused for the method, the position grant alone refused because the class check
+comes first, and both semantic grants together succeeding; `superclass`/`classSide` refs refused under the
 subclass's grant and accepted under their own; `object/write` refused as a read; denied existing and
 missing classes, and denied implemented and unimplemented selectors, all indistinguishable, while an
 authorized reader learns not-found; malformed input refused before any read; a Cuis-imported class
 and a hand-declared one producing descriptions equal except for name and refs, with no Cuis identity
 and no storage-layout token anywhere; and the seam's static module closure carrying no Cuis,
 toolchain, foreign-runtime, Project or Environment module and no `node:` import.
+
+`test/smalltalk-method-position-authority.test.js`: injective resource naming under adversarial
+separator and Unicode text; one real `AuthorityService` context containing only pre-nameable Class
+and logical-position grants performing first read A, public replacement A -> B and fresh discovery
+of B, then stale B conflict and fresh discovery of C; no A/B/C Block grant; direct `object/read` of
+A denied; the receipt remaining exactly `{replaced: true}`; selector, class, instance/class side and
+image isolation; position-only authority denied at the class check; class-only authority denied
+before any graph read; and a valid token conveying no reread authority.
 
 `test/cuis-json-native-import-real.test.js` (real pinned upstream lane, `LAGRANGE_OPENSMALLTALK_INTEGRATION=1`):
 the M1-imported real `Json` class and the M2-imported real `Json>>ctorMap` accessor browse through
@@ -154,9 +192,9 @@ ref equality against the import result, the real declared layout `['stream', 'ct
 identity, package name, export format or storage-layout token in either description.
 
 Deliberate breaks, each turning exactly one intended proof red and then reverted: dropping the
-Block's `require` (the class-versus-method authority test); moving the class `require` after the
-existence read (the no-existence-oracle test); adding the instance-Shape id to `layout` (the
-storage-layout scans).
+position `require` (the class-versus-method and exact-scope tests); restoring current-Block bootstrap
+(the A/B/C context has no Block grant); resolving before position authorization (the zero-graph-read
+instrument); adding the instance-Shape id to `layout` (the storage-layout scans).
 
 ## Not in scope
 

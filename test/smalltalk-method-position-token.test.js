@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   OBJECT_READ_OPERATION,
   OBJECT_WRITE_OPERATION,
+  SMALLTALK_METHOD_READ_OPERATION,
   authorizedDescribeSmalltalkMethod,
   authorizedReadSmalltalkMethodForUpdate,
   createRuntime,
@@ -13,6 +14,7 @@ import {
   objectRef,
   objectResource,
   reconcileMethodsFromSource,
+  smalltalkMethodPositionResource,
 } from '../src/runtime.js';
 // Deliberately imported from the owning module, NOT from a public root: minting and parsing a
 // token are the owner's business, and a caller may only compare and round-trip one. If these ever
@@ -56,29 +58,32 @@ async function image() {
   return runtime;
 }
 
-// A `require` granting exactly the listed object/read demands and nothing else.
-function readerFor(runtime, objectIds) {
+const classReadGrant = (classObjectId) => ({
+  operation: OBJECT_READ_OPERATION,
+  resource: objectResource('app', classObjectId),
+});
+
+const positionReadGrant = (classObjectId, selector) => ({
+  operation: SMALLTALK_METHOD_READ_OPERATION,
+  resource: smalltalkMethodPositionResource('app', objectRef('app', classObjectId), selector),
+});
+
+// A `require` granting exactly the public semantic reads for one method position and nothing else.
+function readerFor(runtime, classObjectId, selector, {classRead = true, positionRead = true} = {}) {
+  const grants = [];
+  if (classRead) grants.push(classReadGrant(classObjectId));
+  if (positionRead) grants.push(positionReadGrant(classObjectId, selector));
   const context = runtime.authority.issue({
     principal: 'e3-probe',
-    grants: objectIds.map((objectId) => ({
-      operation: OBJECT_READ_OPERATION,
-      resource: objectResource('app', objectId),
-    })),
+    grants,
   });
   return (demand) => runtime.authority.require(context, demand);
-}
-
-async function grantsFor(runtime, classObjectId, selector) {
-  const method = await methodBlockRef({
-    images: runtime.images, imageId: 'app', classRef: objectRef('app', classObjectId), selector,
-  });
-  return [classObjectId, method.objectId];
 }
 
 test('the read for update answers exactly the ADR 0087 descriptor, plus a token', async () => {
   const runtime = await image();
   try {
-    const require = readerFor(runtime, await grantsFor(runtime, CLASS_ID, 'answer'));
+    const require = readerFor(runtime, CLASS_ID, 'answer');
     const args = {images: runtime.images, imageId: 'app', classRef: objectRef('app', CLASS_ID), selector: 'answer', require};
 
     const described = await authorizedDescribeSmalltalkMethod(args);
@@ -108,7 +113,7 @@ test('a token is refused for any position other than the one it was issued for',
       imageId: 'app',
       classRef,
       selector: 'answer',
-      require: readerFor(runtime, await grantsFor(runtime, CLASS_ID, 'answer')),
+      require: readerFor(runtime, CLASS_ID, 'answer'),
     });
 
     // Its own position parses.
@@ -162,13 +167,12 @@ test('the token is not the Block ref and carries no storage version', async () =
   const runtime = await image();
   try {
     const classRef = objectRef('app', CLASS_ID);
-    const [classObjectId, methodObjectId] = await grantsFor(runtime, CLASS_ID, 'answer');
     const {descriptor, versionToken} = await authorizedReadSmalltalkMethodForUpdate({
       images: runtime.images,
       imageId: 'app',
       classRef,
       selector: 'answer',
-      require: readerFor(runtime, [classObjectId, methodObjectId]),
+      require: readerFor(runtime, CLASS_ID, 'answer'),
     });
 
     assert.notDeepEqual(versionToken, descriptor.method, 'a token is not a ref');
@@ -189,7 +193,7 @@ test('the token is not the Block ref and carries no storage version', async () =
       'the token is exactly a function of the position and its observed revision',
     );
     // ... and those storage facts really do exist to have leaked, so the assertion is not vacuous.
-    const behavior = await runtime.images.getObject('app', classObjectId);
+    const behavior = await runtime.images.getObject('app', CLASS_ID);
     const dictionaryRef = behavior.slots['behavior-methods'];
     const dictionary = await runtime.images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
     assert.equal(typeof dictionary._version, 'number');
@@ -212,7 +216,7 @@ test('the token follows the position revision, and an unrelated selector does no
       imageId: 'app',
       classRef,
       selector: 'answer',
-      require: readerFor(runtime, await grantsFor(runtime, CLASS_ID, 'answer')),
+      require: readerFor(runtime, CLASS_ID, 'answer'),
     }));
 
     const first = await read();
@@ -254,30 +258,35 @@ test('the token follows the position revision, and an unrelated selector does no
 });
 
 // AUTHORITY. Reading in order to write is still only reading: this demands exactly what ADR 0087's
-// method read demands — the Class read and, independently, the method's Block read — and it grants
+// method read demands — the Class read and, independently, the logical position read — and it grants
 // nothing. In particular holding a token is not authority to do anything.
 test('the read for update demands the same two independent reads and no write', async () => {
   const runtime = await image();
   try {
     const classRef = objectRef('app', CLASS_ID);
-    const [classObjectId, methodObjectId] = await grantsFor(runtime, CLASS_ID, 'answer');
     const args = {images: runtime.images, imageId: 'app', classRef, selector: 'answer'};
 
-    // Class-read authority alone is not enough: the Block is an independent object.
+    // Class-read authority alone is not enough: the logical position has independent authority.
     await assert.rejects(
-      authorizedReadSmalltalkMethodForUpdate({...args, require: readerFor(runtime, [classObjectId])}),
+      authorizedReadSmalltalkMethodForUpdate({
+        ...args, require: readerFor(runtime, CLASS_ID, 'answer', {positionRead: false}),
+      }),
       (error) => error?.name === 'AuthorityError',
       'class authority must not yield the Block',
     );
-    // Neither is Block authority alone.
+    // Neither is method-position authority alone: the class check is independent and first.
     await assert.rejects(
-      authorizedReadSmalltalkMethodForUpdate({...args, require: readerFor(runtime, [methodObjectId])}),
+      authorizedReadSmalltalkMethodForUpdate({
+        ...args, require: readerFor(runtime, CLASS_ID, 'answer', {classRead: false}),
+      }),
       (error) => error?.name === 'AuthorityError',
     );
     // A denied caller cannot distinguish an existing method from a missing one.
     for (const selector of ['answer', 'neverImplemented']) {
       await assert.rejects(
-        authorizedReadSmalltalkMethodForUpdate({...args, selector, require: readerFor(runtime, [])}),
+        authorizedReadSmalltalkMethodForUpdate({
+          ...args, selector, require: readerFor(runtime, CLASS_ID, selector, {classRead: false, positionRead: false}),
+        }),
         (error) => error?.name === 'AuthorityError',
       );
     }
@@ -287,10 +296,7 @@ test('the read for update demands the same two independent reads and no write', 
     const demands = [];
     const context = runtime.authority.issue({
       principal: 'e3-probe',
-      grants: [classObjectId, methodObjectId].map((objectId) => ({
-        operation: OBJECT_READ_OPERATION,
-        resource: objectResource('app', objectId),
-      })),
+      grants: [classReadGrant(CLASS_ID), positionReadGrant(CLASS_ID, 'answer')],
     });
     await authorizedReadSmalltalkMethodForUpdate({
       ...args,
@@ -299,7 +305,10 @@ test('the read for update demands the same two independent reads and no write', 
         return runtime.authority.require(context, demand);
       },
     });
-    assert.deepEqual(demands.map(({operation}) => operation), [OBJECT_READ_OPERATION, OBJECT_READ_OPERATION]);
+    assert.deepEqual(
+      demands.map(({operation}) => operation),
+      [OBJECT_READ_OPERATION, SMALLTALK_METHOD_READ_OPERATION],
+    );
     assert.equal(demands.some(({operation}) => operation === OBJECT_WRITE_OPERATION), false, 'reading is not writing');
   } finally {
     await runtime.close();
@@ -317,7 +326,7 @@ test('the descriptor and the token describe the same resolved binding', async ()
       imageId: 'app',
       classRef,
       selector: 'answer',
-      require: readerFor(runtime, await grantsFor(runtime, CLASS_ID, 'answer')),
+      require: readerFor(runtime, CLASS_ID, 'answer'),
     });
     assert.deepEqual(
       parseSmalltalkMethodPositionToken(versionToken, {imageId: 'app', classRef, selector: 'answer'}),
@@ -343,7 +352,7 @@ test('the descriptor and the token describe the same resolved binding', async ()
       imageId: 'app',
       classRef,
       selector: 'answer',
-      require: readerFor(runtime, await grantsFor(runtime, CLASS_ID, 'answer')),
+      require: readerFor(runtime, CLASS_ID, 'answer'),
     });
     assert.notDeepEqual(moved.descriptor.method, descriptor.method, 'the binding really moved');
     assert.notEqual(moved.versionToken, versionToken, 'so the token moved too');
@@ -393,7 +402,7 @@ test('the descriptor and the token come from ONE resolution, not two that agree'
       imageId: 'app',
       classRef,
       selector: 'answer',
-      require: readerFor(runtime, await grantsFor(runtime, CLASS_ID, 'answer')),
+      require: readerFor(runtime, CLASS_ID, 'answer'),
     });
 
     // The kernel record is deliberately excluded, and only it: `findSmalltalkKernel` is
@@ -437,7 +446,7 @@ test('a class-side position is its own position, distinct from the instance side
       imageId: 'app',
       classRef: ref,
       selector: 'answer',
-      require: readerFor(runtime, await grantsFor(runtime, id, 'answer')),
+      require: readerFor(runtime, id, 'answer'),
     });
     const instance = await readSide(classRef, CLASS_ID);
     const klass = await readSide(metaclassRef, METACLASS_ID);

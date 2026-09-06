@@ -281,7 +281,9 @@ class's method dictionary binds.
 The seam composes owners rather than decoding records: `readBehavior` and `findSmalltalkKernel` for
 class identity and the kernel's `nil`/`Metaclass`, the class builder's `methodBindings` for
 representation-neutral selector bindings, the instance Shape for layout, and
-`authority/object-resource.js` for the operation and resource name. Behavior slot ids,
+`authority/object-resource.js` for Class object authority plus
+`smalltalk-method-position-resource.js` for the public logical-position operation/resource name.
+Behavior slot ids,
 MethodDictionary representation/buckets/tally/seal, backend `_version`, instance-Shape ids, a
 method's code artifact or compiled WASM representation, Spur/Cuis object identity and the Cuis
 import adapter's transient mappings all stay behind it.
@@ -290,19 +292,26 @@ Authority is two independent checks, and neither is inherited from the other:
 
 ```text
 class browsing    object/read on the Class (or Metaclass) OBJECT
-method browsing   that same class check, AND object/read on the method's Block
+method browsing   that same class check, AND smalltalk-method/read on the exact
+                  {imageId, Class/Metaclass, selector} logical position
 ```
 
 A class's own MethodDictionary is covered by the class's single check — it is the Class's storage
 representation, at an id derived from the Class, with no behavior edge of its own — for the same
-reason a Project's member records are covered by the Project's read. The Blocks it BINDS are not:
-a Block is an independent, executable object that may legitimately sit in two dictionaries, so class
-authority yields selector NAMES and never the method behind one. A `superclass`, `classSide` or
-`method` ref in a description is a locator; browsing what it names needs that object's own grant, and
-nothing is inferred from Project membership or graph reachability.
+reason a Project's member records are covered by the Project's read. Class authority therefore
+yields selector NAMES and never the method behind one. The method-position resource is constructed
+purely and injectively from the public locator, discloses no existence, and remains stable while an
+immutable Block revision changes. It authorizes only the CURRENT method at that exact position
+through this semantic seam. It does not authorize another selector/class/side/image, a superseded
+revision, or direct generic reading of the returned Block. A `superclass`, `classSide` or `method` ref
+in a description is still a locator; direct browsing needs that object's own grant, and nothing is
+inferred from Project membership or graph reachability.
 
-Every entry point validates caller-supplied input, then authorizes, then reads. A denied caller
-therefore cannot tell an existing class or method from a missing one — both are `AuthorityError`.
+Class browsing validates input, requires Class `object/read`, then reads. Method browsing validates
+input, requires Class `object/read`, requires exact logical-position `smalltalk-method/read`, and only
+then resolves the selector or reads any graph record. A denied caller therefore cannot tell an
+existing, missing or dangling method position, or which revision is current — all are
+`AuthorityError`.
 
 `source` and `provenance` are `null` today, and that is a truthful answer rather than a placeholder:
 the class builder installs a method's semantic program without retaining the text it was compiled
@@ -326,7 +335,9 @@ authorizedReplaceSmalltalkMethod({images, compilation, imageId, classRef, select
 
 The workflow is the pair: `authorizedReadSmalltalkMethodForUpdate` answers
 `{descriptor, versionToken}`, and that token is handed back here unchanged. Both are published on
-`src/runtime.js` and `src/portable-runtime.js` as the exact owner functions.
+`src/runtime.js` and `src/portable-runtime.js` as the exact owner functions. First reads and every
+fresh reread use ADR 0087's same Class + stable logical-position read authority; they never predict
+or pre-grant the current immutable Block revision.
 
 Order is the contract, and each step exists to kill a specific failure:
 
@@ -433,6 +444,7 @@ Not representations — these appear inside artifact content as an `abi` or cont
 | `cuis-runtime-definition/v0`, `cuis-build/v0` | artifact content contracts |
 | `authority-grant/v0` | exact-match `{operation, resource}` grants; execution-time only, never durable |
 | `object-resource/v0` | injective authority resource name for an object; build only via `objectResource()` |
+| `smalltalk-method-position-resource/v0` | injective authority resource for one logical `{imageId, Class/Metaclass, selector}` position; build only via `smalltalkMethodPositionResource()` and use with `smalltalk-method/read` |
 | `object-version/v0` | opaque object-scoped optimistic-concurrency token; build only via `objectVersionToken()` |
 | `interface-composite/v0` | schema-directed envelope carrying one composite InterfaceValue as bytes; undecodable without the declared interface type. The Component lane unpacks it; the foreign-runtime lane carries the payload alone, with the host owning the header |
 

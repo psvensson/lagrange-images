@@ -12,6 +12,7 @@ import {
   CUIS_SOURCES_V1,
   OBJECT_READ_OPERATION,
   OBJECT_WRITE_OPERATION,
+  SMALLTALK_METHOD_READ_OPERATION,
   OPENSMALLTALK_CUIS_PROVIDER_ID,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
   WASM_FUNCTION_MODULE_DEPENDENCY_ROLE,
@@ -39,6 +40,7 @@ import {
   readBehavior,
   readModuleImplementationBytes,
   reconcileMethodsFromSource,
+  smalltalkMethodPositionResource,
   textValue,
 } from '../src/runtime.js';
 
@@ -300,6 +302,20 @@ function browseRequire(runtime, objectIds) {
   return (demand) => runtime.authority.require(context, demand);
 }
 
+function methodBrowseRequire(runtime, classRef, selector) {
+  const context = runtime.authority.issue({
+    principal: 'environment-e1',
+    grants: [
+      {operation: OBJECT_READ_OPERATION, resource: objectResource('native-image', classRef.objectId)},
+      {
+        operation: SMALLTALK_METHOD_READ_OPERATION,
+        resource: smalltalkMethodPositionResource('native-image', classRef, selector),
+      },
+    ],
+  });
+  return (demand) => runtime.authority.require(context, demand);
+}
+
 // Nothing about a native description may name the Cuis origin, and nothing may name storage.
 function assertOriginNeutralNativeDescription(description, label) {
   const text = JSON.stringify(description);
@@ -403,7 +419,7 @@ test('an M2-imported real Cuis method browses as an ordinary authorized native m
       .find(({selector}) => selector === 'ctorMap');
     assert.ok(binding);
 
-    // Class authority alone does not reach the method's Block: it is an independent semantic object.
+    // Class authority alone does not reach the method: its logical position is independently read.
     await assert.rejects(
       authorizedDescribeSmalltalkMethod({
         images: runtime.images, imageId: 'native-image', classRef, selector: 'ctorMap',
@@ -417,7 +433,7 @@ test('an M2-imported real Cuis method browses as an ordinary authorized native m
       imageId: 'native-image',
       classRef,
       selector: 'ctorMap',
-      require: browseRequire(runtime, [classRef.objectId, binding.method.objectId]),
+      require: methodBrowseRequire(runtime, classRef, 'ctorMap'),
     });
     assert.equal(description.format, 'smalltalk-method-description/v1');
     assert.deepEqual(description.class, classRef);
@@ -682,6 +698,10 @@ function recordingRequire(runtime, grants) {
 
 const readGrant = (objectId) => ({operation: OBJECT_READ_OPERATION, resource: objectResource('native-image', objectId)});
 const writeGrant = (objectId) => ({operation: OBJECT_WRITE_OPERATION, resource: objectResource('native-image', objectId)});
+const positionReadGrant = (classRef, selector) => ({
+  operation: SMALLTALK_METHOD_READ_OPERATION,
+  resource: smalltalkMethodPositionResource('native-image', classRef, selector),
+});
 
 // A delegate compilation service that records every CODE ARTIFACT compilation asked of it. Prototype
 // delegation, so the owner's own instance keeps working behind it.
@@ -850,22 +870,27 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
       'an unimplemented selector RAISES rather than answering nil',
     );
 
-    // The Environment's own read authority, rebuilt for each revision: the class's own `object/read`
-    // plus the CURRENT method Block's independent one (ADR 0087 — neither half alone suffices).
-    // Learning which Block id to GRANT is Images-side fixture setup; every claim below still reads
-    // the ref back out of the authorized seam rather than from here.
-    const readerForCurrent = async () => {
-      const method = await methodBlockRef({images: runtime.images, imageId: 'native-image', classRef, selector: 'ctorMap'});
-      assert.ok(method, 'the position is bound');
-      return browseRequire(runtime, [classRef.objectId, method.objectId]);
-    };
+    // The Environment's read authority is nameable BEFORE the first method read, entirely from the
+    // public semantic locator. It stays unchanged across A -> B -> C and contains no revision id.
+    const semanticReadGrants = Object.freeze([
+      readGrant(classRef.objectId),
+      positionReadGrant(classRef, 'ctorMap'),
+    ]);
+    assert.deepEqual(semanticReadGrants, [
+      {operation: OBJECT_READ_OPERATION, resource: objectResource('native-image', classRef.objectId)},
+      {
+        operation: SMALLTALK_METHOD_READ_OPERATION,
+        resource: smalltalkMethodPositionResource('native-image', classRef, 'ctorMap'),
+      },
+    ], 'the initial authority context contains only public semantic resources');
+    const readerForPosition = () => recordingRequire(runtime, semanticReadGrants);
     const describeCurrent = async () => await authorizedDescribeSmalltalkMethod({
       images: runtime.images, imageId: 'native-image', classRef, selector: 'ctorMap',
-      require: await readerForCurrent(),
+      require: readerForPosition(),
     });
     const readCurrentForUpdate = async () => await authorizedReadSmalltalkMethodForUpdate({
       images: runtime.images, imageId: 'native-image', classRef, selector: 'ctorMap',
-      require: await readerForCurrent(),
+      require: readerForPosition(),
     });
 
     // REVISION A, as the Environment learns it: through ADR 0087's browse seam, never from the
@@ -1077,7 +1102,7 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     // public seam under the same rule. Each of these holds a VALID, CURRENT token for C.
     for (const [label, grants] of [
       ['no grant at all', []],
-      ['the full ADR 0087 read authority that minted the token', [readGrant(classRef.objectId), readGrant(c.objectId)]],
+      ['the full ADR 0087 read authority that minted the token', semanticReadGrants],
       ['object/write on the current revision instead of on the class', [writeGrant(c.objectId)]],
       ['object/write on the superseded revisions A and B', [writeGrant(a.objectId), writeGrant(b.objectId)]],
     ]) {

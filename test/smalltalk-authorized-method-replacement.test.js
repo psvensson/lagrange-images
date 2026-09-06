@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {
   OBJECT_READ_OPERATION,
   OBJECT_WRITE_OPERATION,
+  SMALLTALK_METHOD_READ_OPERATION,
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
   authorizedReadSmalltalkMethodForUpdate,
@@ -21,6 +22,7 @@ import {
   objectRef,
   objectResource,
   reconcileMethodsFromSource,
+  smalltalkMethodPositionResource,
   SEAL_METADATA_KEY,
 } from '../src/runtime.js';
 // The C2 module's own error classes are deliberately NOT published through any root — the public
@@ -107,6 +109,10 @@ const readDemand = (imageId, objectId) => ({
 const writeDemand = (imageId, objectId) => ({
   operation: OBJECT_WRITE_OPERATION, resource: objectResource(imageId, objectId),
 });
+const methodPositionReadDemand = (imageId, classRef, selector) => ({
+  operation: SMALLTALK_METHOD_READ_OPERATION,
+  resource: smalltalkMethodPositionResource(imageId, classRef, selector),
+});
 
 // The caller-side `require` closure over a freshly issued LIVE authority context, exactly as an
 // Object Environment host builds one. Every demand it is asked is recorded, so a proof can assert
@@ -122,13 +128,12 @@ function requireFor(runtime, grants) {
   return require;
 }
 
-// Everything the ADR 0087 read-for-update needs: the class's own read plus the current method
-// Block's independent read.
-async function readerFor(runtime, options, selector) {
-  const method = await methodBlockRef({...options, selector});
+// Everything the corrected ADR 0087 read-for-update needs, constructed only from the public
+// semantic locator: the class's own read plus the stable logical method-position read.
+function readerFor(runtime, options, selector) {
   return requireFor(runtime, [
     readDemand('app', options.classRef.objectId),
-    readDemand(method.imageId, method.objectId),
+    methodPositionReadDemand('app', options.classRef, selector),
   ]);
 }
 
