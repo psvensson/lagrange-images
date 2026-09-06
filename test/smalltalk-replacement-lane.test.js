@@ -121,6 +121,7 @@ test('a replacement of a WASM-lane revision is published in the WASM lane', asyn
     await defineMethodsFromSource({...options, lane: 'wasm', methods: [{selector, source: '[ ^ 1 ]'}]});
     const a = await methodBlockRef({...options, selector});
     assert.deepEqual(await laneOf(runtime, a), WASM, 'the fixture really is WASM-lane');
+    await answers(runtime, selector, 1, 'and A really executes through it');
 
     await reconcileMethodsFromSource({
       ...options, methods: [{selector, source: '[ ^ 7 ]', expectedCurrent: a}],
@@ -129,7 +130,10 @@ test('a replacement of a WASM-lane revision is published in the WASM lane', asyn
     const b = await methodBlockRef({...options, selector});
     assert.notDeepEqual(b, a, 'the position advanced to a fresh immutable revision');
     assert.deepEqual(await laneOf(runtime, b), WASM, 'and the replacement kept the observed lane');
-    await answers(runtime, selector, 7, 'native execution answers the replacement');
+    // Both halves matter. Metadata alone would pass for an implementation that LABELLED a neutral
+    // artifact `wasm`; a send alone would pass for one that migrated the representation, because
+    // the executor registry selects by representation and both lanes answer correctly.
+    await answers(runtime, selector, 7, 'and B executes correctly through that same lane');
   });
 });
 
@@ -143,6 +147,7 @@ test('a replacement of a neutral-lane revision is published in the neutral lane'
     await defineMethodsFromSource({...options, lane: 'neutral', methods: [{selector, source: '[ ^ 1 ]'}]});
     const a = await methodBlockRef({...options, selector});
     assert.deepEqual(await laneOf(runtime, a), NEUTRAL, 'the fixture really is neutral-lane');
+    await answers(runtime, selector, 1, 'and A really executes through it');
 
     await reconcileMethodsFromSource({
       ...options, methods: [{selector, source: '[ ^ 7 ]', expectedCurrent: a}],
@@ -151,7 +156,7 @@ test('a replacement of a neutral-lane revision is published in the neutral lane'
     const b = await methodBlockRef({...options, selector});
     assert.notDeepEqual(b, a);
     assert.deepEqual(await laneOf(runtime, b), NEUTRAL, 'and the replacement kept the observed lane');
-    await answers(runtime, selector, 7, 'native execution answers the replacement');
+    await answers(runtime, selector, 7, 'and B executes correctly through that same lane');
   });
 });
 
@@ -206,11 +211,12 @@ test('a replacement the observed lane cannot compile fails; it is never retried 
     const a = await methodBlockRef({...options, selector});
     assert.deepEqual(await laneOf(runtime, a), WASM);
 
+    const targets = [];
     const wasmRejected = intercepting(runtime.compilation, {
       compileArtifact: async (source, request) => {
-        if (String(request?.targetRepresentation ?? '').startsWith('wasm')) {
-          throw new TypeError('this lane refuses the replacement');
-        }
+        const target = String(request?.targetRepresentation ?? '');
+        targets.push(target);
+        if (target.startsWith('wasm')) throw new TypeError('this lane refuses the replacement');
         return await runtime.compilation.compileArtifact(source, request);
       },
     });
@@ -223,9 +229,17 @@ test('a replacement the observed lane cannot compile fails; it is never retried 
 
     assert.match(error?.message ?? '', /this lane refuses the replacement/,
       'the observed lane\'s rejection is the answer, not a diagnostic from a second attempt');
+    // The retry itself, not only its outcome: a fallback implementation would ASK the compiler for a
+    // neutral target after the WASM one refused, and this call asked for none.
+    assert.ok(targets.length > 0, 'the guarded call really did reach the compiler');
+    assert.deepEqual(targets.filter((target) => !target.startsWith('wasm')), [],
+      'no compilation was requested in the other lane');
     assert.deepEqual(await methodBlockRef({...options, selector}), a, 'the observed revision is still current');
     assert.deepEqual(await laneOf(runtime, a), WASM, 'still in its own lane');
     await answers(runtime, selector, 1, 'and still answering what it always did');
+    // NOT asserted: that nothing immutable was admitted. ADR 0086 publishes revision material before
+    // the final CAS, and this owner does not promise an empty write. The load-bearing claim is the
+    // narrow one above — the current binding did not move, and nothing in the other lane became it.
 
     // The other half of "no fallback": the identical source compiles perfectly well in the neutral
     // lane through the SAME faulted service, so the refusal above is a lane decision and not a
@@ -289,45 +303,133 @@ test('a stale position is refused on the observation, and the winner\'s lane is 
 // Refusal, never a default
 // ---------------------------------------------------------------------------------------------
 
-// WRONG IMPLEMENTATION THIS TEST MUST KILL: "default to neutral when the lane cannot be read". That
-// is the shipped behaviour wearing a preservation shape, and it would apply to exactly the records
-// whose provenance is least trustworthy. Every method binding this owner writes carries its lane, so
-// a binding without one came from a generic graph write — the same threat model
-// `assertUniqueSelectorShape` and bead lagrange-images-jtz.2 already exist for.
-test('a binding whose revision records no lane is refused rather than defaulted', async () => {
-  await withKernel(async (runtime, options) => {
-    const selector = 'laneless';
-    await defineMethodsFromSource({...options, lane: 'wasm', methods: [{selector, source: '[ ^ 1 ]'}]});
-
-    // A perfectly ordinary standalone Block — a real, dispatchable Block that simply is not a method
-    // revision this owner installed, so it records no lane. Unary arity, so dispatch really does
-    // reach it and the fixture proves the position is LIVE rather than merely occupied.
-    const planted = await installSymmetricSmalltalkBlock({
-      images: runtime.images, imageId: 'app', id: 'planted-lane-less', source: '[ 5 ]',
-    });
-    const plantedRef = objectRef('app', planted.block.id);
-    assert.equal((await runtime.images.getBlock('app', planted.block.id)).metadata?.lane, undefined);
-
-    // A generic graph write binds it at the position, keeping the dictionary itself well-formed:
-    // only the method cell of the selector's triple changes, so hash, key and tally still agree.
-    const behavior = await runtime.images.getObject('app', options.classRef.objectId);
+// WRONG IMPLEMENTATION THIS TEST MUST KILL: two of them at once. "Default to neutral when the lane
+// cannot be read" is the shipped behaviour wearing a preservation shape, and it would apply to
+// exactly the records whose provenance is least trustworthy. And reading `metadata.lane` in
+// ISOLATION would accept any Block that happens to carry the field, when what the observation has to
+// be is a native method revision OF THIS POSITION.
+//
+// Every method binding this owner writes carries `{smalltalk: 'method', selector, lane}`, so a
+// binding that does not arrived through a generic graph write — the same threat model
+// `assertUniqueSelectorShape` and bead lagrange-images-jtz.2 already exist for. Each case below is
+// bound at the position as the LIVE current binding, so nothing else refuses first.
+//
+// The ref's own shape (unpinned, local to this image) is NOT retested here: that rule belongs to
+// `readExpectedCurrentBindings`, which already applied it, and a second copy is the duplication
+// jtz.2 was closed to remove.
+test('an observation that is not a native method revision of this position is refused, never defaulted', async () => {
+  // Binds `ref` at `selector` through a generic graph write, keeping the dictionary itself
+  // well-formed: only the method cell of that selector's triple changes, so hash, key and tally
+  // still agree and the reader still sees an ordinary live binding.
+  const plant = async (runtime, classRef, selector, ref) => {
+    const behavior = await runtime.images.getObject('app', classRef.objectId);
     const dictionaryRef = behavior.slots['behavior-methods'];
     const record = await runtime.images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
     const indexed = [...record.indexed];
     let bound = 0;
     for (let index = 0; index < indexed.length; index += 3) {
       if (indexed[index + 1]?.value === selector) {
-        indexed[index + 2] = plantedRef;
+        indexed[index + 2] = ref;
         bound += 1;
       }
     }
-    assert.equal(bound, 1, 'the fixture needs exactly one occupied bucket for this selector');
+    assert.equal(bound, 1, `the fixture needs exactly one occupied bucket for ${selector}`);
     await runtime.images.putObject('app', {
       id: record.id, shape: record.shape, slots: record.slots, indexed, metadata: record.metadata,
     }, {expectedVersion: record._version});
+    return record.id;
+  };
 
-    assert.deepEqual(await methodBlockRef({...options, selector}), plantedRef, 'it really is the current binding');
-    await answers(runtime, selector, 5, 'and it really does dispatch');
+  const cases = [
+    ['absent', async (runtime, options) => {
+      // A well-formed local ref that names no record at all.
+      const ref = objectRef('app', 'smalltalk/block/never-written');
+      assert.equal(await runtime.images.getBlock('app', ref.objectId), null);
+      return ref;
+    }],
+    ['not a method', async (runtime) => {
+      // An ordinary standalone Block: real and dispatchable, but never installed as a method, so it
+      // carries none of the method metadata. Unary, so the position really does answer through it.
+      const planted = await installSymmetricSmalltalkBlock({
+        images: runtime.images, imageId: 'app', id: 'planted-not-a-method', source: '[ 5 ]',
+      });
+      assert.equal((await runtime.images.getBlock('app', planted.block.id)).metadata?.smalltalk, undefined);
+      return objectRef('app', planted.block.id);
+    }],
+    ['another selector', async (runtime, options) => {
+      // A genuine native method revision — same class, same lane, correct metadata — of a DIFFERENT
+      // selector. Only the selector check can refuse this one.
+      await defineMethodsFromSource({
+        ...options, lane: 'wasm', methods: [{selector: 'elsewhere', source: '[ ^ 6 ]'}],
+      });
+      const ref = await methodBlockRef({...options, selector: 'elsewhere'});
+      const record = await runtime.images.getBlock(ref.imageId, ref.objectId);
+      assert.deepEqual(
+        [record.metadata.smalltalk, record.metadata.selector, record.metadata.lane],
+        ['method', 'elsewhere', 'wasm'],
+        'the fixture is a real method revision, and only its SELECTOR is wrong for this position',
+      );
+      return ref;
+    }],
+  ];
+
+  for (const [label, build] of cases) {
+    await withKernel(async (runtime, options) => {
+      const selector = 'refused';
+      await defineMethodsFromSource({...options, lane: 'wasm', methods: [{selector, source: '[ ^ 1 ]'}]});
+      const observed = await build(runtime, options);
+      const dictionaryId = await plant(runtime, options.classRef, selector, observed);
+      assert.deepEqual(await methodBlockRef({...options, selector}), observed,
+        `${label}: it really is the current binding`);
+
+      const frontier = await runtime.images.frontier('app');
+      const error = await reconcileMethodsFromSource({
+        ...options, methods: [{selector, source: '[ ^ 7 ]', expectedCurrent: observed}],
+      }).then(() => null, (cause) => cause);
+
+      assert.ok(error instanceof SmalltalkMethodLaneError, `${label}: unexpected ${error?.name}: ${error?.message}`);
+      assert.equal(error.name, 'SmalltalkMethodLaneError');
+      assert.equal(error.cause, undefined, `${label}: a semantic refusal, carrying no backend cause`);
+      assert.match(error.message, new RegExp(selector), `${label}: it names the caller's own position`);
+      assert.ok(!error.message.includes(dictionaryId), `${label}: and not the method dictionary record`);
+      assert.equal(await runtime.images.frontier('app'), frontier, `${label}: the refusal published nothing`);
+      assert.deepEqual(await methodBlockRef({...options, selector}), observed, `${label}: and moved nothing`);
+    });
+  }
+});
+
+// WRONG IMPLEMENTATION THIS TEST MUST KILL: reading the lane back but ignoring an unknown value —
+// the "default to neutral because we could not tell" branch, isolated from the shape checks above so
+// that removing it reds exactly one proof.
+test('a method revision recording an unknown execution lane is refused, never defaulted', async () => {
+  await withKernel(async (runtime, options) => {
+    const selector = 'unknownLane';
+    await defineMethodsFromSource({...options, lane: 'wasm', methods: [{selector, source: '[ ^ 1 ]'}]});
+    const a = await methodBlockRef({...options, selector});
+    const record = await runtime.images.getBlock(a.imageId, a.objectId);
+    // The same Block record in every respect except a lane nothing can compile in. Written at a
+    // fresh id because revision Blocks are immutable, then bound at the position the way any other
+    // generic graph write would bind one.
+    const planted = await runtime.images.putBlock('app', {
+      id: `${record.id}/unknown-lane`,
+      code: record.code,
+      environment: record.environment,
+      metadata: {...record.metadata, lane: 'jvm'},
+    });
+    const plantedRef = objectRef('app', planted.id);
+    const behavior = await runtime.images.getObject('app', options.classRef.objectId);
+    const dictionaryRef = behavior.slots['behavior-methods'];
+    const dictionary = await runtime.images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
+    const indexed = [...dictionary.indexed];
+    for (let index = 0; index < indexed.length; index += 3) {
+      if (indexed[index + 1]?.value === selector) indexed[index + 2] = plantedRef;
+    }
+    await runtime.images.putObject('app', {
+      id: dictionary.id, shape: dictionary.shape, slots: dictionary.slots, indexed, metadata: dictionary.metadata,
+    }, {expectedVersion: dictionary._version});
+
+    assert.deepEqual(await methodBlockRef({...options, selector}), plantedRef);
+    await answers(runtime, selector, 1, 'it is a live binding that still executes');
 
     const frontier = await runtime.images.frontier('app');
     const error = await reconcileMethodsFromSource({
@@ -335,41 +437,63 @@ test('a binding whose revision records no lane is refused rather than defaulted'
     }).then(() => null, (cause) => cause);
 
     assert.ok(error instanceof SmalltalkMethodLaneError, `unexpected: ${error?.name}: ${error?.message}`);
-    assert.equal(error.name, 'SmalltalkMethodLaneError');
-    assert.equal(error.cause, undefined, 'a semantic refusal, carrying no backend cause');
-    assert.match(error.message, new RegExp(selector), 'it names the position the caller supplied');
-    assert.ok(!error.message.includes(record.id), 'and not the class\'s method dictionary record');
     assert.equal(await runtime.images.frontier('app'), frontier, 'the refusal published nothing');
     assert.deepEqual(await methodBlockRef({...options, selector}), plantedRef, 'and moved nothing');
-    await answers(runtime, selector, 5);
+    await answers(runtime, selector, 1);
   });
 });
 
-// WRONG IMPLEMENTATION THIS TEST MUST KILL: honouring a caller-named lane over the observed one,
-// which is a lane MIGRATION dressed as a replacement. Changing the execution representation of an
-// existing method is a separate operation with its own policy, and there is none; a caller that
-// names a lane at all must name the one it observed.
-test('a replacement may not be steered into a lane the observed revision is not in', async () => {
+// WRONG IMPLEMENTATION THIS TEST MUST KILL: widening the derivation until it overrules a lane an
+// internal caller actually NAMED. The rule is scoped to the case that produced it — an existing
+// revision replaced under an observation with no lane named — because that is the only case the
+// public E3 seam can reach, and because silently changing what a naming caller gets would be a
+// worse regression than the bug being fixed. `installMethods` gets its lane from exactly three
+// places, and this pins the two that must not move.
+test('a named lane is still honoured, and an unguarded call still gets the default it always had', async () => {
   await withKernel(async (runtime, options) => {
-    for (const [selector, lane, other] of [['steerWasm', 'wasm', 'neutral'], ['steerNeutral', 'neutral', 'wasm']]) {
+    for (const [selector, lane, other, otherShape] of [
+      ['namedWasm', 'wasm', 'neutral', NEUTRAL],
+      ['namedNeutral', 'neutral', 'wasm', WASM],
+    ]) {
       await defineMethodsFromSource({...options, lane, methods: [{selector, source: '[ ^ 1 ]'}]});
       const a = await methodBlockRef({...options, selector});
 
-      const frontier = await runtime.images.frontier('app');
-      const error = await reconcileMethodsFromSource({
-        ...options, lane: other, methods: [{selector, source: '[ ^ 7 ]', expectedCurrent: a}],
-      }).then(() => null, (cause) => cause);
-
-      assert.ok(error instanceof SmalltalkMethodLaneError, `${lane}: unexpected ${error?.name}: ${error?.message}`);
-      assert.equal(await runtime.images.frontier('app'), frontier, `${lane}: the refusal published nothing`);
-      assert.deepEqual(await methodBlockRef({...options, selector}), a, `${lane}: and moved nothing`);
-
-      // Naming the lane it actually observed is not a migration and is accepted.
+      // A guarded replacement that NAMES the other lane gets the lane it named: an internal caller
+      // has decided, and this owner does not overrule it. Only the public seam, which names none,
+      // is guaranteed never to migrate.
       await reconcileMethodsFromSource({
-        ...options, lane, methods: [{selector, source: '[ ^ 7 ]', expectedCurrent: a}],
+        ...options, lane: other, methods: [{selector, source: '[ ^ 7 ]', expectedCurrent: a}],
       });
-      await answers(runtime, selector, 7, `${lane}: the honest form of the same call succeeds`);
+      const b = await methodBlockRef({...options, selector});
+      assert.deepEqual(await laneOf(runtime, b), otherShape, `${lane}: the named lane is honoured`);
+      await answers(runtime, selector, 7, `${lane}: and the result executes`);
     }
+
+    // CREATION is untouched. `defineMethodsFromSource` cannot be guarded at all — the class builder
+    // refuses `expectedCurrent` on the add-only path — so it keeps spelling its own neutral default.
+    await defineMethodsFromSource({...options, methods: [{selector: 'createdDefault', source: '[ ^ 3 ]'}]});
+    assert.deepEqual(await laneOf(runtime, await methodBlockRef({...options, selector: 'createdDefault'})), NEUTRAL);
+    await defineMethodsFromSource({...options, lane: 'wasm', methods: [{selector: 'createdWasm', source: '[ ^ 4 ]'}]});
+    assert.deepEqual(await laneOf(runtime, await methodBlockRef({...options, selector: 'createdWasm'})), WASM);
+    await assert.rejects(defineMethodsFromSource({
+      ...options,
+      methods: [{
+        selector: 'createdDefault',
+        source: '[ ^ 5 ]',
+        expectedCurrent: await methodBlockRef({...options, selector: 'createdDefault'}),
+      }],
+    }), /does not accept expectedCurrent/, 'which is why definition has no lane to preserve');
+
+    // An UNGUARDED reconciliation is the creation-shaped half of the same entry point, and keeps
+    // both of its answers: the lane it names, and neutral when it names none.
+    await reconcileMethodsFromSource({...options, lane: 'wasm', methods: [{selector: 'unguardedWasm', source: '[ ^ 5 ]'}]});
+    assert.deepEqual(await laneOf(runtime, await methodBlockRef({...options, selector: 'unguardedWasm'})), WASM);
+    await reconcileMethodsFromSource({...options, methods: [{selector: 'unguardedDefault', source: '[ ^ 6 ]'}]});
+    assert.deepEqual(await laneOf(runtime, await methodBlockRef({...options, selector: 'unguardedDefault'})), NEUTRAL);
+    await answers(runtime, 'createdDefault', 3);
+    await answers(runtime, 'createdWasm', 4);
+    await answers(runtime, 'unguardedWasm', 5);
+    await answers(runtime, 'unguardedDefault', 6);
   });
 });
 
@@ -399,23 +523,6 @@ test('a guarded batch whose observed revisions are in different lanes is refused
     assert.deepEqual(await methodBlockRef({...options, selector: 'mixedNeutral'}), neutral);
     await answers(runtime, 'mixedWasm', 1);
     await answers(runtime, 'mixedNeutral', 2);
-  });
-});
-
-// WRONG IMPLEMENTATION THIS TEST MUST KILL: making lane preservation a property of the from-source
-// path rather than of a GUARDED call, so that the importer's own unguarded reconciliation — the one
-// that installs every Cuis method in the WASM lane — started answering something else.
-test('an unguarded call keeps the lane it named, and the neutral default when it names none', async () => {
-  await withKernel(async (runtime, options) => {
-    await defineMethodsFromSource({...options, lane: 'wasm', methods: [{selector: 'unguarded', source: '[ ^ 1 ]'}]});
-    await reconcileMethodsFromSource({...options, lane: 'wasm', methods: [{selector: 'unguarded', source: '[ ^ 2 ]'}]});
-    assert.deepEqual(await laneOf(runtime, await methodBlockRef({...options, selector: 'unguarded'})), WASM);
-
-    await reconcileMethodsFromSource({...options, methods: [{selector: 'undeclared', source: '[ ^ 3 ]'}]});
-    assert.deepEqual(await laneOf(runtime, await methodBlockRef({...options, selector: 'undeclared'})), NEUTRAL,
-      'no expectation and no lane is still the from-source default it always was');
-    await answers(runtime, 'unguarded', 2);
-    await answers(runtime, 'undeclared', 3);
   });
 });
 

@@ -197,32 +197,42 @@ const isMethodLane = (lane) => METHOD_LANES.includes(lane);
 // lagrange-images-it3 exists to give an owner.
 //
 // `installMethods` publishes `metadata: {smalltalk: 'method', selector, lane}` on every method Block
-// it installs, and `isSameInstalledMethod` already compares that same field to decide whether a
-// definition is the one already installed. So this owner is reading back a fact IT WROTE ITSELF.
-// That is what makes the question answerable here and not at a public seam: nothing below opens the
-// Block's code artifact, decodes an executable representation or consults an executor registry, so
-// no second CodeArtifact decoder is created — the path ADR 0087 rejected for the read seam and ADR
-// 0088 rejected for the write seam.
+// it installs, and `isSameInstalledMethod` already compares part of that same record to decide
+// whether a definition is the one already installed. So this owner is reading back a fact IT WROTE
+// ITSELF. That is what makes the question answerable here and not at a public seam: nothing below
+// opens the Block's code artifact, decodes an executable representation or consults an executor
+// registry, so no second CodeArtifact decoder is created — the path ADR 0087 rejected for the read
+// seam and ADR 0088 rejected for the write seam.
 //
-// There is deliberately NO default. A Block whose method lane metadata is missing, malformed or
-// unknown cannot have its lane preserved, and answering "neutral because we could not tell" would
-// migrate the execution representation of exactly the methods whose records are least trustworthy.
-// Every method binding this owner writes carries its lane, so a binding without one arrived through
-// a generic graph write — the threat model `assertUniqueSelectorShape` already exists for.
+// It validates the whole of that small contract rather than reading `lane` out of it in isolation,
+// because "this ref is bound at the position" is not yet "this ref is a native method revision of
+// THIS position". A record that is absent, is not marked as an ordinary native method, names a
+// DIFFERENT selector, or records no usable lane cannot have a lane preserved from it. Identity is
+// deliberately NOT reconstructed from ids: `isSameInstalledMethod` does that for a different
+// question (is this the definition already installed), and answering THIS question that way would
+// make a legitimately revised method unreplaceable.
 //
-// `block` is an observation `readExpectedCurrentBindings` has already accepted as an unpinned local
-// ref, so that rule is NOT restated here: one owner for "what shape may an observed binding be",
-// exactly as bead lagrange-images-jtz.2 required for "which selectors does this Behavior bind".
+// The ref's own shape — unpinned, local to this image — is NOT rechecked here.
+// `readExpectedCurrentBindings` is the owner of that rule and has already applied it; restating it
+// would be the duplication bead lagrange-images-jtz.2 was closed to remove.
+//
+// There is deliberately NO default anywhere in here. Answering "neutral because we could not tell"
+// would migrate the execution representation of exactly the records whose provenance is least
+// trustworthy: every method binding this owner writes carries this metadata, so one that does not
+// arrived through a generic graph write — the threat model `assertUniqueSelectorShape` exists for.
 async function installedMethodLane({images, classRef, selector, block}) {
-  const record = await images.getBlock(block.imageId, block.objectId);
-  const lane = record?.metadata?.lane;
-  if (!isMethodLane(lane)) {
+  const refuse = (reason) => {
     throw new SmalltalkMethodLaneError(
-      `${classRef.imageId}/${classRef.objectId} ${selector} does not record the execution lane of `
-      + 'the method revision being replaced, so a replacement cannot preserve it',
+      `${classRef.imageId}/${classRef.objectId} ${selector}: ${reason}, so a replacement cannot `
+      + 'preserve the execution lane of the revision it was told to replace',
     );
-  }
-  return lane;
+  };
+  const record = await images.getBlock(block.imageId, block.objectId);
+  if (!record) refuse('the observed revision is not a Block in this image');
+  if (record.metadata?.smalltalk !== 'method') refuse('the observed revision is not a native method');
+  if (record.metadata?.selector !== selector) refuse('the observed revision is a method of another selector');
+  if (!isMethodLane(record.metadata?.lane)) refuse('the observed revision records no known execution lane');
+  return record.metadata.lane;
 }
 
 // A logical method position is class + selector (`methodId`). A changed definition receives an
@@ -614,22 +624,30 @@ function readExpectedCurrentBindings({methods, imageId, allowRedefinition, opera
   return expected;
 }
 
-// The lane a call compiles in, which for a GUARDED call is the lane of the revision it observed.
+// The lane a call compiles in (bead lagrange-images-it3). The derivation is scoped as narrowly as
+// the question that produced it, and both other paths keep exactly the behaviour they had.
+//
+//   a lane was NAMED                       -> that lane. An internal caller naming one has made an
+//                                             explicit decision, and this owner does not overrule it.
+//   no lane, no observed revision          -> `neutral`, the definition/creation default, unchanged.
+//   no lane, an OBSERVED revision          -> that revision's lane. This is the new rule.
 //
 // ADR 0086 decision 1 makes `{Class/Metaclass, selector}` the logical position and the Block bound
 // there the immutable current revision. A replacement says "make this position mean this source
-// instead"; it does not say "and move it to a different execution representation". Execution-lane
-// migration is a separate operation with its own policy, and there is none today — so this owner
-// preserves what it finds and NEVER falls back to the other lane. If the observed lane cannot
-// compile the replacement source, the replacement fails and the observed revision stays current;
-// trying WASM and settling for neutral would perform silently the very migration E3 does not offer.
+// instead"; it does not say "and move it to a different execution representation". Since the public
+// E3 seam names no lane at all, the third row is the only one it can reach — so from a consumer's
+// side, replacing what a method MEANS is never also a migration of how it RUNS.
+//
+// There is NO FALLBACK from the derived lane. If the observed lane cannot compile the replacement
+// source, the replacement fails and the observed revision stays current; trying WASM and settling
+// for neutral would perform silently the very migration E3 does not offer.
 //
 // One lane per call, because `installMethods` derives revision identity, exact replay and code
 // production from a single lane. Two guarded positions whose observed revisions sit in different
-// lanes therefore cannot both be preserved, and are refused rather than half-migrated. A caller
-// that also NAMES a lane must name the observed one: any other value is a migration request.
+// lanes therefore cannot both be preserved, and are refused rather than half-migrated.
 async function replacementLane({images, classRef, expected, requested}) {
-  if (expected.size === 0) return requested ?? 'neutral';
+  if (requested !== undefined) return requested;
+  if (expected.size === 0) return 'neutral';
   let preserved = null;
   let preservedSelector = null;
   for (const [selector, block] of expected) {
@@ -637,19 +655,12 @@ async function replacementLane({images, classRef, expected, requested}) {
     if (preserved !== null && lane !== preserved) {
       throw new SmalltalkMethodLaneError(
         `${classRef.imageId}/${classRef.objectId} cannot replace ${preservedSelector} and ${selector} `
-        + `in one call: the revisions observed at those positions are in different execution lanes `
-        + `(${preserved} and ${lane}), and replacement preserves the lane it finds`,
+        + 'in one call: the revisions observed at those positions are in different execution lanes '
+        + `(${preserved} and ${lane}), and one call compiles in one lane`,
       );
     }
     preserved = lane;
     preservedSelector = selector;
-  }
-  if (requested !== undefined && requested !== preserved) {
-    throw new SmalltalkMethodLaneError(
-      `${classRef.imageId}/${classRef.objectId} ${preservedSelector} was observed in the ${preserved} `
-      + `execution lane, so a replacement cannot be compiled in ${requested}; changing the execution `
-      + 'lane of an existing method is not part of replacing its semantics',
-    );
   }
   return preserved;
 }
@@ -879,8 +890,7 @@ async function installMethods({
   // the lane to preserve belongs to the immutable revision the caller told this owner it SAW.
   // Taking it from the current binding would refresh half of the caller's assumption while still
   // enforcing the other half, and on a moved position would compile against a lane nobody observed.
-  // An unguarded call has nothing to preserve and keeps the requested lane, or the neutral default
-  // it always had.
+  // A named lane and an unguarded call both keep exactly what they had.
   const lane = await replacementLane({images, classRef, expected, requested: requestedLane});
 
   // Preflight covers duplicates *within this call* as well as against what is stored: two new
