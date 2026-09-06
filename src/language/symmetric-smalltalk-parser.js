@@ -23,6 +23,19 @@ class Parser {
     this.source = source;
     this.tokens = tokenizeSymmetricSmalltalk(source);
     this.index = 0;
+    // The Cuis legacy assignment arrow is dialect syntax, never native syntax. The tokenizer keeps
+    // it a DISTINCT token precisely so that no grammar position can absorb it (before this, `a _ b`
+    // parsed as the unary-send chain `((a _) b)` and compiled). The refusal lives here, once, for
+    // every position the token could appear in — direct native source has only canonical `:=`.
+    // The Cuis import adapter translates the same token to `:=` at the import boundary; that is
+    // the one loud division between the two languages.
+    const legacyArrow = this.tokens.find((token) => token.type === 'legacyAssign');
+    if (legacyArrow) {
+      throw new SymmetricSmalltalkSyntaxError(
+        'the legacy assignment arrow `_` is Cuis dialect syntax, not native Symmetric Smalltalk; native assignment is `:=`',
+        legacyArrow.start,
+      );
+    }
   }
 
   current() {

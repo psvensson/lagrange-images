@@ -1,7 +1,7 @@
 import {ensureClassFromDeclaration} from './smalltalk-class-builder.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {reconcileMethodsFromSource} from './smalltalk-instance-variables.js';
-import {tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
+import {isAssignmentToken, tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
 
 // ADR 0085 M1/M2: this adapter owns translation only. The canonical representation remains owned
 // by the OpenSmalltalk/Cuis toolchain provider; native builders/compilers remain the sole owners of
@@ -211,8 +211,11 @@ function boundNames(tokens, bodyTokenIndex, parameters) {
       continue;
     }
     if (token.type !== 'identifier') continue;
-    // `| a b |` temporaries, `[ :each | ... ]` block parameters, and assignment targets.
-    if (inTemporaries || tokens[at - 1]?.type === ':' || tokens[at + 1]?.type === 'assign') {
+    // `| a b |` temporaries, `[ :each | ... ]` block parameters, and assignment targets — under
+    // EITHER assignment spelling the dialect token stream can carry, through the tokenizer owner's
+    // one shared predicate, so a name bound by the legacy arrow suppresses the idiom exactly as a
+    // name bound by `:=` does.
+    if (inTemporaries || tokens[at - 1]?.type === ':' || isAssignmentToken(tokens[at + 1])) {
       bound.add(token.value);
     }
   }
@@ -230,23 +233,45 @@ function matchesIdiom(tokens, at, pattern) {
   return tokens[at + pattern.length]?.type !== ';';
 }
 
-// Right-to-left, so an earlier match's offsets stay valid while a later one is spliced out.
-function adaptDialectIdioms(bodySource, tokens, bodyTokenIndex, bodyStart, parameters, declaredNames) {
+// ONE immutable replacement plan, collected against the SAME original token stream and applied
+// right-to-left in a single pass. Two translation kinds share the plan:
+//
+//   * the measured legacy assignment arrow — the tokenizer's distinct `legacyAssign` token,
+//     translated to canonical native `:=`. This is dialect SYNTAX, not a name, so none of the
+//     idiom exclusions apply: every arrow token in the body translates. The adapter translates the
+//     token and NOTHING more — whether the assignment is then legal (a bindable target, a
+//     resolvable right-hand side, an ordinary refusal such as an unbound name) is decided by the
+//     ordinary native parser and compiler after translation, never here. In particular a masked
+//     name such as `driver _ SAXDriver on: aStream` becomes `driver := SAXDriver on: aStream` and
+//     then undergoes ordinary native name resolution, which is the refusal the un-translated
+//     arrow hid (bead lagrange-images-xxm.3).
+//   * the closed dialect-idiom table above (`String new`), with its bound/declared exclusions.
+//
+// Collecting both against the same token stream and splicing in start-descending order is what
+// makes offset drift impossible by construction: no splice is ever applied at offsets an earlier
+// splice invalidated. The two kinds cannot overlap (an arrow token is never part of an idiom
+// match), so one pass over the tokens suffices.
+function adaptDialect(bodySource, tokens, bodyTokenIndex, bodyStart, parameters, declaredNames) {
   const bound = boundNames(tokens, bodyTokenIndex, parameters);
-  const matches = [];
+  const replacements = [];
   for (let at = bodyTokenIndex; at < tokens.length; at += 1) {
+    const token = tokens[at];
+    if (token.type === 'legacyAssign') {
+      replacements.push({start: token.start - bodyStart, end: token.end - bodyStart, native: ':='});
+      continue;
+    }
     for (const idiom of CUIS_DIALECT_IDIOMS) {
       if (!matchesIdiom(tokens, at, idiom.tokens)) continue;
       // The method binds the name itself, or the package declares a class of that name, so the
       // source means its own thing and this is not the dialect idiom at all.
-      if (bound.has(tokens[at].value) || declaredNames.has(tokens[at].value)) continue;
+      if (bound.has(token.value) || declaredNames.has(token.value)) continue;
       const last = tokens[at + idiom.tokens.length - 1];
-      matches.push({start: tokens[at].start - bodyStart, end: last.end - bodyStart, native: idiom.native});
+      replacements.push({start: token.start - bodyStart, end: last.end - bodyStart, native: idiom.native});
       break;
     }
   }
   let adapted = bodySource;
-  for (const {start, end, native} of matches.reverse()) {
+  for (const {start, end, native} of [...replacements].sort((a, b) => b.start - a.start)) {
     adapted = `${adapted.slice(0, start)}${native}${adapted.slice(end)}`;
   }
   return adapted;
@@ -290,7 +315,7 @@ function nativeMethodSource({identity, selector, source, declaredNames}) {
     fail(`method ${identity} source header declares ${parsedSelector}, not ${selector}`, identity);
   }
   const bodyStart = tokens[index - 1].end;
-  const body = adaptDialectIdioms(source.slice(bodyStart), tokens, index, bodyStart, parameters, declaredNames).trim();
+  const body = adaptDialect(source.slice(bodyStart), tokens, index, bodyStart, parameters, declaredNames).trim();
   if (body.length === 0) fail(`method ${identity} has no body`, identity);
   const parameterSource = parameters.length === 0 ? '' : ` ${parameters.map((name) => `:${name}`).join(' ')} |`;
   const bodyTokens = tokens.slice(index, -1);

@@ -367,13 +367,13 @@ faithfully, and the native compiler now has a binding for the word. The entry po
 implementation its super send resolves to (`SAXHandler class>>parseDocumentFrom:`, in the same
 manifest and the same scope) both import natively with Cuis gone, and exact replay stays write-free.
 
-The vertical's NEXT unsupported semantic, classified and not yet repaired, is that **a natively
-imported class's NAME never becomes resolvable**:
+The vertical's NEXT unsupported semantic, classified afresh after repairing the legacy assignment
+arrow, is that **a natively imported class's NAME never becomes resolvable**:
 
-    unbound Symmetric Smalltalk name: XMLDocument
+    unbound Symmetric Smalltalk name: SAXDriver
 
-from unedited upstream `XMLDOMParser>>startDocument` (`self document: XMLDocument new`). `XMLDocument`
-is in the minimum scope and IS imported as an ordinary native class; what is missing is the binding.
+from unedited upstream `SAXHandler class>>on:` (`driver _ SAXDriver on: aStream`). `SAXDriver` is in
+the minimum scope and IS imported as an ordinary native class; what is missing is the binding.
 The native global namespace (ADR 0057/0061) already owns name -> object bindings and
 `publishSmalltalkClassGlobals` already publishes a class as one — this adapter simply never calls it,
 so the gap is on THIS arrow with a generic mechanism that needs no change. M3's JSON package could
@@ -381,14 +381,26 @@ never expose it: its executable source names only base-image classes. Bead
 `lagrange-images-xxm.2` owns it, including the decisions it must make about which namespace an
 imported class is published into and what a collision means.
 
-One further finding, recorded because the harness structurally cannot see it. A vertical that stops at
-the first REFUSAL is blind to a SILENT miscompile, and there is one causally earlier on this same
-path: 93 of YAXO's 341 methods assign with Cuis's legacy arrow (`validating _ false`), the native
-tokenizer treats `_` as an identifier character, and `a _ b` therefore parses as a chain of unary
-sends and compiles without complaint. Two methods already imported on the measured path do exactly
-this. Bead `lagrange-images-xxm.3` owns it and names both candidate owners — the native tokenizer
-(refuse a bare `_`) and this adapter (translate the dialect arrow, as it already does for one
-`String new` idiom) — without prejudging which.
+The legacy assignment finding is now repaired at its two exact owners. The pinned Cuis scanner/parser
+oracle established that `_` is the legacy arrow only at a token boundary and only when its following
+character is not a letter, digit, underscore or colon. Thus `a _ b` assigns, while `a_b`, `_foo`,
+`foo_`, `_7`, `__`, `_:` and `foo_:` are identifier/keyword forms, and strings/comments keep `_` as
+data. A bare `_` has no legitimate selector meaning. The native tokenizer therefore emits a distinct
+legacy-arrow token for exactly the measured form, and the native parser refuses it explicitly:
+direct Symmetric Smalltalk still has only `:=`. The Cuis adapter translates that token to `:=` and
+does nothing else — assignment target validity, right-hand-side resolution, bindings and execution
+remain ordinary native semantics. Its arrow and `String new` replacements are collected against one
+original token stream and applied right-to-left, so neither can invalidate the other's offsets.
+
+That repair exposed why the earlier description was too weak. The defect was not merely a later `_`
+message-not-understood: the unary-send parse turned `SAXDriver` into a selector and suppressed the
+compile-time name-resolution refusal above. Re-running the exact same YAXO forcing scope now stops at
+that masked occurrence rather than at the later `XMLDocument` occurrence. A second real proof imports
+unchanged `SAXHandler>>document:` (`document _ aDocument`) plus its getter, executes the setter on a
+native instance and reads back the assigned Value. M3's three arrow methods remain outside its
+accepted execution scope, and M4's first slice imported `methods: []`; neither merged claim changes.
+The lesson for future method-bearing slices is narrower: admission is not success when a foreign
+dialect token can be absorbed into another valid native parse.
 
 Two facts worth recording because they were predicted to block first and measurably do not — they sit
 BEHIND all of the above on the executable vertical, and none of it is scheduled by this slice:

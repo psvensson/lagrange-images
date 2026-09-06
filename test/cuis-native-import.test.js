@@ -6,6 +6,7 @@ import {
   CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
   CUIS_SEMANTIC_EXPORT_V2,
   CuisNativeImportError,
+  SymmetricSmalltalkSyntaxError,
   createRuntime,
   findSmalltalkKernel,
   importCuisNativePackage,
@@ -18,6 +19,7 @@ import {
   methodBlockRef,
   objectRef,
   readBehavior,
+  reconcileMethodsFromSource,
   resolveGlobal,
   textValue,
 } from '../src/runtime.js';
@@ -1290,6 +1292,186 @@ test('a manifest that declares its own class of the name is not adapted', async 
         },
       }),
       /unbound Symmetric Smalltalk name: String/,
+    );
+  });
+});
+
+// ==================================================================================================
+// The Cuis legacy assignment arrow (bead lagrange-images-xxm.3).
+//
+// The arrow is Cuis DIALECT syntax, measured against the pinned Cuis image (oracle recorded on
+// the bead): at a token boundary, a bare `_` not followed by an identifier character is the
+// assignment arrow; every other underscore form (`_foo`, `a_b`, `foo_`, `_7`, `__`, the `_:`
+// keyword) is a Cuis-legal
+// identifier form and is preserved. The native tokenizer keeps the arrow a DISTINCT token that
+// the native PARSER refuses outright — direct native source never gains `_` assignment — and
+// this adapter translates exactly that token to canonical `:=`, in ONE replacement plan shared
+// with the `String new` idiom and applied right-to-left in a single pass. The adapter translates
+// the token and nothing more: target legality, right-hand-side resolution and every refusal
+// afterwards belong to the ordinary native parser/compiler.
+
+// An arrow assignment is translated and then EXECUTES as an ordinary native assignment: the
+// smallest faithful fixture is the accessor pair YAXO itself is full of — an arrow setter and a
+// plain getter — and the proof reads the assigned state back through ordinary native behavior.
+// `the method compiles` is not the claim; the assigned value coming back out is.
+test('a legacy-arrow assignment imports as a real native assignment and reads back', async () => {
+  await withStandardImage(async (runtime) => {
+    const input = manifest({
+      methods: [
+        {
+          identity: 'cuis-method/Fixture/ZuluBase/instance/put:',
+          package: 'Fixture',
+          class: 'cuis-class/Fixture/ZuluBase',
+          side: 'instance',
+          selector: 'put:',
+          source: 'put: aNumber\n\tbase _ aNumber',
+        },
+        {
+          identity: 'cuis-method/Fixture/ZuluBase/instance/total',
+          package: 'Fixture',
+          class: 'cuis-class/Fixture/ZuluBase',
+          side: 'instance',
+          selector: 'total',
+          source: 'total\n\t^ base',
+        },
+      ],
+    });
+    const scope = {
+      classes: ['cuis-class/Fixture/ZuluBase'],
+      methods: ['cuis-method/Fixture/ZuluBase/instance/put:', 'cuis-method/Fixture/ZuluBase/instance/total'],
+    };
+    const imported = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: input, scope,
+    });
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'app',
+      id: 'arrow-fixture-probe',
+      source: '[ :class | | instance | instance := class basicNew. instance put: 41. instance total ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', block.id), [imported.classes[0].classRef],
+      )),
+      integerValue(41),
+      'the arrow assigned the instance variable, and ordinary native behavior read it back',
+    );
+  });
+});
+
+// Every proven identifier form passes through the adapter unchanged — including as assignment
+// TARGETS of the translated arrow. If the lexical rule were overbroad (every underscore means
+// assignment) these would refuse or misbind.
+test('oracle-proven underscore identifier forms survive the adapter and assign through the arrow', async () => {
+  await withStandardImage(async (runtime) => {
+    assert.deepEqual(
+      await seedAnswer(runtime, 'seed\n\t| _foo a_b foo_ |\n\t_foo _ 7.\n\ta_b _ _foo.\n\tfoo_ _ a_b.\n\t^ foo_'),
+      integerValue(7),
+    );
+  });
+});
+
+// ONE replacement plan, proven against offset drift: both translation kinds in one body, in both
+// relative orders and adjacent. `_` splices to two characters and `String new` to two, so a plan
+// applied against stale offsets would cut mid-token and refuse rather than answer — a wrong
+// answer from these shapes is not a plausible outcome of drift, refusal is.
+test('the legacy arrow and the `String new` idiom share one drift-free replacement plan', async () => {
+  await withStandardImage(async (runtime) => {
+    // Idiom after arrow, adjacent: `a _ String new`. Besides executing, compare the imported
+    // revision with the exact native source the one plan must produce. A write-free native
+    // reconciliation proves both sources compiled to the same immutable semantic revision.
+    const imported = await importSeed(runtime, 'seed\n\t| a b |\n\ta _ String new.\n\tb _ a.\n\t^ a = b');
+    const classRef = imported.classes[0].classRef;
+    const importedBlock = await methodBlockRef({images: runtime.images, imageId: 'app', classRef, selector: 'seed'});
+    const frontier = await runtime.images.frontier('app');
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef,
+      lane: 'wasm',
+      methods: [{selector: 'seed', source: "[\n| a b |\na := ''.\nb := a.\n^ a = b.\nself\n]"}],
+    });
+    assert.equal(await runtime.images.frontier('app'), frontier, 'the exact normalized native source is write-free');
+    assert.deepEqual(
+      await methodBlockRef({images: runtime.images, imageId: 'app', classRef, selector: 'seed'}),
+      importedBlock,
+      'both translations produced the exact intended native semantic revision',
+    );
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: `seed-send-${counter += 1}`, source: '[ :class | class basicNew seed ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', block.id), [classRef],
+      )),
+      booleanValue(true),
+    );
+    // Idiom before arrow, with the arrow reading the idiom's target.
+    assert.deepEqual(
+      await seedAnswer(runtime, 'seed\n\t| a b |\n\ta := String new.\n\tb _ a.\n\t^ b'),
+      textValue(''),
+    );
+    // Two idioms and two arrows interleaved.
+    assert.deepEqual(
+      await seedAnswer(runtime, 'seed\n\t| a b |\n\ta _ String new.\n\tb _ String new.\n\t^ a = b'),
+      booleanValue(true),
+    );
+  });
+});
+
+// Strings and comments are data: the token stream never spans them, so no replacement can reach
+// inside, and the arrow OUTSIDE them still translates in the same body.
+test('the arrow translation never reaches inside strings or comments', async () => {
+  await withStandardImage(async (runtime) => {
+    assert.deepEqual(
+      await seedAnswer(runtime, 'seed\n\t| a |\n\ta _ \'x_y\'.\n\t"a comment with _ and String new"\n\t^ a'),
+      textValue('x_y'),
+    );
+    assert.deepEqual(await seedAnswer(runtime, "seed\n\t^ 'a _ b'"), textValue('a _ b'));
+  });
+});
+
+// A name bound by the ARROW suppresses the `String new` idiom exactly as a name bound by `:=`
+// does: the bound-names scan recognizes assignment targets through one shared predicate, so the
+// idiom stays off and the name is resolved — and refused — ordinarily. If the scan knew only
+// `:=`, this would silently import `^ ''` instead.
+test('a name bound by the legacy arrow suppresses the idiom exactly as `:=` does', async () => {
+  await withStandardImage(async (runtime) => {
+    await assert.rejects(
+      importSeed(runtime, 'seed\n\tString _ 5.\n\t^ String new'),
+      /unbound Symmetric Smalltalk name: String/,
+    );
+  });
+});
+
+// THE MASKED NAME, and the whole reason for the slice. `driver _ SAXDriver on: aStream` used to
+// compile: the arrow turned `SAXDriver` into a unary SELECTOR, so the name was never resolved
+// and no refusal occurred — an earlier instance of the M4 vertical's next RED sat silently
+// upstream of the one the harness had recorded. After translation the name undergoes ordinary
+// native name resolution, and the refusal is at compile time rather than a late runtime MNU
+// for `_`. The adapter did not resolve or refuse the name itself; the ordinary owner did.
+test('after translation an unresolved name undergoes ordinary native name resolution', async () => {
+  await withStandardImage(async (runtime) => {
+    await assert.rejects(
+      importSeed(runtime, 'seed\n\t| driver |\n\tdriver _ SAXDriver on: self.\n\t^ driver'),
+      /unbound Symmetric Smalltalk name: SAXDriver/,
+    );
+  });
+});
+
+// The adapter translates the token only; it does not validate targets, resolve the right-hand
+// side or create bindings. A nonsense assignment therefore fails at the ORDINARY native owners,
+// with their ordinary refusals — not at the adapter and not silently.
+test('the adapter never lends the arrow assignment semantics: native owners refuse as usual', async () => {
+  await withStandardImage(async (runtime) => {
+    // `3 _ x` translates to `3 := x`, which the native parser refuses exactly as it refuses the
+    // hand-written `3 := x` — the adapter performed no target validation of its own.
+    await assert.rejects(importSeed(runtime, 'seed\n\t3 _ 4'), SymmetricSmalltalkSyntaxError);
+    // Assignment to a name nothing bound is the compiler's ordinary refusal, not an adapter error.
+    await assert.rejects(
+      importSeed(runtime, 'seed\n\tnothingBound _ 4.\n\t^ 1'),
+      /unbound Symmetric Smalltalk name: nothingBound/,
     );
   });
 });
