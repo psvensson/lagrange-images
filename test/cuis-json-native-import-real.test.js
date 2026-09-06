@@ -876,6 +876,10 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     // be vacuous — it would be proving that a named lane is honoured, which is a different rule.
     // B ends up in the WASM lane only because bead lagrange-images-it3's observed-revision rule
     // preserves A's lane.
+    //
+    // This is also what proves A was the CURRENT binding rather than merely the ref the browse seam
+    // answered: a guarded replacement whose `expectedCurrent` is not current is refused, so the
+    // success of this call is the assertion.
     await reconcileMethodsFromSource({
       images: runtime.images,
       compilation: runtime.compilation,
