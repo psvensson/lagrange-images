@@ -30,7 +30,7 @@
     "test:recovery": "node --test --test-name-pattern=\"exhaustive-recovery:\"",
     "integration:setup": "scripts/integration-setup.sh",
     "integration:cargo-oci-setup": "scripts/cargo-oci-setup.sh",
-    "test:integration": "bash -c 'source scripts/integration-env.sh && node --test test/opensmalltalk-cuis-real.test.js test/opensmalltalk-cuis-toolchain-real.test.js test/opensmalltalk-cuis-multipackage-real.test.js test/opensmalltalk-cuis-semantic-export-real.test.js test/cuis-export-materialize-real.test.js test/cuis-json-native-import-real.test.js test/two-lane-callable-real.test.js test/mixed-language-project-real.test.js'",
+    "test:integration": "bash -c 'source scripts/integration-env.sh && node --test test/opensmalltalk-cuis-real.test.js test/opensmalltalk-cuis-toolchain-real.test.js test/opensmalltalk-cuis-multipackage-real.test.js test/opensmalltalk-cuis-semantic-export-real.test.js test/cuis-export-materialize-real.test.js test/cuis-json-native-import-real.test.js test/cuis-yaxo-native-import-real.test.js test/two-lane-callable-real.test.js test/mixed-language-project-real.test.js'",
     "test:cargo-oci": "bash -c 'source scripts/cargo-oci-env.sh && node --test test/cargo-rustc-oci-real.test.js'",
     "test:common-lisp": "LAGRANGE_SBCL_INTEGRATION=1 node --test test/common-lisp-sbcl-real.test.js",
     "artifact:portable-runtime": "node scripts/build-portable-runtime-artifact.mjs",

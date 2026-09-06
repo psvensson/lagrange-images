@@ -183,6 +183,26 @@ feature must be demanded by that consumer and repaired at its own owner
 
 ### M4 — native application state and restart
 
+The pressure source changes here, deliberately: the pinned upstream Cuis **YAXO** package replaces
+JSON, because JSON's parse result is a tree of base collections while YAXO's is a graph of instances
+of classes the package itself defines — which is what an M4 restart proof has to be about
+(`docs/native-import.md`, "The M4 forcing application").
+
+- [x] pin YAXO and its own upstream test package by Git blob hash from the distribution commit the
+  JSON harness already pins, record their identity and MIT license, and drive them through
+  toolchain -> canonical export -> scoped native import as a real forcing harness;
+- [x] measure the smallest useful public parsing path against real pinned Cuis rather than reading it
+  off the source, and record that oracle: `XMLDOMParser class>>parseDocumentFrom:` answers an
+  `XMLDocument`, children are `OrderedCollection`s of `XMLElement`s reached by name, text is an
+  `XMLStringNode` child, and `attributeAt:put:` interns its key so the package's smallest mutation
+  replaces the parsed attribute in place and leaves every identity alone;
+- [x] import the declared M4 minimum class scope natively with Cuis gone — nine classes, upstream
+  layouts, three levels of real inheritance, write-free exact replay;
+- [x] classify the first unsupported native semantic on that vertical instead of pretending it
+  succeeded: a `super` send, consumed by the entry point itself
+  (`^(super parseDocumentFrom: aStream) document`), owned by the Symmetric Smalltalk personality and
+  proven there rather than at the import boundary;
+- [ ] implement `super` at the native language owner (bead `lagrange-images-xxm.1`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;

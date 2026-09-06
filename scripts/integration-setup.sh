@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Download the pinned OpenSmalltalkVM, Cuis image/changes/sources and JSON package into
-# .integration/ so the real foreign-runtime proofs can run.
+# Download the pinned OpenSmalltalkVM, Cuis image/changes/sources and the pinned Cuis packages
+# (JSON, YAXO and the multi-package cluster) into .integration/ so the real foreign-runtime proofs
+# can run.
 #
 # This is the single source of truth for those pins: .github/workflows/test.yml calls this
 # script rather than repeating the URLs, so CI and a local checkout cannot drift.
@@ -17,6 +18,17 @@ VM_ARCHIVE_SHA256=dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09
 CUIS_COMMIT=6bcee3f38ce037c9714b997ccd3b5b3ff62965c8
 CUIS_IMAGE_BLOB=523dc5e74b5b550922b56ff2406415c19700ee8e
 CUIS_JSON_BLOB=47fab65d0d9017d706aa07d39ab0451619488ccd
+
+# The ADR 0085 M4 forcing application (Bead lagrange-images-xxm; selected and validated by
+# lagrange-images-moq). YAXO is an independently authored upstream XML package whose parse result
+# is a graph of instances of ITS OWN classes, which is the property the JSON harness structurally
+# cannot supply. Same distribution commit as everything above, so no new upstream trust anchor is
+# introduced; license MIT, verified at that commit. Tests-YAXO is the package's own upstream test
+# package and is fetched because the behaviour oracle is upstream-authored rather than invented
+# here. Pinned by Git blob hash exactly like JSON.
+#   Cuis-Base -> YAXO -> Tests-YAXO   (YAXO declares no !requires: line at all)
+CUIS_YAXO_BLOB=67d670ed38cc136d88afdf7e0df5bf8bc6519087
+CUIS_TESTS_YAXO_BLOB=8c50cbe6f29f3f4b25c883511eb905e44120ec5e
 
 # Multi-package Cuis cluster (Bead lagrange-images-d57): a real upstream dependency DAG
 # with a diamond, used to prove dependency ordering / Feature-requirement resolution and
@@ -84,6 +96,12 @@ fetch "$CUIS_IMAGE_ROOT/Cuis7.8.sources" .integration/cuis/Cuis7.8.sources
 
 fetch "$CUIS_ROOT/Packages/Features/JSON.pck.st" .integration/cuis/JSON.pck.st
 test "$(git hash-object .integration/cuis/JSON.pck.st)" = "$CUIS_JSON_BLOB"
+
+# The M4 forcing application (see the pin block above).
+fetch "$CUIS_ROOT/Packages/Features/YAXO.pck.st" .integration/cuis/YAXO.pck.st
+test "$(git hash-object .integration/cuis/YAXO.pck.st)" = "$CUIS_YAXO_BLOB"
+fetch "$CUIS_ROOT/Packages/Features/Tests-YAXO.pck.st" .integration/cuis/Tests-YAXO.pck.st
+test "$(git hash-object .integration/cuis/Tests-YAXO.pck.st)" = "$CUIS_TESTS_YAXO_BLOB"
 
 # The multi-package cluster (see the pin block above).
 fetch "$CUIS_ROOT/Packages/System/ExtendedClipboard.pck.st" .integration/cuis/ExtendedClipboard.pck.st

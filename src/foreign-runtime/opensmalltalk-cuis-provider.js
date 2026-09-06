@@ -92,6 +92,7 @@ function normalizeInterface(value) {
   if (!SAFE_NAME.test(operation)) throw new TypeError('OpenSmalltalk Cuis interface operation contains unsafe characters');
   const exported = (service === 'proof' && ['add', 'echo', 'factorial'].includes(operation))
     || (service === 'json' && ['package-proof', 'render'].includes(operation))
+    || (service === 'yaxo' && operation === 'measure')
     || (service === 'cluster' && operation === 'package-proof')
     || (service === 'text' && operation === 'normalize')
     || (service === 'bytes' && operation === 'reverse')
@@ -108,6 +109,7 @@ function expectedArity(service, operation) {
   if (service === 'proof' && operation === 'factorial') return 1;
   if (service === 'json' && operation === 'package-proof') return 0;
   if (service === 'json' && operation === 'render') return 1;
+  if (service === 'yaxo' && operation === 'measure') return 1;
   if (service === 'cluster' && operation === 'package-proof') return 0;
   if (service === 'text' && operation === 'normalize') return 1;
   if (service === 'bytes' && operation === 'reverse') return 1;
@@ -150,6 +152,60 @@ const BRIDGE_METHODS = Object.freeze([
 // than from a reading of the source. It is an oracle only — native execution never calls it.
 `jsonRender: aValue
     ^ (Smalltalk at: #Json) render: aValue`,
+// yaxo/measure is the ADR 0085 M4 reference oracle (Bead lagrange-images-xxm). It answers, from
+// the REAL pinned Cuis image with the REAL pinned YAXO package installed, the handful of facts the
+// M4 vertical depends on: which public operation parses, what it answers, how children are
+// reached, how text and an attribute are read, and what the package's own smallest mutation does.
+// Those facts were previously only READ off the package source; this executes them.
+//
+// It is an ORACLE ONLY — native execution never calls it, and it deliberately answers a flat
+// key=value text rather than a structured payload so that the recorded answer is the measurement
+// itself rather than an interpretation of it. Every selector below is upstream YAXO or upstream
+// Cuis protocol; nothing is added to, patched into or forked from the package.
+//
+// It is not a general XML probe and does not pretend to be: it measures ONE document shape — a root
+// element carrying a `lang` attribute, with a single `to` child holding text — because that is the
+// smallest document that still forces root, attribute, child and text at once. Feeding it another
+// shape is a caller error, not a supported mode.
+`yaxoReport: aKey value: aValue on: aStream
+    aStream nextPutAll: aKey; nextPut: $=; nextPutAll: aValue asString; nextPut: Character lf`,
+`yaxoMeasure: aString
+    | doc root child attributes canonicalStream out |
+    out := WriteStream on: (UnicodeString new: 512).
+    doc := (Smalltalk at: #XMLDOMParser) parseDocumentFrom: aString readStream.
+    self yaxoReport: 'parseAnswerClass' value: doc class name on: out.
+    self yaxoReport: 'documentElementsClass' value: doc elements class name on: out.
+    self yaxoReport: 'documentElementsSize' value: doc elements size printString on: out.
+    root := doc elements first.
+    self yaxoReport: 'rootClass' value: root class name on: out.
+    self yaxoReport: 'rootName' value: root name printString on: out.
+    self yaxoReport: 'rootNameClass' value: root name class name on: out.
+    self yaxoReport: 'rootElementsSize' value: root elements size printString on: out.
+    child := root elementAt: #to.
+    self yaxoReport: 'childByNameClass' value: child class name on: out.
+    self yaxoReport: 'childName' value: child name printString on: out.
+    self yaxoReport: 'childIsSameObjectAsFirstChild' value: (child == root elements first) printString on: out.
+    self yaxoReport: 'childContentsClass' value: child contents class name on: out.
+    self yaxoReport: 'childContentsSize' value: child contents size printString on: out.
+    self yaxoReport: 'childContentsFirstClass' value: child contents first class name on: out.
+    self yaxoReport: 'childContentString' value: child contentString on: out.
+    self yaxoReport: 'childContentStringClass' value: child contentString class name on: out.
+    attributes := root attributes.
+    self yaxoReport: 'rootAttributesClass' value: attributes class name on: out.
+    self yaxoReport: 'rootAttributesSize' value: attributes size printString on: out.
+    self yaxoReport: 'rootAttributeKeyClass' value: attributes keys asArray first class name on: out.
+    self yaxoReport: 'rootAttributeReadByString' value: (root attributeAt: 'lang') printString on: out.
+    self yaxoReport: 'rootAttributeReadBySymbol' value: (root attributeAt: #lang) printString on: out.
+    root attributeAt: #lang put: 'sv'.
+    self yaxoReport: 'mutatedAttributesSize' value: root attributes size printString on: out.
+    self yaxoReport: 'mutatedReadBySymbol' value: (root attributeAt: #lang) printString on: out.
+    self yaxoReport: 'mutatedReadByString' value: (root attributeAt: 'lang') printString on: out.
+    self yaxoReport: 'mutatedRootIsSameObject' value: (root == doc elements first) printString on: out.
+    self yaxoReport: 'mutatedChildContentString' value: (root elementAt: #to) contentString on: out.
+    canonicalStream := WriteStream on: (UnicodeString new: 256).
+    doc printCanonicalOn: canonicalStream.
+    self yaxoReport: 'canonicalAfterMutation' value: canonicalStream contents on: out.
+    ^ out contents`,
 // cluster/package-proof (Bead lagrange-images-d57): exercise REAL behavior from the
 // multi-package cluster, not merely class presence. Compression is pure-Smalltalk and
 // headless-safe: round-trip a ByteArray through gzip. The compress idiom is the package's
@@ -418,6 +474,9 @@ const BRIDGE_METHODS = Object.freeze([
     (serviceName = 'json' and: [ operation = 'render' ]) ifTrue: [
         fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self jsonRender: (self lagrangeDecode: (fields at: 5)) ].
+    (serviceName = 'yaxo' and: [ operation = 'measure' ]) ifTrue: [
+        fields size = 5 ifFalse: [ ^ self error: 'bad arity' ].
+        ^ self yaxoMeasure: (self lagrangeDecode: (fields at: 5)) ].
     (serviceName = 'cluster' and: [ operation = 'package-proof' ]) ifTrue: [
         fields size = 4 ifFalse: [ ^ self error: 'bad arity' ].
         ^ self clusterPackageProof ].
