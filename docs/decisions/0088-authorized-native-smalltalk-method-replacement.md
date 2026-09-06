@@ -1,7 +1,7 @@
 # ADR 0088: Authorized native Smalltalk method replacement
 
 Status: implemented
-Proven by: test/smalltalk-authorized-method-replacement.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js
+Proven by: test/smalltalk-authorized-method-replacement.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js, test/smalltalk-replacement-lane.test.js
 
 ## Problem
 
@@ -103,17 +103,73 @@ precondition with its rebase, staleness and contention semantics (slice C1).
    operation to prove it cannot have. An ABSENT selector is stale rather than a fresh definition —
    the same rule the class builder applies — because E3 adds no method.
 
-6. **No execution lane is published, and the consequence is stated rather than hidden.**
-   `reconcileMethodsFromSource` compiles in its own default lane, so a method originally installed in
-   the WASM lane — every Cuis-imported method is — is replaced by one in the neutral lane. It
-   dispatches and answers exactly as before, because the executor registry selects by the artifact's
-   representation, but the executable representation underneath does change. A `lane` parameter would
-   publish a compiler/execution knob on a seam whose point is that E3 exposes no compiler, and
-   preserving the current method's lane would mean reading the bound Block's code artifact to
-   discover it — making this seam a second CodeArtifact decoder, which ADR 0087 rejected for the read
-   seam. Which lane a REPLACEMENT should compile in is a question for the installer that owns lanes,
-   and a consumer that needs an answer is the pressure that should produce one (bead
-   `lagrange-images-it3`).
+6. **No execution lane is published, and replacement does not change one.**
+
+   > **AMENDED by bead `lagrange-images-it3`, after this ADR was implemented and before GitHub #218
+   > was handed back.** As first written, this decision said that `reconcileMethodsFromSource`
+   > compiles in its own default lane, so a method installed in the WASM lane — every Cuis-imported
+   > method is — is replaced by one in the NEUTRAL lane, and that this observable representation
+   > change was the accepted consequence of publishing no lane knob. That consequence was real and
+   > tested, but it was never the E3 contract, and it is corrected below rather than deleted so the
+   > record of what shipped in PR #222 stays legible. Decisions 1-5 and 7-10 are unchanged.
+
+   A `lane` parameter is still deliberately absent, for the reason originally given: it would publish
+   a compiler/execution knob on a seam whose point is that E3 exposes no compiler. And this seam
+   still may not discover the current method's lane itself — that would mean reading the bound
+   Block's code artifact, making it a second CodeArtifact decoder, which ADR 0087 rejected for the
+   read seam.
+
+   What was wrong was the conclusion drawn from those two facts. `{Class/Metaclass, selector}` is the
+   logical method position and the Block bound there is the immutable current revision (ADR 0086
+   decision 1). A caller's E3 operation says *replace the semantics of the method I observed*; it
+   does not say *and also migrate its execution representation*. Because E3 exposes no compiler and
+   no lane knob, a lane change underneath it is a SECOND mutation the caller neither requested nor
+   can observe through the public contract — which is a worse property than the one the missing knob
+   was protecting.
+
+   **The rule is therefore: E3 exposes no lane choice. For a replacement guarded by an observed
+   native revision, the native method evolution owner preserves that revision's execution lane. Lane
+   migration is not part of E3.**
+
+   The rule is about NATIVE methods, not about imported ones: a native method replacement preserves
+   the method's existing native execution policy, whatever produced it. That imported Cuis material
+   is the first consumer to notice is a fact about who asked, not a clause in the rule.
+
+   There is no fallback in either direction: if the observed lane cannot compile the replacement
+   source, the replacement FAILS and the observed revision remains current. A later explicit lane
+   migration, should real consumer pressure ever appear, is a separate operation with its own policy.
+
+   The owner is the class builder, which already decides revision identity, lane-specific Block/code
+   production, exact replay and revision publication. Its rule is scoped as narrowly as the question
+   that produced it, and both other paths keep exactly the behaviour they had:
+
+   | what the caller supplied | lane used |
+   | --- | --- |
+   | a named lane | that lane — an internal caller has decided, and this owner does not overrule it |
+   | no lane, no observed revision | `neutral`, the definition/creation default, unchanged |
+   | no lane, an observed revision | that revision's lane — the new rule |
+
+   The public seam names no lane at all, so the third row is the only one it can reach; that is what
+   makes "replacement never migrates" a guarantee to a CONSUMER without turning it into a new
+   constraint on the trusted internal callers that build images. Definition is untouched either way:
+   the class builder refuses `expectedCurrent` on the add-only path, so there is never an observed
+   revision there to preserve a lane from.
+
+   The lane is answered from `metadata: {smalltalk: 'method', selector, lane}` — a record the owner
+   PUBLISHES ITSELF on every method Block it installs — so this is the owner reading its own record,
+   not a CodeArtifact or executable-representation decode. That distinction is exactly why the
+   question is answerable there and not here. The whole of that small contract is validated rather
+   than `lane` alone, because "this ref is bound at the position" is not yet "this ref is a native
+   method revision of THIS position": an absent record, one not marked as an ordinary native method,
+   one naming a different selector, and one recording no known lane are all
+   `SmalltalkMethodLaneError`. Identity is deliberately not reconstructed from ids, which would make
+   a legitimately revised method unreplaceable, and the ref's own shape is not rechecked, because
+   the expectation reader already owns that rule. There is no "default to neutral because we could
+   not tell": that would migrate precisely the records whose provenance is least trustworthy.
+
+   This seam is UNCHANGED by the amendment: it still passes only the caller's observed binding down,
+   contains no lane selection, no representation branching and no CodeArtifact read, and a structural
+   proof keeps it that way.
 
 7. **Source is explicitly supplied and is not persisted.** ADR 0087 decision 6's `source: null`
    remains truthful after a successful replacement, and #218 point 5 says explicitly that changing it
@@ -139,6 +195,7 @@ precondition with its rebase, staleness and contention semantics (slice C1).
    | `SmalltalkMethodTargetError` | after authorization: no such native method position |
    | `SmalltalkStaleMethodPositionError` | the observed binding is no longer current (the class builder's own class) |
    | `SmalltalkMethodReplacementContentionError` | transient: the position is unchanged and was not advanced |
+   | `SmalltalkMethodLaneError` | the observed revision records no usable execution lane, so decision 6 cannot preserve it (the lane owner's own class, passed through unrestated because it already names only the caller's position) |
    | anything else | the native compiler/source owner rejected the source |
 
    Malformed caller input gets its own class because the native semantic compiler also rejects bad
@@ -185,13 +242,30 @@ precondition with its rebase, staleness and contention semantics (slice C1).
 - **Add rollback so a failed replacement leaves no immutable material.** ADR 0086 already decided
   create-before-publication and states the consequence honestly; the load-bearing invariant is that a
   failed, stale or uncompilable replacement never makes its revision CURRENT.
+- **Let the replacement land in the from-source owner's default lane** (what shipped, and what
+  decision 6 originally accepted). It is a second mutation the caller neither requested nor can
+  observe: E3 publishes no lane knob, so no consumer can ask for it, ask against it, or see that it
+  happened. See the amendment.
+- **Extend the derivation over a lane an internal caller actually NAMED.** That would change
+  creation and image-construction semantics to fix a replacement bug, which is a worse regression
+  than the bug. The public seam names no lane, so scoping the rule to "no lane named" costs the
+  consumer nothing.
+- **Try the observed lane and fall back to the other when it rejects the source.** That performs the
+  migration E3 does not offer, silently, and precisely when the caller has least reason to expect it.
+  A replacement the observed lane cannot compile fails.
+- **Default to neutral when the observed revision's lane cannot be read.** It would migrate exactly
+  the records whose provenance is least trustworthy — a binding without lane metadata came from a
+  generic graph write, not from this owner. `SmalltalkMethodLaneError` instead.
+- **Answer the lane question inside this seam by reading the bound Block's code artifact.** The
+  second CodeArtifact decoder ADR 0087 rejected. The lane owner reads its OWN published
+  `metadata.lane` instead, which is not a decode.
 
 ## Proof
 
 `test/smalltalk-authorized-method-replacement.test.js`: a still-current position advances while its
 sibling does not, with a frozen one-key receipt and a fresh Block identity; `descriptor.source` still
-`null` afterwards; a WASM-lane method replaced, still dispatching, with the replacement in the
-from-source owner's default lane; replacing a method with what it already means answering the same receipt write-free; denial before existence, with an implemented selector, an unimplemented one and a
+`null` afterwards; a WASM-lane method replaced, still dispatching, with the replacement still in the
+WASM lane; replacing a method with what it already means answering the same receipt write-free; denial before existence, with an implemented selector, an unimplemented one and a
 missing class producing refusals that are a pure function of caller input; class read, class read
 plus Block read, and write on the OLD BLOCK all refused, while the class write succeeds; a valid
 current token with no grant refused; exactly one demand, issued with zero records read; wrong-scope,
@@ -206,8 +280,34 @@ transient verdict without naming the sealed record; a non-semantic read failure 
 a missing target; malformed caller input as its own verdict before any demand or read; an invalid
 source rejected as a source with the exact old binding still current; a structural check that the
 module imports only owners, carries the caller's observation, and contains no `putObject`, storage
-version, bucket, Shape, dictionary ref or loop; the export matrix by binding on all four roots; and
+version, bucket, Shape, dictionary ref, loop, lane name, Block/CodeArtifact read or representation
+branch; the export matrix by binding on all four roots; and
 the read/replace pair used end to end through `src/portable-runtime.js` alone.
+
+`test/smalltalk-replacement-lane.test.js` (bead `lagrange-images-it3`) owns decision 6's rule and its
+refusals at the lane owner: a WASM-lane revision replaced in the WASM lane and a neutral one in the
+neutral lane, each asserted on BOTH the Block's recorded lane and the code artifact's representation,
+with BOTH the old and the new revision proven by a real send through that lane, because metadata
+alone would pass for an implementation that merely LABELLED the other lane's artifact and a send
+alone would pass for one that migrated the representation; an exact guarded replay staying write-free
+IN the observed lane, which is what proves the preserved lane actually participates in revision
+identity rather than merely being computed; a replacement the observed lane cannot compile failing
+with the observed revision still current, NO compilation even requested in the other lane, and the
+same source still compiling there under the same faulted service; a stale position refused on the
+observation, with the WINNER'S Block record never read; four observations refused rather than
+defaulted — absent, not a native method, a method of another selector, and an unknown lane — each
+planted by a generic graph write as the live current binding of an otherwise well-formed dictionary;
+a guarded batch spanning both lanes refused whole; a NAMED lane still honoured and the definition and
+unguarded-reconciliation defaults proven unchanged; and a genuinely Cuis-imported WASM method, driven
+through the real `importCuisNativePackage` adapter with no Cuis runtime present, preserved in the
+WASM lane when replaced.
+
+Deliberate breaks for decision 6, each turning exactly its intended proof red and then reverted: the
+shipped `?? 'neutral'` default restored; the derivation forced to neutral anyway, observed both at
+the owner and at this seam; a blanket-WASM derivation, which the neutral-direction proof alone
+catches; defaulting to neutral when the lane cannot be read; a WASM-failure fallback to neutral;
+resolving the lane from a fresh current read; dropping the mixed-batch refusal; extending the
+derivation over a named lane; and teaching this seam a lane, which the structural scan catches.
 
 Deliberate breaks, each turning exactly its own intended proof red and then reverted: authorization
 moved after the lookup; `object/read` demanded instead of `object/write`; write demanded on the old

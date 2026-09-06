@@ -293,18 +293,20 @@ test('a successful replacement persists no source: the descriptor still reports 
   });
 });
 
-// WRONG IMPLEMENTATION THIS TEST MUST KILL: a seam that silently refuses, or silently breaks, a
-// method that was installed in the WASM lane — which is every Cuis-imported method, and therefore
-// the whole target of slice D.
+// WRONG IMPLEMENTATION THIS TEST MUST KILL: a seam that silently refuses, silently breaks, or
+// silently MIGRATES a method that was installed in the WASM lane — which is every Cuis-imported
+// method, and therefore the whole target of slice D.
 //
-// It also PINS the observable consequence of publishing no lane knob, rather than leaving it to be
-// discovered: the replacement compiles in the from-source owner's default lane, so the executable
-// representation underneath the position changes. The method still dispatches and answers, because
-// the executor registry selects by representation. A `lane` parameter would publish a compiler knob
-// on a seam that exposes no compiler, and preserving the old lane would mean decoding the bound
-// Block's code artifact — the second-decoder path ADR 0087 rejected. If this assertion ever has to
-// change, the lane question has acquired an owner and that is exactly when it should be visible.
-test('a method installed in the WASM lane is replaceable, and the replacement compiles in the default lane', async () => {
+// The third of those shipped. Publishing no lane knob is still the contract, but the consequence
+// this test used to pin — the replacement landing in the from-source owner's neutral default — was
+// never the E3 contract: a replacement says "make this position mean this source", not "and also
+// change its executable representation", and a caller with no lane knob could not have asked for the
+// second thing or observed that it happened. Bead lagrange-images-it3 gave the question its owner:
+// the native method evolution owner preserves the lane of the revision the caller OBSERVED, read
+// back from the `metadata.lane` that owner itself publishes on every method Block. This seam is
+// unchanged and still passes only the observed binding down; `test/smalltalk-replacement-lane.test.js`
+// owns the rule and its refusals.
+test('a method installed in the WASM lane is replaced by one in the WASM lane', async () => {
   await withFixture(async (runtime, options) => {
     const WASM_LANE = 'wasmLaneAnswer';
     await defineMethodsFromSource({...options, lane: 'wasm', methods: [{selector: WASM_LANE, source: '[ ^ 1 ]'}]});
@@ -328,8 +330,11 @@ test('a method installed in the WASM lane is replaceable, and the replacement co
 
     assert.deepEqual(result, {replaced: true});
     await answers(runtime, WASM_LANE, 7, 'and the replaced method still dispatches and answers');
-    assert.equal(await representationOf(await methodBlockRef({...options, selector: WASM_LANE})),
-      'neutral-expression/v0', 'the replacement compiles in the from-source owner\'s default lane');
+    const after = await methodBlockRef({...options, selector: WASM_LANE});
+    assert.notDeepEqual(after, before, 'the position advanced to a fresh revision');
+    assert.equal(await representationOf(after), 'wasm-function/v2',
+      'and the replacement preserves the execution lane of the revision the caller observed');
+    assert.equal((await runtime.images.getBlock(after.imageId, after.objectId)).metadata?.lane, 'wasm');
   });
 });
 
@@ -797,9 +802,17 @@ test('the authorized module composes owners and contains no MethodDictionary, CA
   // own parameter. The storage CAS is caught by `putObject` instead, which is the only way that
   // option could be used. `retry` is absent for the same reason — the contention error's own
   // message tells the caller to retry — and the retry LOOP is caught structurally below.
+  // `lane`, `wasm`, `neutral`, `getBlock`, `getCodeArtifact`, `representation` and `metadata` are
+  // here for bead lagrange-images-it3: the answer to "which lane does a replacement compile in" is
+  // the native method evolution owner's, decided from the `metadata.lane` that owner published
+  // itself. If it ever migrated INTO this module it would have to decode the bound Block's code
+  // artifact or branch on a representation, which is the second-decoder path ADR 0087 rejected for
+  // the read seam and ADR 0088 for this one. The seam still passes the observed binding down and
+  // knows nothing about how it executes.
   for (const forbidden of [
     'putObject', 'putBlock', 'putShape', 'putCodeArtifact', '_version', 'bucket', 'ensureShape',
     'getShape', 'dictionaryRef', 'slots', 'VersionConflict', 'rebase', 'attempt',
+    'lane', 'wasm', 'neutral', 'getBlock', 'getCodeArtifact', 'representation', 'metadata',
   ]) {
     assert.ok(!code.includes(forbidden), `the authorized module must not implement ${forbidden}`);
   }
@@ -1011,6 +1024,8 @@ test('the public roots publish the four authorized seams and none of the interna
     'methodDictionaryInput',
     'readMethodBindings',
     'currentSelectorBindings',
+    'installedMethodLane',
+    'replacementLane',
     'selectorBindings',
     'installMethods',
     'authorizedMethodPosition',
@@ -1035,6 +1050,12 @@ test('the public roots publish the four authorized seams and none of the interna
   assert.equal(typeof token.parseSmalltalkMethodPositionToken, 'function');
   // And the names this PR did not touch stay exactly as they were.
   assert.equal(runtime.SmalltalkStaleMethodPositionError, builder.SmalltalkStaleMethodPositionError);
+  // `SmalltalkMethodLaneError` is deliberately on the SAME footing (bead lagrange-images-it3): a
+  // public semantic verdict from the same owner, published as the owner's own class, while the two
+  // helpers that raise it stay internal — listed above, because publishing either would put "which
+  // lane is this revision in" on the package surface as an API rather than as an owner decision.
+  assert.equal(runtime.SmalltalkMethodLaneError, builder.SmalltalkMethodLaneError);
+  assert.equal(typeof builder.SmalltalkMethodLaneError, 'function');
 });
 
 // WRONG IMPLEMENTATION THIS TEST MUST KILL: an Object Environment forced back to a private

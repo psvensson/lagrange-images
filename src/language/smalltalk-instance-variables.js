@@ -280,12 +280,23 @@ async function methodsFromSource({
   return await install({images, compilation, imageId, classRef, lane, methods: compiled});
 }
 
+// DEFINITION is unchanged, deliberately (bead lagrange-images-it3). Defining a method is add-only
+// and can carry no `expectedCurrent` at all — the class builder refuses one there — so there is no
+// observed revision whose lane could be preserved, and the neutral default it has always had stays
+// spelled right here.
 async function defineMethodsFromSource(options = {}) {
   return await methodsFromSource({...options, lane: options.lane ?? 'neutral', install: defineMethods});
 }
 
+// RECONCILIATION is the one line bead lagrange-images-it3 changes, and it changes only what happens
+// when the caller named NO lane. Spelling `?? 'neutral'` here made "no lane named" indistinguishable
+// from "neutral named" by the time it reached the installer, so a REPLACEMENT guarded by a WASM
+// revision was silently recompiled into the neutral lane. The lane now travels as the caller wrote
+// it — including not at all — to the class builder, which owns the default, the derivation and the
+// refusals in one place. A caller that DOES name a lane still gets exactly the lane it named, and an
+// unguarded reconciliation that names none still gets neutral: neither path changes.
 async function reconcileMethodsFromSource(options = {}) {
-  return await methodsFromSource({...options, lane: options.lane ?? 'neutral', install: reconcileMethods});
+  return await methodsFromSource({...options, lane: options.lane, install: reconcileMethods});
 }
 
 export {
