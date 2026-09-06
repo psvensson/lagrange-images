@@ -912,7 +912,13 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
 
     assert.equal(stale?.name, 'SmalltalkStaleMethodPositionError',
       `an overtaken observation must be refused as stale; got ${stale?.name}: ${stale?.message}`);
-    assert.deepEqual(compiled, [], 'and the replacement source was never compiled');
+    // No executable material was produced for the doomed call either. Stated for what it is: this
+    // is the CODE-ARTIFACT admission point, so it says no replacement artifact was compiled — it
+    // is NOT by itself the proof that the stale verdict precedes source compilation. MEASURED: with
+    // ADR 0088 decision 5's pre-compilation admission deleted, the class builder still refuses at
+    // plan time, which is before any code artifact exists, and this assertion stays green. The next
+    // one is the instrument that separates the two orderings.
+    assert.deepEqual(compiled, [], 'no replacement code artifact was produced for a doomed call');
     assert.deepEqual(staleWriter.demands, [
       {operation: OBJECT_WRITE_OPERATION, resource: objectResource('native-image', classRef.objectId)},
     ], 'a stale call still authorizes first, and demands only the declaring class\'s write');
@@ -923,6 +929,26 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     assert.deepEqual((await describeCurrent()).method, b, 'B remains the exact current binding');
     assert.deepEqual(await sendCtorMap(), integerValue(11), 'and dispatch still answers B');
     await assertGenuinelyWasm(runtime, b, 'B after the refused replacement');
+
+    // AND THE ORDERING ITSELF, with the only instrument that can see it: the same overtaken token
+    // against a source that CANNOT compile. A seam that compiles before admitting the caller's
+    // observation answers the compiler's rejection here; this one answers staleness, and no
+    // assertion about final state could tell those two implementations apart.
+    const staleUncompilable = await authorizedReplaceSmalltalkMethod({
+      images: runtime.images,
+      compilation: instrumented,
+      imageId: 'native-image',
+      classRef,
+      selector: 'ctorMap',
+      source: '[ 3 + ]',
+      expectedVersionToken: tokenA,
+      require: recordingRequire(runtime, [writeGrant(classRef.objectId)]),
+    }).then(() => null, (error) => error);
+    assert.equal(staleUncompilable?.name, 'SmalltalkStaleMethodPositionError',
+      'an overtaken observation is stale even when its source is also bad, which is what puts the '
+      + `stale verdict in front of compilation; got ${staleUncompilable?.name}: ${staleUncompilable?.message}`);
+    assert.deepEqual(compiled, [], 'and still nothing was compiled');
+    assert.deepEqual((await describeCurrent()).method, b, 'B is still the current binding');
 
     // ---- 6. A FRESH PUBLIC READ OF B ------------------------------------------------------------
     const readB = await readCurrentForUpdate();
