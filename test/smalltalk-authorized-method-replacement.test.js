@@ -903,6 +903,80 @@ test('a valid token with invalid source is a source rejection, and the exact old
   });
 });
 
+// REPLACEMENT-ONLY. ADR 0088 states normatively that this seam replaces an EXISTING
+// {Class/Metaclass, selector} position and that an absent selector is not a definition opportunity.
+// Until now that rule was carried only by a probe recorded in a bead, which is not a proof.
+//
+// WRONG IMPLEMENTATION THIS TEST MUST KILL: the authorized seam falls through to an unguarded
+// reconcile or define path and CREATES the absent selector. That is the whole failure mode — E3
+// silently becoming a method-authoring API — and it is invisible to every other test here, all of
+// which target a selector that already exists.
+//
+// The token is minted rather than read, deliberately: the public read cannot issue a token for a
+// position nothing implements, which is exactly why this is a BOUNDARY proof rather than an
+// ordinary user flow. Minting one is the only way to put a well-formed, correctly-scoped token in
+// front of the seam and ask what it does with an absent target.
+test('E3 is replacement-only: an absent selector is refused, never defined', async () => {
+  await withFixture(async (runtime, options) => {
+    const MISSING = 'missingSelector';
+    // The class really is a live native class with real methods; only THIS selector is absent.
+    assert.equal(await methodBlockRef({...options, selector: MISSING}), null, 'the fixture must start absent');
+    const before = await recordFingerprint(runtime);
+    const selectorsBefore = (await authorizedDescribeSmalltalkClass({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: options.classRef,
+      require: requireFor(runtime, [readDemand('app', options.classRef.objectId)]),
+    })).selectors;
+    assert.equal(selectorsBefore.includes(MISSING), false);
+
+    const token = smalltalkMethodPositionToken({
+      imageId: 'app',
+      classRef: options.classRef,
+      selector: MISSING,
+      // Any well-formed observation; the point is that NOTHING is bound at this position.
+      method: await methodBlockRef({...options, selector: GUARDED}),
+    });
+
+    const {compilation, compiled} = countingCompilation(runtime.compilation);
+    const error = await failure(authorizedReplaceSmalltalkMethod({
+      images: runtime.images,
+      compilation,
+      imageId: 'app',
+      classRef: options.classRef,
+      selector: MISSING,
+      source: '[ ^ 99 ]',
+      expectedVersionToken: token,
+      require: writerFor(runtime, options),
+    }));
+
+    // Refused as a semantic verdict about this position, per ADR 0088.
+    assert.ok(error, 'the call must not succeed');
+    assert.ok(
+      error instanceof SmalltalkMethodTargetError || error instanceof SmalltalkStaleMethodPositionError,
+      `an absent selector must be a target or stale verdict; got ${error?.name}: ${error?.message}`,
+    );
+
+    // Nothing was defined. Each of these fails independently if the seam fell through and created it.
+    assert.equal(await methodBlockRef({...options, selector: MISSING}), null,
+      'the absent selector must STILL be absent');
+    const selectorsAfter = (await authorizedDescribeSmalltalkClass({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: options.classRef,
+      require: requireFor(runtime, [readDemand('app', options.classRef.objectId)]),
+    })).selectors;
+    assert.deepEqual(selectorsAfter, selectorsBefore, 'the selector set is unchanged');
+    assert.deepEqual(await recordFingerprint(runtime), before,
+      'and no record was written at all: not the method, not the dictionary');
+    // Decided before compilation, so no replacement material was even produced.
+    assert.deepEqual(compiled, [], 'the source was never compiled for an absent target');
+    // The neighbours are untouched.
+    await answers(runtime, GUARDED, 1, 'the existing method is unaffected');
+    await answers(runtime, UNRELATED, 10, 'and so is its neighbour');
+  });
+});
+
 // WRONG IMPLEMENTATION THIS TEST MUST KILL: disclosing the resolution failure verbatim to an
 // authorized caller. Those failures name the class's MethodDictionary RECORD — storage identity the
 // seam does not publish — and a plain `TypeError` would also be indistinguishable from a source
