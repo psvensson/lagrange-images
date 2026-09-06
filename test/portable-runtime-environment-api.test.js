@@ -17,6 +17,10 @@ import {objectRef, referencesOfValue, textValue} from '../src/value/scalars.js';
 import {objectResource, parseObjectResource} from '../src/authority/object-resource.js';
 import {objectVersionToken} from '../src/object/version-token.js';
 import {
+  SMALLTALK_METHOD_READ_OPERATION,
+  smalltalkMethodPositionResource,
+} from '../src/language/smalltalk-method-position-resource.js';
+import {
   addProjectMember,
   authorizedReadProject,
   authorizedReadProjectDescriptor,
@@ -54,6 +58,7 @@ const owned = Object.freeze({
   objectResource,
   parseObjectResource,
   objectVersionToken,
+  smalltalkMethodPositionResource,
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
@@ -67,6 +72,10 @@ const owned = Object.freeze({
   authorizedDescribeSmalltalkMethod,
   authorizedReadSmalltalkMethodForUpdate,
   authorizedReplaceSmalltalkMethod,
+});
+
+test('portable-runtime exposes the exact method-position authority operation', () => {
+  assert.equal(portable.SMALLTALK_METHOD_READ_OPERATION, SMALLTALK_METHOD_READ_OPERATION);
 });
 
 test('portable-runtime exposes the exact Object Environment composition owner bindings', () => {
@@ -128,12 +137,17 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // the closure. It composes owners the closure already carried (the Behavior reader, the lookup
   // owner, the primitive-support guards and the value model), owns no walk of its own, and adds no
   // other dependency and no node:*.
-  assert.equal(modules.length, 116, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position token owner, the authorized method-replacement seam and the super-send facility');
+  // 117 after the public logical method-position authority vocabulary
+  // (src/language/smalltalk-method-position-resource.js, bead lagrange-images-31l) — one pure,
+  // injective resource namer composed only from the value model and portable byte helpers already
+  // in the closure, with no graph access and no node:*.
+  assert.equal(modules.length, 117, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam and the super-send facility');
   assert.ok(paths.includes('src/wasm/module-contract.js'));
   assert.ok(paths.includes('src/wasm/function-contract.js'));
   assert.ok(paths.includes('src/language/smalltalk-browse.js'));
   assert.ok(paths.includes('src/language/smalltalk-write-stream.js'));
   assert.ok(paths.includes('src/language/smalltalk-method-position-token.js'));
+  assert.ok(paths.includes('src/language/smalltalk-method-position-resource.js'));
   assert.ok(paths.includes('src/language/smalltalk-authorized-method-replacement.js'));
   assert.ok(paths.includes('src/language/smalltalk-primitives-super.js'));
   assert.deepEqual(projectPaths, [

@@ -7,6 +7,7 @@ import {
   CUIS_SEMANTIC_EXPORT_V2,
   OBJECT_READ_OPERATION,
   OBJECT_WRITE_OPERATION,
+  SMALLTALK_METHOD_READ_OPERATION,
   SMALLTALK_CLASS_DESCRIPTION_V1,
   SMALLTALK_METHOD_DESCRIPTION_V1,
   authorizedDescribeSmalltalkClass,
@@ -20,6 +21,7 @@ import {
   methodBindings,
   objectRef,
   objectResource,
+  smalltalkMethodPositionResource,
 } from '../src/runtime.js';
 import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
 import {createNodeSourceReader} from '../src/portable-artifact/node-source-reader.js';
@@ -32,8 +34,8 @@ import {createNodeSourceReader} from '../src/portable-artifact/node-source-reade
 //     declared layout, the class's OWN selectors) and nothing about storage;
 //   * method browsing answers the native method facts an inspector needs, and reports source and
 //     Cuis provenance as ABSENT because Images owns no durable association for either today;
-//   * two independent authority checks — class read, then the method Block's own read — with no
-//     transitive authority through a superclass, class-side or method ref;
+//   * two independent authority checks — class read, then the exact logical method position — with
+//     no transitive authority through a superclass, class-side, selector or method ref;
 //   * authorization strictly precedes existence disclosure, so a denied caller cannot use the seam
 //     as an existence oracle;
 //   * a Cuis-imported native class browses through the SAME public function as a hand-declared one,
@@ -65,6 +67,11 @@ function requireFor(runtime, grants) {
 const readGrant = (imageId, objectId) => ({
   operation: OBJECT_READ_OPERATION,
   resource: objectResource(imageId, objectId),
+});
+
+const methodPositionGrant = (imageId, classRef, selector) => ({
+  operation: SMALLTALK_METHOD_READ_OPERATION,
+  resource: smalltalkMethodPositionResource(imageId, classRef, selector),
 });
 
 // Two native classes with a real inheritance edge, real instance state and real methods on each.
@@ -234,7 +241,7 @@ test('an authorized method browse answers the native method, and absent source/p
       selector: 'childFirst',
       require: requireFor(runtime, [
         readGrant('app', child.classRef.objectId),
-        readGrant('app', binding.method.objectId),
+        methodPositionGrant('app', child.classRef, 'childFirst'),
       ]),
     });
 
@@ -265,12 +272,11 @@ test('a class-side method browses as side "class" through the same seam', async 
       images: runtime.images, compilation: runtime.compilation, imageId: 'app',
       classRef: child.metaclassRef, methods: [{selector: 'describe', source: '[ ^7 ]'}],
     });
-    const [binding] = await methodBindings({images: runtime.images, imageId: 'app', classRef: child.metaclassRef});
     const description = await authorizedDescribeSmalltalkMethod({
       images: runtime.images, imageId: 'app', classRef: child.metaclassRef, selector: 'describe',
       require: requireFor(runtime, [
         readGrant('app', child.metaclassRef.objectId),
-        readGrant('app', binding.method.objectId),
+        methodPositionGrant('app', child.metaclassRef, 'describe'),
       ]),
     });
     assert.equal(description.side, 'class');
@@ -278,7 +284,7 @@ test('a class-side method browses as side "class" through the same seam', async 
   });
 });
 
-test('CLASS authority is not METHOD authority: the Block needs its own grant', async () => {
+test('CLASS authority is not METHOD authority: the logical position needs its own grant', async () => {
   await withImage(async (runtime) => {
     const {child} = await declareNativeClasses(runtime);
     const [binding] = await methodBindings({images: runtime.images, imageId: 'app', classRef: child.classRef});
@@ -290,9 +296,8 @@ test('CLASS authority is not METHOD authority: the Block needs its own grant', a
       images: runtime.images, imageId: 'app', classRef: child.classRef, require: classOnly,
     });
     assert.ok(description.selectors.includes(binding.selector));
-    // It does NOT authorize the Block behind a selector. A Block is an independent semantic object
-    // — executable, and legitimately reachable from more than one dictionary — so this is exactly
-    // the transitive ref-follow ADR 0039 §2 refuses.
+    // It does NOT authorize the method behind a selector. The logical position has an independent
+    // semantic read operation, so this is exactly the transitive ref-follow ADR 0039 §2 refuses.
     await assert.rejects(
       authorizedDescribeSmalltalkMethod({
         images: runtime.images, imageId: 'app', classRef: child.classRef,
@@ -301,12 +306,11 @@ test('CLASS authority is not METHOD authority: the Block needs its own grant', a
       (error) => error?.name === 'AuthorityError',
     );
 
-    // The Block grant alone is not enough either: the class check comes first, so a caller who may
-    // read the Block but not the class cannot use the seam to discover which class binds it.
+    // The position grant alone is not enough either: the class check comes first.
     await assert.rejects(
       authorizedDescribeSmalltalkMethod({
         images: runtime.images, imageId: 'app', classRef: child.classRef, selector: binding.selector,
-        require: requireFor(runtime, [readGrant('app', binding.method.objectId)]),
+        require: requireFor(runtime, [methodPositionGrant('app', child.classRef, binding.selector)]),
       }),
       (error) => error?.name === 'AuthorityError',
     );
@@ -316,7 +320,7 @@ test('CLASS authority is not METHOD authority: the Block needs its own grant', a
       images: runtime.images, imageId: 'app', classRef: child.classRef, selector: binding.selector,
       require: requireFor(runtime, [
         readGrant('app', child.classRef.objectId),
-        readGrant('app', binding.method.objectId),
+        methodPositionGrant('app', child.classRef, binding.selector),
       ]),
     });
     assert.deepEqual(both.method, binding.method);
@@ -412,7 +416,10 @@ test('NO-EXISTENCE-ORACLE: denied browsing of existing and missing classes is in
     await assert.rejects(
       authorizedDescribeSmalltalkMethod({
         images: runtime.images, imageId: 'app', classRef: child.classRef, selector: 'neverImplemented',
-        require: requireFor(runtime, [readGrant('app', child.classRef.objectId)]),
+        require: requireFor(runtime, [
+          readGrant('app', child.classRef.objectId),
+          methodPositionGrant('app', child.classRef, 'neverImplemented'),
+        ]),
       }),
       (error) => error?.name === 'TypeError' && /does not implement neverImplemented/.test(error.message),
     );
@@ -514,7 +521,10 @@ test('an imported-native class browses through the same seam, with no Cuis ident
     const [binding] = await methodBindings({images: runtime.images, imageId: 'app', classRef});
     const method = await authorizedDescribeSmalltalkMethod({
       images: runtime.images, imageId: 'app', classRef, selector: 'baseValue',
-      require: requireFor(runtime, [readGrant('app', classRef.objectId), readGrant('app', binding.method.objectId)]),
+      require: requireFor(runtime, [
+        readGrant('app', classRef.objectId),
+        methodPositionGrant('app', classRef, 'baseValue'),
+      ]),
     });
     assert.equal(method.selector, 'baseValue');
     assert.equal(method.side, 'instance');

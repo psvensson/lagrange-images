@@ -71,7 +71,7 @@ Already established foundations include cascades, collection/species conventions
 
 The REPL, source browser, inspector and debugger presentation belong in Lagrange Object Environment; this repository exposes the semantic/compiler/execution APIs they need.
 
-The first of those is delivered: `authorizedDescribeSmalltalkClass` / `authorizedDescribeSmalltalkMethod` (ADR 0087, [seams](seams.md#authorized-native-smalltalk-browsing)) let a class or method browser read ordinary native facts under two independent `object/read` checks, with a Cuis-imported class browsing exactly as an ordinary native one. It is READ-ONLY on purpose: durable native method source, protocol/category and Cuis provenance are reported as absent because Images owns no such association yet, and edit/rename/recompile semantics wait for a consumer that actually needs them.
+The first of those is delivered: `authorizedDescribeSmalltalkClass` / `authorizedDescribeSmalltalkMethod` (ADR 0087, [seams](seams.md#authorized-native-smalltalk-browsing)) let a class or method browser read ordinary native facts under independent Class `object/read` and exact logical-position `smalltalk-method/read` checks, with a Cuis-imported class browsing exactly as an ordinary native one. The method-position resource is nameable from `{imageId, Class/Metaclass, selector}` before the current immutable Block is known and remains stable across replacements; direct Block reads still require Block `object/read`. It is READ-ONLY on purpose: durable native method source, protocol/category and Cuis provenance are reported as absent because Images owns no such association yet, and edit/rename/recompile semantics wait for a consumer that actually needs them.
 
 ## 2. Callable Component and authority refinements
 

@@ -91,6 +91,10 @@ import {
   authorizedReadSmalltalkMethodForUpdate,
 } from './language/smalltalk-browse.js';
 import {
+  SMALLTALK_METHOD_READ_OPERATION,
+  smalltalkMethodPositionResource,
+} from './language/smalltalk-method-position-resource.js';
+import {
   authorizedReplaceSmalltalkMethod,
 } from './language/smalltalk-authorized-method-replacement.js';
 import {createDefaultLanguagePlatform} from './language/index.js';
@@ -262,6 +266,8 @@ export {
   objectResource,
   parseObjectResource,
   objectVersionToken,
+  SMALLTALK_METHOD_READ_OPERATION,
+  smalltalkMethodPositionResource,
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
