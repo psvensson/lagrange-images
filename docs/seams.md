@@ -150,7 +150,7 @@ Protocol arrives after identity, per lane, through builders rather than through 
 | `ensureClassFromDeclaration()` | an instantiable class from locally declared instance-variable names; the native class owner assigns initial stable slot ids and composes the complete inherited Shape |
 | `importCuisNativePackage()` | the ADR 0085 M1/M2 translation from one canonical Cuis v2 package graph to existing native owners: class declarations go to `ensureClassFromDeclaration`, full Cuis method definitions are header-translated and go to `reconcileMethodsFromSource` in the WASM lane; the adapter recognizes only a closed table of exact Cuis base-class identities, each declared for the position it is proved in (`Cuis-Base/Object` as a superclass, `Cuis-Base/Integer` as an instance-side method target), and owns no `CuisExport*`, VM handle, native identity, prior-source/revision state, durable importer state or compiler semantics |
 | `defineMethods()` | add-only native methods from semantic `lagrange-code` programs, optionally with captures; exact replay converges and different current semantics are refused |
-| `reconcileMethods()` | ADR 0086's explicit native method evolution: exact current semantics are write-free; changed semantics get immutable class-builder-owned revision identities and one expected-version MethodDictionary publication. A method entry may carry `expectedCurrent`, the binding the caller OBSERVED at that position, which the owner requires to still be current at plan time and at every retry boundary: a moved position is `SmalltalkStaleMethodPositionError` (checked BEFORE exact-replay convergence, so an external winner that happens to mean what the caller wanted is still stale), while an UNRELATED selector moving under the write rebases onto the fresh bindings and retries rather than reporting staleness or clobbering the winner. Exhausting the bounded rebase budget is `SmalltalkMethodDictionaryContentionError`, claimable only after that boundary has re-asserted the expectation too, so contention can never stand in for staleness; it does not claim an empty write, because the revision material is published before the final CAS. A guarded write is NOT idempotent under a lost acknowledgement: the position moved (the caller moved it), so re-attempting with the same observation is stale rather than the write-free replay ADR 0086 describes for an unguarded write — a fresh authorized read is how the caller learns its write landed. Trusted internal semantics with no authority of its own |
+| `reconcileMethods()` | ADR 0086's explicit native method evolution: exact current semantics are write-free; changed semantics get immutable class-builder-owned revision identities and one expected-version MethodDictionary publication. A method entry may carry `expectedCurrent`, the binding the caller OBSERVED at that position, which the owner requires to still be current at plan time and at every retry boundary: a moved position is `SmalltalkStaleMethodPositionError` (checked BEFORE exact-replay convergence, so an external winner that happens to mean what the caller wanted is still stale), while an UNRELATED selector moving under the write rebases onto the fresh bindings and retries rather than reporting staleness or clobbering the winner. Exhausting the bounded rebase budget is `SmalltalkMethodDictionaryContentionError`, claimable only after that boundary has re-asserted the expectation too, so contention can never stand in for staleness; it does not claim an empty write, because the revision material is published before the final CAS. A guarded write is NOT idempotent under a lost acknowledgement: the position moved (the caller moved it), so re-attempting with the same observation is stale rather than the write-free replay ADR 0086 describes for an unguarded write — a fresh authorized read is how the caller learns its write landed. It also decides the EXECUTION LANE of a replacement (bead `lagrange-images-it3`): a guarded entry is compiled in the lane of the revision the caller OBSERVED — read back from the `metadata.lane` this owner published on that Block, never from the current binding. WASM stays WASM, neutral stays neutral, and there is no fallback either way — a replacement the observed lane cannot compile fails with the observed revision still current, because changing execution representation is a migration rather than part of replacing semantics. Lane also participates in identity, so an exact guarded replay stays write-free in the observed lane. Missing/unknown lane metadata, a caller-named lane that disagrees with the observed one, and a guarded batch spanning two lanes are all `SmalltalkMethodLaneError`; unguarded calls keep the lane they name and the neutral default when they name none. Trusted internal semantics with no authority of its own |
 | `installSmalltalkControlFlow()` | `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:` on True and False (ADR 0045) |
 | `installSmalltalkAllocationProtocol()` | the `class-of`/`basic-new` primitive Blocks, plus `Object >> class`, `Object >> initialize`, `Class >> basicNew` and `Class >> new` (ADR 0046) |
 | `installSmalltalkEqualityProtocol()` | the `built-in-equals`/`built-in-hash` primitive Blocks, plus `Object >> =` and `Object >> hash` (ADR 0048) |
@@ -349,15 +349,21 @@ make a stale conflict unobservable, which is exactly what #218 asks this operati
 cannot do. An ABSENT selector is stale rather than a fresh definition, the same rule the owner
 applies, because E3 adds no method.
 
-**No execution lane is published**, and that has an observable consequence. `reconcileMethodsFromSource`
-compiles in its own default lane, so a method originally installed in the WASM lane — every
-Cuis-imported method is — is replaced by one in the neutral lane. It dispatches and answers exactly
-as before, because the executor registry selects by the artifact's representation, but the
-executable representation underneath does change. A `lane` parameter would publish a compiler knob
-on a seam that exposes no compiler, and preserving the current method's lane would mean decoding the
-bound Block's code artifact — the second-decoder path ADR 0087 rejected for the read seam. Which
-lane a REPLACEMENT should compile in is a question for the installer that owns lanes; see bead
-`lagrange-images-it3`.
+**No execution lane is published, and none is chosen here.** A `lane` parameter would publish a
+compiler knob on a seam that exposes no compiler, and discovering the bound method's lane HERE would
+mean decoding its Block's code artifact — the second-decoder path ADR 0087 rejected for the read
+seam. So this seam does not know, and must not learn, how the method it replaces executes; a
+structural proof keeps it free of any lane name, Block/CodeArtifact read or representation branch.
+
+What happens to the lane is the class builder's decision (bead `lagrange-images-it3`, ADR 0088
+decision 6 as amended): **a replacement is compiled in the execution lane of the revision the caller
+observed.** WASM stays WASM — which is every Cuis-imported method — and neutral stays neutral.
+Replacing what a position MEANS is never also a migration of how it RUNS, and there is no fallback:
+if the observed lane cannot compile the replacement source, the replacement fails and the observed
+revision stays current. The token already names the observed immutable binding, so the Environment
+never has to know what a lane is. A revision whose lane cannot be established is
+`SmalltalkMethodLaneError`, passed through unrestated because it already names only the caller's own
+position.
 
 `source` is explicitly supplied NEW source and is not persisted: ADR 0087's `source: null` remains a
 truthful answer after a successful replacement, and #218 point 5 scopes E3 that way on purpose. The
@@ -378,6 +384,7 @@ consumer reaching the seam through `src/portable-runtime.js` (these classes are 
 | `AuthorityError` | the caller's own `require` denied `object/write` |
 | `SmalltalkMethodTargetError` | after authorization: no such native method position. Names only the caller's own position and forwards no owner diagnostic, because those name the class's MethodDictionary record |
 | `SmalltalkStaleMethodPositionError` | the observed binding is no longer current (the class builder's own class, unchanged) |
+| `SmalltalkMethodLaneError` | the observed revision records no usable execution lane, so the lane owner cannot preserve it |
 | `SmalltalkMethodReplacementContentionError` | transient: the position is unchanged and was not advanced; retry from a fresh read. Covers BOTH an exhausted rebase budget and a dictionary sealed for migration, because the caller's response to either is the same and neither is a statement about the request. A position-scoped restatement of the owner's dictionary-scoped outcomes, which name the class's MethodDictionary record. It does not claim an empty write |
 | anything else | the native compiler/source owner rejected the source. Only the class builder's own semantic refusals are restated; a host or transport failure of the binding read propagates as raised, because it is not a statement about this position |
 

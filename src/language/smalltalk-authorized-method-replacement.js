@@ -66,18 +66,22 @@ import {sameRef} from './smalltalk-lookup.js';
 //     denied caller cannot tell an implemented selector from an unimplemented one from a missing
 //     class. All three are `AuthorityError`.
 //
-// NO EXECUTION LANE IS PUBLISHED, and that has an observable consequence stated here rather than
-// discovered later. `reconcileMethodsFromSource` compiles in its own default lane, so a method
-// originally installed in the WASM lane — every Cuis-imported method is — is replaced by one in the
-// neutral lane. It dispatches and answers exactly as before, because the executor registry selects
-// by the artifact's representation, but the executable representation underneath does change.
+// NO EXECUTION LANE IS PUBLISHED, AND NONE IS CHOSEN HERE. A `lane` parameter would publish a
+// compiler/execution knob on a seam whose whole point is that E3 exposes no compiler, and
+// discovering the current method's lane HERE would mean reading the bound Block's code artifact —
+// making this a second CodeArtifact decoder, exactly the path ADR 0087 rejected for the read seam.
 //
-// The two alternatives are worse. A `lane` parameter would publish a compiler/execution knob on a
-// seam whose whole point is that E3 exposes no compiler. PRESERVING the current method's lane would
-// mean reading the bound Block's code artifact to discover it, making this a second CodeArtifact
-// decoder — exactly the path ADR 0087 rejected for the read seam. Which lane a REPLACEMENT should
-// compile in is a question for the installer that owns lanes, and a consumer that needs an answer
-// is the pressure that should produce one.
+// So this module does not know, and must not learn, how the method it replaces executes. What
+// happens to the execution lane is the native method evolution owner's decision (bead
+// lagrange-images-it3): a replacement guarded by an observed revision is compiled in THAT
+// REVISION'S lane, which that owner reads back from the `metadata.lane` it published itself when it
+// installed the Block — its own record, not a decoded executable representation. Replacing what a
+// position MEANS is therefore never also a migration of how it RUNS, and there is no fallback: a
+// replacement the observed lane cannot compile fails, and the observed revision stays current.
+//
+// Nothing about that reaches this contract. The token already names the observed immutable binding,
+// which is all the owner needs; the Environment never has to know what a lane is, and a future
+// explicit lane migration would be a separate operation with its own policy.
 //
 // SOURCE IS NOT PERSISTED. `source` is the explicitly supplied NEW source and this seam is not a
 // source editor: it compiles through the existing owner and retains no text, so ADR 0087's
@@ -104,7 +108,15 @@ import {sameRef} from './smalltalk-lookup.js';
 //   SmalltalkMethodTargetError              after authorization: no such native method position
 //   SmalltalkStaleMethodPositionError       the observed binding is no longer current (C1's class)
 //   SmalltalkMethodReplacementContentionError  transient: the position did not move and was not advanced
+//   SmalltalkMethodLaneError                the observed revision records no usable execution lane,
+//                                           so its lane cannot be preserved (the lane owner's class)
 //   anything else                           the native compiler/source owner rejected the source
+//
+// `SmalltalkMethodLaneError` passes through unrestated, unlike the two dictionary-scoped outcomes
+// above it: it already names only the `{class, selector}` the caller supplied, carries no storage
+// identity and no `cause`, and a caller cannot provoke it with a well-formed observation of a
+// method this substrate installed. Restating it would only hide which of two very different things
+// went wrong.
 //
 // Malformed caller input has its OWN class rather than a bare `TypeError` for one concrete reason:
 // the native semantic compiler also rejects bad source with `TypeError`, so a bare `TypeError` here

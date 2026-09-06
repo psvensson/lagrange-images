@@ -280,12 +280,18 @@ async function methodsFromSource({
   return await install({images, compilation, imageId, classRef, lane, methods: compiled});
 }
 
+// Neither entry point defaults the lane any more, and that is the whole of bead
+// lagrange-images-it3's change here. The neutral default used to be spelled twice, once on each of
+// these lines, which made "no lane named" indistinguishable from "neutral named" by the time it
+// reached the installer — so a REPLACEMENT that observed a WASM revision was silently recompiled
+// into the neutral lane. The lane now travels as the caller wrote it (including not at all) to the
+// class builder, which owns lane defaulting, preservation and refusal in one place.
 async function defineMethodsFromSource(options = {}) {
-  return await methodsFromSource({...options, lane: options.lane ?? 'neutral', install: defineMethods});
+  return await methodsFromSource({...options, lane: options.lane, install: defineMethods});
 }
 
 async function reconcileMethodsFromSource(options = {}) {
-  return await methodsFromSource({...options, lane: options.lane ?? 'neutral', install: reconcileMethods});
+  return await methodsFromSource({...options, lane: options.lane, install: reconcileMethods});
 }
 
 export {
