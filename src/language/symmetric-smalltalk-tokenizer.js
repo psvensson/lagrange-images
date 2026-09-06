@@ -11,7 +11,14 @@ const BINARY_SELECTOR_CHARS = new Set('+-*/=<>~&,@%?!\\'.split(''));
 // temporaries, assignment targets and explicit captures — four sites that would otherwise drift, as
 // they already had: `self` was refused as a temporary and as an assignment target but accepted as a
 // block parameter.
-const RESERVED_WORDS = Object.freeze(new Set(['self', 'true', 'false', 'nil']));
+//
+// ADR 0089 adds `super` to exactly this set rather than to the identifier path. Leaving it an
+// ordinary name is the pre-0089 defect — it resolved as nothing and reported `unbound Symmetric
+// Smalltalk name: super` — and binding it as a global would be worse, because `super` names no
+// object at all: it is a receiver MARKER whose only effect is to move where lookup starts. Being
+// reserved here is what makes a parameter, temporary, assignment target or explicit capture called
+// `super` a refusal at all four existing sites instead of a fifth rule.
+const RESERVED_WORDS = Object.freeze(new Set(['self', 'super', 'true', 'false', 'nil']));
 
 function isReservedWord(name) {
   return RESERVED_WORDS.has(name);

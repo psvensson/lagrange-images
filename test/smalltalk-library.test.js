@@ -286,9 +286,10 @@ test('every library method is an ordinary Smalltalk method with a semantic artif
 
 // No collection-specific host operation was added. The primitive family is exactly what ADRs
 // 0046-0051 installed, and the library reaches storage only through Array's ordinary protocol.
-// The loop (ADR 0051), Integer (ADR 0053), condition (ADR 0054) and non-local-return (ADR 0055)
-// primitives are language operations, not collection operations. `non-local-return` is reached only
-// by the compiler's `^` lowering and is never named in source. They are reached by
+// The loop (ADR 0051), Integer (ADR 0053), condition (ADR 0054), non-local-return (ADR 0055) and
+// super-send (ADR 0089) primitives are language operations, not collection operations.
+// `non-local-return` and `super-send` are reached only by the compiler's `^` and `super` lowerings
+// and are never named in source. They are reached by
 // dispatching `whileTrue:`/`whileFalse:` and `<`/`<=`/`-` like any other message.
 test('the library adds no new kernel primitive', async () => {
   const {SMALLTALK_PRIMITIVE_NAMES} = await import('../src/language/smalltalk-primitives.js');
@@ -348,6 +349,10 @@ test('the library adds no new kernel primitive', async () => {
     // Class-hierarchy introspection: `subclasses-of` is installed by
     // `installSmalltalkSubclassProtocol`, not by the library — the library still adds nothing.
     'subclasses-of',
+    // ADR 0089. A LANGUAGE operation, reached only by the compiler's `super` lowering and never
+    // named in source — exactly like `non-local-return` above. Installed by
+    // `installSmalltalkInstanceVariableProtocol` beside the slot primitives and `^`.
+    'super-send',
     'symbol-intern',
     'text-utf8-bytes',
   ]);

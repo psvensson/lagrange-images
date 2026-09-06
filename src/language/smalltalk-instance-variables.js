@@ -21,6 +21,7 @@ import {
   NIL_CAPTURE,
   NON_LOCAL_RETURN_CAPTURE,
   INSTANCE_SLOT_WRITE_CAPTURE,
+  SUPER_SEND_CAPTURE,
   SYMBOL_BINDING_ID,
   compileSymmetricSmalltalkSemanticBlock,
 } from './symmetric-smalltalk-semantic.js';
@@ -37,11 +38,17 @@ const PRIMITIVE_BLOCK_ID = Object.freeze({
   [SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE]: 'smalltalk/primitive/instance-slot-write',
   // ADR 0055. `^` lowers to a send to this, bound through the same seam and reserved the same way.
   [SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN]: 'smalltalk/primitive/non-local-return',
+  // ADR 0089. `super <selector>` lowers to a send to this, through the same seam again. It belongs
+  // to the CLASS-SCOPED binder rather than to the Block compiler for the same reason `^` does: a
+  // super send starts above the DEFINING Behavior of a method, so a compilation with no method home
+  // has nothing to start above.
+  [SMALLTALK_PRIMITIVE.SUPER_SEND]: 'smalltalk/primitive/super-send',
 });
 
 // Owned by the class-scoped binder, which injects them for instance-variable access and for `^`.
 const RESERVED_CAPTURE_NAMES = new Set([
   INSTANCE_SLOT_READ_CAPTURE, INSTANCE_SLOT_WRITE_CAPTURE, NON_LOCAL_RETURN_CAPTURE, NIL_CAPTURE,
+  SUPER_SEND_CAPTURE,
 ]);
 // The nil binding id joins the primitive ids: reserving a name without its id would let a caller
 // bind the same id under a different name and shadow the intrinsic from outside the compiler.
@@ -82,6 +89,7 @@ async function installSmalltalkInstanceVariableProtocol({images, imageId} = {}) 
     readPrimitive: installed[SMALLTALK_PRIMITIVE.INSTANCE_SLOT_READ],
     writePrimitive: installed[SMALLTALK_PRIMITIVE.INSTANCE_SLOT_WRITE],
     nonLocalReturnPrimitive: installed[SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN],
+    superSendPrimitive: installed[SMALLTALK_PRIMITIVE.SUPER_SEND],
   });
 }
 
@@ -190,6 +198,9 @@ async function compileSymmetricSmalltalkMethod({
     // inspection of the source.
     intrinsics: {
       [NON_LOCAL_RETURN_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN],
+      // ADR 0089, offered on exactly the same terms: made available rather than declared, so a
+      // method that never writes `super` carries no binding for it.
+      [SUPER_SEND_CAPTURE]: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.SUPER_SEND],
       // `nil` is deliberately absent: the semantic compiler owns that intrinsic and offers it to
       // every compilation, so declaring it here would be a second definition to keep in step.
     },

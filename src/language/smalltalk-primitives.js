@@ -9,12 +9,14 @@ import {
   SMALLTALK_PRIMITIVE,
   SMALLTALK_PRIMITIVE_ARITY,
   SMALLTALK_PRIMITIVE_NAMES,
+  SMALLTALK_PRIMITIVE_VARIADIC,
   SmalltalkPrimitiveLocalityError,
   SmalltalkPrimitiveReceiverError,
   parsePrimitiveCode,
   primitiveCodeContent,
   requireSendMessage,
 } from './smalltalk-primitive-support.js';
+import {SmalltalkSuperFrameMissingError, superSend} from './smalltalk-primitives-super.js';
 import {
   SmalltalkIndexedBoundsError,
   SmalltalkNotIndexedError,
@@ -118,7 +120,17 @@ function createSmalltalkKernelPrimitiveV1Executor({
         assertBlockApplicationReceiver(activation, `${SMALLTALK_KERNEL_PRIMITIVE_V1} ${primitive}`);
       }
       const expectedArity = SMALLTALK_PRIMITIVE_ARITY[primitive];
-      if (activation.arguments.length !== expectedArity) {
+      // ADR 0089. Exactly one primitive is variadic, because the message it forwards is: `super foo`
+      // and `super at: k put: v` are one operation with different argument counts. Its entry in the
+      // arity map is therefore a minimum, and every other primitive keeps its exact check.
+      if (SMALLTALK_PRIMITIVE_VARIADIC.has(primitive)) {
+        if (activation.arguments.length < expectedArity) {
+          throw new TypeError(
+            `Symmetric Smalltalk ${primitive} primitive expects at least ${expectedArity} arguments, `
+            + `received ${activation.arguments.length}`,
+          );
+        }
+      } else if (activation.arguments.length !== expectedArity) {
         throw new TypeError(
           `Symmetric Smalltalk ${primitive} primitive expects exactly ${expectedArity} arguments, `
           + `received ${activation.arguments.length}`,
@@ -141,6 +153,12 @@ function createSmalltalkKernelPrimitiveV1Executor({
       }
       if (primitive === SMALLTALK_PRIMITIVE.NON_LOCAL_RETURN) {
         return nonLocalReturn({activation, context, primitive});
+      }
+      // ADR 0089. Handled before the fixed-shape switch below because it is the variadic one: its
+      // arguments are the selector plus however many the forwarded message takes, so the
+      // `[value, second, third]` destructuring the switch relies on does not describe it.
+      if (primitive === SMALLTALK_PRIMITIVE.SUPER_SEND) {
+        return await superSend({images, activation, context, primitive});
       }
       if (primitive === SMALLTALK_PRIMITIVE.CONDITION_SIGNAL) {
         return await conditionSignal({images, primitiveImage, activation, context, primitive});
@@ -287,6 +305,7 @@ export {
   SmalltalkPrimitiveReceiverError,
   SmalltalkSlotAccessError,
   SmalltalkSlotFrameMissingError,
+  SmalltalkSuperFrameMissingError,
   createSmalltalkKernelPrimitiveV1Executor,
   parsePrimitiveCode,
   primitiveCodeContent,
