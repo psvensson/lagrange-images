@@ -734,6 +734,7 @@ async function assertGenuinelyWasm(runtime, method, label) {
     exports.some(({name, kind}) => name === entry && kind === 'function'),
     `${label}: the artifact's entry ${entry} must be a real exported function of the compiled module`,
   );
+  return block.code;
 }
 
 // Where a lane could leak into the Environment-facing contract, checked as KEYS AND VALUES rather
@@ -810,16 +811,38 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     ));
 
     let sends = 0;
-    const sendCtorMap = async () => {
+    const send = async (selector) => {
       sends += 1;
       const {block} = await installSymmetricSmalltalkBlock({
         images: runtime.images, imageId: 'native-image', id: `e3-send-${sends}`,
-        source: '[ :receiver | receiver ctorMap ]',
+        source: `[ :receiver | receiver ${selector} ]`,
       });
       return await runtime.executor.execute(await runtime.invocations.invokeBlock(
         objectRef('native-image', block.id), [instance],
       ));
     };
+    const sendCtorMap = async () => await send('ctorMap');
+
+    // The receiver is genuinely an instance of the imported class, and `nil` is not simply what
+    // every send to it answers. Both matter because A's measured answer IS this image's `nil`: a
+    // receiver of the wrong class, or a dispatch that quietly answered `nil` for anything, would
+    // otherwise satisfy the measurement below without the upstream accessor doing any work.
+    const isInstanceOfImportedClass = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'native-image', id: 'e3-class-of',
+      source: '[ :receiver :aClass | receiver class == aClass ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('native-image', isInstanceOfImportedClass.block.id), [instance, classRef],
+      )),
+      booleanValue(true),
+      'the receiver is an instance of the imported class, asked of the receiver in Smalltalk',
+    );
+    await assert.rejects(
+      send('neverImplementedByAnyPackage'),
+      /message not understood/,
+      'an unimplemented selector RAISES rather than answering nil',
+    );
 
     // The Environment's own read authority, rebuilt for each revision: the class's own `object/read`
     // plus the CURRENT method Block's independent one (ADR 0087 — neither half alone suffices).
@@ -849,7 +872,7 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     assert.equal(descriptionA.side, 'instance');
     assert.equal(descriptionA.source, null);
     assert.equal(descriptionA.provenance, null);
-    await assertGenuinelyWasm(runtime, a, 'A (the pinned upstream revision)');
+    const codeA = await assertGenuinelyWasm(runtime, a, 'A (the pinned upstream revision)');
     const blockA = await runtime.images.getBlock(a.imageId, a.objectId);
 
     // A'S ANSWER, MEASURED. `^ ctorMap` reads an instance variable nothing has assigned, so the real
@@ -872,6 +895,10 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     assert.deepEqual(descriptorA.method, a, 'and it names exactly Block A');
     assert.equal(typeof tokenA, 'string');
     assert.ok(tokenA.length > 0);
+    // A token is NOT the Block ref, which the browse seam already discloses; if it were, the
+    // Environment could derive one locally and the E3 contract would be empty.
+    assert.notEqual(tokenA, a.objectId);
+    assert.equal(tokenA.includes(a.objectId), false);
 
     // ---- 4. A COMPETING EDITOR REPLACES A WITH B ------------------------------------------------
     // Through the TRUSTED Images-native owner path rather than the public writer, so the stale leg
@@ -897,7 +924,8 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     assert.notDeepEqual(b, a, 'B is a FRESH immutable revision, not a mutation of A');
     assert.deepEqual(await runtime.images.getBlock(a.imageId, a.objectId), blockA,
       'and A survives unchanged: a replacement stops pointing at the old revision, it does not edit it');
-    await assertGenuinelyWasm(runtime, b, 'B (the competing editor\'s revision)');
+    const codeB = await assertGenuinelyWasm(runtime, b, 'B (the competing editor\'s revision)');
+    assert.notDeepEqual(codeB, codeA, 'and it is a different compiled program, not the same code rebound');
     assert.deepEqual(await sendCtorMap(), integerValue(11), 'ordinary dispatch now answers B');
     const blockB = await runtime.images.getBlock(b.imageId, b.objectId);
 
@@ -1000,7 +1028,9 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     assert.notDeepEqual(c, a, 'and distinct from A');
     assert.deepEqual(await runtime.images.getBlock(a.imageId, a.objectId), blockA, 'A is still an addressable immutable revision');
     assert.deepEqual(await runtime.images.getBlock(b.imageId, b.objectId), blockB, 'and so is B');
-    await assertGenuinelyWasm(runtime, c, 'C (the publicly replaced revision)');
+    const codeC = await assertGenuinelyWasm(runtime, c, 'C (the publicly replaced revision)');
+    assert.notDeepEqual(codeC, codeB, 'C is a different compiled program from B');
+    assert.notDeepEqual(codeC, codeA, 'and from A');
     assert.deepEqual(await sendCtorMap(), integerValue(22), 'and ordinary dispatch answers C');
 
     // ---- 8. SOURCE STAYS ABSENT -----------------------------------------------------------------
@@ -1013,6 +1043,28 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     assertOriginNeutralNativeDescription(descriptionC, 'the replaced method description');
     assert.equal(JSON.stringify(descriptionC).includes(REPLACEMENT_C), false,
       'the supplied source did not become retained, Environment-visible source');
+
+    // THE PREMISE THE ORDERING LEG RESTS ON, pinned in this fixture rather than in another file.
+    // Step 5's instrument only separates the two orderings while `[ 3 + ]` is genuinely
+    // uncompilable; if the parser ever accepted it, that leg would silently become a duplicate of
+    // the leg above it and keep claiming to prove decision 5. So: the SAME source under a FRESH,
+    // VALID token is refused by the compiler owner rather than as staleness — and refusing source
+    // does not move the binding either.
+    const sourceRejection = await authorizedReplaceSmalltalkMethod({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      classRef,
+      selector: 'ctorMap',
+      source: '[ 3 + ]',
+      expectedVersionToken: tokenC,
+      require: recordingRequire(runtime, [writeGrant(classRef.objectId)]),
+    }).then(() => null, (error) => error);
+    assert.ok(sourceRejection, 'an uncompilable source must be refused');
+    assert.notEqual(sourceRejection.name, 'SmalltalkStaleMethodPositionError',
+      `a CURRENT observation with bad source is a source rejection, not staleness; got ${sourceRejection.name}`);
+    assert.deepEqual((await describeCurrent()).method, c, 'and a rejected source never moves the binding');
+    assert.deepEqual(await sendCtorMap(), integerValue(22));
 
     // ---- 9. THE AUTHORITY IS NARROW -------------------------------------------------------------
     // Not a re-proof of the C2 suite — just enough to show the REAL imported method takes the same
@@ -1042,13 +1094,7 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     assert.deepEqual((await describeCurrent()).method, c, 'no denied call moved the position');
     assert.deepEqual(await sendCtorMap(), integerValue(22));
 
-    // ---- 10. CUIS IS STILL ABSENT ---------------------------------------------------------------
-    // The pair matters: step 1 proves the sequence STARTED without Cuis, and this proves nothing
-    // lazily started it during import, replacement or dispatch.
-    assert.deepEqual(runtime.toolchainProviders.list(), [], 'nothing started a Cuis toolchain during E3');
-    assert.deepEqual(runtime.foreignRuntimeProviders.list(), [], 'and no Cuis foreign runtime');
-
-    // ---- 11. THE LANE IS INTERNAL ---------------------------------------------------------------
+    // ---- 10. THE LANE IS INTERNAL ---------------------------------------------------------------
     // A -> B -> C never left the WASM lane, proven above by BOTH the owner's recorded lane and a
     // genuine WebAssembly decode of the module each revision executes through.
     //
@@ -1059,8 +1105,17 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
       ['class', 'format', 'method', 'provenance', 'selector', 'side', 'source'],
       'the descriptor carries exactly the ADR 0087 field set and nothing this seam added',
     );
-    assert.deepEqual(laneVocabulary(readC), [], 'the read-for-update result names no lane');
-    assert.deepEqual(laneVocabulary(receipt), [], 'and neither does the receipt');
+    for (const [label, surface] of [
+      ['the A read-for-update result', readA],
+      ['the B read-for-update result', readB],
+      ['the C read-for-update result', readC],
+      ['the A browse description', descriptionA],
+      ['the C browse description', descriptionC],
+      ['the replacement receipt', receipt],
+    ]) {
+      assert.deepEqual(laneVocabulary(surface), [], `${label} names no lane`);
+    }
+    assert.notEqual(tokenC, tokenB, 'and each observation mints its own token');
 
     // The replacement ARGUMENTS name no lane either — and cannot. The seam accepts a fixed argument
     // set, so a consumer that tried to choose one would be ignored rather than obeyed: this call
@@ -1080,6 +1135,20 @@ test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam
     const afterLaneAttempt = (await describeCurrent()).method;
     await assertGenuinelyWasm(runtime, afterLaneAttempt, 'the revision following a caller-named lane');
     assert.deepEqual(await sendCtorMap(), integerValue(44), 'the source was applied; only the lane request was inert');
+
+    // ---- 11. CUIS IS STILL ABSENT, AT THE END OF EVERYTHING --------------------------------------
+    // The pair matters: step 1 proves the sequence STARTED without Cuis, and this proves nothing
+    // registered one during import, replacement or dispatch. Scoped honestly — these are the
+    // provider REGISTRIES, so what they rule out is a Cuis provider having been registered and used
+    // through this runtime, which is the only route the seams under test have to one.
+    assert.deepEqual(runtime.toolchainProviders.list(), [], 'no Cuis toolchain provider was registered during E3');
+    assert.deepEqual(runtime.foreignRuntimeProviders.list(), [], 'and no Cuis foreign runtime provider');
+    // Nothing Cuis-shaped was written into the native image either: the adapter consumes the
+    // canonical manifest and produces native records, and no export, package, image or build
+    // artifact follows it across.
+    for (const artifact of await runtime.images.listCodeArtifacts('native-image')) {
+      assert.doesNotMatch(artifact.representation, /cuis/i, `${artifact.id} is a native artifact`);
+    }
   } finally {
     await runtime.close();
   }

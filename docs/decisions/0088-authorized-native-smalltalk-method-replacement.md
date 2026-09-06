@@ -1,7 +1,7 @@
 # ADR 0088: Authorized native Smalltalk method replacement
 
 Status: implemented
-Proven by: test/smalltalk-authorized-method-replacement.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js, test/smalltalk-replacement-lane.test.js, test/cuis-json-native-import-real.test.js
+Proven by: test/smalltalk-authorized-method-replacement.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js, test/smalltalk-replacement-lane.test.js, test/cuis-json-native-import-real.test.js (the last runs only with LAGRANGE_OPENSMALLTALK_INTEGRATION=1)
 
 ## Problem
 
@@ -325,10 +325,15 @@ the canonical `smalltalk/cuis-semantic-export-v2` manifest that this file's own 
 produced and asserted against its upstream source. It is imported at the minimum native scope, and
 the setter `ctorMap:` is deliberately left OUT of that scope so nothing in the test can assign the
 instance variable the accessor reads: revision A's answer is therefore MEASURED — this image's `nil`
-on a freshly allocated receiver — rather than manufactured, which keeps A unquestionably upstream
-behaviour. The toolchain runtime is closed before the native one exists, and both provider registries
-are asserted empty BEFORE and AFTER the sequence; the second assertion is the one that proves nothing
-lazily started Cuis during import, replacement or dispatch.
+on a freshly allocated receiver — rather than manufactured, so A stays the unedited upstream method.
+That answer is the image's universal default, so it is fenced on both sides: the receiver is asserted
+to be an instance of the imported class, and an unimplemented selector sent to that same receiver is
+required to RAISE, so `nil` is known not to be what any send answers. The toolchain runtime is closed
+before the native one exists, and both provider registries are asserted empty BEFORE and AFTER the
+sequence. Scope that second assertion honestly: these are the provider REGISTRIES, so what it rules
+out is a Cuis provider having been registered and used through this runtime — which is the only route
+the seams under test have to one — and it is paired with a scan showing the native image holds no
+Cuis-representation artifact.
 
 The sequence: an ordinary native `Json` allocated through the ordinary `basicNew` protocol, with
 every A/B/C behaviour claim made by SENDING `ctorMap` to that receiver through normal dispatch and
@@ -357,17 +362,26 @@ imported material). The instrument that does separate the two orderings is the V
 UNCOMPILABLE source, which the acceptance also demands of the same overtaken token; with the
 admission deleted it answers the compiler's rejection instead of staleness. The spy is kept for what
 it truthfully says, and a successful replacement through the same instrumented service records a
-compilation, so it is not a spy that could never fire.
+compilation, so it is not a spy that could never fire. That leg in turn rests on the source really
+being uncompilable, which the acceptance pins in its own fixture rather than borrowing from another
+file: the same source under a FRESH, VALID token is refused as a source rejection and not as
+staleness, and the binding does not move.
 
 Every revision A -> B -> C is proven WASM TWICE OVER: by the lane this substrate recorded on the
-Block, and by resolving that Block's function artifact to its module's implementation BYTES and
-requiring the host's own WebAssembly decoder to accept them and to export the artifact's declared
-entry as a function. Bead `lagrange-images-it3` established that a metadata label alone is satisfied
-by an implementation that merely labelled the other lane's artifact, so the label is never the whole
+Block, and by resolving the function artifact that Block is BOUND TO down to its module's
+implementation BYTES and requiring the host's own WebAssembly decoder to accept them and to export
+the artifact's declared entry as a function. The three revisions are also required to bind three
+DIFFERENT compiled programs, so "a fresh revision" is not merely a fresh id over the same code. Bead
+`lagrange-images-it3` established that a metadata label alone is satisfied by an implementation that
+merely labelled the other lane's artifact, so the label is never the whole
 claim. The lane stays out of the Environment-facing contract in the same test: the descriptor's field
-set is exactly ADR 0087's, the receipt's is one key, neither surface nor the token names a lane, and
-a caller that supplies `lane` to the replacement is ignored rather than obeyed — the position it
-replaces stays genuinely WASM.
+set is exactly ADR 0087's, the receipt's is one key, no key or value of any surface the consumer
+receives names a lane, and a caller that supplies `lane` to the replacement is ignored rather than
+obeyed — the position it replaces stays genuinely WASM. The token is not exempted by claim: decision
+6's lane is an input to ADR 0086 revision identity and therefore travels, encoded, inside the opaque
+Block id the token names. What is guaranteed is that no lane reaches the Environment as something it
+can read or act on, and the token is opaque by contract in the first place — the acceptance also
+requires it to be neither the Block ref nor to contain it, so a consumer cannot derive one locally.
 
 Deliberate breaks for the acceptance, each applied, run and reverted, and each reddening its own
 intended proof: revision A manufactured during setup rather than imported (the MEASURED answer);
