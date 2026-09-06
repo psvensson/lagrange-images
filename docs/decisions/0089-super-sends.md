@@ -234,15 +234,23 @@ loop, method-dictionary decode or Shape read of its own.
 `XMLDOMParser class>>parseDocumentFrom:` now imports and compiles natively from the canonical export
 with Cuis absent, and the harness records the vertical's NEXT first RED rather than this one.
 
-Deliberate breaks, each applied, run and reverted, and each reddening exactly its intended proof:
-`super` lowered to `self` (the three-level lexical proof, on both sides); the primitive answering the
-superclass Behavior as the receiver instead of `self` (the exact-receiver proof); lookup started from
-the receiver's own Behavior's superclass (the three-level proof, again — the two-level shape would
-have stayed green, which is why it is not the central test); the caller's frame passed to the callee
-(the chained proof, as a depth-limit failure); `super` left as an ordinary name (the reservation and
-not-a-value proofs, and the YAXO import back to `unbound Symmetric Smalltalk name: super`); the
-class-side proofs run against an instance-side `class superclass` approximation (both class-side
-proofs); and a second superclass walk inlined into the primitive (the structural scan).
+Deliberate breaks, each applied, run and reverted. What each reddened is recorded as measured,
+because WHICH proofs survive a break is as load-bearing as which fall:
+
+| break | reddened | survived, and why that matters |
+| --- | --- | --- |
+| `super` lowered to `self` | 8/17, incl. both three-level lexical proofs | the exact-receiver proof and all three syntax proofs stayed GREEN — `self identity` still answers the receiver, so a receiver-shaped proof alone cannot catch this |
+| the primitive answers the superclass Behavior as the receiver | **exactly 1** — the exact-receiver proof | every lookup proof stayed green, so a lookup-shaped proof alone cannot catch it either; the two breaks are each other's complement |
+| lookup started from the RECEIVER's own Behavior's superclass | 5/17, incl. both three-level proofs | the exact-receiver proof stayed green, and a two-level proof on an instance of the immediate subclass would have too — which is why that shape is not the central test |
+| the callee keeps the CALLER's `definingBehavior` | **exactly 1** — the chained proof | nothing else moved; the chain is the only thing that can see it |
+| a superclass/MethodDictionary walk inlined into the primitive | 13/17, incl. the structural scan | the structural scan is the one that catches a walk which merely *agrees* today |
+| `super` left an ordinary name (the pre-0089 state) | 16/17 | only the structural scan survives, since the primitive module is untouched — and the Cuis-free `reconcileMethodsFromSource` proof is among the 16, which is precisely why an importer rewrite could not have satisfied it |
+| an instance-side-only facility (class-side refused) | **exactly 2** — both class-side proofs | the instance side stayed entirely green, which is what an instance-side approximation looks like from the inside |
+
+The eighth named wrong implementation — repairing this in the Cuis adapter by rewriting `super` —
+needs no separate break, and the sixth row is why: the Cuis-free instrument names no Cuis material at
+all, so nothing the adapter does can make it pass. `main` recorded exactly that instrument answering
+`unbound Symmetric Smalltalk name: super` before this ADR.
 
 ## Not in scope
 
