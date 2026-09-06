@@ -6,9 +6,11 @@ import {
   CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
   CUIS_SEMANTIC_EXPORT_V2,
   CuisNativeImportError,
+  SmalltalkGlobalConflictError,
   SymmetricSmalltalkSyntaxError,
   createRuntime,
   findSmalltalkKernel,
+  globalBindingId,
   importCuisNativePackage,
   installSmalltalkAllocationProtocol,
   installSmalltalkInstanceVariableProtocol,
@@ -18,7 +20,9 @@ import {
   integerValue,
   methodBlockRef,
   objectRef,
+  publishGlobal,
   readBehavior,
+  rebindGlobal,
   reconcileMethodsFromSource,
   resolveGlobal,
   textValue,
@@ -132,6 +136,104 @@ test('an imported class allocates ordinary durable native object state', async (
     const reread = await runtime.images.getObject('app', instance.objectId);
     assert.deepEqual(reread.slots[slotByName.get('base')], textValue('native'));
     assert.deepEqual(reread.slots[slotByName.get('child')], integerValue(7));
+  });
+});
+
+test('an imported method resolves and executes a sibling package class through native globals', async () => {
+  await withStandardImage(async (runtime) => {
+    const input = manifest({methods: [{
+      identity: 'cuis-method/Fixture/ZuluBase/class/newChild',
+      package: 'Fixture',
+      class: 'cuis-class/Fixture/ZuluBase',
+      side: 'class',
+      selector: 'newChild',
+      source: 'newChild\n\t^ AChild basicNew',
+    }]});
+
+    const imported = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: input,
+    });
+    const childClass = imported.classes.find(({identity}) => identity === 'cuis-class/Fixture/AChild');
+    assert.deepEqual(
+      await resolveGlobal({images: runtime.images, imageId: 'app', name: 'AChild'}),
+      objectRef('app', globalBindingId('AChild')),
+    );
+    assert.deepEqual(
+      await resolveGlobal({images: runtime.images, imageId: 'app', name: 'ZuluBase'}),
+      objectRef('app', globalBindingId('ZuluBase')),
+    );
+
+    const send = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'execute-imported-sibling-global',
+      source: '[ ZuluBase newChild ]',
+    });
+    const instance = await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('app', send.block.id), [],
+    ));
+    assert.deepEqual(
+      (await runtime.images.getObject(instance.imageId, instance.objectId)).behavior,
+      childClass.classRef,
+      'ordinary global lookup reaches the sibling class and ordinary allocation creates its instance',
+    );
+
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+    await rebindGlobal({
+      images: runtime.images,
+      imageId: 'app',
+      bindingId: globalBindingId('AChild'),
+      value: kernel.integerClass,
+    });
+    const frontierBeforeReplay = await runtime.images.frontier('app');
+    assert.deepEqual(await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: input,
+    }), imported);
+    assert.equal(await runtime.images.frontier('app'), frontierBeforeReplay);
+    const readRebound = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'read-rebound-import-global', source: '[ AChild ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', readRebound.block.id), [],
+      )),
+      kernel.integerClass,
+      'replaying class publication preserves the binding current value instead of restoring its seed',
+    );
+  });
+});
+
+test('an imported class global collision is refused by the native namespace owner without rebinding', async () => {
+  await withStandardImage(async (runtime) => {
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+    const conflictingBinding = 'fixture/global-binding/AChild';
+    await publishGlobal({
+      images: runtime.images,
+      imageId: 'app',
+      name: 'AChild',
+      bindingId: conflictingBinding,
+      value: kernel.integerClass,
+    });
+
+    await assert.rejects(
+      importCuisNativePackage({images: runtime.images, imageId: 'app', manifest: manifest()}),
+      (error) => error instanceof SmalltalkGlobalConflictError
+        && /AChild/.test(error.message)
+        && new RegExp(conflictingBinding).test(error.message),
+    );
+    assert.deepEqual(
+      await resolveGlobal({images: runtime.images, imageId: 'app', name: 'AChild'}),
+      objectRef('app', conflictingBinding),
+      'the pre-existing namespace mapping remains authoritative',
+    );
+    const read = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'read-colliding-import-global', source: '[ AChild ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', read.block.id), [],
+      )),
+      kernel.integerClass,
+      'the collision never silently rebinds the existing global value',
+    );
   });
 });
 
@@ -1278,20 +1380,30 @@ test('a manifest that declares its own class of the name is not adapted', async 
         source: 'seed\n\t^ String new',
       }],
     };
-    // The package's own `String` is not published as a global, so the name stays unbound rather
-    // than being quietly turned into a Text literal. What matters is that it is NOT adapted.
-    await assert.rejects(
-      importCuisNativePackage({
-        images: runtime.images,
-        compilation: runtime.compilation,
-        imageId: 'app',
-        manifest: input,
-        scope: {
-          classes: ['cuis-class/Fixture/String', 'cuis-class/Fixture/ZuluBase'],
-          methods: ['cuis-method/Fixture/ZuluBase/instance/seed'],
-        },
-      }),
-      /unbound Symmetric Smalltalk name: String/,
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      manifest: input,
+      scope: {
+        classes: ['cuis-class/Fixture/String', 'cuis-class/Fixture/ZuluBase'],
+        methods: ['cuis-method/Fixture/ZuluBase/instance/seed'],
+      },
+    });
+    const stringClass = imported.classes.find(({identity}) => identity === 'cuis-class/Fixture/String');
+    const exercise = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'app',
+      id: 'exercise-package-owned-string',
+      source: '[ ZuluBase basicNew seed ]',
+    });
+    const answer = await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('app', exercise.block.id), [],
+    ));
+    assert.deepEqual(
+      (await runtime.images.getObject(answer.imageId, answer.objectId)).behavior,
+      stringClass.classRef,
+      'String resolved to the package class; the idiom was not quietly rewritten to a Text literal',
     );
   });
 });

@@ -367,19 +367,39 @@ faithfully, and the native compiler now has a binding for the word. The entry po
 implementation its super send resolves to (`SAXHandler class>>parseDocumentFrom:`, in the same
 manifest and the same scope) both import natively with Cuis gone, and exact replay stays write-free.
 
-The vertical's NEXT unsupported semantic, classified afresh after repairing the legacy assignment
-arrow, is that **a natively imported class's NAME never becomes resolvable**:
+The next unsupported semantic after the assignment repair was that **a natively imported class's
+NAME never became resolvable**:
 
     unbound Symmetric Smalltalk name: SAXDriver
 
-from unedited upstream `SAXHandler class>>on:` (`driver _ SAXDriver on: aStream`). `SAXDriver` is in
-the minimum scope and IS imported as an ordinary native class; what is missing is the binding.
-The native global namespace (ADR 0057/0061) already owns name -> object bindings and
-`publishSmalltalkClassGlobals` already publishes a class as one — this adapter simply never calls it,
-so the gap is on THIS arrow with a generic mechanism that needs no change. M3's JSON package could
-never expose it: its executable source names only base-image classes. Bead
-`lagrange-images-xxm.2` owns it, including the decisions it must make about which namespace an
-imported class is published into and what a collision means.
+from unedited upstream `SAXHandler class>>on:` (`driver _ SAXDriver on: aStream`). `SAXDriver` was
+in the minimum scope and already imported as an ordinary native class; only its binding was missing.
+
+Bead `lagrange-images-xxm.2` repairs that adapter-owned arrow without adding another name owner.
+After every scoped declaration is constructed and before any scoped method compiles, the adapter
+passes all scoped names to the existing `publishSmalltalkClassGlobals()` owner when the native image
+has installed its global-namespace protocol. Cuis class names are image-global and the canonical
+manifest declares no lexical package namespace, so the existing root namespace is the exact target;
+inventing a child namespace would change source visibility and cannot represent a package dependency
+DAG with one parent. A kernel-only image can still admit unnameable class structures, preserving the
+M1 structural seam when no namespace protocol exists.
+
+Publication therefore inherits ADR 0057 behavior instead of duplicating it: the canonical binding
+identity is stable, exact replay writes nothing and preserves a legitimate rebind, while a different
+existing binding is an explicit `SmalltalkGlobalConflictError`. A focused execution proof compiles a
+package method naming a sibling, allocates that sibling through ordinary behavior and checks its
+native class; another proof seeds a conflicting binding and observes its value unchanged. As with
+other later native-owner refusals, this is recoverable ordered admission rather than an invented
+all-or-nothing adapter transaction.
+
+Re-running the unchanged M4 forcing scope now compiles through `SAXDriver` and exposes the next RED
+afresh in unedited upstream `XMLTokenizer>>initialize`:
+
+    unbound Symmetric Smalltalk name: UnicodeString
+
+`UnicodeString` is a Cuis base-image dependency, not a YAXO declaration. Bead
+`lagrange-images-xxm.9` owns an oracle-first classification; this slice does not assume it aliases a
+native text or stream class and adds no global fallback.
 
 The legacy assignment finding is now repaired at its two exact owners. The pinned Cuis scanner/parser
 oracle established that `_` is the legacy arrow only at a token boundary and only when its following
