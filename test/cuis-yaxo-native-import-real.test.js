@@ -60,8 +60,10 @@ import {
 // It has moved once already. The first RED was a super send (`unbound Symmetric Smalltalk name:
 // super`), repaired at the language owner by ADR 0089 / bead lagrange-images-xxm.1; the section
 // below now proves the entry point imports and records the next RED in its place. The legacy-arrow
-// repair moved that RED once more: the exact same forcing scope now stops at the earlier masked
+// repair moved that RED once more: the exact same forcing scope stopped at the earlier masked
 // `SAXDriver` name in `SAXHandler class>>on:` rather than reaching `XMLDocument` later in the path.
+// Publishing the scoped imported classes through the existing native global owner repaired that
+// boundary and the unchanged scope now stops at `UnicodeString` in `XMLTokenizer>>initialize`.
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';
@@ -533,33 +535,23 @@ test('super works at the native language owner, not by anything at the Cuis impo
 });
 
 // ==================================================================================================
-// THE NEXT FIRST RED OF THE M4 VERTICAL, classified afresh after the legacy-arrow repair and
+// THE NEXT FIRST RED OF THE M4 VERTICAL, classified afresh after imported class publication and
 // deliberately NOT repaired here.
 //
-// The exact forcing scope this harness used before the repair now stops earlier, at
-// `SAXHandler class>>on:`. Its upstream first statement is `driver _ SAXDriver on: aStream`.
-// Translating the arrow to canonical `:=` restores ordinary native name resolution, which refuses:
+// The exact forcing scope now compiles `SAXHandler class>>on:` through its ordinary `SAXDriver`
+// global and reaches `XMLTokenizer>>initialize`, where upstream names a Cuis base-image class that
+// this native image does not publish:
 //
-//     unbound Symmetric Smalltalk name: SAXDriver
+//     unbound Symmetric Smalltalk name: UnicodeString
 //
-// SAXDriver is IN this scope and IS imported as an ordinary native class — the class-graph proof
-// above asserts its upstream layout. What is missing is that a natively imported class's NAME never
-// becomes resolvable. The native global namespace (src/language/smalltalk-globals.js, ADR 0057/0061)
-// already owns name -> object bindings and `publishSmalltalkClassGlobals` already publishes a class
-// as one; the Cuis native import adapter simply never calls it. So the OWNER is the import adapter's
-// own arrow — canonical manifest -> native image structures — and the mechanism it needs already
-// exists at a generic owner that needs no change at all.
+// Unlike SAXDriver, UnicodeString is NOT declared by YAXO and therefore is not in the nine-class
+// scope. It is a Cuis base-image dependency. Whether the right repair is a native library class,
+// an exact adapter idiom, or something else requires its own oracle and owner decision; this test
+// records only the newly measured pressure and does not prejudge that work.
 //
-// The REAL CONSUMER is unedited upstream YAXO source. Within the nine-class minimum scope alone,
-// `SAXHandler class>>on:` (SAXDriver), `XMLDOMParser>>startDocument` (XMLDocument),
-// `XMLElement>>contentString` (XMLStringNode),
-// `SAXDriver>>scope` (XMLNamespaceScope) and `XMLTokenizer>>malformedError:` (SAXMalformedException)
-// each name a class the package itself declares. M3's JSON package never did — its executable source
-// names only base-image classes — which is why this gap could not appear before now.
-//
-// Not this slice's work. It is recorded so the next slice starts from the repaired instrument's
-// measurement, not from the earlier gate's prediction.
-const M4_NEXT_RED = /unbound Symmetric Smalltalk name: SAXDriver/;
+// Not this slice's work. It is recorded so the next child starts from this repaired instrument's
+// measurement rather than a prediction.
+const M4_NEXT_RED = /unbound Symmetric Smalltalk name: UnicodeString/;
 
 // The measured parse path in causal order, from the public entry point. Every entry is upstream
 // material in the canonical manifest; `XMLTokenizer>>saxHandler:` is deliberately absent from the
@@ -577,12 +569,12 @@ const M4_PARSE_PATH = Object.freeze([
   'cuis-method/YAXO/SAXHandler/instance/driver:',
   'cuis-method/YAXO/SAXHandler/instance/startDocument',
 ]);
-const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/SAXHandler/class/on:';
+const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/XMLTokenizer/instance/initialize';
 const M4_PATH_BEFORE_NEXT_RED = Object.freeze(
   M4_PARSE_PATH.slice(0, M4_PARSE_PATH.indexOf(M4_NEXT_RED_METHOD)),
 );
 
-test('the repaired M4 forcing scope exposes its true next RED: SAXDriver is not a global', {skip: !enabled, timeout: 900_000}, async () => {
+test('the repaired M4 forcing scope exposes its next RED afresh: UnicodeString is unbound', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
 
   const runtime = await nativeRuntime();
@@ -596,9 +588,8 @@ test('the repaired M4 forcing scope exposes its true next RED: SAXDriver is not 
       scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PATH_BEFORE_NEXT_RED]},
     });
 
-    // Re-run the SAME forcing scope the pre-repair instrument admitted. It now refuses at the
-    // masked name inside the first arrow-bearing method rather than reaching the later
-    // `XMLDocument` occurrence. This is the central vertical proof for the repair.
+    // Re-run the SAME forcing scope. It now passes the package-owned class names and refuses the
+    // first base-image dependency the native namespace does not provide.
     const error = await importCuisNativePackage({
       images: runtime.images,
       compilation: runtime.compilation,
@@ -606,30 +597,28 @@ test('the repaired M4 forcing scope exposes its true next RED: SAXDriver is not 
       manifest,
       scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PARSE_PATH]},
     }).then(
-      () => assert.fail('the repaired M4 forcing scope compiled past its first unresolved package class'),
+      () => assert.fail('the repaired M4 forcing scope compiled past its first unresolved dependency'),
       (thrown) => thrown,
     );
     assert.match(error.message, M4_NEXT_RED);
 
     // The real consumer, named, and unedited upstream source.
-    const on = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
+    const initialize = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
     assert.equal(
-      on.source,
-      'on: aStream\n\t| driver parser |\n\tdriver _ SAXDriver on: aStream.\n\tdriver validating: true.\n\tparser _ self new driver: driver.\n\t^parser',
+      initialize.source,
+      'initialize\n\tparsingMarkup _ false.\n\tvalidating _ false.\n\tattributeBuffer _ UnicodeString writeStream.\n\tnameBuffer _ UnicodeString writeStream.',
     );
 
-    // ... and the class really is imported rather than merely out of scope, so the refusal is about
-    // NAME RESOLUTION and not about a short import scope.
+    // Package classes really are imported and now published through the ordinary root namespace.
     assert.ok(M4_SCOPE_CLASSES.includes('cuis-class/YAXO/SAXDriver'));
     assert.ok(
       await runtime.images.getObject('native-image', 'smalltalk/class/SAXDriver'),
       'SAXDriver is an ordinary native class in this image',
     );
-    // The mechanism the adapter does not use: the native global namespace publishes base classes and
-    // nothing the import created.
     const globals = await globalDeclarations({images: runtime.images, imageId: 'native-image'});
     assert.ok(Object.hasOwn(globals, 'OrderedCollection'), 'base classes are published globals');
-    assert.equal(Object.hasOwn(globals, 'SAXDriver'), false, 'an imported class is not');
+    assert.ok(Object.hasOwn(globals, 'SAXDriver'), 'an imported class is published before methods compile');
+    assert.equal(Object.hasOwn(globals, 'UnicodeString'), false, 'the newly exposed dependency is not');
   } finally {
     await runtime.close();
   }

@@ -212,9 +212,13 @@ of classes the package itself defines — which is what an M4 restart proof has 
   `lagrange-images-xxm.3`): preserve the pinned oracle's legal underscore identifier forms, emit a
   distinct token refused by direct native syntax, translate only at the Cuis adapter, share one
   drift-free replacement plan with `String new`, and execute a real pinned YAXO setter/read-back;
-- [ ] make a natively imported class's NAME resolvable, so a package method may name a class the same
-  package declares (bead `lagrange-images-xxm.2`, the repaired vertical's next classified RED:
-  `unbound Symmetric Smalltalk name: SAXDriver` from upstream `SAXHandler class>>on:`);
+- [x] make a natively imported class's NAME resolvable (bead `lagrange-images-xxm.2`): when the
+  native global-namespace protocol is present, publish every scoped Cuis declaration into its root
+  namespace through the existing global owner before method compilation; prove sibling lookup by
+  execution, write-free replay, and explicit collision refusal rather than a silent rebind;
+- [ ] classify and repair the next freshly measured YAXO RED (bead `lagrange-images-xxm.9`):
+  `unbound Symmetric Smalltalk name: UnicodeString` from upstream
+  `XMLTokenizer>>initialize`, with an oracle before choosing a native-library or adapter owner;
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;

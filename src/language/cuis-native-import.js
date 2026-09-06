@@ -1,4 +1,5 @@
 import {ensureClassFromDeclaration} from './smalltalk-class-builder.js';
+import {findSmalltalkGlobalNamespace, publishSmalltalkClassGlobals} from './smalltalk-globals.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {reconcileMethodsFromSource} from './smalltalk-instance-variables.js';
 import {isAssignmentToken, tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
@@ -555,6 +556,22 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
       superclassRef: superclass.classRef,
       instanceVariables: declaration.instanceVariables,
     }));
+  }
+
+  // Cuis class names live in its image-wide SystemDictionary. When the native image has installed
+  // the corresponding namespace protocol, publish every scoped declaration through that existing
+  // owner before compiling any method: source order must not decide whether one package class can
+  // name another. A kernel-only image can still admit unnameable class structures (the M1 seam),
+  // just as it could before this step; without a namespace it has no native name-resolution
+  // contract for the adapter to target. Collision identity, replay and rebind preservation remain
+  // wholly owned by publishSmalltalkClassGlobals/publishGlobal (ADR 0057), never duplicated here.
+  const globalNamespace = await findSmalltalkGlobalNamespace({images, imageId});
+  if (globalNamespace && plan.classes.length > 0) {
+    await publishSmalltalkClassGlobals({
+      images,
+      imageId,
+      names: plan.classes.map(({name}) => name),
+    });
   }
 
   const methodGroups = new Map();
