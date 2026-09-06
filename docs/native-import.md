@@ -321,6 +321,89 @@ the recorded real-Cuis oracle.
 
 ### 4. Native application state
 
+#### The M4 forcing application
+
+M4's pressure source changes, and the change is the point. M3's pinned JSON package answers base
+image collections, so an M4 restart proof over it would be a proof about base collections rather
+than about an imported application's own objects. The M4 forcing application is therefore the pinned
+upstream Cuis **YAXO** package (Cuis-Smalltalk-Dev `6bcee3f38ce037c9714b997ccd3b5b3ff62965c8`,
+`Packages/Features/YAXO.pck.st` git blob `67d670ed38cc136d88afdf7e0df5bf8bc6519087`, and its own
+upstream test package `Packages/Features/Tests-YAXO.pck.st` git blob
+`8c50cbe6f29f3f4b25c883511eb905e44120ec5e`, MIT). That is the same distribution commit the JSON
+harness already pins, so no new upstream trust anchor is introduced, and `scripts/integration-setup.sh`
+fetches both by Git blob hash exactly as it does JSON. Its source is never edited and none of its
+methods are copied into a fixture. It was selected and validated by bead `lagrange-images-moq`.
+
+The property that earns it the milestone: `XMLDOMParser class>>parseDocumentFrom:` answers a graph of
+instances of classes THE PACKAGE ITSELF DEFINES — `XMLDocument` -> `XMLElement` -> `XMLStringNode` —
+constructed by the imported code, so what M4 eventually restarts is an application object graph.
+
+`test/cuis-yaxo-native-import-real.test.js` drives the same one-directional path the M3 harness does,
+and the live VM is again extraction plus reference oracle only. The provider's `yaxo/measure`
+operation records what real Cuis answers for the smallest useful parsing path, and native execution
+never calls it. That oracle is deliberately narrow — which public operation parses, what class the
+root is, how a child is reached, how text and one attribute are read, and what the package's own
+smallest mutation does. It is not a claim about XML correctness.
+
+The M4 MINIMUM IMPORT SCOPE is the nine classes the measured path instantiates and dispatches to
+(`SAXHandler`, `XMLDOMParser`, `XMLTokenizer`, `SAXDriver`, `XMLNode`, `XMLNodeWithElements`,
+`XMLDocument`, `XMLElement`, `XMLStringNode`) plus the one public entry point. Those nine classes
+already import natively with Cuis gone, keeping their upstream declared layouts and three levels of
+real inheritance, and exact replay is write-free. The DTD, namespace, writer and exception classes
+stay out, and with them the unmapped `Error`/`Warning` superclass identities.
+
+The first unsupported native semantic on that vertical is a **`super` send**, and the consumer is the
+entry point itself: `XMLDOMParser class>>parseDocumentFrom:` is `^(super parseDocumentFrom: aStream)
+document`. ADR 0006 deferred `super` explicitly and nothing has implemented it since, so this belongs
+to the Symmetric Smalltalk personality — not to the export and not to the import adapter. The harness
+proves that at the right seam rather than at the messenger: it also hands an ORDINARY native method
+body with no Cuis provenance to the native method compiler and gets the same refusal, while the
+identical body with `self` compiles.
+
+Two facts worth recording because they were predicted to block first and measurably do not — they sit
+BEHIND the `super` send on the executable vertical, and neither is scheduled by that slice:
+
+- the canonical v2 export carries **no class-variable facts**. YAXO's `XMLTokenizer` declares four
+  class variables that its class-side `initialize` builds and its tokenizer cannot scan without, and
+  the manifest's class declaration has no field for them. That is the EXPORT owner's gap, not YAXO's.
+  The native side already has the concept: `src/language/smalltalk-class-variables.js` owns
+  hierarchy-scoped class variables and the semantic compiler resolves them.
+- the canonical v2 export carries **no package load-time expressions**. The package file ends with
+  five top-level `... initialize!` chunks that run those initializers at load; the manifest
+  represents packages, classes and methods only. Also the EXPORT owner's gap.
+
+#### The durable root M4 will reacquire through — audited, not invented
+
+M4's restart proof needs ONE durable application root reacquired through a locator a real application
+could use, and the rule is to reuse the authoritative owner rather than build a YAXO-specific
+registry. The audit's answer is that a suitable generic owner already exists, so no new one is
+needed:
+
+- **The Project working-state owner** (`src/project/working-state.js`) is the generic, language-neutral
+  one. `project/<projectId>` is a deterministic id derived from caller-chosen text; a member is
+  `{key, role, target}` where `target` is an arbitrary unpinned `ObjectRef`, and `readProjectDescriptor`
+  rebuilds the whole descriptor from records alone. Its own "restart" test admits it only re-reads
+  rather than restarting, so M4 would be the first proof that it survives a real one.
+- **The ProjectInstallation deterministic head** (`src/project/installation-state.js`,
+  `lagrange-project-installation/<projectId>/head`) is the same shape and IS restart-proven:
+  `test/mixed-language-project-real.test.js` closes a runtime over a real backend and reacquires
+  members from `(targetImageId, projectId)` alone, and `test/project-installation-state.test.js`
+  asserts the read sequence is head -> snapshot -> members with no scan and no retained handle. It is
+  release/installation-shaped and replaced wholesale rather than rebound, which is why the working-state
+  owner is the better fit for a live mutable application root.
+- **The Smalltalk global namespace** (`src/language/smalltalk-globals.js`, ADR 0057/0061) is the only
+  true name -> arbitrary object facility: `publishGlobal` stores any Value and `resolveGlobal` finds it
+  from `(imageId, namespaceId, name)`. It is generic in mechanism but Smalltalk-scoped by placement
+  (it requires a kernel), it answers the binding rather than the value, and every existing test binds
+  a kernel class rather than an application instance.
+- `ImageService.setRoot` / `image.rootObjectId` is the only thing literally shaped like "the image's
+  root object" and is not a candidate: single-valued, unnamed, and called by no production code.
+
+Two recorded gaps that are ownership defects rather than M4 blockers: `docs/ownership.md` names no
+owner for "durable named/application roots", and has no row for the global namespace at all.
+
+#### The state rule
+
 Application roots, globals/class state and domain objects must become ordinary image state when they are part of the native application domain.
 
 ```text
