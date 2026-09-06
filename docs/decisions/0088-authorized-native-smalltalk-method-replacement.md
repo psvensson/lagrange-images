@@ -336,16 +336,28 @@ never by invoking a Block directly; A read through the public read-for-update, w
 asserted to be exactly the ADR 0087 description plus a token; a competing editor replacing A with
 `[ ^ 11 ]` through the trusted Images-native owner path NAMING NO LANE, so B's lane can only come
 from decision 6's observed-revision rule; the public writer then refused as
-`SmalltalkStaleMethodPositionError` on A's now-overtaken token, with an instrumented compilation
-service recording NOTHING and the same service later recording the successful replacement, so the
-"never compiled" claim cannot be vacuous; a fresh read of B yielding a different token; the public
-replacement to `[ ^ 22 ]` answering the frozen one-key receipt under exactly one `object/write`
-demand on the declaring class; and C discovered by a FRESH authorized read rather than predicted from
-the receipt. A and B remain addressable, unchanged immutable revisions throughout; `descriptor.source`
-is still `null` and the supplied source appears nowhere in the description; and no grant, the full
+`SmalltalkStaleMethodPositionError` on A's now-overtaken token; a fresh read of B yielding a
+different token; the public replacement to `[ ^ 22 ]` answering the frozen one-key receipt under
+exactly one `object/write` demand on the declaring class; and C discovered by a FRESH authorized read
+rather than predicted from the receipt. A and B remain addressable, unchanged immutable revisions
+throughout; `descriptor.source` is still `null` and the supplied source appears nowhere in the
+description; and no grant, the full
 ADR 0087 read authority that minted the token, `object/write` on the current revision and
 `object/write` on the superseded revisions are each refused with the same single class-write demand,
 so neither a token, a Block read, a class read nor possession of refs conveys write.
+
+WHAT THE COMPILATION SPY THERE DOES AND DOES NOT SHOW, because the weaker reading is the easy one
+and this file states it rather than trading on it. `compilation.compileArtifact` is the CODE-ARTIFACT
+admission point, not the semantic source compiler, so an empty record means no replacement artifact
+was produced for a doomed call. It is NOT the instrument that orders the stale verdict against
+compilation: MEASURED on this path, deleting decision 5's pre-compilation admission leaves that
+assertion green, because the class builder still refuses at plan time and plan time is before any
+code artifact exists (bead `lagrange-images-qax.2`'s first recorded gap, confirmed against real
+imported material). The instrument that does separate the two orderings is the VERDICT under an
+UNCOMPILABLE source, which the acceptance also demands of the same overtaken token; with the
+admission deleted it answers the compiler's rejection instead of staleness. The spy is kept for what
+it truthfully says, and a successful replacement through the same instrumented service records a
+compilation, so it is not a spy that could never fire.
 
 Every revision A -> B -> C is proven WASM TWICE OVER: by the lane this substrate recorded on the
 Block, and by resolving that Block's function artifact to its module's implementation BYTES and
@@ -356,6 +368,20 @@ claim. The lane stays out of the Environment-facing contract in the same test: t
 set is exactly ADR 0087's, the receipt's is one key, neither surface nor the token names a lane, and
 a caller that supplies `lane` to the replacement is ignored rather than obeyed — the position it
 replaces stays genuinely WASM.
+
+Deliberate breaks for the acceptance, each applied, run and reverted, and each reddening its own
+intended proof: revision A manufactured during setup rather than imported (the MEASURED answer);
+the manifest edited before import (the upstream-source assertion); the token minted AFTER the
+competing replacement, so it was never stale (the stale verdict); B and C made indistinguishable
+(the winner-preservation send); the Cuis toolchain provider left registered (the before-E3 provider
+assertion); decision 5's pre-compilation admission deleted (the uncompilable-source verdict, and
+nothing else); a fresh read substituted for the caller's observation (the stale call succeeds);
+the shipped `neutral` default restored for an observed revision (B's recorded lane); a LABEL-ONLY
+WASM implementation, `metadata.lane` still `wasm` with the artifact produced by the neutral branch
+(the code artifact's representation); `object/read` demanded where the contract demands
+`object/write` (the class-write caller refused); a richer receipt carrying the new method ref (the
+frozen one-key receipt); and the execution lane published in the ADR 0087 descriptor (the
+descriptor's field set).
 
 ## Not in scope
 
