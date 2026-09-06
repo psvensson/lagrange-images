@@ -123,13 +123,19 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // the ONE module is the seam itself: it composes owners the closure already carried (the class
   // builder, the from-source compiler owner, the lookup helper, the token owner, the value model
   // and the authority resource namer) and adds no other dependency and no node:*.
-  assert.equal(modules.length, 115, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position token owner and the authorized method-replacement seam');
+  // 116 after the super-send facility (src/language/smalltalk-primitives-super.js, ADR 0089) — the
+  // ONE module is the runtime half of `super`, reached from the kernel-primitive executor already in
+  // the closure. It composes owners the closure already carried (the Behavior reader, the lookup
+  // owner, the primitive-support guards and the value model), owns no walk of its own, and adds no
+  // other dependency and no node:*.
+  assert.equal(modules.length, 116, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position token owner, the authorized method-replacement seam and the super-send facility');
   assert.ok(paths.includes('src/wasm/module-contract.js'));
   assert.ok(paths.includes('src/wasm/function-contract.js'));
   assert.ok(paths.includes('src/language/smalltalk-browse.js'));
   assert.ok(paths.includes('src/language/smalltalk-write-stream.js'));
   assert.ok(paths.includes('src/language/smalltalk-method-position-token.js'));
   assert.ok(paths.includes('src/language/smalltalk-authorized-method-replacement.js'));
+  assert.ok(paths.includes('src/language/smalltalk-primitives-super.js'));
   assert.deepEqual(projectPaths, [
     'src/project/model.js',
     'src/project/working-state.js',

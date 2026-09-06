@@ -336,16 +336,16 @@ test('a dangling superclass edge above the defining class is corrupt graph state
 test('super is a reserved word at every site a name could be introduced', async () => {
   await withRuntime(async (runtime, options) => {
     const a = await declare(runtime, 'A');
-    const attempt = async (source) => await defineMethodsFromSource({
-      ...options, classRef: a.classRef, methods: [{selector: `s${Math.random()}`.replace('.', ''), source}],
+    const attempt = async (selector, source) => await defineMethodsFromSource({
+      ...options, classRef: a.classRef, methods: [{selector, source}],
     });
-    for (const [what, source] of [
-      ['a temporary', '[ | super | super ]'],
-      ['a block parameter', '[ :super | super ]'],
-      ['an assignment target', '[ super := 1 ]'],
+    for (const [selector, what, source] of [
+      ['asTemporary', 'a temporary', '[ | super | super ]'],
+      ['asBlockParameter', 'a block parameter', '[ :super | super ]'],
+      ['asAssignmentTarget', 'an assignment target', '[ super := 1 ]'],
     ]) {
       await assert.rejects(
-        attempt(source),
+        attempt(selector, source),
         (error) => error.name === 'SymmetricSmalltalkSyntaxError' && /super: it is a reserved word/.test(error.message),
         `${what} named super is refused`,
       );
