@@ -1,7 +1,7 @@
 # ADR 0088: Authorized native Smalltalk method replacement
 
 Status: implemented
-Proven by: test/smalltalk-authorized-method-replacement.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js, test/smalltalk-replacement-lane.test.js
+Proven by: test/smalltalk-authorized-method-replacement.test.js, test/portable-runtime-environment-api.test.js, test/smalltalk-expected-current-binding.test.js, test/smalltalk-replacement-lane.test.js, test/cuis-json-native-import-real.test.js
 
 ## Problem
 
@@ -318,9 +318,49 @@ scoped contention error re-thrown unmapped; the sealed-dictionary refusal escapi
 target verdict forwarding the owner diagnostic as a `cause`; and the non-semantic-failure narrowing
 removed.
 
+`test/cuis-json-native-import-real.test.js` (real pinned upstream lane,
+`LAGRANGE_OPENSMALLTALK_INTEGRATION=1`) is the CUIS-ORIGIN ACCEPTANCE, slice D of bead
+`lagrange-images-qax`. Its subject is the genuine pinned upstream method `Json>>ctorMap`, taken from
+the canonical `smalltalk/cuis-semantic-export-v2` manifest that this file's own real toolchain build
+produced and asserted against its upstream source. It is imported at the minimum native scope, and
+the setter `ctorMap:` is deliberately left OUT of that scope so nothing in the test can assign the
+instance variable the accessor reads: revision A's answer is therefore MEASURED — this image's `nil`
+on a freshly allocated receiver — rather than manufactured, which keeps A unquestionably upstream
+behaviour. The toolchain runtime is closed before the native one exists, and both provider registries
+are asserted empty BEFORE and AFTER the sequence; the second assertion is the one that proves nothing
+lazily started Cuis during import, replacement or dispatch.
+
+The sequence: an ordinary native `Json` allocated through the ordinary `basicNew` protocol, with
+every A/B/C behaviour claim made by SENDING `ctorMap` to that receiver through normal dispatch and
+never by invoking a Block directly; A read through the public read-for-update, whose result is
+asserted to be exactly the ADR 0087 description plus a token; a competing editor replacing A with
+`[ ^ 11 ]` through the trusted Images-native owner path NAMING NO LANE, so B's lane can only come
+from decision 6's observed-revision rule; the public writer then refused as
+`SmalltalkStaleMethodPositionError` on A's now-overtaken token, with an instrumented compilation
+service recording NOTHING and the same service later recording the successful replacement, so the
+"never compiled" claim cannot be vacuous; a fresh read of B yielding a different token; the public
+replacement to `[ ^ 22 ]` answering the frozen one-key receipt under exactly one `object/write`
+demand on the declaring class; and C discovered by a FRESH authorized read rather than predicted from
+the receipt. A and B remain addressable, unchanged immutable revisions throughout; `descriptor.source`
+is still `null` and the supplied source appears nowhere in the description; and no grant, the full
+ADR 0087 read authority that minted the token, `object/write` on the current revision and
+`object/write` on the superseded revisions are each refused with the same single class-write demand,
+so neither a token, a Block read, a class read nor possession of refs conveys write.
+
+Every revision A -> B -> C is proven WASM TWICE OVER: by the lane this substrate recorded on the
+Block, and by resolving that Block's function artifact to its module's implementation BYTES and
+requiring the host's own WebAssembly decoder to accept them and to export the artifact's declared
+entry as a function. Bead `lagrange-images-it3` established that a metadata label alone is satisfied
+by an implementation that merely labelled the other lane's artifact, so the label is never the whole
+claim. The lane stays out of the Environment-facing contract in the same test: the descriptor's field
+set is exactly ADR 0087's, the receipt's is one key, neither surface nor the token names a lane, and
+a caller that supplies `lane` to the replacement is ignored rather than obeyed — the position it
+replaces stays genuinely WASM.
+
 ## Not in scope
 
 Method addition, removal, class editing, batch editing, durable native method source,
 protocol/category, a durable Cuis provenance association, a public compiler or a generic
-reconciliation API. Real Cuis-origin E3 acceptance over the pinned upstream import path is the next
-slice of bead `lagrange-images-qax`; GitHub #218 stays open until it lands.
+reconciliation API. Real Cuis-origin E3 acceptance over the pinned upstream import path has landed as
+slice D of bead `lagrange-images-qax` and is described in the Proof section; the handback on GitHub
+#218 is a separate step and no decision here depends on it.

@@ -11,10 +11,17 @@ import {
   CUIS_SEMANTIC_EXPORT_V2,
   CUIS_SOURCES_V1,
   OBJECT_READ_OPERATION,
+  OBJECT_WRITE_OPERATION,
   OPENSMALLTALK_CUIS_PROVIDER_ID,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
+  WASM_FUNCTION_MODULE_DEPENDENCY_ROLE,
+  WASM_FUNCTION_V2,
+  assertWasmFunctionV2Artifact,
+  assertWasmModuleV2Artifact,
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
+  authorizedReadSmalltalkMethodForUpdate,
+  authorizedReplaceSmalltalkMethod,
   bytesValue,
   createOpenSmalltalkCuisProvider,
   createOpenSmalltalkCuisToolchainProvider,
@@ -30,6 +37,8 @@ import {
   objectResource,
   publishSmalltalkClassGlobals,
   readBehavior,
+  readModuleImplementationBytes,
+  reconcileMethodsFromSource,
   textValue,
 } from '../src/runtime.js';
 
@@ -622,6 +631,420 @@ test('the M3 acceptance target imports AND EXECUTES natively, matching the recor
     // Cuis build runtime was closed before this one existed.
     assert.deepEqual(runtime.toolchainProviders.list(), []);
     assert.deepEqual(runtime.foreignRuntimeProviders.list(), []);
+  } finally {
+    await runtime.close();
+  }
+});
+
+// =================================================================================================
+// SLICE D of bead lagrange-images-qax: the REAL Cuis-origin E3 acceptance (ADR 0088, GitHub #218).
+//
+// Everything above this point proves READS over real upstream material. This proves the WRITE, end
+// to end, against the pinned upstream method `Json>>ctorMap` — imported from the canonical export
+// with nothing edited between, then replaced twice, in a runtime that has no Cuis toolchain provider
+// and no Cuis foreign-runtime provider to have fallen back to.
+//
+// WHY REVISION A IS NOT MANUFACTURED. A is the genuine upstream accessor, taken from the manifest
+// this file's own real toolchain build produced. It is deliberately NOT replaced during fixture
+// setup, and its answer is MEASURED rather than chosen: `ctorMap:` is deliberately left out of the
+// import scope, so nothing in this test can assign the slot and a fresh native `Json` answers this
+// image's `nil`. A distinct integer would make the winner-preservation arithmetic prettier, but it
+// would also mean the subject of an E3 ACCEPTANCE was written by the acceptance. B and C — the two
+// revisions the test itself supplies — answer 11 and 22, which is where the distinctness is needed.
+//
+// WHAT THE CONSUMER SIDE MAY TOUCH. Every leg that models the Object Environment uses only the
+// public authorized seams: `authorizedDescribeSmalltalkMethod`, `authorizedReadSmalltalkMethodForUpdate`
+// and `authorizedReplaceSmalltalkMethod`. It never opens a MethodDictionary, never mints or parses a
+// token, never names an execution lane, never reconstructs a Block id, and never treats the write
+// receipt as current truth — Block C is discovered by a fresh authorized read, not from the receipt.
+// The one owner-path call is the COMPETING EDITOR in step 4, which is Images-owned test setup
+// standing in for a second writer; using the public writer there would have this test race itself.
+
+const CTOR_MAP_IDENTITY = 'cuis-method/JSON/Json/instance/ctorMap';
+// The pinned upstream source, exactly as the canonical export delivers it. Asserted rather than
+// described, so a substituted fixture or an edited manifest cannot reach the sequence below.
+const CTOR_MAP_UPSTREAM_SOURCE = 'ctorMap\n\t^ ctorMap';
+const REPLACEMENT_B = '[ ^ 11 ]';
+const REPLACEMENT_C = '[ ^ 22 ]';
+
+// An authority context that RECORDS every demand it is asked, so a proof can assert WHAT was
+// demanded rather than only that a call succeeded or was refused.
+function recordingRequire(runtime, grants) {
+  const context = runtime.authority.issue({principal: 'environment-e3', grants});
+  const demands = [];
+  const require = (demand) => {
+    demands.push(demand);
+    return runtime.authority.require(context, demand);
+  };
+  require.demands = demands;
+  return require;
+}
+
+const readGrant = (objectId) => ({operation: OBJECT_READ_OPERATION, resource: objectResource('native-image', objectId)});
+const writeGrant = (objectId) => ({operation: OBJECT_WRITE_OPERATION, resource: objectResource('native-image', objectId)});
+
+// A delegate compilation service that records every artifact compilation asked of it. Prototype
+// delegation, so the owner's own instance keeps working behind it. This is the compiler owner's
+// admission point: if it records nothing, nothing was compiled.
+function countingCompilation(compilation) {
+  const compiled = [];
+  const delegate = Object.create(compilation);
+  delegate.compileArtifact = async (...args) => {
+    compiled.push(args[1]?.id ?? null);
+    return await compilation.compileArtifact(...args);
+  };
+  return {compilation: delegate, compiled};
+}
+
+// THE EXECUTABLE ARTIFACT, OPENED RATHER THAN BELIEVED.
+//
+// `block.metadata.lane` is a LABEL the installer wrote, and bead lagrange-images-it3 established
+// that an implementation which merely labelled a neutral artifact `wasm` passes any metadata-only
+// check. So every lane claim below also walks the Block to its code artifact, validates it against
+// the wasm-function/v2 contract, follows its single `module` dependency to the compiled module,
+// resolves that module's implementation BYTES, and hands them to the host's own WebAssembly decoder
+// — requiring that the function artifact's declared entry really is an exported function of the
+// module that was compiled. A label cannot survive `new WebAssembly.Module`.
+async function assertGenuinelyWasm(runtime, method, label) {
+  const block = await runtime.images.getBlock(method.imageId, method.objectId);
+  assert.equal(block.metadata?.lane, 'wasm', `${label}: the method evolution owner recorded the WASM lane`);
+  assert.equal(block.metadata?.smalltalk, 'method', `${label}: and recorded it on an ordinary native method Block`);
+
+  const fn = await runtime.images.getCodeArtifact(block.code.imageId, block.code.objectId);
+  assert.equal(fn.representation, WASM_FUNCTION_V2, `${label}: the bound code artifact is a WASM function`);
+  assertWasmFunctionV2Artifact(fn);
+  const moduleDependencies = fn.dependencies.filter(({role}) => role === WASM_FUNCTION_MODULE_DEPENDENCY_ROLE);
+  assert.equal(moduleDependencies.length, 1, `${label}: exactly one module dependency`);
+  const moduleArtifact = await runtime.images.getCodeArtifact(
+    moduleDependencies[0].artifact.imageId, moduleDependencies[0].artifact.objectId,
+  );
+  assertWasmModuleV2Artifact(moduleArtifact);
+  const bytes = await readModuleImplementationBytes(moduleArtifact, {
+    resolveImplementation: (ref) => runtime.images.getCodeArtifact(ref.imageId, ref.objectId),
+  });
+  assert.deepEqual([...bytes.slice(0, 4)], [0x00, 0x61, 0x73, 0x6d], `${label}: the module bytes carry the WASM magic`);
+  const {entry} = JSON.parse(fn.content.value);
+  const exports = WebAssembly.Module.exports(new WebAssembly.Module(bytes));
+  assert.ok(
+    exports.some(({name, kind}) => name === entry && kind === 'function'),
+    `${label}: the artifact's entry ${entry} must be a real exported function of the compiled module`,
+  );
+}
+
+// Where a lane could leak into the Environment-facing contract, checked as KEYS AND VALUES rather
+// than as a substring scan. The substring instrument would be the wrong one here: ADR 0086 revision
+// identity is derived in part from the lane (bead lagrange-images-it3), and it travels inside an
+// OPAQUE base64url Block id that the consumer may compare and round-trip but never interpret. What
+// must not happen is a lane appearing as a field the Environment could read or a value it could act
+// on, and that is exactly what this answers.
+function laneVocabulary(value, path = '$', found = []) {
+  if (typeof value === 'string') {
+    if (value === 'wasm' || value === 'neutral') found.push(`${path} = ${value}`);
+    return found;
+  }
+  if (value === null || typeof value !== 'object') return found;
+  for (const [key, entry] of Object.entries(value)) {
+    if (/^lane$/i.test(key)) found.push(`${path}.${key}`);
+    laneVocabulary(entry, `${path}.${key}`, found);
+  }
+  return found;
+}
+
+// THE ACCEPTANCE. One test on purpose: it is a single vertical, and splitting it would mean either
+// re-running the real Cuis build's downstream import several times or sharing mutable state between
+// tests that must observe one another's revisions in order.
+test('the real upstream Json>>ctorMap is replaced through the authorized E3 seam with Cuis absent', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await jsonSemanticExport());
+
+  // ---- 1. THE REAL BOUNDARY -------------------------------------------------------------------
+  // The subject is named by the canonical export's own semantic identity and pinned to its upstream
+  // source. The toolchain that produced this manifest ran in a runtime that was CLOSED before the
+  // native runtime below existed (see `jsonSemanticExport`), so the whole sequence sits on the
+  // native side of the cut.
+  const upstream = manifest.methods.find(({identity}) => identity === CTOR_MAP_IDENTITY);
+  assert.ok(upstream, `${CTOR_MAP_IDENTITY} is real upstream material in the canonical export`);
+  assert.equal(upstream.class, 'cuis-class/JSON/Json');
+  assert.equal(upstream.side, 'instance');
+  assert.equal(upstream.selector, 'ctorMap');
+  assert.equal(upstream.source, CTOR_MAP_UPSTREAM_SOURCE, 'the pinned upstream source, unedited');
+
+  const runtime = await nativeRuntime();
+  try {
+    // Cuis is absent BEFORE the E3 sequence. Asserted here as well as inside `nativeRuntime` so the
+    // pairing with the post-execution assertion in step 10 is legible at both ends.
+    assert.deepEqual(runtime.toolchainProviders.list(), [], 'no Cuis toolchain provider before E3');
+    assert.deepEqual(runtime.foreignRuntimeProviders.list(), [], 'no Cuis foreign runtime before E3');
+
+    // The MINIMUM native scope: the declaring class and the one method under test. `ctorMap:` is
+    // deliberately excluded — nothing in this test may assign the slot, because A's answer is
+    // measured rather than manufactured.
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: ['cuis-class/JSON/Json'], methods: [CTOR_MAP_IDENTITY]},
+    });
+    assert.deepEqual(imported.classes.map(({identity}) => identity), ['cuis-class/JSON/Json']);
+    const {classRef} = imported.classes[0];
+    assert.equal(
+      await methodBlockRef({images: runtime.images, imageId: 'native-image', classRef, selector: 'ctorMap:'}),
+      null,
+      'the setter was NOT imported, so nothing can assign the slot A reads',
+    );
+
+    // ---- 2. AN ORDINARY NATIVE RECEIVER ---------------------------------------------------------
+    // Allocated through the ordinary native allocation protocol — `basicNew` sent to the imported
+    // class — and every A/B/C behaviour claim below sends `ctorMap` to THIS receiver through normal
+    // native dispatch. No method Block is ever invoked directly.
+    const allocate = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'native-image', id: 'e3-allocate', source: '[ :class | class basicNew ]',
+    });
+    const instance = await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('native-image', allocate.block.id), [classRef],
+    ));
+
+    let sends = 0;
+    const sendCtorMap = async () => {
+      sends += 1;
+      const {block} = await installSymmetricSmalltalkBlock({
+        images: runtime.images, imageId: 'native-image', id: `e3-send-${sends}`,
+        source: '[ :receiver | receiver ctorMap ]',
+      });
+      return await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('native-image', block.id), [instance],
+      ));
+    };
+
+    // The Environment's own read authority, rebuilt for each revision: the class's own `object/read`
+    // plus the CURRENT method Block's independent one (ADR 0087 — neither half alone suffices).
+    // Learning which Block id to GRANT is Images-side fixture setup; every claim below still reads
+    // the ref back out of the authorized seam rather than from here.
+    const readerForCurrent = async () => {
+      const method = await methodBlockRef({images: runtime.images, imageId: 'native-image', classRef, selector: 'ctorMap'});
+      assert.ok(method, 'the position is bound');
+      return browseRequire(runtime, [classRef.objectId, method.objectId]);
+    };
+    const describeCurrent = async () => await authorizedDescribeSmalltalkMethod({
+      images: runtime.images, imageId: 'native-image', classRef, selector: 'ctorMap',
+      require: await readerForCurrent(),
+    });
+    const readCurrentForUpdate = async () => await authorizedReadSmalltalkMethodForUpdate({
+      images: runtime.images, imageId: 'native-image', classRef, selector: 'ctorMap',
+      require: await readerForCurrent(),
+    });
+
+    // REVISION A, as the Environment learns it: through ADR 0087's browse seam, never from the
+    // importer's transient output.
+    const descriptionA = await describeCurrent();
+    const a = descriptionA.method;
+    assert.equal(descriptionA.format, 'smalltalk-method-description/v1');
+    assert.deepEqual(descriptionA.class, classRef);
+    assert.equal(descriptionA.selector, 'ctorMap');
+    assert.equal(descriptionA.side, 'instance');
+    assert.equal(descriptionA.source, null);
+    assert.equal(descriptionA.provenance, null);
+    await assertGenuinelyWasm(runtime, a, 'A (the pinned upstream revision)');
+    const blockA = await runtime.images.getBlock(a.imageId, a.objectId);
+
+    // A'S ANSWER, MEASURED. `^ ctorMap` reads an instance variable nothing has assigned, so the real
+    // upstream accessor answers this image's `nil` on a fresh receiver. Recorded as the fact it is:
+    // the acceptance did not choose it, and it is asserted so that a later change to allocation or
+    // slot semantics reddens here rather than silently altering what "A's behaviour" means.
+    assert.deepEqual(
+      await sendCtorMap(),
+      objectRef('native-image', 'smalltalk/nil'),
+      'the genuine upstream accessor, reached by ordinary native dispatch',
+    );
+
+    // ---- 3. THE PUBLIC VERSION-AWARE READ -------------------------------------------------------
+    const readA = await readCurrentForUpdate();
+    assert.deepEqual(Object.keys(readA).sort(), ['descriptor', 'versionToken']);
+    const {descriptor: descriptorA, versionToken: tokenA} = readA;
+    // EXACTLY the canonical ADR 0087 descriptor — the same object the browse seam answers, not a
+    // second description shape that happens to carry the same fields.
+    assert.deepEqual(descriptorA, descriptionA, 'the read-for-update descriptor IS the ADR 0087 description');
+    assert.deepEqual(descriptorA.method, a, 'and it names exactly Block A');
+    assert.equal(typeof tokenA, 'string');
+    assert.ok(tokenA.length > 0);
+
+    // ---- 4. A COMPETING EDITOR REPLACES A WITH B ------------------------------------------------
+    // Through the TRUSTED Images-native owner path rather than the public writer, so the stale leg
+    // below is a genuine third-party conflict instead of this test racing itself.
+    //
+    // NO LANE IS NAMED. If this call chose `lane: 'wasm'`, the lane-preservation claim about B would
+    // be vacuous — it would be proving that a named lane is honoured, which is a different rule.
+    // B ends up in the WASM lane only because bead lagrange-images-it3's observed-revision rule
+    // preserves A's lane.
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      classRef,
+      methods: [{selector: 'ctorMap', source: REPLACEMENT_B, expectedCurrent: a}],
+    });
+
+    const b = (await describeCurrent()).method;
+    assert.notDeepEqual(b, a, 'B is a FRESH immutable revision, not a mutation of A');
+    assert.deepEqual(await runtime.images.getBlock(a.imageId, a.objectId), blockA,
+      'and A survives unchanged: a replacement stops pointing at the old revision, it does not edit it');
+    await assertGenuinelyWasm(runtime, b, 'B (the competing editor\'s revision)');
+    assert.deepEqual(await sendCtorMap(), integerValue(11), 'ordinary dispatch now answers B');
+    const blockB = await runtime.images.getBlock(b.imageId, b.objectId);
+
+    // ---- 5. THE PUBLIC WRITER, WITH A STALE TOKEN A ---------------------------------------------
+    // Token A was minted in step 3, BEFORE B landed — it was never a fresh read taken after the
+    // fact — so this is a real overtaken observation. The compilation service is instrumented: ADR
+    // 0088 decision 5 requires the stale verdict to precede compilation, and an implementation that
+    // compiled first would be indistinguishable from this one by any assertion about final state.
+    const {compilation: instrumented, compiled} = countingCompilation(runtime.compilation);
+    const staleWriter = recordingRequire(runtime, [writeGrant(classRef.objectId)]);
+    const stale = await authorizedReplaceSmalltalkMethod({
+      images: runtime.images,
+      compilation: instrumented,
+      imageId: 'native-image',
+      classRef,
+      selector: 'ctorMap',
+      source: REPLACEMENT_C,
+      expectedVersionToken: tokenA,
+      require: staleWriter,
+    }).then(() => null, (error) => error);
+
+    assert.equal(stale?.name, 'SmalltalkStaleMethodPositionError',
+      `an overtaken observation must be refused as stale; got ${stale?.name}: ${stale?.message}`);
+    assert.deepEqual(compiled, [], 'and the replacement source was never compiled');
+    assert.deepEqual(staleWriter.demands, [
+      {operation: OBJECT_WRITE_OPERATION, resource: objectResource('native-image', classRef.objectId)},
+    ], 'a stale call still authorizes first, and demands only the declaring class\'s write');
+    // The refusal discloses nothing about the winner, and carries no backend error out with it.
+    assert.equal(stale.cause, undefined);
+    assert.equal(String(stale.message).includes(b.objectId), false, 'a stale refusal names no winning Block');
+    // The winner survives, by the public reader AND by execution.
+    assert.deepEqual((await describeCurrent()).method, b, 'B remains the exact current binding');
+    assert.deepEqual(await sendCtorMap(), integerValue(11), 'and dispatch still answers B');
+    await assertGenuinelyWasm(runtime, b, 'B after the refused replacement');
+
+    // ---- 6. A FRESH PUBLIC READ OF B ------------------------------------------------------------
+    const readB = await readCurrentForUpdate();
+    const {descriptor: descriptorB, versionToken: tokenB} = readB;
+    assert.deepEqual(descriptorB.method, b, 'the descriptor names exactly Block B');
+    assert.notEqual(tokenB, tokenA, 'a new observation is a different assumption');
+    assert.equal(descriptorB.source, null);
+
+    // ---- 7. THE PUBLIC REPLACEMENT B -> C -------------------------------------------------------
+    const writer = recordingRequire(runtime, [writeGrant(classRef.objectId)]);
+    const receipt = await authorizedReplaceSmalltalkMethod({
+      images: runtime.images,
+      compilation: instrumented,
+      imageId: 'native-image',
+      classRef,
+      selector: 'ctorMap',
+      source: REPLACEMENT_C,
+      expectedVersionToken: tokenB,
+      require: writer,
+    });
+    assert.deepEqual(receipt, {replaced: true});
+    assert.deepEqual(Object.keys(receipt), ['replaced'], 'the receipt is one key and no more');
+    assert.equal(Object.isFrozen(receipt), true);
+    // Exactly one authority demand: `object/write` on the declaring Class. No write on A, on B, or
+    // on anything else, and no read demand at all.
+    assert.deepEqual(writer.demands, [
+      {operation: OBJECT_WRITE_OPERATION, resource: objectResource('native-image', classRef.objectId)},
+    ]);
+    // THE SPY IS DEMONSTRABLY WIRED. The same instrumented service that recorded NOTHING for the
+    // stale call records this one's compilation. Without this, "never compiled" in step 5 would be
+    // satisfied just as well by a spy that could never fire.
+    assert.ok(compiled.length > 0, 'the same instrumented compiler DID compile the successful replacement');
+
+    // C IS DISCOVERED BY A FRESH AUTHORIZED READ, never from the receipt — which is exactly what the
+    // consumer committed to (#218 point 4) and why the receipt carries no ref to predict it from.
+    const readC = await readCurrentForUpdate();
+    const {descriptor: descriptorC, versionToken: tokenC} = readC;
+    const c = descriptorC.method;
+    assert.notDeepEqual(c, b, 'C is a fresh revision, distinct from B');
+    assert.notDeepEqual(c, a, 'and distinct from A');
+    assert.deepEqual(await runtime.images.getBlock(a.imageId, a.objectId), blockA, 'A is still an addressable immutable revision');
+    assert.deepEqual(await runtime.images.getBlock(b.imageId, b.objectId), blockB, 'and so is B');
+    await assertGenuinelyWasm(runtime, c, 'C (the publicly replaced revision)');
+    assert.deepEqual(await sendCtorMap(), integerValue(22), 'and ordinary dispatch answers C');
+
+    // ---- 8. SOURCE STAYS ABSENT -----------------------------------------------------------------
+    // ADR 0087 decision 6's `source: null` is still truthful after a successful replacement: the
+    // supplied text was compiled and not retained, so nothing about it is Environment-visible.
+    const descriptionC = await describeCurrent();
+    assert.deepEqual(descriptionC, descriptorC, 'browse and read-for-update agree on the new revision');
+    assert.equal(descriptionC.source, null);
+    assert.equal(descriptionC.provenance, null, 'Images owns no durable association back to the Cuis origin');
+    assertOriginNeutralNativeDescription(descriptionC, 'the replaced method description');
+    assert.equal(JSON.stringify(descriptionC).includes(REPLACEMENT_C), false,
+      'the supplied source did not become retained, Environment-visible source');
+
+    // ---- 9. THE AUTHORITY IS NARROW -------------------------------------------------------------
+    // Not a re-proof of the C2 suite — just enough to show the REAL imported method takes the same
+    // public seam under the same rule. Each of these holds a VALID, CURRENT token for C.
+    for (const [label, grants] of [
+      ['no grant at all', []],
+      ['the full ADR 0087 read authority that minted the token', [readGrant(classRef.objectId), readGrant(c.objectId)]],
+      ['object/write on the current revision instead of on the class', [writeGrant(c.objectId)]],
+      ['object/write on the superseded revisions A and B', [writeGrant(a.objectId), writeGrant(b.objectId)]],
+    ]) {
+      const denied = recordingRequire(runtime, grants);
+      const refusal = await authorizedReplaceSmalltalkMethod({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'native-image',
+        classRef,
+        selector: 'ctorMap',
+        source: '[ ^ 33 ]',
+        expectedVersionToken: tokenC,
+        require: denied,
+      }).then(() => null, (error) => error);
+      assert.equal(refusal?.name, 'AuthorityError', `${label} must not authorize a replacement`);
+      assert.deepEqual(denied.demands, [
+        {operation: OBJECT_WRITE_OPERATION, resource: objectResource('native-image', classRef.objectId)},
+      ], `${label}: the one demand is the declaring class's own write`);
+    }
+    assert.deepEqual((await describeCurrent()).method, c, 'no denied call moved the position');
+    assert.deepEqual(await sendCtorMap(), integerValue(22));
+
+    // ---- 10. CUIS IS STILL ABSENT ---------------------------------------------------------------
+    // The pair matters: step 1 proves the sequence STARTED without Cuis, and this proves nothing
+    // lazily started it during import, replacement or dispatch.
+    assert.deepEqual(runtime.toolchainProviders.list(), [], 'nothing started a Cuis toolchain during E3');
+    assert.deepEqual(runtime.foreignRuntimeProviders.list(), [], 'and no Cuis foreign runtime');
+
+    // ---- 11. THE LANE IS INTERNAL ---------------------------------------------------------------
+    // A -> B -> C never left the WASM lane, proven above by BOTH the owner's recorded lane and a
+    // genuine WebAssembly decode of the module each revision executes through.
+    //
+    // And none of it is Environment-facing: the descriptor's field set is exactly ADR 0087's, the
+    // receipt's is one key, and no key or value in either — the token included — names a lane.
+    assert.deepEqual(
+      Object.keys(descriptorC).sort(),
+      ['class', 'format', 'method', 'provenance', 'selector', 'side', 'source'],
+      'the descriptor carries exactly the ADR 0087 field set and nothing this seam added',
+    );
+    assert.deepEqual(laneVocabulary(readC), [], 'the read-for-update result names no lane');
+    assert.deepEqual(laneVocabulary(receipt), [], 'and neither does the receipt');
+
+    // The replacement ARGUMENTS name no lane either — and cannot. The seam accepts a fixed argument
+    // set, so a consumer that tried to choose one would be ignored rather than obeyed: this call
+    // supplies `lane: 'neutral'` and the position stays genuinely WASM.
+    const laneWriter = recordingRequire(runtime, [writeGrant(classRef.objectId)]);
+    assert.deepEqual(await authorizedReplaceSmalltalkMethod({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      classRef,
+      selector: 'ctorMap',
+      source: '[ ^ 44 ]',
+      expectedVersionToken: tokenC,
+      require: laneWriter,
+      lane: 'neutral',
+    }), {replaced: true});
+    const afterLaneAttempt = (await describeCurrent()).method;
+    await assertGenuinelyWasm(runtime, afterLaneAttempt, 'the revision following a caller-named lane');
+    assert.deepEqual(await sendCtorMap(), integerValue(44), 'the source was applied; only the lane request was inert');
   } finally {
     await runtime.close();
   }
