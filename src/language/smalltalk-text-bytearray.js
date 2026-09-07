@@ -14,6 +14,7 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 // primitive family (smalltalk-primitives-bytes.js).
 //
 //   Text       >> utf8Bytes        primitiveTextUtf8Bytes value: self
+//   Text       >> asString/isEmpty ordinary Text protocol (the latter forced by ADR 0091)
 //   ByteArray  >> utf8Text         primitiveByteArrayUtf8Text value: self
 //   ByteArray  >> size             primitiveByteArraySize value: self
 //   ByteArray  >> at:              primitiveByteArrayAt value: self value: index
@@ -112,12 +113,18 @@ async function installSmalltalkTextByteArrayProtocol({images, compilation, image
     })],
   });
 
-  // Text >> asString answers the receiver: a Text's string form is itself. Standard,
-  // general protocol (a String answers `asString` with itself in every dialect); it
-  // lets a uniform `aString asString` conversion reach both Text and Symbol.
+  // Ordinary Text protocol. `asString` answers the receiver: a Text's string form is itself. The
+  // `isEmpty` predicate is forced by the first consumer of native `Text class>>streamContents:`:
+  // unchanged YAXO `XMLTokenizer>>nextWhitespace` observes the returned text through exactly that
+  // selector once a test-only fixture supplies its separately classified earlier `~~` dependency.
+  // Equality with the empty Text is sufficient and keeps this in ordinary Smalltalk; no
+  // byte/string-size primitive or broader collection inheritance is invented.
   await defineMethodsFromSource({
     images, compilation, imageId, lane, classRef: kernel.textClass,
-    methods: [{selector: 'asString', source: '[ ^ self ]'}],
+    methods: [
+      {selector: 'asString', source: '[ ^ self ]'},
+      {selector: 'isEmpty', source: "[ ^ self = '' ]"},
+    ],
   });
 
   // ByteArray >> utf8Text / size / at:

@@ -213,6 +213,22 @@ function canonicalMethodIdentity(packageName, classIdentity, side, selector) {
 // text seed yields a text result. It does NOT go through `species` — measurement showed upstream's
 // own `contents` is a class-preserving copy that never sends it, and that a native text Value is
 // not allocatable — so nothing here depends on a Text ever answering `species`.
+//
+// The third idiom is the distinct `UnicodeString streamContents: [ ... ]`, forced by unchanged
+// pinned YAXO `XMLTokenizer>>nextWhitespace` and measured independently (bead
+// lagrange-images-xxm.11). In the pinned image UnicodeString class itself creates a
+// Utf8EncodedWriteStream, evaluates the block once, ignores its answer, and returns stream
+// contents. Empty, ASCII, U+03BB and supplementary U+1F600 writes all answer UnicodeString;
+// multiple writes preserve order; an Error escapes unchanged; and the result is equal and has the
+// same class as the corresponding `UnicodeString writeStream ... contents` result.
+//
+// The native image's honest counterpart is ordinary `Text class >> streamContents:` protocol,
+// installed by the native Text/WriteStream owner and answering the one canonical native Text
+// representation. The adapter therefore changes ONLY the foreign receiver name and selector to
+// `Text streamContents:`. It does not expand the call, evaluate the block, construct the stream or
+// take contents. Those semantics stay native and direct native source can call them with no Cuis
+// material present. This remains no claim that UnicodeString is generally Text and publishes no
+// UnicodeString global.
 const CUIS_DIALECT_IDIOMS = Object.freeze([Object.freeze({
   tokens: Object.freeze([
     Object.freeze({type: 'identifier', value: 'String'}),
@@ -225,29 +241,47 @@ const CUIS_DIALECT_IDIOMS = Object.freeze([Object.freeze({
     Object.freeze({type: 'identifier', value: 'writeStream'}),
   ]),
   native: "(WriteStream on: '')",
+}), Object.freeze({
+  // Include the opening block token in the MATCH so the adaptation cannot capture a different
+  // `streamContents:` argument form. `replaceTokens` leaves that block untouched: only receiver +
+  // selector are the foreign semantic locator being normalized.
+  tokens: Object.freeze([
+    Object.freeze({type: 'identifier', value: 'UnicodeString'}),
+    Object.freeze({type: 'keyword', value: 'streamContents:'}),
+    Object.freeze({type: '[', value: '['}),
+  ]),
+  replaceTokens: 2,
+  exactBlockArgument: true,
+  native: 'Text streamContents:',
 })]);
 
 // A dialect idiom is about a GLOBAL name. If the method binds that name itself — as a parameter,
 // a temporary or a block parameter — then the source means something else entirely and needs no
-// translation at all, so the idiom must not fire. This scan deliberately OVER-detects: `|` is also
-// an ordinary binary selector, so an expression like `a | String | b` marks `String` bound and the
-// adaptation is skipped. Erring that way is safe — a skipped adaptation leaves an unbound name and
-// a visible refusal, while a missed binding would silently rewrite a legitimate variable.
+// translation at all, so the idiom must not fire. Temporary bars need their lexical position:
+// blindly toggling on every `|` mistakes a block-parameter CLOSING bar for a temporary opener and
+// can suppress a later, unrelated idiom. A temporary opener is only the method body's first token,
+// the first token after `[`, or the second bar in `[:parameter | | temporary | ...]`.
 function boundNames(tokens, bodyTokenIndex, parameters) {
   const bound = new Set(parameters);
-  let inTemporaries = false;
+
+  const collectTemporaries = (openAt) => {
+    for (let at = openAt + 1; at < tokens.length && tokens[at].type !== '|'; at += 1) {
+      if (tokens[at].type === 'identifier') bound.add(tokens[at].value);
+    }
+  };
+
   for (let at = bodyTokenIndex; at < tokens.length; at += 1) {
     const token = tokens[at];
-    if (token.type === '|') {
-      inTemporaries = !inTemporaries;
-      continue;
+    if (token.type === '|' && (
+      at === bodyTokenIndex || tokens[at - 1]?.type === '[' || tokens[at - 1]?.type === '|'
+    )) {
+      collectTemporaries(at);
     }
     if (token.type !== 'identifier') continue;
-    // `| a b |` temporaries, `[ :each | ... ]` block parameters, and assignment targets — under
-    // EITHER assignment spelling the dialect token stream can carry, through the tokenizer owner's
-    // one shared predicate, so a name bound by the legacy arrow suppresses the idiom exactly as a
-    // name bound by `:=` does.
-    if (inTemporaries || tokens[at - 1]?.type === ':' || isAssignmentToken(tokens[at + 1])) {
+    // `[ :each | ... ]` block parameters and assignment targets — under EITHER assignment spelling
+    // the dialect token stream can carry, through the tokenizer owner's one shared predicate — join
+    // the explicit temporary declarations above in this one definition of a bound name.
+    if (tokens[at - 1]?.type === ':' || isAssignmentToken(tokens[at + 1])) {
       bound.add(token.value);
     }
   }
@@ -275,6 +309,22 @@ function matchesIdiom(tokens, at, pattern, bodyTokenIndex) {
   return tokens[at + pattern.length]?.type !== ';';
 }
 
+// `UnicodeString streamContents:` is deliberately the complete one-keyword call with one literal
+// Block argument, not a prefix of another selector chain. Find the matching closing bracket in the
+// ORIGINAL tokens (nested Blocks included) and allow only an expression boundary afterwards. A
+// later unary/keyword/cascade chain remains unsupported rather than silently widening the idiom.
+const EXACT_IDIOM_END = new Set(['eof', '.', ']', ')']);
+function hasExactBlockArgument(tokens, openAt) {
+  let depth = 0;
+  for (let at = openAt; at < tokens.length; at += 1) {
+    if (tokens[at].type === '[') depth += 1;
+    if (tokens[at].type !== ']') continue;
+    depth -= 1;
+    if (depth === 0) return EXACT_IDIOM_END.has(tokens[at + 1]?.type);
+  }
+  return false;
+}
+
 // ONE immutable replacement plan, collected against the SAME original token stream and applied
 // right-to-left in a single pass. Two translation kinds share the plan:
 //
@@ -287,8 +337,8 @@ function matchesIdiom(tokens, at, pattern, bodyTokenIndex) {
 //     name such as `driver _ SAXDriver on: aStream` becomes `driver := SAXDriver on: aStream` and
 //     then undergoes ordinary native name resolution, which is the refusal the un-translated
 //     arrow hid (bead lagrange-images-xxm.3).
-//   * the closed dialect-idiom table above (`String new` and `UnicodeString writeStream`), with its
-//     bound/declared exclusions.
+//   * the closed dialect-idiom table above (`String new`, `UnicodeString writeStream`, and exact
+//     `UnicodeString streamContents: [block]`), with its bound/declared exclusions.
 //
 // Collecting both against the same token stream and splicing in start-descending order is what
 // makes offset drift impossible by construction: no splice is ever applied at offsets an earlier
@@ -305,10 +355,12 @@ function adaptDialect(bodySource, tokens, bodyTokenIndex, bodyStart, parameters,
     }
     for (const idiom of CUIS_DIALECT_IDIOMS) {
       if (!matchesIdiom(tokens, at, idiom.tokens, bodyTokenIndex)) continue;
+      if (idiom.exactBlockArgument && !hasExactBlockArgument(tokens, at + idiom.tokens.length - 1)) continue;
       // The method binds the name itself, or the package declares a class of that name, so the
       // source means its own thing and this is not the dialect idiom at all.
       if (bound.has(token.value) || declaredNames.has(token.value)) continue;
-      const last = tokens[at + idiom.tokens.length - 1];
+      const replacedTokenCount = idiom.replaceTokens ?? idiom.tokens.length;
+      const last = tokens[at + replacedTokenCount - 1];
       replacements.push({start: token.start - bodyStart, end: last.end - bodyStart, native: idiom.native});
       break;
     }

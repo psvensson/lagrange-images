@@ -1408,11 +1408,12 @@ test('a manifest that declares its own class of the name is not adapted', async 
   });
 });
 
-// M4 blocker (bead lagrange-images-xxm.9). The pinned Cuis oracle shows that this exact base-image
-// expression constructs a Unicode-preserving stream whose contents have UnicodeString species.
-// The native image has one textual representation and one ordinary text-backed stream, so the
-// adapter translates the CONSTRUCTION idiom only; it does not publish or alias UnicodeString.
-test('the Cuis `UnicodeString writeStream` idiom uses the ordinary native text-backed stream', async () => {
+// M4 blockers xxm.9 and xxm.11. The two independently measured base-image expressions both use a
+// Unicode-preserving stream but have distinct shapes: one answers the stream, while streamContents:
+// evaluates a producer Block and answers contents. The native image has one textual representation
+// and one ordinary text-backed stream, so the adapter translates only these exact locators; it does
+// not publish or alias UnicodeString, and the native Text/WriteStream owners execute the protocol.
+test('the exact Cuis UnicodeString stream constructions reach ordinary native Text protocol', async () => {
   await withStandardImage(async (runtime) => {
     assert.deepEqual(
       await seedAnswer(runtime, "seed\n\t| stream |\n\tstream _ UnicodeString writeStream.\n\tstream nextPutAll: 'λ'.\n\t^ stream contents"),
@@ -1424,10 +1425,20 @@ test('the Cuis `UnicodeString writeStream` idiom uses the ordinary native text-b
       textValue(''),
       'an unwritten translated stream answers the native empty Text counterpart',
     );
+    assert.deepEqual(
+      await seedAnswer(runtime, `seed
+	^ UnicodeString streamContents: [ :stream |
+		stream nextPutAll: 'ab'.
+		stream nextPutAll: 'λ'.
+		stream nextPutAll: '😀'.
+		42 ]`),
+      textValue('abλ😀'),
+      'the distinct streamContents: locator reaches native Text protocol, preserving ordered Unicode writes and ignoring the producer answer',
+    );
     assert.equal(
       await resolveGlobal({images: runtime.images, imageId: 'app', name: 'UnicodeString'}),
       null,
-      'the adapter did not turn an exact idiom into a class alias',
+      'the adapter did not turn either exact idiom into a class alias',
     );
     await assert.rejects(
       installSymmetricSmalltalkBlock({
@@ -1437,10 +1448,20 @@ test('the Cuis `UnicodeString writeStream` idiom uses the ordinary native text-b
       /unbound Symmetric Smalltalk name: UnicodeString/,
       'direct native source did not gain Cuis base-image vocabulary',
     );
+    await assert.rejects(
+      installSymmetricSmalltalkBlock({
+        images: runtime.images,
+        imageId: 'app',
+        id: 'native-unicode-stream-contents-refusal',
+        source: '[ UnicodeString streamContents: [ :stream | nil ] ]',
+      }),
+      /unbound Symmetric Smalltalk name: UnicodeString/,
+      'direct native source knows Text protocol, not Cuis-only vocabulary',
+    );
   });
 });
 
-test('only the exact `UnicodeString writeStream` construction is adapted', async () => {
+test('only the exact measured UnicodeString stream constructions are adapted', async () => {
   await withStandardImage(async (runtime) => {
     const unsupported = [
       'seed\n\t^ UnicodeString',
@@ -1456,6 +1477,16 @@ test('only the exact `UnicodeString writeStream` construction is adapted', async
       /unbound Symmetric Smalltalk name: UnicodeString/,
       'a cascade observes the receiver and therefore is not the measured idiom',
     );
+    const unsupportedStreamContents = [
+      'seed\n\t^ UnicodeString streamContents: self',
+      "seed\n\t^ UnicodeString streamContents: [ :stream | stream nextPutAll: 'x' ] yourself",
+      "seed\n\t^ UnicodeString streamContents: [ :stream | stream nextPutAll: 'x' ]; yourself",
+      "seed\n\t^ UnicodeString streamContents: [ :stream | nil ] estimatedSize: 10",
+      "seed\n\t^ UnicodeString readStream: [ :stream | nil ]",
+    ];
+    for (const source of unsupportedStreamContents) {
+      await assert.rejects(importSeed(runtime, source), /unbound Symmetric Smalltalk name: UnicodeString/, source);
+    }
     assert.deepEqual(
       await seedAnswer(runtime, "seed\n\t^ 'UnicodeString writeStream'"),
       textValue('UnicodeString writeStream'),
@@ -1463,6 +1494,19 @@ test('only the exact `UnicodeString writeStream` construction is adapted', async
     assert.deepEqual(
       await seedAnswer(runtime, 'seed\n\t"UnicodeString writeStream is data here"\n\t^ 9'),
       integerValue(9),
+    );
+    assert.deepEqual(
+      await seedAnswer(runtime, "seed\n\t^ 'UnicodeString streamContents: [ :stream | 1 ]'"),
+      textValue('UnicodeString streamContents: [ :stream | 1 ]'),
+    );
+    assert.deepEqual(
+      await seedAnswer(runtime, 'seed\n\t"UnicodeString streamContents: is commentary"\n\t^ 9'),
+      integerValue(9),
+    );
+    await assert.rejects(
+      seedAnswer(runtime, "seed\n\t^ self UnicodeString streamContents: [ :stream | stream nextPutAll: 'x' ]"),
+      (error) => error?.name === 'SmalltalkMessageNotUnderstoodError' && error?.selector === 'UnicodeString',
+      'an instance-side unary selector is executed as written, not reinterpreted as a global name',
     );
   });
 });
@@ -1480,6 +1524,16 @@ test('a locally bound UnicodeString name is not the base-image idiom', async () 
         package: 'Fixture', class: 'cuis-class/Fixture/ZuluBase', side: 'instance', selector: 'writeStream',
         source: 'writeStream\n\t^ 41',
       },
+      {
+        identity: 'cuis-method/Fixture/ZuluBase/instance/localStreamContents',
+        package: 'Fixture', class: 'cuis-class/Fixture/ZuluBase', side: 'instance', selector: 'localStreamContents',
+        source: 'localStreamContents\n\t| UnicodeString |\n\tUnicodeString _ self.\n\t^ UnicodeString streamContents: [ :stream | 99 ]',
+      },
+      {
+        identity: 'cuis-method/Fixture/ZuluBase/instance/streamContents:',
+        package: 'Fixture', class: 'cuis-class/Fixture/ZuluBase', side: 'instance', selector: 'streamContents:',
+        source: 'streamContents: aBlock\n\t^ 73',
+      },
     ]});
     const imported = await importCuisNativePackage({
       images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: input,
@@ -1488,6 +1542,8 @@ test('a locally bound UnicodeString name is not the base-image idiom', async () 
         methods: [
           'cuis-method/Fixture/ZuluBase/instance/seed',
           'cuis-method/Fixture/ZuluBase/instance/writeStream',
+          'cuis-method/Fixture/ZuluBase/instance/localStreamContents',
+          'cuis-method/Fixture/ZuluBase/instance/streamContents:',
         ],
       },
     });
@@ -1501,6 +1557,17 @@ test('a locally bound UnicodeString name is not the base-image idiom', async () 
       )),
       integerValue(41),
       'the send remained on the local variable rather than becoming a native stream construction',
+    );
+    const streamContents = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'local-unicode-stream-contents',
+      source: '[ :class | class basicNew localStreamContents ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', streamContents.block.id), [imported.classes[0].classRef],
+      )),
+      integerValue(73),
+      'the keyword send remained on the local receiver and did not evaluate the supplied Block',
     );
   });
 });
@@ -1591,9 +1658,19 @@ test('a manifest-declared UnicodeString class remains the package class', async 
           source: 'writeStream\n\t^ 42',
         },
         {
+          identity: 'cuis-method/Fixture/UnicodeString/class/streamContents:',
+          package: 'Fixture', class: 'cuis-class/Fixture/UnicodeString', side: 'class', selector: 'streamContents:',
+          source: 'streamContents: aBlock\n\t^ 74',
+        },
+        {
           identity: 'cuis-method/Fixture/ZuluBase/instance/seed',
           package: 'Fixture', class: 'cuis-class/Fixture/ZuluBase', side: 'instance', selector: 'seed',
           source: 'seed\n\t^ UnicodeString writeStream',
+        },
+        {
+          identity: 'cuis-method/Fixture/ZuluBase/instance/seedStreamContents',
+          package: 'Fixture', class: 'cuis-class/Fixture/ZuluBase', side: 'instance', selector: 'seedStreamContents',
+          source: 'seedStreamContents\n\t^ UnicodeString streamContents: [ :stream | 99 ]',
         },
       ],
     });
@@ -1603,7 +1680,9 @@ test('a manifest-declared UnicodeString class remains the package class', async 
         classes: ['cuis-class/Fixture/UnicodeString', 'cuis-class/Fixture/ZuluBase'],
         methods: [
           'cuis-method/Fixture/UnicodeString/class/writeStream',
+          'cuis-method/Fixture/UnicodeString/class/streamContents:',
           'cuis-method/Fixture/ZuluBase/instance/seed',
+          'cuis-method/Fixture/ZuluBase/instance/seedStreamContents',
         ],
       },
     });
@@ -1618,6 +1697,17 @@ test('a manifest-declared UnicodeString class remains the package class', async 
       )),
       integerValue(42),
       'the package declaration won; no base-image idiom was substituted',
+    );
+    const streamContents = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'declared-unicode-stream-contents-send',
+      source: '[ :class | class basicNew seedStreamContents ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', streamContents.block.id), [target.classRef],
+      )),
+      integerValue(74),
+      'the package-owned keyword method won and its argument Block was not evaluated',
     );
   });
 });
@@ -1697,10 +1787,10 @@ test('oracle-proven underscore identifier forms survive the adapter and assign t
   });
 });
 
-// ONE replacement plan, proven against offset drift: the assignment token and both idioms share
-// one original token stream. The UnicodeString replacement is deliberately much longer than its
-// source, so applying another original offset after it would cut the body visibly.
-test('the legacy arrow and both Cuis idioms share one drift-free replacement plan', async () => {
+// ONE replacement plan, proven against offset drift: the assignment token and all three idioms
+// share one original token stream. The UnicodeString replacements are deliberately different
+// lengths from their sources, so applying another original offset after one would cut the body.
+test('the legacy arrow and all three Cuis idioms share one drift-free replacement plan', async () => {
   await withStandardImage(async (runtime) => {
     // Idiom after arrow, adjacent: `a _ String new`. Besides executing, compare the imported
     // revision with the exact native source the one plan must produce. A write-free native
@@ -1776,6 +1866,44 @@ test('the legacy arrow and both Cuis idioms share one drift-free replacement pla
     assert.deepEqual(
       await runtime.executor.execute(await runtime.invocations.invokeBlock(
         objectRef('app', exerciseAll.block.id), [allClassRef],
+      )),
+      textValue('λ'),
+    );
+
+    // All four translation kinds, including a nested `String new` inside the exact block argument
+    // of the new idiom. Every offset belongs to the one original token stream.
+    const nested = await importSeed(
+      runtime,
+      "seed\n\t| result stream |\n\tresult _ UnicodeString streamContents: [ :out | out nextPutAll: String new. out nextPutAll: 'λ' ].\n\tstream _ UnicodeString writeStream.\n\tstream nextPutAll: result.\n\t^ stream contents",
+    );
+    const nestedClassRef = nested.classes[0].classRef;
+    const nestedBlock = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: nestedClassRef, selector: 'seed',
+    });
+    const nestedFrontier = await runtime.images.frontier('app');
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef: nestedClassRef,
+      lane: 'wasm',
+      methods: [{
+        selector: 'seed',
+        source: "[\n| result stream |\nresult := Text streamContents: [ :out | out nextPutAll: ''. out nextPutAll: 'λ' ].\nstream := (WriteStream on: '').\nstream nextPutAll: result.\n^ stream contents.\nself\n]",
+      }],
+    });
+    assert.equal(await runtime.images.frontier('app'), nestedFrontier, 'nested replacements did not drift');
+    assert.deepEqual(
+      await methodBlockRef({images: runtime.images, imageId: 'app', classRef: nestedClassRef, selector: 'seed'}),
+      nestedBlock,
+      'the adapter produced exactly the canonical native composition, not a macro expansion',
+    );
+    const exerciseNested = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: `seed-send-${counter += 1}`, source: '[ :class | class basicNew seed ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', exerciseNested.block.id), [nestedClassRef],
       )),
       textValue('λ'),
     );

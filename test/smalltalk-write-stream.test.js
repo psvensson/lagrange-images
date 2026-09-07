@@ -16,6 +16,7 @@ import {
   objectRef,
   publishSmalltalkClassGlobals,
   readBehavior,
+  reconcileMethodsFromSource,
   resolveGlobal,
   textValue,
 } from '../src/runtime.js';
@@ -115,10 +116,113 @@ test('WriteStream implements exactly the consumer protocol plus its own initiali
   })).map(({selector}) => selector).sort();
 
   // `nextPutAll:` is here because EXECUTION named it: native Integer printing sends exactly one
-  // write per print and nothing else (bead lagrange-images-nv1.8). `nextPut:` is still absent —
-  // no consumer sends it, and it earns its own repair if one ever does.
+  // write per print and nothing else (bead lagrange-images-nv1.8). `nextPut:` is still absent — the
+  // newly reached YAXO source contains that send, but its preceding Character predicate has not
+  // yet allowed execution to reach it. Executable pressure, not source inventory, earns breadth.
   assert.deepEqual(await selectorsOf('smalltalk/class/WriteStream'), ['contents', 'nextPutAll:', 'on:']);
   assert.deepEqual(await selectorsOf('smalltalk/metaclass/WriteStream'), ['on:']);
+  assert.ok(
+    await methodBlockRef({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: objectRef('app', 'smalltalk/metaclass/Text'),
+      selector: 'streamContents:',
+    }),
+    'the generic convenience protocol is owned by native Text, not by an importer',
+  );
+});
+
+// xxm.11: the pinned UnicodeString operation is observationally the ordinary composition
+// `writeStream; evaluate block once; contents` on the forcing path. This image has one Text
+// representation, so the native protocol answers Text honestly; it does not pretend that a native
+// UnicodeString class exists. These calls are direct native source with no Cuis provider or import.
+test('Text class streamContents: composes the native WriteStream owner and ignores the block answer', async () => {
+  assert.deepEqual(await evaluate('[ Text streamContents: [ :stream | nil ] ]'), textValue(''));
+  assert.deepEqual(
+    await evaluate('[ (Text streamContents: [ :stream | nil ]) isEmpty ]'),
+    booleanValue(true),
+    'the exact observation made by unchanged XMLTokenizer>>nextWhitespace works on an empty result',
+  );
+  assert.deepEqual(
+    await evaluate(`[ Text streamContents: [ :stream |
+      stream nextPutAll: 'ab'.
+      stream nextPutAll: 'λ'.
+      stream nextPutAll: '😀'.
+      42 ] ]`),
+    textValue('abλ😀'),
+    'multiple Unicode chunks preserve order and the unrelated block answer is ignored',
+  );
+  assert.deepEqual(
+    await evaluate("[ (Text streamContents: [ :stream | stream nextPutAll: 'x' ]) isEmpty ]"),
+    booleanValue(false),
+  );
+  assert.deepEqual(
+    await evaluate("[ (Text streamContents: [ :stream | stream nextPutAll: 'x'. false ]) class == Text ]"),
+    booleanValue(true),
+    'the result is the one native Text representation',
+  );
+  assert.deepEqual(
+    await evaluate(`[ | evaluations result |
+      evaluations := 0.
+      result := Text streamContents: [ :stream |
+        evaluations := evaluations + 1.
+        stream nextPutAll: 'once'.
+        99 ].
+      (evaluations = 1) and: [ result = 'once' ] ]`),
+    booleanValue(true),
+    'the producer Block is evaluated exactly once',
+  );
+});
+
+test('Text class streamContents: lets the producer error escape unchanged', async () => {
+  await assert.rejects(
+    evaluate('[ Text streamContents: [ :stream | 1 xxm11ProducerFailure ] ]'),
+    (error) =>
+      error?.name === 'SmalltalkMessageNotUnderstoodError'
+      && error?.selector === 'xxm11ProducerFailure'
+      && /message not understood: xxm11ProducerFailure/.test(error.message),
+  );
+});
+
+// W3, as an executable dependency rather than a source-text assertion. In an isolated image,
+// replace the existing stream owner's `contents` answer. Text>>streamContents: must follow that
+// replacement; if it had acquired a second accumulator/reconstruction path this would stay Text
+// and the test would fail.
+test('Text class streamContents: delegates its result to WriteStream contents', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    await runtime.images.createImage({id: 'delegation'});
+    await installSymmetricSmalltalkStandardImage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'delegation', lane: 'wasm',
+    });
+    const writeStreamClass = objectRef('delegation', 'smalltalk/class/WriteStream');
+    const current = await methodBlockRef({
+      images: runtime.images, imageId: 'delegation', classRef: writeStreamClass, selector: 'contents',
+    });
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'delegation',
+      classRef: writeStreamClass,
+      lane: 'wasm',
+      methods: [{selector: 'contents', source: '[ ^ 71 ]', expectedCurrent: current}],
+    });
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'delegation',
+      id: 'stream-contents-delegation-proof',
+      source: "[ Text streamContents: [ :stream | stream nextPutAll: 'ignored' ] ]",
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('delegation', block.id), [],
+      )),
+      integerValue(71),
+      'the result is exactly what the existing contents owner answers',
+    );
+  } finally {
+    await runtime.close();
+  }
 });
 
 // The acceptance path's own shape, with a native collection standing in for the `String` the
