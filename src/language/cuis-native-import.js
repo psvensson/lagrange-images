@@ -136,12 +136,13 @@ function canonicalMethodIdentity(packageName, classIdentity, side, selector) {
 // answers its last expression, so make the method return rule explicit at this dialect boundary.
 // Parsing/lowering the body and binding native state remain the existing Symmetric Smalltalk
 // compiler's responsibility.
-// ONE Cuis dialect idiom, translated at the boundary that already owns dialect translation (the
-// method header and the implicit-receiver return rule are translated here too). It is NOT a
-// `String` mapping and NOT a claim that `String` is `Text`.
+// Narrow Cuis dialect/base-image idioms, translated at the boundary that already owns dialect
+// translation (the method header and the implicit-receiver return rule are translated here too).
+// These are NOT class mappings and make no claim that `String` or `UnicodeString` is `Text`.
 //
-// The idiom is the unary send `String new`, and the claim is only about the role that expression
-// plays. Measured against the pinned Cuis VM and image and recorded on bead lagrange-images-nv1.5:
+// The first idiom is the unary send `String new`, and the claim is only about the role that
+// expression plays. Measured against the pinned Cuis VM and image and recorded on bead
+// lagrange-images-nv1.5:
 //
 //   seedSize=0, seedPrint=''                  `String new` is an EMPTY textual seed
 //   seedSizeAfterWrite=0, seedAfterWrite=''   writing through the stream does NOT mutate it: the
@@ -164,7 +165,7 @@ function canonicalMethodIdentity(packageName, classIdentity, side, selector) {
 //   `String` anywhere else — as a receiver of any other message, as an argument, as a superclass,
 //                      as a method target — is untouched and remains `unbound Symmetric Smalltalk
 //                      name: String`. Nothing publishes a `String` global.
-//   any other class name is untouched. This table has exactly one entry and no name fallback.
+//   every other String use is untouched. The closed table has no name fallback.
 //
 // The match is on the TOKEN stream, not on text, so `'String new'` inside a string literal and
 // `"String new"` inside a comment are not rewritten. An idiom is also about a GLOBAL name that the
@@ -182,7 +183,31 @@ function canonicalMethodIdentity(packageName, classIdentity, side, selector) {
 // declarations win), and the requirement that each entry be justified by a recorded measurement
 // that the expression's object contributes nothing observable to the covered path.
 //
-// HOW THE REST OF THE PATH REALISES THIS, since the substitution's justification depends on it:
+// The second idiom is `UnicodeString writeStream`, forced by the real pinned YAXO
+// `XMLTokenizer>>initialize` and measured by that vertical's real-Cuis oracle (bead
+// lagrange-images-xxm.9):
+//
+//   UnicodeString superclass/species             CharacterSequence / UnicodeString
+//   UnicodeString writeStream class              Utf8EncodedWriteStream (a WriteStream subclass)
+//   empty/written/reset contents class            UnicodeString
+//   empty/written contents are fresh              true
+//   nextPutAll: answers the stream                 true
+//   U+03BB survives in contents                   code point 955
+//
+// YAXO uses the two buffers only through stream protocol (`reset`, `nextPut:`, `contents`) and
+// never observes their physical class. This native image has one textual representation, `Text`,
+// and already has one ordinary native text-backed stream construction. The exact native semantic
+// counterpart for CONSTRUCTING that buffer is therefore `(WriteStream on: '')`. Parentheses are
+// part of the translation so a following unary send remains on the resulting stream rather than
+// becoming part of the keyword argument. This does not claim that the two concrete Cuis stream
+// classes are identical, and it does not pre-implement the later
+// `reset`/`nextPut:` protocol: the executable vertical must force that breadth in its own order.
+//
+// DELIBERATELY NARROW in the same way as `String new`: `UnicodeString` as a value, any other send,
+// a cascade, a locally bound name or a manifest-declared class remains untouched. No
+// `UnicodeString` global is published, and direct native source still refuses the name.
+//
+// HOW THE REST OF THE PATH REALISES THESE, since the substitutions' justification depends on it:
 // the seed's contribution is the result's REPRESENTATION, and the native stream owner is what
 // supplies it. `WriteStream >> contents` builds its answer preserving the backing's class, so a
 // text seed yields a text result. It does NOT go through `species` — measurement showed upstream's
@@ -194,6 +219,12 @@ const CUIS_DIALECT_IDIOMS = Object.freeze([Object.freeze({
     Object.freeze({type: 'identifier', value: 'new'}),
   ]),
   native: "''",
+}), Object.freeze({
+  tokens: Object.freeze([
+    Object.freeze({type: 'identifier', value: 'UnicodeString'}),
+    Object.freeze({type: 'identifier', value: 'writeStream'}),
+  ]),
+  native: "(WriteStream on: '')",
 })]);
 
 // A dialect idiom is about a GLOBAL name. If the method binds that name itself — as a parameter,
@@ -223,7 +254,17 @@ function boundNames(tokens, bodyTokenIndex, parameters) {
   return bound;
 }
 
-function matchesIdiom(tokens, at, pattern) {
+const IDIOM_EXPRESSION_PREFIXES = new Set([
+  'assign', 'legacyAssign', 'caret', '.', '(', '[', '|', 'binary', 'keyword',
+]);
+
+function matchesIdiom(tokens, at, pattern, bodyTokenIndex) {
+  // The first name must be a primary expression, not a unary selector in a longer chain. In
+  // `self UnicodeString writeStream`, for example, `UnicodeString` is a message to `self`; treating
+  // the two following identifiers as the global construction would rewrite the receiver. The
+  // prefix set names precisely the token positions where the parser can begin a new expression or
+  // operand. `;` is deliberately absent because a cascade continues on its earlier receiver.
+  if (at !== bodyTokenIndex && !IDIOM_EXPRESSION_PREFIXES.has(tokens[at - 1]?.type)) return false;
   if (!pattern.every((expected, offset) => {
     const token = tokens[at + offset];
     return token !== undefined && token.type === expected.type && token.value === expected.value;
@@ -246,7 +287,8 @@ function matchesIdiom(tokens, at, pattern) {
 //     name such as `driver _ SAXDriver on: aStream` becomes `driver := SAXDriver on: aStream` and
 //     then undergoes ordinary native name resolution, which is the refusal the un-translated
 //     arrow hid (bead lagrange-images-xxm.3).
-//   * the closed dialect-idiom table above (`String new`), with its bound/declared exclusions.
+//   * the closed dialect-idiom table above (`String new` and `UnicodeString writeStream`), with its
+//     bound/declared exclusions.
 //
 // Collecting both against the same token stream and splicing in start-descending order is what
 // makes offset drift impossible by construction: no splice is ever applied at offsets an earlier
@@ -262,7 +304,7 @@ function adaptDialect(bodySource, tokens, bodyTokenIndex, bodyStart, parameters,
       continue;
     }
     for (const idiom of CUIS_DIALECT_IDIOMS) {
-      if (!matchesIdiom(tokens, at, idiom.tokens)) continue;
+      if (!matchesIdiom(tokens, at, idiom.tokens, bodyTokenIndex)) continue;
       // The method binds the name itself, or the package declares a class of that name, so the
       // source means its own thing and this is not the dialect idiom at all.
       if (bound.has(token.value) || declaredNames.has(token.value)) continue;

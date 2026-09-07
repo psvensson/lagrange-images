@@ -12,6 +12,7 @@ import {
   CUIS_SOURCES_V1,
   OPENSMALLTALK_CUIS_PROVIDER_ID,
   OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID,
+  booleanValue,
   bytesValue,
   createOpenSmalltalkCuisProvider,
   createOpenSmalltalkCuisToolchainProvider,
@@ -63,7 +64,8 @@ import {
 // repair moved that RED once more: the exact same forcing scope stopped at the earlier masked
 // `SAXDriver` name in `SAXHandler class>>on:` rather than reaching `XMLDocument` later in the path.
 // Publishing the scoped imported classes through the existing native global owner repaired that
-// boundary and the unchanged scope now stops at `UnicodeString` in `XMLTokenizer>>initialize`.
+// boundary. The oracle-backed `UnicodeString writeStream` construction repair now executes the real
+// initializer, and the causal scope stops next at `$<` in `XMLTokenizer>>nextEntity`.
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';
@@ -101,6 +103,7 @@ const M4_SCOPE_CLASSES = Object.freeze([
 // upstream test uses, and there is no way into the DOM path that does not go through it.
 const M4_ENTRY_POINT = 'cuis-method/YAXO/XMLDOMParser/class/parseDocumentFrom:';
 const M4_ENTRY_POINT_UPSTREAM_SOURCE = 'parseDocumentFrom: aStream\n\t^(super parseDocumentFrom: aStream) document';
+const M4_TOKENIZER_INITIALIZE = 'cuis-method/YAXO/XMLTokenizer/instance/initialize';
 
 // The pinned identity, re-asserted here rather than trusted from the setup script. The whole claim
 // of a forcing harness is that the material is the pinned upstream package and not something this
@@ -274,6 +277,30 @@ test('the pinned upstream Cuis YAXO package is a real M4 pressure source, not a 
 // what the package's own smallest mutation does. It is an oracle only; native execution never calls
 // it. Nothing here claims general XML correctness.
 const M4_ORACLE = Object.freeze({
+  // the Cuis base-image dependency at the current native-import frontier. This records the class,
+  // the species of its empty instance, and the exact stream/result behavior rather than inferring
+  // any of them from the spelling `UnicodeString writeStream` in YAXO source.
+  unicodeStringClassName: 'UnicodeString',
+  unicodeStringSuperclassName: 'CharacterSequence',
+  unicodeStringEmptyClass: 'UnicodeString',
+  unicodeStringEmptySpecies: 'UnicodeString',
+  unicodeStringRespondsToWriteStream: 'true',
+  unicodeStringWriteStreamClass: 'Utf8EncodedWriteStream',
+  unicodeStringWriteStreamSuperclass: 'WriteStream',
+  unicodeStringWriteStreamUnderstandsNextPut: 'true',
+  unicodeStringWriteStreamUnderstandsReset: 'true',
+  unicodeStringEmptyContentsClass: 'UnicodeString',
+  unicodeStringEmptyContentsSize: '0',
+  unicodeStringEmptyContentsPrint: "''",
+  unicodeStringEmptyContentsFresh: 'true',
+  unicodeStringWriteAnswerIsStream: 'true',
+  unicodeStringWrittenContentsClass: 'UnicodeString',
+  unicodeStringWrittenContentsSize: '1',
+  unicodeStringWrittenCodePoint: '955',
+  unicodeStringWrittenContentsFresh: 'true',
+  unicodeStringResetAnswerIsStream: 'true',
+  unicodeStringResetContentsClass: 'UnicodeString',
+  unicodeStringResetContentsSize: '0',
   // the public parse operation and what it answers
   parseAnswerClass: 'XMLDocument',
   documentElementsClass: 'OrderedCollection',
@@ -359,6 +386,64 @@ async function nativeRuntime() {
   });
   return runtime;
 }
+
+test('the real pinned XMLTokenizer initializer executes with ordinary native text-backed streams', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await yaxoSemanticExport());
+  const initialize = manifest.methods.find(({identity}) => identity === M4_TOKENIZER_INITIALIZE);
+  assert.equal(
+    initialize.source,
+    'initialize\n\tparsingMarkup _ false.\n\tvalidating _ false.\n\tattributeBuffer _ UnicodeString writeStream.\n\tnameBuffer _ UnicodeString writeStream.',
+    'the executable proof uses the unedited canonical upstream method',
+  );
+
+  const runtime = await nativeRuntime();
+  try {
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [M4_TOKENIZER_INITIALIZE]},
+    });
+    const tokenizer = imported.classes.find(({identity}) => identity === 'cuis-class/YAXO/XMLTokenizer');
+
+    // A native probe method reads the state the REAL initializer assigned. It uses only the
+    // ordinary stream protocol already owned by the native standard image; neither the adapter nor
+    // the test reaches into the compiled method or the instance's graph slots.
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      classRef: tokenizer.classRef,
+      lane: 'wasm',
+      methods: [{
+        selector: 'lagrangeBufferProbe',
+        source: `[
+          attributeBuffer nextPutAll: 'λ'.
+          nameBuffer nextPutAll: 'name'.
+          ^ (attributeBuffer contents = 'λ') and: [ nameBuffer contents = 'name' ]
+        ]`,
+      }],
+    });
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'native-image',
+      id: 'm4-real-tokenizer-initialize-probe',
+      source: '[ XMLTokenizer new lagrangeBufferProbe ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('native-image', block.id), [],
+      )),
+      booleanValue(true),
+      'both buffers were assigned, accepted Unicode text and read it back through native behavior',
+    );
+    const globals = await globalDeclarations({images: runtime.images, imageId: 'native-image'});
+    assert.equal(Object.hasOwn(globals, 'UnicodeString'), false, 'execution required no class alias');
+  } finally {
+    await runtime.close();
+  }
+});
 
 // Step one of the vertical, and the instrument that keeps the RED below honest: if the DOM class
 // graph itself could not be constructed, a refusal on the entry-point method would say nothing
@@ -535,23 +620,19 @@ test('super works at the native language owner, not by anything at the Cuis impo
 });
 
 // ==================================================================================================
-// THE NEXT FIRST RED OF THE M4 VERTICAL, classified afresh after imported class publication and
-// deliberately NOT repaired here.
+// THE NEXT FIRST RED OF THE M4 VERTICAL, classified afresh after the UnicodeString stream
+// construction repair and deliberately NOT repaired here.
 //
-// The exact forcing scope now compiles `SAXHandler class>>on:` through its ordinary `SAXDriver`
-// global and reaches `XMLTokenizer>>initialize`, where upstream names a Cuis base-image class that
-// this native image does not publish:
+// The exact forcing scope now compiles and EXECUTES the real `XMLTokenizer>>initialize`, then its
+// causal method scope advances to `XMLTokenizer>>nextEntity`. The first expression there that the
+// native tokenizer cannot represent is the real Cuis Character literal `$<`:
 //
-//     unbound Symmetric Smalltalk name: UnicodeString
+//     unexpected character "$" at 297
 //
-// Unlike SAXDriver, UnicodeString is NOT declared by YAXO and therefore is not in the nine-class
-// scope. It is a Cuis base-image dependency. Whether the right repair is a native library class,
-// an exact adapter idiom, or something else requires its own oracle and owner decision; this test
-// records only the newly measured pressure and does not prejudge that work.
-//
-// Not this slice's work. It is recorded so the next child starts from this repaired instrument's
-// measurement rather than a prediction.
-const M4_NEXT_RED = /unbound Symmetric Smalltalk name: UnicodeString/;
+// This is native literal-syntax pressure, not another UnicodeString or global-resolution problem.
+// Bead lagrange-images-xxm.10 owns its oracle-first classification and repair; this slice records
+// the refusal rather than guessing at Cuis's lexical rule or rewriting the character to a number.
+const M4_NEXT_RED = /method cuis-method\/YAXO\/XMLTokenizer\/instance\/nextEntity source .*unexpected character "\$" at 297/;
 
 // The measured parse path in causal order, from the public entry point. Every entry is upstream
 // material in the canonical manifest; `XMLTokenizer>>saxHandler:` is deliberately absent from the
@@ -561,20 +642,29 @@ const M4_PARSE_PATH = Object.freeze([
   M4_INHERITED_ENTRY_POINT,
   'cuis-method/YAXO/SAXHandler/class/on:',
   'cuis-method/YAXO/XMLTokenizer/class/on:',
-  'cuis-method/YAXO/XMLTokenizer/instance/initialize',
+  'cuis-method/YAXO/SAXDriver/instance/initialize',
+  M4_TOKENIZER_INITIALIZE,
   'cuis-method/YAXO/XMLTokenizer/instance/parseStream:',
+  'cuis-method/YAXO/XMLTokenizer/instance/stream:',
   'cuis-method/YAXO/XMLTokenizer/instance/validating:',
-  'cuis-method/YAXO/SAXHandler/instance/initialize',
   'cuis-method/YAXO/XMLDOMParser/instance/initialize',
+  'cuis-method/YAXO/SAXHandler/instance/initialize',
   'cuis-method/YAXO/SAXHandler/instance/driver:',
-  'cuis-method/YAXO/SAXHandler/instance/startDocument',
+  'cuis-method/YAXO/SAXDriver/instance/saxHandler:',
+  'cuis-method/YAXO/XMLDOMParser/instance/startDocument',
+  'cuis-method/YAXO/SAXHandler/instance/document:',
+  'cuis-method/YAXO/SAXHandler/instance/document',
+  'cuis-method/YAXO/XMLDOMParser/instance/push:',
+  'cuis-method/YAXO/SAXHandler/instance/parseDocument',
+  'cuis-method/YAXO/SAXHandler/instance/driver',
+  'cuis-method/YAXO/XMLTokenizer/instance/nextEntity',
 ]);
-const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/XMLTokenizer/instance/initialize';
+const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/XMLTokenizer/instance/nextEntity';
 const M4_PATH_BEFORE_NEXT_RED = Object.freeze(
   M4_PARSE_PATH.slice(0, M4_PARSE_PATH.indexOf(M4_NEXT_RED_METHOD)),
 );
 
-test('the repaired M4 forcing scope exposes its next RED afresh: UnicodeString is unbound', {skip: !enabled, timeout: 900_000}, async () => {
+test('the repaired M4 forcing scope exposes its next RED afresh: the `$<` Character literal', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
 
   const runtime = await nativeRuntime();
@@ -588,8 +678,8 @@ test('the repaired M4 forcing scope exposes its next RED afresh: UnicodeString i
       scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PATH_BEFORE_NEXT_RED]},
     });
 
-    // Re-run the SAME forcing scope. It now passes the package-owned class names and refuses the
-    // first base-image dependency the native namespace does not provide.
+    // Re-run the SAME causal forcing scope. It now passes the package-owned class names and the
+    // exact UnicodeString stream idiom, then refuses the first literal syntax it cannot represent.
     const error = await importCuisNativePackage({
       images: runtime.images,
       compilation: runtime.compilation,
@@ -603,10 +693,10 @@ test('the repaired M4 forcing scope exposes its next RED afresh: UnicodeString i
     assert.match(error.message, M4_NEXT_RED);
 
     // The real consumer, named, and unedited upstream source.
-    const initialize = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
+    const nextEntity = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
     assert.equal(
-      initialize.source,
-      'initialize\n\tparsingMarkup _ false.\n\tvalidating _ false.\n\tattributeBuffer _ UnicodeString writeStream.\n\tnameBuffer _ UnicodeString writeStream.',
+      nextEntity.source,
+      'nextEntity\n\t"return the next XMLnode, or nil if there are no more"\n\n\t"branch, depending on what the first character is"\n\tself nextWhitespace.\n\tself atEnd ifTrue: [self handleEndDocument. ^ nil].\n\tself checkAndExpandReference: (self parsingMarkup ifTrue: [#dtd] ifFalse: [#content]).\n\t^self peek = $<\n\t\tifTrue: [self nextNode]\n\t\tifFalse: [self nextPCData]',
     );
 
     // Package classes really are imported and now published through the ordinary root namespace.
@@ -618,7 +708,7 @@ test('the repaired M4 forcing scope exposes its next RED afresh: UnicodeString i
     const globals = await globalDeclarations({images: runtime.images, imageId: 'native-image'});
     assert.ok(Object.hasOwn(globals, 'OrderedCollection'), 'base classes are published globals');
     assert.ok(Object.hasOwn(globals, 'SAXDriver'), 'an imported class is published before methods compile');
-    assert.equal(Object.hasOwn(globals, 'UnicodeString'), false, 'the newly exposed dependency is not');
+    assert.equal(Object.hasOwn(globals, 'UnicodeString'), false, 'the repaired idiom created no class alias');
   } finally {
     await runtime.close();
   }

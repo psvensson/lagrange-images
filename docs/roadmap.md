@@ -216,9 +216,14 @@ of classes the package itself defines — which is what an M4 restart proof has 
   native global-namespace protocol is present, publish every scoped Cuis declaration into its root
   namespace through the existing global owner before method compilation; prove sibling lookup by
   execution, write-free replay, and explicit collision refusal rather than a silent rebind;
-- [ ] classify and repair the next freshly measured YAXO RED (bead `lagrange-images-xxm.9`):
-  `unbound Symmetric Smalltalk name: UnicodeString` from upstream
-  `XMLTokenizer>>initialize`, with an oracle before choosing a native-library or adapter owner;
+- [x] classify and repair the next freshly measured YAXO RED (bead `lagrange-images-xxm.9`): the
+  pinned oracle proves `UnicodeString writeStream` answers a `Utf8EncodedWriteStream` whose fresh
+  contents retain UnicodeString species, while the native image has one textual representation;
+  translate only that exact construction to an ordinary native text-backed WriteStream, publish no
+  alias, and execute the real upstream `XMLTokenizer>>initialize` with both buffers read back;
+- [ ] measure and repair the freshly exposed `$<` Character-literal RED in upstream
+  `XMLTokenizer>>nextEntity` (bead `lagrange-images-xxm.10`) at the native literal owner, without
+  conflating it with the separate reserved-word parser quirk;
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;

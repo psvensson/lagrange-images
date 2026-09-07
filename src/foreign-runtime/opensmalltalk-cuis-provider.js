@@ -154,8 +154,9 @@ const BRIDGE_METHODS = Object.freeze([
     ^ (Smalltalk at: #Json) render: aValue`,
 // yaxo/measure is the ADR 0085 M4 reference oracle (Bead lagrange-images-xxm). It answers, from
 // the REAL pinned Cuis image with the REAL pinned YAXO package installed, the handful of facts the
-// M4 vertical depends on: which public operation parses, what it answers, how children are
-// reached, how text and an attribute are read, and what the package's own smallest mutation does.
+// M4 vertical depends on: the exact UnicodeString stream construction currently at the native
+// frontier, which public operation parses, what it answers, how children are reached, how text and
+// an attribute are read, and what the package's own smallest mutation does.
 // Those facts were previously only READ off the package source; this executes them.
 //
 // It is an ORACLE ONLY — native execution never calls it, and it deliberately answers a flat
@@ -170,8 +171,39 @@ const BRIDGE_METHODS = Object.freeze([
 `yaxoReport: aKey value: aValue on: aStream
     aStream nextPutAll: aKey; nextPut: $=; nextPutAll: aValue asString; nextPut: Character lf`,
 `yaxoMeasure: aString
-    | doc root child attributes canonicalStream out |
+    | unicodeClass unicodeEmpty unicodeStream emptyContents writeAnswer firstContents secondContents resetAnswer resetContents
+      doc root child attributes canonicalStream out |
     out := WriteStream on: (UnicodeString new: 512).
+    unicodeClass := Smalltalk at: #UnicodeString.
+    unicodeEmpty := unicodeClass new.
+    unicodeStream := unicodeClass writeStream.
+    self yaxoReport: 'unicodeStringClassName' value: unicodeClass name on: out.
+    self yaxoReport: 'unicodeStringSuperclassName' value: unicodeClass superclass name on: out.
+    self yaxoReport: 'unicodeStringEmptyClass' value: unicodeEmpty class name on: out.
+    self yaxoReport: 'unicodeStringEmptySpecies' value: unicodeEmpty species name on: out.
+    self yaxoReport: 'unicodeStringRespondsToWriteStream' value: (unicodeClass respondsTo: #writeStream) printString on: out.
+    self yaxoReport: 'unicodeStringWriteStreamClass' value: unicodeStream class name on: out.
+    self yaxoReport: 'unicodeStringWriteStreamSuperclass' value: unicodeStream class superclass name on: out.
+    self yaxoReport: 'unicodeStringWriteStreamUnderstandsNextPut' value: (unicodeStream respondsTo: #nextPut:) printString on: out.
+    self yaxoReport: 'unicodeStringWriteStreamUnderstandsReset' value: (unicodeStream respondsTo: #reset) printString on: out.
+    emptyContents := unicodeStream contents.
+    self yaxoReport: 'unicodeStringEmptyContentsClass' value: emptyContents class name on: out.
+    self yaxoReport: 'unicodeStringEmptyContentsSize' value: emptyContents size printString on: out.
+    self yaxoReport: 'unicodeStringEmptyContentsPrint' value: emptyContents printString on: out.
+    self yaxoReport: 'unicodeStringEmptyContentsFresh' value: (emptyContents ~~ unicodeStream contents) printString on: out.
+    writeAnswer := unicodeStream nextPutAll: (UnicodeString fromUtf8Bytes: #[206 187]).
+    firstContents := unicodeStream contents.
+    secondContents := unicodeStream contents.
+    self yaxoReport: 'unicodeStringWriteAnswerIsStream' value: (writeAnswer == unicodeStream) printString on: out.
+    self yaxoReport: 'unicodeStringWrittenContentsClass' value: firstContents class name on: out.
+    self yaxoReport: 'unicodeStringWrittenContentsSize' value: firstContents size printString on: out.
+    self yaxoReport: 'unicodeStringWrittenCodePoint' value: firstContents first codePoint printString on: out.
+    self yaxoReport: 'unicodeStringWrittenContentsFresh' value: (firstContents ~~ secondContents) printString on: out.
+    resetAnswer := unicodeStream reset.
+    resetContents := unicodeStream contents.
+    self yaxoReport: 'unicodeStringResetAnswerIsStream' value: (resetAnswer == unicodeStream) printString on: out.
+    self yaxoReport: 'unicodeStringResetContentsClass' value: resetContents class name on: out.
+    self yaxoReport: 'unicodeStringResetContentsSize' value: resetContents size printString on: out.
     doc := (Smalltalk at: #XMLDOMParser) parseDocumentFrom: aString readStream.
     self yaxoReport: 'parseAnswerClass' value: doc class name on: out.
     self yaxoReport: 'documentElementsClass' value: doc elements class name on: out.

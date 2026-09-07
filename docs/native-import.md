@@ -272,8 +272,9 @@ lagrange-images-nv1.4), because a stream is a facility any native code can want.
 
 `String` did not. Native `Text` is a Value and a Cuis `String` is a mutable collection class, so
 publishing one as the other would claim an equivalence nothing had established. What the adapter
-owns instead is a CLOSED table of Cuis DIALECT IDIOMS translated inside method bodies — today
-exactly one entry, the unary `String new`, translated to an empty native Text value. The claim is
+owns instead is a CLOSED table of oracle-backed Cuis dialect/base-image IDIOMS translated inside
+method bodies. Its first entry is the unary `String new`, translated to an empty native Text value.
+The claim is
 not about the class but about the ROLE that expression plays, and it was measured against the
 pinned Cuis image before it was written (bead lagrange-images-nv1.5): the seed is empty; writing
 through the stream never mutates it, because being empty the first write grows the stream onto a
@@ -299,6 +300,25 @@ expression, not a class), the exclusions just listed, and the rule that every en
 justified by a recorded measurement that the object contributes nothing observable to the path. `String new: 16` is a different expression the measurement does not
 cover and stays unbound, as does every other use of the name. No `String` global is published, no
 Cuis String class identity is mapped, and native `Text` is unchanged.
+
+The second entry was forced later by the real YAXO path: `XMLTokenizer>>initialize` constructs two
+buffers with `UnicodeString writeStream`. The pinned executable oracle matters here because the
+spelling is misleadingly close to an ordinary generic stream: `UnicodeString` is a
+`CharacterSequence` subclass whose species is itself, and its class-side constructor answers a
+`Utf8EncodedWriteStream` (a `WriteStream` subclass), not a plain `WriteStream`. Empty, written and
+reset contents are fresh `UnicodeString` instances; U+03BB survives as code point 955;
+`nextPutAll:` and `reset` answer the stream. YAXO uses those buffers only through stream protocol
+and never inspects the concrete class.
+
+The native image has exactly one textual representation (`Text`) and already owns one ordinary
+text-backed stream. The adapter therefore translates only the exact token sequence
+`UnicodeString writeStream` to the parenthesized native construction `(WriteStream on: '')`.
+Parentheses preserve Smalltalk precedence when a later unary send follows. It does not publish a
+`UnicodeString` global, alias it to `Text`, invent `Utf8EncodedWriteStream`, or pre-implement the
+later `nextPut:`/`reset` breadth. Every other use of the name, a cascade, a local binding and a
+manifest-declared `UnicodeString` stays untouched, as do strings and comments. The real unedited
+initializer executes natively and a native probe reads both assigned buffers back through ordinary
+stream behavior, including non-Latin text.
 
 With that, the acceptance target's whole scope — the package's own class-side `render:` and its own
 `Integer>>jsonWriteOn:` extension — imports natively from the canonical export with Cuis gone, and
@@ -392,14 +412,15 @@ native class; another proof seeds a conflicting binding and observes its value u
 other later native-owner refusals, this is recoverable ordered admission rather than an invented
 all-or-nothing adapter transaction.
 
-Re-running the unchanged M4 forcing scope now compiles through `SAXDriver` and exposes the next RED
-afresh in unedited upstream `XMLTokenizer>>initialize`:
+Re-running the M4 causal forcing scope now compiles through `SAXDriver`, executes unedited upstream
+`XMLTokenizer>>initialize`, and exposes the next RED afresh in `XMLTokenizer>>nextEntity`:
 
-    unbound Symmetric Smalltalk name: UnicodeString
+    unexpected character "$" at 297
 
-`UnicodeString` is a Cuis base-image dependency, not a YAXO declaration. Bead
-`lagrange-images-xxm.9` owns an oracle-first classification; this slice does not assume it aliases a
-native text or stream class and adds no global fallback.
+The exact source operand is the Cuis Character literal `$<`. This is literal-syntax pressure at the
+native tokenizer/parser/compiler owner, not another class/global or stream problem. Bead
+`lagrange-images-xxm.10` owns the oracle-first repair; it remains separate from the already filed
+reserved-word unary-selector quirk.
 
 The legacy assignment finding is now repaired at its two exact owners. The pinned Cuis scanner/parser
 oracle established that `_` is the legacy arrow only at a token boundary and only when its following
@@ -409,8 +430,9 @@ data. A bare `_` has no legitimate selector meaning. The native tokenizer theref
 legacy-arrow token for exactly the measured form, and the native parser refuses it explicitly:
 direct Symmetric Smalltalk still has only `:=`. The Cuis adapter translates that token to `:=` and
 does nothing else — assignment target validity, right-hand-side resolution, bindings and execution
-remain ordinary native semantics. Its arrow and `String new` replacements are collected against one
-original token stream and applied right-to-left, so neither can invalidate the other's offsets.
+remain ordinary native semantics. Its arrow, `String new` and `UnicodeString writeStream`
+replacements are collected against one original token stream and applied right-to-left, so none can
+invalidate another's offsets.
 
 That repair exposed why the earlier description was too weak. The defect was not merely a later `_`
 message-not-understood: the unary-send parse turned `SAXDriver` into a selector and suppressed the
