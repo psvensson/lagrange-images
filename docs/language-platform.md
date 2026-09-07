@@ -152,6 +152,13 @@ and native `Text>>at:` both reach one image-local Character interner. Characters
 ordinary Smalltalk objects, distinct from Text and Integer, while the shared Value model and
 `lagrange-code` remain language-neutral. Cuis import does not rewrite Character literals.
 
+It also includes the small origin-neutral text/stream composition in ADR 0091. Direct native
+`Text streamContents: [ :stream | ... ]` evaluates through the existing WriteStream owner and
+answers its `contents`; native Text has one representation and `Text>>isEmpty` supplies the exact
+result observation the forcing tokenizer makes. Cuis import may normalize the one measured foreign
+receiver spelling `UnicodeString streamContents: [literalBlock]` to that native locator, but it
+does not evaluate the Block, build text, or publish a UnicodeString alias.
+
 OpenSmalltalkVM/Cuis supplies mature package/compiler semantics and a reference implementation. It does not own native Lagrange class/object identity.
 
 ## 7. Current Cuis compatibility/toolchain machinery

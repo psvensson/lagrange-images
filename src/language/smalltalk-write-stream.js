@@ -17,10 +17,13 @@ import {objectRef} from '../value/index.js';
 //   WriteStream class >> on:          the stream the source constructs
 //   WriteStream       >> nextPutAll:  the one write EXECUTION named (bead lagrange-images-nv1.8)
 //   WriteStream       >> contents     the answer it takes back out
+//   Text class        >> streamContents:  evaluate one producer Block through that stream owner
 //
 // `nextPut:`, `with:`, positioning, resets, read streams and byte-stream breadth are all real Cuis
-// protocol that this consumer does not exercise, and are deliberately absent. Execution pressure
-// adds them, one proven consumer at a time — `nextPutAll:` is here because it did exactly that.
+// protocol that this consumer does not yet execute, and are deliberately absent. Execution
+// pressure adds them, one proven consumer at a time — `nextPutAll:` is here because it did exactly
+// that. `Text class >> streamContents:` is ordinary native Text protocol: the Cuis importer owns
+// only the exact foreign receiver-name adaptation that reaches it.
 //
 // RECORDED REAL-CUIS ORACLE (pinned VM + Cuis7.9-8090 image, probed directly; the full transcript
 // is on bead lagrange-images-nv1.4). These are measurements, not Squeak/Pharo recollection:
@@ -88,6 +91,23 @@ const WRITE_STREAM_SHAPE_ID = 'smalltalk/write-stream-instance-shape/v2';
 const WRITE_STREAM_CLASS_METHODS = [
   {selector: 'on:', source: '[ :aCollection | ^ self new on: aCollection ]'},
 ];
+
+// The class is captured directly because this method is installed in the same transaction-shaped
+// owner that first creates WriteStream, before the standard-image composition root publishes the
+// class as a global. This is dependency injection, not a second stream implementation: every bit
+// of allocation, accumulation and result construction is still sent to the one WriteStream owner.
+const TEXT_STREAM_WRITE_STREAM_CAPTURE = Object.freeze({
+  name: 'NativeWriteStream',
+  id: 'smalltalk/text-stream/write-stream-class',
+});
+
+const TEXT_STREAM_CLASS_METHODS = Object.freeze([Object.freeze({
+  selector: 'streamContents:',
+  source: `[ :aBlock | | stream |
+    stream := NativeWriteStream on: ''.
+    aBlock value: stream.
+    ^ stream contents ]`,
+})]);
 
 const WRITE_STREAM_METHODS = [
   {selector: 'on:', source: '[ :aCollection | collection := aCollection. written := nil. ^ self ]'},
@@ -249,6 +269,17 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
   });
   await defineMethodsFromSource({
     images, compilation, imageId, lane, classRef: metaclassRef, methods: WRITE_STREAM_CLASS_METHODS,
+  });
+  await defineMethodsFromSource({
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef: objectRef(imageId, 'smalltalk/metaclass/Text'),
+    methods: TEXT_STREAM_CLASS_METHODS.map((method) => ({
+      ...method,
+      captures: [{...TEXT_STREAM_WRITE_STREAM_CAPTURE, value: classRef}],
+    })),
   });
 
   return Object.freeze({classRef, metaclassRef});

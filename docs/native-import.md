@@ -426,15 +426,21 @@ Character is neither a new generic Value kind nor a `lagrange-code` operation, a
 contains no Character syntax. The real unchanged `nextEntity` now executes with Cuis absent and
 takes visibly different markup/non-markup branches from a value produced by native Text indexing.
 
-The next causal method, `XMLTokenizer>>nextWhitespace`, now exposes the next RED before any
-Character classification protocol runs:
+The next causal method, `XMLTokenizer>>nextWhitespace`, exposed the distinct
+`UnicodeString streamContents: [ ... ]` name-resolution RED before Character classification ran.
+ADR 0091/bead `lagrange-images-xxm.11` measures it separately from xxm.9. Pinned Cuis defines the
+class-side method itself as: create a `Utf8EncodedWriteStream`, evaluate the supplied Block once,
+ignore its answer, then answer `contents`. Empty, ordered ASCII/BMP/supplementary writes and errors
+confirm that shape, and the result matches the corresponding `UnicodeString writeStream ...
+contents` value/class.
 
-    UnicodeString streamContents: [ ... ]
-    -> unbound Symmetric Smalltalk name: UnicodeString
-
-This is not xxm.9's already measured `UnicodeString writeStream` role. Bead
-`lagrange-images-xxm.11` owns a fresh oracle and owner decision for this distinct construction; it
-is not widened into either completed slice.
+The generic operation is native protocol: `Text class>>streamContents:` composes the one existing
+WriteStream owner, and `Text>>isEmpty` supplies the exact result observation the unchanged caller
+makes. The native result is canonical Text, not a simulated UnicodeString. The adapter translates
+only the exact unbound/undeclared token form `UnicodeString streamContents: [literalBlock]` to the
+native semantic locator `Text streamContents:`; it leaves the Block untouched and refuses other
+arguments, selector chains, cascades, local/declared receivers, strings and comments. There is no
+UnicodeString global, alias, second text representation, or adapter-owned block/stream execution.
 
 The legacy assignment finding is now repaired at its two exact owners. The pinned Cuis scanner/parser
 oracle established that `_` is the legacy arrow only at a token boundary and only when its following
@@ -444,7 +450,8 @@ data. A bare `_` has no legitimate selector meaning. The native tokenizer theref
 legacy-arrow token for exactly the measured form, and the native parser refuses it explicitly:
 direct Symmetric Smalltalk still has only `:=`. The Cuis adapter translates that token to `:=` and
 does nothing else — assignment target validity, right-hand-side resolution, bindings and execution
-remain ordinary native semantics. Its arrow, `String new` and `UnicodeString writeStream`
+remain ordinary native semantics. Its arrow, `String new`, `UnicodeString writeStream`, and exact
+`UnicodeString streamContents: [literalBlock]`
 replacements are collected against one original token stream and applied right-to-left, so none can
 invalidate another's offsets.
 

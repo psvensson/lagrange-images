@@ -303,6 +303,34 @@ const M4_ORACLE = Object.freeze({
   unicodeStringResetAnswerIsStream: 'true',
   unicodeStringResetContentsClass: 'UnicodeString',
   unicodeStringResetContentsSize: '0',
+  // The distinct `UnicodeString streamContents:` pressure is implemented by UnicodeString class
+  // itself in the pinned image. These expected values are deliberately filled from the live oracle
+  // rather than inferred from that source: they distinguish block answer, stream protocol,
+  // Unicode behavior, empty writes, error propagation, and the relation to writeStream/contents.
+  unicodeStringStreamContentsOwnerIsUnicodeStringClass: 'true',
+  unicodeStringStreamContentsEmptyClass: 'UnicodeString',
+  unicodeStringStreamContentsEmptySize: '0',
+  unicodeStringStreamContentsEmptyIsEmpty: 'true',
+  unicodeStringStreamContentsAscii: 'A',
+  unicodeStringStreamContentsAsciiClass: 'UnicodeString',
+  unicodeStringStreamContentsUnicodeCodePoint: '955',
+  unicodeStringStreamContentsUnicodeClass: 'UnicodeString',
+  unicodeStringStreamContentsSupplementaryCodePoint: '128512',
+  unicodeStringStreamContentsSupplementaryClass: 'UnicodeString',
+  unicodeStringStreamContentsBlockAnswerIgnored: 'true',
+  unicodeStringStreamContentsMultiple: 'abλ😀',
+  unicodeStringStreamContentsMultipleIsEmpty: 'false',
+  unicodeStringStreamContentsEmptyWriteEqualsNoWrite: 'true',
+  unicodeStringStreamContentsEmptyWriteIdenticalToNoWrite: 'false',
+  unicodeStringStreamContentsStreamClass: 'Utf8EncodedWriteStream',
+  unicodeStringStreamContentsStreamUnderstandsNextPut: 'true',
+  unicodeStringStreamContentsStreamUnderstandsNextPutAll: 'true',
+  unicodeStringStreamContentsStreamUnderstandsContents: 'true',
+  unicodeStringStreamContentsStreamMatchesWriteStreamClass: 'true',
+  unicodeStringStreamContentsMatchesWriteStreamContents: 'true',
+  unicodeStringStreamContentsMatchesWriteStreamContentsClass: 'true',
+  unicodeStringStreamContentsRaisedClass: 'Error',
+  unicodeStringStreamContentsRaisedMessage: 'xxm.11-marker',
   // Character literal semantics at the exact source/consumer boundary. The literal is neither a
   // one-character String nor an Integer code point. String indexing, String streaming and the real
   // XMLTokenizer>>peek path all answer the same canonical Character identity as `$<`.
@@ -667,20 +695,10 @@ test('super works at the native language owner, not by anything at the Cuis impo
 });
 
 // ==================================================================================================
-// THE NEXT FIRST RED OF THE M4 VERTICAL, classified afresh after the Character-literal repair and
-// deliberately NOT repaired here.
-//
-// The exact forcing scope now compiles and EXECUTES the real `XMLTokenizer>>initialize` and
-// `XMLTokenizer>>nextEntity`. Its first call is the real `nextWhitespace`; the first newly reached
-// construct is a different Cuis base-image spelling which the deliberately narrow xxm.9 repair did
-// not claim:
-//
-//     UnicodeString streamContents: [...]
-//
-// The ordinary native name owner refuses it at compile time. Whether this second idiom belongs to
-// Cuis base-image adaptation or exposes different native stream pressure is for the next oracle,
-// and is recorded as a child of xxm.10 rather than being absorbed here.
-const M4_NEXT_RED = 'unbound Symmetric Smalltalk name: UnicodeString';
+// xxm.11: the distinct class-side `UnicodeString streamContents:` pressure has now been measured
+// rather than folded into xxm.9. Only that foreign receiver name is normalized; the generic
+// evaluate-Block-and-answer-contents protocol is native Text/WriteStream behavior. The real method
+// below must both import and execute before this slice can classify the next unsupported semantic.
 
 // The measured parse path in causal order, from the public entry point. Every entry is upstream
 // material in the canonical manifest; `XMLTokenizer>>saxHandler:` is deliberately absent from the
@@ -709,38 +727,19 @@ const M4_PARSE_PATH = Object.freeze([
   'cuis-method/YAXO/XMLTokenizer/instance/nextWhitespace',
 ]);
 const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/XMLTokenizer/instance/nextWhitespace';
-const M4_PATH_BEFORE_NEXT_RED = Object.freeze(
-  M4_PARSE_PATH.slice(0, M4_PARSE_PATH.indexOf(M4_NEXT_RED_METHOD)),
-);
 
-test('the repaired M4 forcing scope exposes its next RED afresh: UnicodeString streamContents:', {skip: !enabled, timeout: 900_000}, async () => {
+test('the repaired M4 forcing scope imports unchanged UnicodeString streamContents: without an alias', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
 
   const runtime = await nativeRuntime();
   try {
-    // Everything the measured path reaches BEFORE the refusal imports natively.
     await importCuisNativePackage({
       images: runtime.images,
       compilation: runtime.compilation,
       imageId: 'native-image',
       manifest,
-      scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PATH_BEFORE_NEXT_RED]},
-    });
-
-    // Re-run the SAME causal forcing scope. Its `$<` syntax now imports as an ordinary native
-    // Character literal, then ordinary name resolution refuses the first construct in the newly
-    // reached nextWhitespace method rather than widening xxm.9 by accident.
-    const error = await importCuisNativePackage({
-      images: runtime.images,
-      compilation: runtime.compilation,
-      imageId: 'native-image',
-      manifest,
       scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PARSE_PATH]},
-    }).then(
-      () => assert.fail('the repaired M4 forcing scope compiled past its first unresolved dependency'),
-      (thrown) => thrown,
-    );
-    assert.equal(error.message, M4_NEXT_RED);
+    });
 
     // The real newly reached consumer, named, and unedited upstream source.
     const nextWhitespace = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
@@ -759,6 +758,112 @@ test('the repaired M4 forcing scope exposes its next RED afresh: UnicodeString s
     assert.ok(Object.hasOwn(globals, 'OrderedCollection'), 'base classes are published globals');
     assert.ok(Object.hasOwn(globals, 'SAXDriver'), 'an imported class is published before methods compile');
     assert.equal(Object.hasOwn(globals, 'UnicodeString'), false, 'the repaired idiom created no class alias');
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('unchanged pinned XMLTokenizer nextWhitespace executes its empty-result path natively', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await yaxoSemanticExport());
+  const nextWhitespace = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
+  assert.equal(
+    nextWhitespace.source,
+    'nextWhitespace\n\t| nextChar resultString|\n\tresultString _ UnicodeString streamContents: [ :strm |\n\t\t[ ((nextChar _ self peek) ~~ nil) and: [nextChar isSeparator] ]\n\t\t\twhileTrue: [strm nextPut: nextChar. self next].\n\t\t(nestedStreams == nil or: [self atEnd not])\n\t\t\tifFalse: [self checkNestedStream.\n\t\t\t\t\tself nextWhitespace].\n\t].\n\tresultString isEmpty ifFalse: [self handleWhitespace: resultString].',
+    'the executed method is the unchanged pinned source',
+  );
+
+  const runtime = await nativeRuntime();
+  try {
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [M4_NEXT_RED_METHOD]},
+    });
+    const tokenizer = imported.classes.find(({identity}) => identity === 'cuis-class/YAXO/XMLTokenizer');
+    const probe = await ensureClassFromDeclaration({
+      images: runtime.images,
+      imageId: 'native-image',
+      name: 'M4EmptyWhitespaceProbe',
+      superclassRef: tokenizer.classRef,
+      instanceVariables: ['lagrangeHandledWhitespace'],
+    });
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      classRef: probe.classRef,
+      lane: 'wasm',
+      methods: [
+        {selector: 'peek', source: '[ ^ nil ]'},
+        {selector: 'handleWhitespace:', source: '[ :text | lagrangeHandledWhitespace := true. ^ self ]'},
+        {selector: 'exercise', source: '[ lagrangeHandledWhitespace := false. self nextWhitespace. ^ lagrangeHandledWhitespace ]'},
+      ],
+    });
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'native-image',
+      id: 'm4-empty-whitespace-execution',
+      source: '[ :class | class basicNew exercise ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('native-image', block.id), [probe.classRef],
+      )),
+      booleanValue(false),
+      'the empty native Text result is observed through isEmpty and never delivered as whitespace',
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('the unchanged nextWhitespace path exposes Character isSeparator as its next RED', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await yaxoSemanticExport());
+  const runtime = await nativeRuntime();
+  try {
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [M4_NEXT_RED_METHOD]},
+    });
+    const tokenizer = imported.classes.find(({identity}) => identity === 'cuis-class/YAXO/XMLTokenizer');
+    const probe = await ensureClassFromDeclaration({
+      images: runtime.images,
+      imageId: 'native-image',
+      name: 'M4WhitespaceNextRedProbe',
+      superclassRef: tokenizer.classRef,
+      instanceVariables: ['lagrangeInput'],
+    });
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      classRef: probe.classRef,
+      lane: 'wasm',
+      methods: [
+        {selector: 'lagrangeInput:', source: '[ :input | lagrangeInput := input. ^ self ]'},
+        {selector: 'peek', source: '[ ^ lagrangeInput at: 1 ]'},
+      ],
+    });
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'native-image',
+      id: 'm4-whitespace-next-red',
+      source: '[ :class :input | | tokenizer | tokenizer := class basicNew. tokenizer lagrangeInput: input. tokenizer nextWhitespace ]',
+    });
+    const error = await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('native-image', block.id), [probe.classRef, textValue(M4_DOCUMENT)],
+    )).then(
+      () => assert.fail('the unchanged causal path executed past its first unsupported Character protocol'),
+      (thrown) => thrown,
+    );
+    assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
+    assert.equal(error.selector, 'isSeparator');
+    assert.match(error.message, /message not understood: isSeparator/);
   } finally {
     await runtime.close();
   }

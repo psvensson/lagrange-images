@@ -181,6 +181,9 @@ const BRIDGE_METHODS = Object.freeze([
       do: [ :error | #failed ]`,
 `yaxoMeasure: aString
     | unicodeClass unicodeEmpty unicodeStream emptyContents writeAnswer firstContents secondContents resetAnswer resetContents
+      streamContentsEmpty streamContentsAscii streamContentsUnicode streamContentsSupplementary
+      streamContentsBlockAnswer streamContentsMultiple streamContentsEmptyWrite capturedStream comparisonStream
+      comparisonContents raisedClass raisedMessage streamContentsOwner
       indexedCharacter streamCharacter tokenizerCharacter unicodeCharacter unicodeStreamCharacter
       supplementaryCharacter supplementaryStreamCharacter tokenizer bareDollar
       doc root child attributes canonicalStream out |
@@ -215,6 +218,65 @@ const BRIDGE_METHODS = Object.freeze([
     self yaxoReport: 'unicodeStringResetAnswerIsStream' value: (resetAnswer == unicodeStream) printString on: out.
     self yaxoReport: 'unicodeStringResetContentsClass' value: resetContents class name on: out.
     self yaxoReport: 'unicodeStringResetContentsSize' value: resetContents size printString on: out.
+    streamContentsOwner := unicodeClass class whichClassIncludesSelector: #streamContents:.
+    streamContentsEmpty := unicodeClass streamContents: [ :stream | nil ].
+    streamContentsAscii := unicodeClass streamContents: [ :stream | stream nextPut: $A ].
+    streamContentsUnicode := unicodeClass streamContents: [ :stream | stream nextPut: $λ ].
+    streamContentsSupplementary := unicodeClass streamContents: [ :stream | stream nextPut: $😀 ].
+    streamContentsBlockAnswer := unicodeClass streamContents: [ :stream |
+      stream nextPut: $A.
+      42 ].
+    streamContentsMultiple := unicodeClass streamContents: [ :stream |
+      stream nextPutAll: 'ab'; nextPut: $λ; nextPut: $😀 ].
+    streamContentsEmptyWrite := unicodeClass streamContents: [ :stream | stream nextPutAll: '' ].
+    unicodeClass streamContents: [ :stream | capturedStream := stream ].
+    comparisonStream := unicodeClass writeStream.
+    comparisonStream nextPutAll: 'ab'; nextPut: $λ; nextPut: $😀.
+    comparisonContents := comparisonStream contents.
+    raisedClass := nil.
+    raisedMessage := nil.
+    [ unicodeClass streamContents: [ :stream | Error signal: 'xxm.11-marker' ] ]
+      on: Error
+      do: [ :error |
+        raisedClass := error class.
+        raisedMessage := error messageText ].
+    self yaxoReport: 'unicodeStringStreamContentsOwnerIsUnicodeStringClass'
+      value: (streamContentsOwner == unicodeClass class) printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsEmptyClass' value: streamContentsEmpty class name on: out.
+    self yaxoReport: 'unicodeStringStreamContentsEmptySize' value: streamContentsEmpty size printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsEmptyIsEmpty' value: streamContentsEmpty isEmpty printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsAscii' value: streamContentsAscii on: out.
+    self yaxoReport: 'unicodeStringStreamContentsAsciiClass' value: streamContentsAscii class name on: out.
+    self yaxoReport: 'unicodeStringStreamContentsUnicodeCodePoint'
+      value: streamContentsUnicode first codePoint printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsUnicodeClass' value: streamContentsUnicode class name on: out.
+    self yaxoReport: 'unicodeStringStreamContentsSupplementaryCodePoint'
+      value: streamContentsSupplementary first codePoint printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsSupplementaryClass'
+      value: streamContentsSupplementary class name on: out.
+    self yaxoReport: 'unicodeStringStreamContentsBlockAnswerIgnored'
+      value: (streamContentsBlockAnswer = streamContentsAscii) printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsMultiple' value: streamContentsMultiple on: out.
+    self yaxoReport: 'unicodeStringStreamContentsMultipleIsEmpty' value: streamContentsMultiple isEmpty printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsEmptyWriteEqualsNoWrite'
+      value: (streamContentsEmptyWrite = streamContentsEmpty) printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsEmptyWriteIdenticalToNoWrite'
+      value: (streamContentsEmptyWrite == streamContentsEmpty) printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsStreamClass' value: capturedStream class name on: out.
+    self yaxoReport: 'unicodeStringStreamContentsStreamUnderstandsNextPut'
+      value: (capturedStream respondsTo: #nextPut:) printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsStreamUnderstandsNextPutAll'
+      value: (capturedStream respondsTo: #nextPutAll:) printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsStreamUnderstandsContents'
+      value: (capturedStream respondsTo: #contents) printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsStreamMatchesWriteStreamClass'
+      value: (capturedStream class == comparisonStream class) printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsMatchesWriteStreamContents'
+      value: (streamContentsMultiple = comparisonContents) printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsMatchesWriteStreamContentsClass'
+      value: (streamContentsMultiple class == comparisonContents class) printString on: out.
+    self yaxoReport: 'unicodeStringStreamContentsRaisedClass' value: raisedClass name on: out.
+    self yaxoReport: 'unicodeStringStreamContentsRaisedMessage' value: raisedMessage on: out.
     indexedCharacter := '<' at: 1.
     streamCharacter := '<' readStream next.
     tokenizer := (Smalltalk at: #XMLTokenizer) on: aString readStream.
