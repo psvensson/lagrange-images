@@ -13,10 +13,11 @@ jobs:
   # `npm test` still runs the whole suite locally.
   node-test:
     runs-on: ubuntu-latest
-    # The fast suite takes 6-10 minutes on a hosted runner (350-583s over the last 14 runs) and
-    # was cancelled at the old 10-minute limit on runner-slow days; 15 leaves headroom without
-    # hiding a genuine hang (recovery-test already uses 20).
-    timeout-minutes: 15
+    # The fast suite historically took 6-10 minutes, but incremental native protocol makes every
+    # standard-image fixture do more real work. Three xxm.11 exact-head attempts passed every
+    # emitted assertion and were then cancelled at 15 minutes before the runner summary. Twenty
+    # matches recovery-test while retaining a finite hang detector; coverage remains unsampled.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
