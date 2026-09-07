@@ -17,6 +17,7 @@ import {
 import {
   INSTANCE_SLOT_READ_CAPTURE,
   ARRAY_BINDING_ID,
+  CHARACTER_BINDING_ID,
   NIL_BINDING_ID,
   NIL_CAPTURE,
   NON_LOCAL_RETURN_CAPTURE,
@@ -262,6 +263,11 @@ async function methodsFromSource({
       if (id === NIL_BINDING_ID) return {id, name, value: kernelNil};
       // The symbol intrinsic binds to the image-local interner primitive Block.
       if (id === SYMBOL_BINDING_ID) return {id, name, value: objectRef(imageId, 'smalltalk/primitive/symbol-intern')};
+      // Character literals use the image-local interner primitive. The semantic artifact carries
+      // only the code point; the image-specific ref enters at method installation.
+      if (id === CHARACTER_BINDING_ID) {
+        return {id, name, value: objectRef(imageId, 'smalltalk/primitive/character-intern')};
+      }
       // The array intrinsic binds to this image's Array class (for the `#()` empty literal).
       if (id === ARRAY_BINDING_ID) return {id, name, value: objectRef(imageId, 'smalltalk/class/Array')};
       // ADR 0057: a resolved global binds to that binding object in *this* image. The artifact

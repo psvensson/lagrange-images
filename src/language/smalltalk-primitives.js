@@ -73,6 +73,7 @@ import {
   performSendWith,
   symbolIntern,
 } from './smalltalk-primitives-symbol.js';
+import {characterIntern, textAtCharacter} from './smalltalk-primitives-character.js';
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
 
 // The executor for the `smalltalk-kernel-primitive/v1` representation, and nothing else: the
@@ -262,6 +263,10 @@ function createSmalltalkKernelPrimitiveV1Executor({
           });
         case SMALLTALK_PRIMITIVE.SYMBOL_INTERN:
           return await symbolIntern({images, primitiveImage, value});
+        case SMALLTALK_PRIMITIVE.CHARACTER_INTERN:
+          return await characterIntern({images, primitiveImage, value});
+        case SMALLTALK_PRIMITIVE.TEXT_AT_CHARACTER:
+          return await textAtCharacter({images, primitiveImage, value, indexValue: second});
         case SMALLTALK_PRIMITIVE.SUBCLASSES_OF:
           return await subclassesOf({
             images, primitiveImage, value, newObjectId, maxIdentityAttempts, context,

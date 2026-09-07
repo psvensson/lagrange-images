@@ -1,6 +1,11 @@
 import {uuid as randomUUID} from '../support/default-crypto.js';
 import {ensureBlock, ensureCodeArtifact, ensureLexicalEnvironment} from '../graph/ensure-records.js';
-import {ARRAY_BINDING_ID, NIL_BINDING_ID, SYMBOL_BINDING_ID} from './symmetric-smalltalk-semantic.js';
+import {
+  ARRAY_BINDING_ID,
+  CHARACTER_BINDING_ID,
+  NIL_BINDING_ID,
+  SYMBOL_BINDING_ID,
+} from './symmetric-smalltalk-semantic.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {globalDeclarations} from './smalltalk-globals.js';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
@@ -44,6 +49,7 @@ async function ensureCompilerSuppliedEnvironment({
   const captureIds = new Set(captures.map(({id: captureId}) => captureId));
   const usesNil = captureIds.has(NIL_BINDING_ID);
   const usesSymbol = captureIds.has(SYMBOL_BINDING_ID);
+  const usesCharacter = captureIds.has(CHARACTER_BINDING_ID);
   const usesArray = captureIds.has(ARRAY_BINDING_ID);
   // Exactly the globals compilation resolved — never every published id that happens to appear
   // among the captures. An explicit caller capture may legitimately use an id that is also a
@@ -62,7 +68,7 @@ async function ensureCompilerSuppliedEnvironment({
     }
     globalCaptures.push(capture);
   }
-  if (!usesNil && !usesSymbol && !usesArray && globalCaptures.length === 0) return parent;
+  if (!usesNil && !usesSymbol && !usesCharacter && !usesArray && globalCaptures.length === 0) return parent;
 
   const bindings = {};
   if (usesNil) {
@@ -72,6 +78,11 @@ async function ensureCompilerSuppliedEnvironment({
   }
   if (usesSymbol) {
     bindings[SYMBOL_BINDING_ID] = {name: '$symbol', value: objectRef(imageId, 'smalltalk/primitive/symbol-intern')};
+  }
+  if (usesCharacter) {
+    bindings[CHARACTER_BINDING_ID] = {
+      name: '$character', value: objectRef(imageId, 'smalltalk/primitive/character-intern'),
+    };
   }
   if (usesArray) {
     // The empty literal Array `#()` lowers to `new: 0` against this image's Array class. The
@@ -84,7 +95,7 @@ async function ensureCompilerSuppliedEnvironment({
     bindings[bindingId] = {name, value: objectRef(imageId, bindingId)};
   }
 
-  const environmentId = globalCaptures.length === 0 && !usesSymbol && !usesArray
+  const environmentId = globalCaptures.length === 0 && !usesSymbol && !usesCharacter && !usesArray
     ? `${id}:nil-environment`
     : `${id}:compiler-environment`;
   const record = await ensureLexicalEnvironment(images, imageId, {

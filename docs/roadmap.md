@@ -221,9 +221,14 @@ of classes the package itself defines — which is what an M4 restart proof has 
   contents retain UnicodeString species, while the native image has one textual representation;
   translate only that exact construction to an ordinary native text-backed WriteStream, publish no
   alias, and execute the real upstream `XMLTokenizer>>initialize` with both buffers read back;
-- [ ] measure and repair the freshly exposed `$<` Character-literal RED in upstream
-  `XMLTokenizer>>nextEntity` (bead `lagrange-images-xxm.10`) at the native literal owner, without
-  conflating it with the separate reserved-word parser quirk;
+- [x] measure and repair the `$<` Character-literal RED in upstream
+  `XMLTokenizer>>nextEntity` (bead `lagrange-images-xxm.10`, ADR 0090): the pinned oracle proves a
+  distinct Character semantic whose literal, String-index, stream and real tokenizer products are
+  identical; direct native syntax lowers to a canonical image-local Character object, native
+  `Text>>at:` shares that interner, and the real unchanged method takes both observable branches;
+- [ ] classify the freshly exposed `UnicodeString streamContents:` name-resolution RED in upstream
+  `XMLTokenizer>>nextWhitespace` (bead `lagrange-images-xxm.11`) independently of xxm.9's narrower
+  `UnicodeString writeStream` idiom and of later Character protocol;
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;

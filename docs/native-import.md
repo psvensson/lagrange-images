@@ -412,15 +412,29 @@ native class; another proof seeds a conflicting binding and observes its value u
 other later native-owner refusals, this is recoverable ordered admission rather than an invented
 all-or-nothing adapter transaction.
 
-Re-running the M4 causal forcing scope now compiles through `SAXDriver`, executes unedited upstream
-`XMLTokenizer>>initialize`, and exposes the next RED afresh in `XMLTokenizer>>nextEntity`:
+Re-running the M4 causal forcing scope then exposed `$<` in unedited
+`XMLTokenizer>>nextEntity`. The pinned Cuis oracle proved this is a distinct Character semantic:
+the literal is unequal to one-character String and Integer code point, while String indexed access,
+String/UnicodeString streams, and the real tokenizer's `peek` answer the same Character identity.
+It also proved the lexical rule consumes exactly one Unicode code point, including whitespace and
+supplementary characters, with no invented escape grammar.
 
-    unexpected character "$" at 297
+ADR 0090/bead `lagrange-images-xxm.10` repairs that at the native language owner. The tokenizer and
+parser carry an explicit Character form; the compiler lowers it through an image-local interner to
+a canonical ordinary Character object, and native `Text>>at:` delegates to the same interner.
+Character is neither a new generic Value kind nor a `lagrange-code` operation, and the Cuis adapter
+contains no Character syntax. The real unchanged `nextEntity` now executes with Cuis absent and
+takes visibly different markup/non-markup branches from a value produced by native Text indexing.
 
-The exact source operand is the Cuis Character literal `$<`. This is literal-syntax pressure at the
-native tokenizer/parser/compiler owner, not another class/global or stream problem. Bead
-`lagrange-images-xxm.10` owns the oracle-first repair; it remains separate from the already filed
-reserved-word unary-selector quirk.
+The next causal method, `XMLTokenizer>>nextWhitespace`, now exposes the next RED before any
+Character classification protocol runs:
+
+    UnicodeString streamContents: [ ... ]
+    -> unbound Symmetric Smalltalk name: UnicodeString
+
+This is not xxm.9's already measured `UnicodeString writeStream` role. Bead
+`lagrange-images-xxm.11` owns a fresh oracle and owner decision for this distinct construction; it
+is not widened into either completed slice.
 
 The legacy assignment finding is now repaired at its two exact owners. The pinned Cuis scanner/parser
 oracle established that `_` is the legacy arrow only at a token boundary and only when its following

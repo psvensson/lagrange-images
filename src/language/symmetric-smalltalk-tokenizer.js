@@ -79,6 +79,29 @@ function isLegacyAssignmentArrowAt(source, index) {
   return source[index] === '_' && !/[A-Za-z0-9_:]/.test(source[index + 1] ?? '');
 }
 
+// Character literal syntax is ordinary native Smalltalk syntax, owned here rather than by the
+// Cuis adapter. The pinned Cuis 7.9-8090 oracle (bead lagrange-images-xxm.10) establishes the exact
+// lexical boundary: `$` consumes ONE following Unicode code point, including whitespace, newline,
+// quote, apostrophe and `$` itself; there is no JavaScript-style escape grammar and no separating
+// whitespace is required before a following message. A physical end of source contributes Cuis's
+// scanner end marker, Character U+001A, so a final `$` denotes that character rather than being an
+// unterminated token. Strings and comments are scanned before this branch, hence their dollars stay
+// data or ignored comment text.
+const SMALLTALK_END_OF_SOURCE_CHARACTER = '\u001a';
+
+function characterLiteralAt(source, index) {
+  const valueIndex = index + 1;
+  if (valueIndex >= source.length) {
+    return Object.freeze({value: SMALLTALK_END_OF_SOURCE_CHARACTER, end: source.length});
+  }
+  const codePoint = source.codePointAt(valueIndex);
+  if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+    throw new SymmetricSmalltalkSyntaxError('character literal must contain a Unicode scalar value', index);
+  }
+  const value = String.fromCodePoint(codePoint);
+  return Object.freeze({value, end: valueIndex + value.length});
+}
+
 function tokenizeSymmetricSmalltalk(source) {
   if (typeof source !== 'string') throw new TypeError('source must be text');
   const tokens = [];
@@ -180,6 +203,14 @@ function tokenizeSymmetricSmalltalk(source) {
       }
       if (!closed) throw new SymmetricSmalltalkSyntaxError('unterminated string', start);
       push('string', value, start);
+      continue;
+    }
+
+    if (char === '$') {
+      const start = index;
+      const literal = characterLiteralAt(source, index);
+      index = literal.end;
+      push('character', literal.value, start);
       continue;
     }
 
@@ -285,6 +316,7 @@ function tokenizeSymmetricSmalltalk(source) {
 }
 
 export {
+  SMALLTALK_END_OF_SOURCE_CHARACTER,
   RESERVED_WORDS,
   isReservedWord,
   isAssignmentToken,
