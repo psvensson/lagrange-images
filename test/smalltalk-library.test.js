@@ -311,6 +311,8 @@ test('the library adds no new kernel primitive', async () => {
     'bytearray-at',
     'bytearray-size',
     'bytearray-utf8-text',
+    // ADR 0090 Character personality, installed by its own standard-image stage.
+    'character-intern',
     'class-of',
     'condition-resume',
     'condition-return',
@@ -354,6 +356,7 @@ test('the library adds no new kernel primitive', async () => {
     // `installSmalltalkInstanceVariableProtocol` beside the slot primitives and `^`.
     'super-send',
     'symbol-intern',
+    'text-at-character',
     'text-utf8-bytes',
   ]);
 });

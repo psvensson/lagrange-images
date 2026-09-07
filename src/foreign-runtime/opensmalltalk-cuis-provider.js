@@ -170,8 +170,19 @@ const BRIDGE_METHODS = Object.freeze([
 // shape is a caller error, not a supported mode.
 `yaxoReport: aKey value: aValue on: aStream
     aStream nextPutAll: aKey; nextPut: $=; nextPutAll: aValue asString; nextPut: Character lf`,
+`yaxoEvaluationOf: aSource
+    ^ [ Compiler new
+        evaluate: aSource
+        in: nil
+        to: nil
+        notifying: nil
+        ifFail: [ #failed ] ]
+      on: Error
+      do: [ :error | #failed ]`,
 `yaxoMeasure: aString
     | unicodeClass unicodeEmpty unicodeStream emptyContents writeAnswer firstContents secondContents resetAnswer resetContents
+      indexedCharacter streamCharacter tokenizerCharacter unicodeCharacter unicodeStreamCharacter
+      supplementaryCharacter supplementaryStreamCharacter tokenizer bareDollar
       doc root child attributes canonicalStream out |
     out := WriteStream on: (UnicodeString new: 512).
     unicodeClass := Smalltalk at: #UnicodeString.
@@ -204,6 +215,56 @@ const BRIDGE_METHODS = Object.freeze([
     self yaxoReport: 'unicodeStringResetAnswerIsStream' value: (resetAnswer == unicodeStream) printString on: out.
     self yaxoReport: 'unicodeStringResetContentsClass' value: resetContents class name on: out.
     self yaxoReport: 'unicodeStringResetContentsSize' value: resetContents size printString on: out.
+    indexedCharacter := '<' at: 1.
+    streamCharacter := '<' readStream next.
+    tokenizer := (Smalltalk at: #XMLTokenizer) on: aString readStream.
+    tokenizerCharacter := tokenizer peek.
+    unicodeCharacter := $λ.
+    unicodeStreamCharacter := (UnicodeString fromUtf8Bytes: #[206 187]) readStream next.
+    supplementaryCharacter := $😀.
+    supplementaryStreamCharacter := (UnicodeString fromUtf8Bytes: #[240 159 152 128]) readStream next.
+    self yaxoReport: 'characterLiteralClass' value: $< class name on: out.
+    self yaxoReport: 'characterLiteralCodePoint' value: $< codePoint printString on: out.
+    self yaxoReport: 'characterLiteralEqualsOneCharacterString' value: ($< = '<') printString on: out.
+    self yaxoReport: 'characterLiteralEqualsIntegerCodePoint' value: ($< = 60) printString on: out.
+    self yaxoReport: 'characterLiteralAsStringClass' value: $< asString class name on: out.
+    self yaxoReport: 'characterLiteralAsStringEqualsString' value: ($< asString = '<') printString on: out.
+    self yaxoReport: 'indexedCharacterClass' value: indexedCharacter class name on: out.
+    self yaxoReport: 'indexedCharacterEqualsLiteral' value: (indexedCharacter = $<) printString on: out.
+    self yaxoReport: 'indexedCharacterIdenticalToLiteral' value: (indexedCharacter == $<) printString on: out.
+    self yaxoReport: 'streamCharacterClass' value: streamCharacter class name on: out.
+    self yaxoReport: 'streamCharacterEqualsLiteral' value: (streamCharacter = $<) printString on: out.
+    self yaxoReport: 'streamCharacterIdenticalToLiteral' value: (streamCharacter == $<) printString on: out.
+    self yaxoReport: 'tokenizerPeekClass' value: tokenizerCharacter class name on: out.
+    self yaxoReport: 'tokenizerPeekCodePoint' value: tokenizerCharacter codePoint printString on: out.
+    self yaxoReport: 'tokenizerPeekEqualsLiteral' value: (tokenizerCharacter = $<) printString on: out.
+    self yaxoReport: 'tokenizerPeekIdenticalToLiteral' value: (tokenizerCharacter == $<) printString on: out.
+    self yaxoReport: 'unicodeCharacterLiteralClass' value: unicodeCharacter class name on: out.
+    self yaxoReport: 'unicodeCharacterLiteralCodePoint' value: unicodeCharacter codePoint printString on: out.
+    self yaxoReport: 'unicodeStreamCharacterClass' value: unicodeStreamCharacter class name on: out.
+    self yaxoReport: 'unicodeStreamCharacterEqualsLiteral' value: (unicodeStreamCharacter = unicodeCharacter) printString on: out.
+    self yaxoReport: 'unicodeStreamCharacterIdenticalToLiteral' value: (unicodeStreamCharacter == unicodeCharacter) printString on: out.
+    self yaxoReport: 'supplementaryCharacterLiteralCodePoint' value: supplementaryCharacter codePoint printString on: out.
+    self yaxoReport: 'supplementaryStreamCharacterEqualsLiteral'
+      value: (supplementaryStreamCharacter = supplementaryCharacter) printString on: out.
+    self yaxoReport: 'supplementaryStreamCharacterIdenticalToLiteral'
+      value: (supplementaryStreamCharacter == supplementaryCharacter) printString on: out.
+    self yaxoReport: 'characterLiteralConsumesOneSourceCharacter' value: (self yaxoEvaluationOf: '$<isAscii') printString on: out.
+    self yaxoReport: 'characterLiteralSpaceCodePoint' value: $  codePoint printString on: out.
+    self yaxoReport: 'characterLiteralDollarCodePoint' value: $$ codePoint printString on: out.
+    self yaxoReport: 'characterLiteralApostropheCodePoint' value: $' codePoint printString on: out.
+    self yaxoReport: 'characterLiteralQuoteCodePoint' value: $" codePoint printString on: out.
+    self yaxoReport: 'characterLiteralNCodePoint' value: $n codePoint printString on: out.
+    self yaxoReport: 'characterLiteralLineFeedCodePoint'
+      value: (self yaxoEvaluationOf: '$', Character lf asString) codePoint printString on: out.
+    bareDollar := self yaxoEvaluationOf: '$'.
+    self yaxoReport: 'bareDollarAtEndClass' value: bareDollar class name on: out.
+    self yaxoReport: 'bareDollarAtEndPrint' value: bareDollar printString on: out.
+    self yaxoReport: 'bareDollarAtEndIsCharacter' value: (bareDollar isKindOf: Character) printString on: out.
+    self yaxoReport: 'bareDollarAtEndCodePoint' value: bareDollar codePoint printString on: out.
+    self yaxoReport: 'dollarInCommentLeavesLiteral'
+      value: ((self yaxoEvaluationOf: '"$<" $<') = $<) printString on: out.
+    self yaxoReport: 'dollarInStringStaysText' value: '$<' on: out.
     doc := (Smalltalk at: #XMLDOMParser) parseDocumentFrom: aString readStream.
     self yaxoReport: 'parseAnswerClass' value: doc class name on: out.
     self yaxoReport: 'documentElementsClass' value: doc elements class name on: out.

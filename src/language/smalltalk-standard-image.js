@@ -15,6 +15,7 @@ import {findSmalltalkKernel, installSmalltalkKernel} from './smalltalk-kernel.js
 import {installSmalltalkLibrary} from './smalltalk-library.js';
 import {installSmalltalkSubclassProtocol} from './smalltalk-subclasses.js';
 import {installSmalltalkSymbolProtocol} from './smalltalk-symbol.js';
+import {installSmalltalkCharacterProtocol} from './smalltalk-character.js';
 import {installSmalltalkTextByteArrayProtocol} from './smalltalk-text-bytearray.js';
 import {installSmalltalkWriteStreamProtocol} from './smalltalk-write-stream.js';
 
@@ -120,6 +121,9 @@ async function installSymmetricSmalltalkStandardImage({
   const exceptionAccessors = await installSmalltalkExceptionAccessors(options);
   const dictionary = await installSmalltalkDictionaryProtocol(options);
   const symbol = await installSmalltalkSymbolProtocol(options);
+  // Character literals and Text indexing share one canonical, image-local Character interner.
+  // Character remains distinct from both Text and Integer without widening the generic Value model.
+  const character = await installSmalltalkCharacterProtocol(options);
   // Native Text/ByteArray protocol over the byte-sequence primitives (WS3). Independent of the
   // library — Text/ByteArray are native Values dispatching through their kernel classes.
   const textByteArray = await installSmalltalkTextByteArrayProtocol(options);
@@ -176,6 +180,7 @@ async function installSymmetricSmalltalkStandardImage({
       exceptionAccessors,
       dictionary,
       symbol,
+      character,
       textByteArray,
       globals,
       arrayEnumeration,
@@ -185,6 +190,7 @@ async function installSymmetricSmalltalkStandardImage({
     classes: Object.freeze({
       Array: indexed.arrayClass,
       Dictionary: dictionary.classRef,
+      Character: character.classRef,
       Association: library.association,
       Collection: library.collection,
       OrderedCollection: library.orderedCollection,

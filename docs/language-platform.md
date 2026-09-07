@@ -147,6 +147,11 @@ Smalltalk currently has two bodies of machinery with one convergence direction:
 
 Symmetric Smalltalk owns the native semantics: parser/compiler policy, lexical capture, message lookup, Behavior/Class/Metaclass, Shapes/slots, method dictionaries, allocation, class state, collections and conditions.
 
+That ownership includes Character syntax and runtime personality (ADR 0090). A direct `$x` literal
+and native `Text>>at:` both reach one image-local Character interner. Characters are canonical
+ordinary Smalltalk objects, distinct from Text and Integer, while the shared Value model and
+`lagrange-code` remain language-neutral. Cuis import does not rewrite Character literals.
+
 OpenSmalltalkVM/Cuis supplies mature package/compiler semantics and a reference implementation. It does not own native Lagrange class/object identity.
 
 ## 7. Current Cuis compatibility/toolchain machinery

@@ -45,6 +45,7 @@ for (const lane of ['neutral', 'wasm']) {
       assert.equal(image.lane, lane);
       assert.deepEqual(image.classes.Array, objectRef('app', 'smalltalk/class/Array'));
       assert.deepEqual(image.classes.Dictionary, objectRef('app', 'smalltalk/class/Dictionary'));
+      assert.deepEqual(image.classes.Character, objectRef('app', 'smalltalk/class/Character'));
       assert.deepEqual(image.classes.Association, objectRef('app', 'smalltalk/class/Association'));
       assert.deepEqual(image.classes.OrderedCollection, objectRef('app', 'smalltalk/class/OrderedCollection'));
       assert.deepEqual(image.classes.WriteStream, objectRef('app', 'smalltalk/class/WriteStream'));
@@ -164,6 +165,7 @@ const RECOVERY_TARGETS = Object.freeze([
   'smalltalk-kernel/v1',
   'smalltalk/class/Array',
   'smalltalk-global-namespace/v1',
+  'smalltalk/class/Character',
   'smalltalk/class/OrderedCollection',
 ]);
 

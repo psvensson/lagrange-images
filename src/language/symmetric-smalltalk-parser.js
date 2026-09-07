@@ -225,6 +225,10 @@ class Parser {
       this.advance();
       return node('string', {value: token.value});
     }
+    if (token.type === 'character') {
+      this.advance();
+      return node('character', {value: token.value});
+    }
     if (token.type === 'symbol') {
       this.advance();
       return node('symbol', {value: token.value});

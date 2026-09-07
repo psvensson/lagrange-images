@@ -65,7 +65,9 @@ import {
 // `SAXDriver` name in `SAXHandler class>>on:` rather than reaching `XMLDocument` later in the path.
 // Publishing the scoped imported classes through the existing native global owner repaired that
 // boundary. The oracle-backed `UnicodeString writeStream` construction repair now executes the real
-// initializer, and the causal scope stops next at `$<` in `XMLTokenizer>>nextEntity`.
+// initializer. Character literals then let the real `XMLTokenizer>>nextEntity` compare its input,
+// and the causal scope stops next at the distinct `UnicodeString streamContents:` idiom in its
+// first `nextWhitespace` send.
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';
@@ -301,6 +303,51 @@ const M4_ORACLE = Object.freeze({
   unicodeStringResetAnswerIsStream: 'true',
   unicodeStringResetContentsClass: 'UnicodeString',
   unicodeStringResetContentsSize: '0',
+  // Character literal semantics at the exact source/consumer boundary. The literal is neither a
+  // one-character String nor an Integer code point. String indexing, String streaming and the real
+  // XMLTokenizer>>peek path all answer the same canonical Character identity as `$<`.
+  characterLiteralClass: 'Character',
+  characterLiteralCodePoint: '60',
+  characterLiteralEqualsOneCharacterString: 'false',
+  characterLiteralEqualsIntegerCodePoint: 'false',
+  characterLiteralAsStringClass: 'String',
+  characterLiteralAsStringEqualsString: 'true',
+  indexedCharacterClass: 'Character',
+  indexedCharacterEqualsLiteral: 'true',
+  indexedCharacterIdenticalToLiteral: 'true',
+  streamCharacterClass: 'Character',
+  streamCharacterEqualsLiteral: 'true',
+  streamCharacterIdenticalToLiteral: 'true',
+  tokenizerPeekClass: 'Character',
+  tokenizerPeekCodePoint: '60',
+  tokenizerPeekEqualsLiteral: 'true',
+  tokenizerPeekIdenticalToLiteral: 'true',
+  // The scanner is not ASCII-specialized: direct BMP and supplementary literals agree with the
+  // corresponding UnicodeString stream results.
+  unicodeCharacterLiteralClass: 'Character',
+  unicodeCharacterLiteralCodePoint: '955',
+  unicodeStreamCharacterClass: 'Character',
+  unicodeStreamCharacterEqualsLiteral: 'true',
+  unicodeStreamCharacterIdenticalToLiteral: 'true',
+  supplementaryCharacterLiteralCodePoint: '128512',
+  supplementaryStreamCharacterEqualsLiteral: 'true',
+  supplementaryStreamCharacterIdenticalToLiteral: 'true',
+  // Lexically `$` consumes exactly one following Unicode code point, including whitespace and
+  // punctuation, with no escape convention. At physical EOF Cuis exposes its U+001A scanner end
+  // marker as the consumed Character. Strings/comments retain their ordinary boundaries.
+  characterLiteralConsumesOneSourceCharacter: 'true',
+  characterLiteralSpaceCodePoint: '32',
+  characterLiteralDollarCodePoint: '36',
+  characterLiteralApostropheCodePoint: '39',
+  characterLiteralQuoteCodePoint: '34',
+  characterLiteralNCodePoint: '110',
+  characterLiteralLineFeedCodePoint: '10',
+  bareDollarAtEndClass: 'Character',
+  bareDollarAtEndPrint: 'Character value: 26',
+  bareDollarAtEndIsCharacter: 'true',
+  bareDollarAtEndCodePoint: '26',
+  dollarInCommentLeavesLiteral: 'true',
+  dollarInStringStaysText: '$<',
   // the public parse operation and what it answers
   parseAnswerClass: 'XMLDocument',
   documentElementsClass: 'OrderedCollection',
@@ -620,19 +667,20 @@ test('super works at the native language owner, not by anything at the Cuis impo
 });
 
 // ==================================================================================================
-// THE NEXT FIRST RED OF THE M4 VERTICAL, classified afresh after the UnicodeString stream
-// construction repair and deliberately NOT repaired here.
+// THE NEXT FIRST RED OF THE M4 VERTICAL, classified afresh after the Character-literal repair and
+// deliberately NOT repaired here.
 //
-// The exact forcing scope now compiles and EXECUTES the real `XMLTokenizer>>initialize`, then its
-// causal method scope advances to `XMLTokenizer>>nextEntity`. The first expression there that the
-// native tokenizer cannot represent is the real Cuis Character literal `$<`:
+// The exact forcing scope now compiles and EXECUTES the real `XMLTokenizer>>initialize` and
+// `XMLTokenizer>>nextEntity`. Its first call is the real `nextWhitespace`; the first newly reached
+// construct is a different Cuis base-image spelling which the deliberately narrow xxm.9 repair did
+// not claim:
 //
-//     unexpected character "$" at 297
+//     UnicodeString streamContents: [...]
 //
-// This is native literal-syntax pressure, not another UnicodeString or global-resolution problem.
-// Bead lagrange-images-xxm.10 owns its oracle-first classification and repair; this slice records
-// the refusal rather than guessing at Cuis's lexical rule or rewriting the character to a number.
-const M4_NEXT_RED = /method cuis-method\/YAXO\/XMLTokenizer\/instance\/nextEntity source .*unexpected character "\$" at 297/;
+// The ordinary native name owner refuses it at compile time. Whether this second idiom belongs to
+// Cuis base-image adaptation or exposes different native stream pressure is for the next oracle,
+// and is recorded as a child of xxm.10 rather than being absorbed here.
+const M4_NEXT_RED = 'unbound Symmetric Smalltalk name: UnicodeString';
 
 // The measured parse path in causal order, from the public entry point. Every entry is upstream
 // material in the canonical manifest; `XMLTokenizer>>saxHandler:` is deliberately absent from the
@@ -658,13 +706,14 @@ const M4_PARSE_PATH = Object.freeze([
   'cuis-method/YAXO/SAXHandler/instance/parseDocument',
   'cuis-method/YAXO/SAXHandler/instance/driver',
   'cuis-method/YAXO/XMLTokenizer/instance/nextEntity',
+  'cuis-method/YAXO/XMLTokenizer/instance/nextWhitespace',
 ]);
-const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/XMLTokenizer/instance/nextEntity';
+const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/XMLTokenizer/instance/nextWhitespace';
 const M4_PATH_BEFORE_NEXT_RED = Object.freeze(
   M4_PARSE_PATH.slice(0, M4_PARSE_PATH.indexOf(M4_NEXT_RED_METHOD)),
 );
 
-test('the repaired M4 forcing scope exposes its next RED afresh: the `$<` Character literal', {skip: !enabled, timeout: 900_000}, async () => {
+test('the repaired M4 forcing scope exposes its next RED afresh: UnicodeString streamContents:', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
 
   const runtime = await nativeRuntime();
@@ -678,8 +727,9 @@ test('the repaired M4 forcing scope exposes its next RED afresh: the `$<` Charac
       scope: {classes: [...M4_SCOPE_CLASSES], methods: [...M4_PATH_BEFORE_NEXT_RED]},
     });
 
-    // Re-run the SAME causal forcing scope. It now passes the package-owned class names and the
-    // exact UnicodeString stream idiom, then refuses the first literal syntax it cannot represent.
+    // Re-run the SAME causal forcing scope. Its `$<` syntax now imports as an ordinary native
+    // Character literal, then ordinary name resolution refuses the first construct in the newly
+    // reached nextWhitespace method rather than widening xxm.9 by accident.
     const error = await importCuisNativePackage({
       images: runtime.images,
       compilation: runtime.compilation,
@@ -690,13 +740,13 @@ test('the repaired M4 forcing scope exposes its next RED afresh: the `$<` Charac
       () => assert.fail('the repaired M4 forcing scope compiled past its first unresolved dependency'),
       (thrown) => thrown,
     );
-    assert.match(error.message, M4_NEXT_RED);
+    assert.equal(error.message, M4_NEXT_RED);
 
-    // The real consumer, named, and unedited upstream source.
-    const nextEntity = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
+    // The real newly reached consumer, named, and unedited upstream source.
+    const nextWhitespace = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
     assert.equal(
-      nextEntity.source,
-      'nextEntity\n\t"return the next XMLnode, or nil if there are no more"\n\n\t"branch, depending on what the first character is"\n\tself nextWhitespace.\n\tself atEnd ifTrue: [self handleEndDocument. ^ nil].\n\tself checkAndExpandReference: (self parsingMarkup ifTrue: [#dtd] ifFalse: [#content]).\n\t^self peek = $<\n\t\tifTrue: [self nextNode]\n\t\tifFalse: [self nextPCData]',
+      nextWhitespace.source,
+      'nextWhitespace\n\t| nextChar resultString|\n\tresultString _ UnicodeString streamContents: [ :strm |\n\t\t[ ((nextChar _ self peek) ~~ nil) and: [nextChar isSeparator] ]\n\t\t\twhileTrue: [strm nextPut: nextChar. self next].\n\t\t(nestedStreams == nil or: [self atEnd not])\n\t\t\tifFalse: [self checkNestedStream.\n\t\t\t\t\tself nextWhitespace].\n\t].\n\tresultString isEmpty ifFalse: [self handleWhitespace: resultString].',
     );
 
     // Package classes really are imported and now published through the ordinary root namespace.
@@ -709,6 +759,69 @@ test('the repaired M4 forcing scope exposes its next RED afresh: the `$<` Charac
     assert.ok(Object.hasOwn(globals, 'OrderedCollection'), 'base classes are published globals');
     assert.ok(Object.hasOwn(globals, 'SAXDriver'), 'an imported class is published before methods compile');
     assert.equal(Object.hasOwn(globals, 'UnicodeString'), false, 'the repaired idiom created no class alias');
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('the real pinned XMLTokenizer nextEntity compares native indexed text with `$<` and takes the observable branch', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await yaxoSemanticExport());
+  const nextEntityId = 'cuis-method/YAXO/XMLTokenizer/instance/nextEntity';
+  const nextEntity = manifest.methods.find(({identity}) => identity === nextEntityId);
+  assert.equal(
+    nextEntity.source,
+    'nextEntity\n\t"return the next XMLnode, or nil if there are no more"\n\n\t"branch, depending on what the first character is"\n\tself nextWhitespace.\n\tself atEnd ifTrue: [self handleEndDocument. ^ nil].\n\tself checkAndExpandReference: (self parsingMarkup ifTrue: [#dtd] ifFalse: [#content]).\n\t^self peek = $<\n\t\tifTrue: [self nextNode]\n\t\tifFalse: [self nextPCData]',
+    'the executed method is the unchanged pinned YAXO consumer',
+  );
+
+  const runtime = await nativeRuntime();
+  try {
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [nextEntityId]},
+    });
+    const tokenizer = imported.classes.find(({identity}) => identity === 'cuis-class/YAXO/XMLTokenizer');
+    const probe = await ensureClassFromDeclaration({
+      images: runtime.images,
+      imageId: 'native-image',
+      name: 'M4CharacterBranchProbe',
+      superclassRef: tokenizer.classRef,
+      instanceVariables: ['lagrangeInput'],
+    });
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      classRef: probe.classRef,
+      lane: 'wasm',
+      methods: [
+        {selector: 'lagrangeInput:', source: '[ :input | lagrangeInput := input. self ]'},
+        // This is the load-bearing producer: the compared value comes through ordinary native
+        // Text indexing and therefore through the same Character interner as the literal.
+        {selector: 'peek', source: '[ ^ lagrangeInput at: 1 ]'},
+        {selector: 'nextWhitespace', source: '[ ^ self ]'},
+        {selector: 'atEnd', source: '[ ^ false ]'},
+        {selector: 'parsingMarkup', source: '[ ^ false ]'},
+        {selector: 'checkAndExpandReference:', source: '[ :context | ^ self ]'},
+        // Two different answers make the comparison branch observable.
+        {selector: 'nextNode', source: '[ ^ true ]'},
+        {selector: 'nextPCData', source: '[ ^ false ]'},
+      ],
+    });
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'native-image',
+      id: 'm4-real-character-branch-probe',
+      source: '[ :class :input | | tokenizer | tokenizer := class basicNew. tokenizer lagrangeInput: input. tokenizer nextEntity ]',
+    });
+    const run = async (input) => await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('native-image', block.id), [probe.classRef, textValue(input)],
+    ));
+    assert.deepEqual(await run('<node'), booleanValue(true), '`$<` equals the Character read from indexed Text');
+    assert.deepEqual(await run('plain text'), booleanValue(false), 'a different indexed Character takes the other branch');
   } finally {
     await runtime.close();
   }

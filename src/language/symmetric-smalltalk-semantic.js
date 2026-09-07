@@ -21,6 +21,7 @@ function normalizeRootCaptures(captures) {
     // compiler — the same reason `$nonLocalReturn` and the slot primitives reserve both.
     if (name === NIL_CAPTURE) throw new TypeError(`capture name ${NIL_CAPTURE} is reserved for the nil intrinsic`);
     if (name === SYMBOL_CAPTURE) throw new TypeError(`capture name ${SYMBOL_CAPTURE} is reserved for the symbol intrinsic`);
+    if (name === CHARACTER_CAPTURE) throw new TypeError(`capture name ${CHARACTER_CAPTURE} is reserved for the character intrinsic`);
     // The compiler owns this whole key namespace. Reserving only the ids it happens to use would
     // let a caller supply an internal-looking name and slip past the global collision check, which
     // distinguishes its own captures by exactly this prefix.
@@ -30,6 +31,7 @@ function normalizeRootCaptures(captures) {
     if (typeof id !== 'string' || id.length === 0) throw new TypeError(`capture binding id for ${name} must be non-empty text`);
     if (id === NIL_BINDING_ID) throw new TypeError(`capture binding id ${NIL_BINDING_ID} is reserved for the nil intrinsic`);
     if (id === SYMBOL_BINDING_ID) throw new TypeError(`capture binding id ${SYMBOL_BINDING_ID} is reserved for the symbol intrinsic`);
+    if (id === CHARACTER_BINDING_ID) throw new TypeError(`capture binding id ${CHARACTER_BINDING_ID} is reserved for the character intrinsic`);
     if (ids.has(id)) throw new TypeError(`duplicate capture binding id: ${id}`);
     ids.add(id);
     result.set(name, id);
@@ -68,9 +70,10 @@ function needsMutableLexicalState(syntax) {
     case 'send':
       return needsMutableLexicalState(syntax.receiver)
         || syntax.arguments.some((argument) => needsMutableLexicalState(argument));
-    // A symbol literal is an immutable compile-time value — it needs no v1 state, exactly
-    // like integer, string, true, false, and nil.
+    // Symbol and Character literals need no mutable state. Their image-local identities are
+    // supplied through intrinsics later, just as nil's is; that does not make the source stateful.
     case 'symbol':
+    case 'character':
       return false;
     default:
       return false;
@@ -101,6 +104,13 @@ const NIL_BINDING_ID = 'smalltalk/intrinsic/nil';
 // spelling as a Text literal — never an image-specific Symbol ref.
 const SYMBOL_CAPTURE = '$symbol';
 const SYMBOL_BINDING_ID = 'smalltalk/intrinsic/symbol';
+// A Character is distinct from Text and Integer in the measured language: `$< = '<'` and
+// `$< = 60` are both false, while String indexing and streaming answer the same Character identity
+// as the literal. Lower through the image-local Character interner so the common IR and generic
+// Value model learn neither a new operation nor a new Value kind. The semantic artifact carries
+// only the Unicode code point as an Integer literal.
+const CHARACTER_CAPTURE = '$character';
+const CHARACTER_BINDING_ID = 'smalltalk/intrinsic/character';
 // The empty literal Array `#()` (WS3) lowers to `new: 0` sent to the image-local Array class,
 // reached through this intrinsic — exactly as Symbol lowers to a send to the interner and `nil`
 // to a read of the nil intrinsic. The compiler names no class and bakes no image-local ref: the
@@ -566,6 +576,16 @@ function compileExpression(syntax, scope, state) {
       return Object.freeze({op: 'literal', value: integerValue(syntax.value)});
     case 'string':
       return Object.freeze({op: 'literal', value: textValue(syntax.value)});
+    case 'character':
+      return Object.freeze({
+        op: 'send',
+        languageId: SYMMETRIC_SMALLTALK_ID,
+        receiver: scope.requireIntrinsic(CHARACTER_CAPTURE),
+        message: textValue('value:'),
+        arguments: Object.freeze([
+          Object.freeze({op: 'literal', value: integerValue(syntax.value.codePointAt(0))}),
+        ]),
+      });
     case 'self':
       return scope.resolveSelf();
     // ADR 0056 decision 1: the canonical boolean Values themselves, not the kernel singletons. The
@@ -781,6 +801,9 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
   if (Object.hasOwn(intrinsics, SYMBOL_CAPTURE)) {
     throw new TypeError(`the ${SYMBOL_CAPTURE} intrinsic is owned by the compiler and cannot be replaced`);
   }
+  if (Object.hasOwn(intrinsics, CHARACTER_CAPTURE)) {
+    throw new TypeError(`the ${CHARACTER_CAPTURE} intrinsic is owned by the compiler and cannot be replaced`);
+  }
   if (Object.hasOwn(intrinsics, ARRAY_CAPTURE)) {
     throw new TypeError(`the ${ARRAY_CAPTURE} intrinsic is owned by the compiler and cannot be replaced`);
   }
@@ -796,6 +819,7 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
       ...Object.entries(intrinsics),
       [NIL_CAPTURE, NIL_BINDING_ID],
       [SYMBOL_CAPTURE, SYMBOL_BINDING_ID],
+      [CHARACTER_CAPTURE, CHARACTER_BINDING_ID],
       [ARRAY_CAPTURE, ARRAY_BINDING_ID],
     ]),
     globals: new Map(Object.entries(globals)),
@@ -813,6 +837,8 @@ function compileSymmetricSmalltalkSemanticBlock(source, {
 export {
   ARRAY_BINDING_ID,
   ARRAY_CAPTURE,
+  CHARACTER_BINDING_ID,
+  CHARACTER_CAPTURE,
   SUPER_SEND_CAPTURE,
   CLASS_VAR_CAPTURE_PREFIX,
   INSTANCE_SLOT_READ_CAPTURE,
