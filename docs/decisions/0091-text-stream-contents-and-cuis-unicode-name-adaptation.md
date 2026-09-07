@@ -1,6 +1,7 @@
 # ADR 0091: Text stream contents and narrow Cuis Unicode name adaptation
 
 Status: implemented — native `Text class>>streamContents:` composes the existing WriteStream owner; the Cuis adapter normalizes only the exact foreign receiver locator, and unchanged YAXO execution exposes `~~` as the next independent RED.
+Proven by: test/smalltalk-write-stream.test.js, test/cuis-native-import.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
 
