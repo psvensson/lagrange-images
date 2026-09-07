@@ -1,6 +1,6 @@
 # ADR 0091: Text stream contents and narrow Cuis Unicode name adaptation
 
-Status: accepted
+Status: implemented — native `Text class>>streamContents:` composes the existing WriteStream owner; the Cuis adapter normalizes only the exact foreign receiver locator, and unchanged YAXO execution exposes `~~` as the next independent RED.
 
 ## Problem
 
@@ -99,8 +99,23 @@ stream or text class.
 
 ## Completion and causal review
 
-Implementation status requires direct provider-free Text execution, a causal dependency on
-`WriteStream>>contents`, exact adapter negative/offset tests, unchanged pinned
-`XMLTokenizer>>nextWhitespace` execution with Cuis absent, the next genuine M4 RED recorded as a
-child, and exact-head CI plus adversarial breaks. This section will record those results before the
-status advances to implemented.
+The pinned Cuis oracle executes empty, ASCII, BMP and supplementary writes, ignored block answer,
+multiple ordered writes, empty-write equality/identity, yielded-stream protocol, corresponding
+`writeStream ... contents`, and Error propagation. Direct provider-free native execution proves
+empty/multiple/Unicode results, one block evaluation, ignored answer, Text result identity, and
+unmodified error propagation.
+
+The dependency on the existing stream owner is executable rather than documentary: an isolated
+test replaces `WriteStream>>contents` with an Integer answer and proves `Text streamContents:`
+returns that exact answer. This would stay Text under a second accumulator. Exact adapter tests keep
+unrelated selectors, arguments, chains, cascades, local/declared receivers, strings and comments
+unadapted; a combined arrow/three-idiom method reconciles to the exact canonical native source and
+executes, proving one drift-free replacement plan and no macro expansion. Direct native source
+still refuses the Cuis-only `UnicodeString` name.
+
+The exact real OpenSmalltalk/Cuis lane imports the full unchanged M4 causal scope with no alias. In
+a Cuis-free native runtime, unchanged `XMLTokenizer>>nextWhitespace` observes the empty Text result
+and suppresses `handleWhitespace:`; only a test-local bridge supplies its newly exposed dependency.
+Without that bridge, both EOF and real Text-indexed Character paths expose `~~` before
+`isSeparator` or `nextPut:`. That pressure is recorded, unrepaired, as
+`lagrange-images-xxm.12`. Exact-head CI and final revision evidence live on the owning Bead/PR.

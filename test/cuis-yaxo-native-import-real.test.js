@@ -66,8 +66,9 @@ import {
 // Publishing the scoped imported classes through the existing native global owner repaired that
 // boundary. The oracle-backed `UnicodeString writeStream` construction repair now executes the real
 // initializer. Character literals then let the real `XMLTokenizer>>nextEntity` compare its input,
-// and the causal scope stops next at the distinct `UnicodeString streamContents:` idiom in its
-// first `nextWhitespace` send.
+// and the distinct `UnicodeString streamContents:` repair now lets the unchanged nextWhitespace
+// method observe its empty native Text result. The unbridged causal scope stops next at ordinary
+// identity inequality `~~`, before either Character classification or the next stream write.
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';

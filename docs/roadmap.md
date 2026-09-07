@@ -226,11 +226,14 @@ of classes the package itself defines — which is what an M4 restart proof has 
   distinct Character semantic whose literal, String-index, stream and real tokenizer products are
   identical; direct native syntax lowers to a canonical image-local Character object, native
   `Text>>at:` shares that interner, and the real unchanged method takes both observable branches;
-- [ ] measure and repair the freshly exposed `UnicodeString streamContents:` name-resolution RED
+- [x] measure and repair the freshly exposed `UnicodeString streamContents:` name-resolution RED
   in upstream `XMLTokenizer>>nextWhitespace` (bead `lagrange-images-xxm.11`, ADR 0091): keep generic
   Block/stream/result semantics in native `Text class>>streamContents:` over the existing
   WriteStream owner, translate only the exact foreign receiver locator, publish no UnicodeString
   alias, and execute the unchanged method before classifying its next identity-inequality RED;
+- [ ] measure and repair the ordinary identity-inequality `~~` RED now exposed before
+  `isSeparator` in unchanged `XMLTokenizer>>nextWhitespace` (bead `lagrange-images-xxm.12`), at the
+  native equality owner rather than the Cuis adapter or Character personality;
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
