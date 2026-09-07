@@ -74,12 +74,14 @@ stream or text class.
    one immutable replacement plan collected against the original token stream and applied once
    right-to-left. There is no macro expansion and no second rewrite pass.
 
-4. **Later stream and Character protocol remains pressure-driven.**
+4. **Later identity, stream, and Character protocol remains pressure-driven.**
 
-   The upstream block contains `nextPut:`, but the real causal execution asks the current
-   Character whether it `isSeparator` before that send is reached. Neither selector is added by
-   this decision merely because it appears in source. The repaired vertical must classify its next
-   actual refusal and schedule that as a separate M4 child.
+   The upstream block contains `nextPut:` and `isSeparator`, but real causal execution first sends
+   the ordinary identity-inequality selector `~~`. That selector is absent even though `==` already
+   exists. None of those later selectors is added by this decision merely because it appears in
+   source. A test-only `Object>>~~` fixture lets the unchanged method finish its empty-result
+   observation; the product remains unchanged and the real vertical records `~~` as the next M4
+   child.
 
 ## Alternatives rejected
 

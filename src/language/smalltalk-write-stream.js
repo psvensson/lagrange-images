@@ -22,8 +22,10 @@ import {objectRef} from '../value/index.js';
 // `nextPut:`, `with:`, positioning, resets, read streams and byte-stream breadth are all real Cuis
 // protocol that this consumer does not yet execute, and are deliberately absent. Execution
 // pressure adds them, one proven consumer at a time — `nextPutAll:` is here because it did exactly
-// that. `Text class >> streamContents:` is ordinary native Text protocol: the Cuis importer owns
-// only the exact foreign receiver-name adaptation that reaches it.
+// that. The newly reached YAXO method stops earlier at the still-missing identity-inequality
+// protocol, so its source alone still does not earn `nextPut:`. `Text class >> streamContents:` is
+// ordinary native Text protocol: the Cuis importer owns only the exact foreign receiver-name
+// adaptation that reaches it.
 //
 // RECORDED REAL-CUIS ORACLE (pinned VM + Cuis7.9-8090 image, probed directly; the full transcript
 // is on bead lagrange-images-nv1.4). These are measurements, not Squeak/Pharo recollection:

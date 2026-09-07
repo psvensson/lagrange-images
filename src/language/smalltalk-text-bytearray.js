@@ -116,8 +116,9 @@ async function installSmalltalkTextByteArrayProtocol({images, compilation, image
   // Ordinary Text protocol. `asString` answers the receiver: a Text's string form is itself. The
   // `isEmpty` predicate is forced by the first consumer of native `Text class>>streamContents:`:
   // unchanged YAXO `XMLTokenizer>>nextWhitespace` observes the returned text through exactly that
-  // selector. Equality with the empty Text is sufficient and keeps this in ordinary Smalltalk;
-  // no byte/string-size primitive or broader collection inheritance is invented.
+  // selector once a test-only fixture supplies its separately classified earlier `~~` dependency.
+  // Equality with the empty Text is sufficient and keeps this in ordinary Smalltalk; no
+  // byte/string-size primitive or broader collection inheritance is invented.
   await defineMethodsFromSource({
     images, compilation, imageId, lane, classRef: kernel.textClass,
     methods: [

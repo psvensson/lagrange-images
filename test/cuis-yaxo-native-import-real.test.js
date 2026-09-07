@@ -763,7 +763,7 @@ test('the repaired M4 forcing scope imports unchanged UnicodeString streamConten
   }
 });
 
-test('unchanged pinned XMLTokenizer nextWhitespace executes its empty-result path natively', {skip: !enabled, timeout: 900_000}, async () => {
+test('unchanged pinned XMLTokenizer nextWhitespace observes the empty Text result natively', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const nextWhitespace = manifest.methods.find(({identity}) => identity === M4_NEXT_RED_METHOD);
   assert.equal(
@@ -782,6 +782,21 @@ test('unchanged pinned XMLTokenizer nextWhitespace executes its empty-result pat
       scope: {classes: [...M4_SCOPE_CLASSES], methods: [M4_NEXT_RED_METHOD]},
     });
     const tokenizer = imported.classes.find(({identity}) => identity === 'cuis-class/YAXO/XMLTokenizer');
+    // The repaired vertical's next genuine RED is the earlier `~~` send. Supply that one method
+    // only inside this isolated acceptance image so the UNCHANGED upstream consumer can finish its
+    // empty-result observation; xxm.11 does not publish the protocol. This is a fixture bridge over
+    // the separately recorded child, not another product implementation path.
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      classRef: objectRef('native-image', 'smalltalk/class/Object'),
+      lane: 'wasm',
+      methods: [{
+        selector: '~~',
+        source: '[ :anObject | (self == anObject) ifTrue: [ ^ false ]. ^ true ]',
+      }],
+    });
     const probe = await ensureClassFromDeclaration({
       images: runtime.images,
       imageId: 'native-image',
@@ -819,7 +834,7 @@ test('unchanged pinned XMLTokenizer nextWhitespace executes its empty-result pat
   }
 });
 
-test('the unchanged nextWhitespace path exposes Character isSeparator as its next RED', {skip: !enabled, timeout: 900_000}, async () => {
+test('the unchanged nextWhitespace path exposes identity inequality as its next RED', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const runtime = await nativeRuntime();
   try {
@@ -858,12 +873,12 @@ test('the unchanged nextWhitespace path exposes Character isSeparator as its nex
     const error = await runtime.executor.execute(await runtime.invocations.invokeBlock(
       objectRef('native-image', block.id), [probe.classRef, textValue(M4_DOCUMENT)],
     )).then(
-      () => assert.fail('the unchanged causal path executed past its first unsupported Character protocol'),
+      () => assert.fail('the unchanged causal path executed past its first unsupported identity protocol'),
       (thrown) => thrown,
     );
     assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
-    assert.equal(error.selector, 'isSeparator');
-    assert.match(error.message, /message not understood: isSeparator/);
+    assert.equal(error.selector, '~~');
+    assert.match(error.message, /message not understood: ~~/);
   } finally {
     await runtime.close();
   }
