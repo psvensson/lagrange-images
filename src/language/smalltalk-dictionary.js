@@ -28,9 +28,10 @@ import {
 } from './smalltalk-primitives.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
-// ADR 0048 decisions 1 and 9: the `Object >> =` / `Object >> hash` protocol and the first public
-// `Dictionary` protocol, installed after kernel identity exists exactly as ADRs 0045-0047 install
-// theirs. The compiler and dispatcher learn none of these selectors.
+// ADR 0048 decisions 1 and 9: the `Object >> =` / `Object >> ==` / `Object >> ~~` /
+// `Object >> hash` protocol and the first public `Dictionary` protocol, installed after kernel
+// identity exists exactly as ADRs 0045-0047 install theirs. The compiler and dispatcher learn none
+// of these selectors.
 //
 // Two installers rather than one, because they are separately useful: equality and hashing are
 // ordinary Object protocol that a program may want without any collection at all, and a later
@@ -113,8 +114,9 @@ async function installPrimitiveBlock({images, imageId, primitive}) {
 }
 
 
-// `Object >> =` and `Object >> hash`. Every receiver in the image inherits them, which is what makes
-// the default relation of decision 2 the language's default rather than a Dictionary-private helper.
+// `Object >> =`, identity `==` / `~~`, and `Object >> hash`. Every receiver in the image inherits
+// them, which is what makes the default relation of decision 2 the language's default rather than a
+// Dictionary-private helper.
 async function installSmalltalkEqualityProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
   if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
@@ -169,6 +171,19 @@ async function installSmalltalkEqualityProtocol({images, compilation, imageId, l
         imageId,
       }),
     ],
+  });
+
+  // Pinned Cuis ProtoObject>>~~ is source-level composition through `==`, not a second identity
+  // primitive. In this native image `==` is deliberately an ordinary overridable method, so `~~`
+  // must send it dynamically and then consume the existing Boolean protocol. Installing this from
+  // Smalltalk source keeps binary-selector syntax and both sends in their existing owners.
+  await defineMethodsFromSource({
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef: kernel.objectClass,
+    methods: [{selector: '~~', source: '[ :anObject | ^ (self == anObject) not ]'}],
   });
   return Object.freeze({objectClass: kernel.objectClass});
 }

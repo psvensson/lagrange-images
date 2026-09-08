@@ -24,6 +24,7 @@ import {
   installSymmetricSmalltalkBlock,
   installSymmetricSmalltalkStandardImage,
   integerValue,
+  methodBindings,
   objectRef,
   readBehavior,
   reconcileMethodsFromSource,
@@ -67,8 +68,9 @@ import {
 // boundary. The oracle-backed `UnicodeString writeStream` construction repair now executes the real
 // initializer. Character literals then let the real `XMLTokenizer>>nextEntity` compare its input,
 // and the distinct `UnicodeString streamContents:` repair now lets the unchanged nextWhitespace
-// method observe its empty native Text result. The unbridged causal scope stops next at ordinary
-// identity inequality `~~`, before either Character classification or the next stream write.
+// method observe its empty native Text result. Product `Object>>~~` now carries the next ordinary
+// identity protocol step; the same unchanged causal scope classifies whatever execution reaches
+// after it rather than inferring that result from later source text.
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';
@@ -377,6 +379,24 @@ const M4_ORACLE = Object.freeze({
   bareDollarAtEndCodePoint: '26',
   dollarInCommentLeavesLiteral: 'true',
   dollarInStringStaysText: '$<',
+  // Pinned Cuis ProtoObject>>~~ is ordinary source composition: it sends `==` and answers the
+  // Boolean complement. Cuis marks its primitive `==` "No Lookup", so the transient override is
+  // deliberately ignored by that VM. The native image differs at exactly that already-decided
+  // boundary: its `==` is an ordinary overridable method, and native `~~` must compose with it.
+  identityInequalityOwner: 'ProtoObject',
+  identityInequalitySameObject: 'false',
+  identityInequalityDistinctObjects: 'true',
+  identityInequalitySameInteger: 'false',
+  identityInequalityDifferentIntegers: 'true',
+  identityInequalitySameCharacter: 'false',
+  identityInequalityDifferentCharacters: 'true',
+  identityInequalitySameUnicodeCharacter: 'false',
+  identityInequalityNil: 'false',
+  identityInequalityEqualDistinctTextEquality: 'true',
+  identityInequalityEqualDistinctTextIdentity: 'false',
+  identityInequalityEqualDistinctText: 'true',
+  identityInequalityDispatchOverrideEquals: 'false',
+  identityInequalityDispatchOverrideComplement: 'true',
   // the public parse operation and what it answers
   parseAnswerClass: 'XMLDocument',
   documentElementsClass: 'OrderedCollection',
@@ -775,6 +795,12 @@ test('unchanged pinned XMLTokenizer nextWhitespace observes the empty Text resul
 
   const runtime = await nativeRuntime();
   try {
+    const productBinding = (await methodBindings({
+      images: runtime.images,
+      imageId: 'native-image',
+      classRef: objectRef('native-image', 'smalltalk/class/Object'),
+    })).find(({selector}) => selector === '~~');
+    assert.ok(productBinding, 'the standard image installs the product Object>>~~ protocol');
     const imported = await importCuisNativePackage({
       images: runtime.images,
       compilation: runtime.compilation,
@@ -783,21 +809,16 @@ test('unchanged pinned XMLTokenizer nextWhitespace observes the empty Text resul
       scope: {classes: [...M4_SCOPE_CLASSES], methods: [M4_NEXT_RED_METHOD]},
     });
     const tokenizer = imported.classes.find(({identity}) => identity === 'cuis-class/YAXO/XMLTokenizer');
-    // The repaired vertical's next genuine RED is the earlier `~~` send. Supply that one method
-    // only inside this isolated acceptance image so the UNCHANGED upstream consumer can finish its
-    // empty-result observation; xxm.11 does not publish the protocol. This is a fixture bridge over
-    // the separately recorded child, not another product implementation path.
-    await reconcileMethodsFromSource({
+    const bindingAfterImport = (await methodBindings({
       images: runtime.images,
-      compilation: runtime.compilation,
       imageId: 'native-image',
       classRef: objectRef('native-image', 'smalltalk/class/Object'),
-      lane: 'wasm',
-      methods: [{
-        selector: '~~',
-        source: '[ :anObject | (self == anObject) ifTrue: [ ^ false ]. ^ true ]',
-      }],
-    });
+    })).find(({selector}) => selector === '~~');
+    assert.deepEqual(
+      bindingAfterImport,
+      productBinding,
+      'the YAXO fixture neither replaces nor supplies its own identity-inequality method',
+    );
     const probe = await ensureClassFromDeclaration({
       images: runtime.images,
       imageId: 'native-image',
@@ -835,7 +856,7 @@ test('unchanged pinned XMLTokenizer nextWhitespace observes the empty Text resul
   }
 });
 
-test('the unchanged nextWhitespace path exposes identity inequality as its next RED', {skip: !enabled, timeout: 900_000}, async () => {
+test('the unchanged nextWhitespace path passes product ~~ and exposes isSeparator as its next RED', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const runtime = await nativeRuntime();
   try {
@@ -874,12 +895,12 @@ test('the unchanged nextWhitespace path exposes identity inequality as its next 
     const error = await runtime.executor.execute(await runtime.invocations.invokeBlock(
       objectRef('native-image', block.id), [probe.classRef, textValue(M4_DOCUMENT)],
     )).then(
-      () => assert.fail('the unchanged causal path executed past its first unsupported identity protocol'),
+      () => assert.fail('the unchanged causal path executed past its first unsupported Character classification protocol'),
       (thrown) => thrown,
     );
     assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
-    assert.equal(error.selector, '~~');
-    assert.match(error.message, /message not understood: ~~/);
+    assert.equal(error.selector, 'isSeparator');
+    assert.match(error.message, /message not understood: isSeparator/);
   } finally {
     await runtime.close();
   }

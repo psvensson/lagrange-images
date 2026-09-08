@@ -441,9 +441,11 @@ only the exact unbound/undeclared token form `UnicodeString streamContents: [lit
 native semantic locator `Text streamContents:`; it leaves the Block untouched and refuses other
 arguments, selector chains, cascades, local/declared receivers, strings and comments. There is no
 UnicodeString global, alias, second text representation, or adapter-owned block/stream execution.
-The unchanged method observes the correct empty result when its next dependency is supplied only
-as a test fixture; without that fixture, the same causal vertical now exposes ordinary identity
-inequality `~~` as its next first RED, before `isSeparator` or `nextPut:`.
+The unchanged method observes the correct empty result through the product equality protocol.
+ADR 0048's later reconciliation installs ordinary `Object>>~~` as the Boolean complement of its
+existing dynamically dispatched `==`; no fixture, importer rewrite, or second identity primitive
+is involved. The same causal vertical now passes `~~` and exposes `Character>>isSeparator` as its
+next first RED, before `nextPut:`.
 
 The legacy assignment finding is now repaired at its two exact owners. The pinned Cuis scanner/parser
 oracle established that `_` is the legacy arrow only at a token boundary and only when its following

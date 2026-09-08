@@ -15,6 +15,7 @@ import {
   installSymmetricSmalltalkStandardImage,
   integerValue,
   objectRef,
+  reconcileMethodsFromSource,
   textValue,
 } from '../src/runtime.js';
 
@@ -53,7 +54,7 @@ async function evaluate(runtime, imageId, id, source, args = []) {
 // Peter's discriminating proof: two Associations that are `=` (value equality, via the Association
 // override) but not `==` (distinct refs), and an object that is `==` to itself. This is the one test
 // that separates identity from equality — if `==` were `^self = other`, the middle assertion fails.
-test('equal-but-distinct Associations are = but not ==, and an object is == to itself', async () => {
+test('equal-but-distinct Associations are =, not ==, and therefore ~~', async () => {
   await withRuntime(async (runtime) => {
     // Association is a library class, so this case uses the composed standard image; the rest of
     // the file proves `==` against a minimal seed.
@@ -77,10 +78,101 @@ test('equal-but-distinct Associations are = but not ==, and an object is == to i
       'distinct refs are not identical, even when = ',
     );
     assert.deepEqual(
+      await evaluate(runtime, 'app', 'not-ident', '[ :x :y | x ~~ y ]', [a, b]),
+      booleanValue(true),
+      '~~ complements identity rather than value equality',
+    );
+    assert.deepEqual(
       await evaluate(runtime, 'app', 'self-ident', '[ :x | x == x ]', [a]),
       booleanValue(true),
       'an object is identical to itself',
     );
+  });
+});
+
+test('~~ dynamically sends the native overridable == method', async () => {
+  await withRuntime(async (runtime) => {
+    assert.deepEqual(runtime.toolchainProviders.list(), [], 'direct native proof has no Cuis toolchain');
+    assert.deepEqual(runtime.foreignRuntimeProviders.list(), [], 'direct native proof has no Cuis runtime fallback');
+    await runtime.images.createImage({id: 'app'});
+    await installSymmetricSmalltalkStandardImage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+    });
+    const shape = objectRef('app', (await runtime.images.putShape('app', {id: 'identity-probe-shape', slots: []})).id);
+    const probe = await defineClass({
+      images: runtime.images, imageId: 'app', name: 'IdentityProbe', instanceShapeRef: shape,
+    });
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef: probe.classRef,
+      methods: [
+        {selector: '==', source: '[ :other | ^ true ]'},
+        {selector: 'differentFrom:', source: '[ :other | ^ self ~~ other ]'},
+      ],
+    });
+    const one = await evaluate(runtime, 'app', 'identity-probe-one', '[ :class | class basicNew ]', [probe.classRef]);
+    const two = await evaluate(runtime, 'app', 'identity-probe-two', '[ :class | class basicNew ]', [probe.classRef]);
+    assert.notEqual(one.objectId, two.objectId, 'the probe pair is physically distinct');
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'identity-probe-overridden', '[ :left :right | left == right ]', [one, two]),
+      booleanValue(true),
+      'the receiver override controls ==',
+    );
+    assert.deepEqual(
+      await evaluate(runtime, 'app', 'identity-probe-complement', '[ :left :right | left differentFrom: right ]', [one, two]),
+      booleanValue(false),
+      'direct native method syntax reaches Object>>~~, which dispatches the overridden == then not',
+    );
+  });
+});
+
+test('~~ is exactly the Smalltalk-level complement of == across native representations', async () => {
+  await withRuntime(async (runtime) => {
+    await runtime.images.createImage({id: 'app'});
+    await installSymmetricSmalltalkStandardImage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
+    });
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+    const associationClass = objectRef('app', 'smalltalk/class/Association');
+    const sameObject = await evaluate(runtime, 'app', 'same-object', '[ :class | class new ]', [associationClass]);
+    const otherObject = await evaluate(runtime, 'app', 'other-object', '[ :class | class new ]', [associationClass]);
+    const less = await evaluate(runtime, 'app', 'less-character', '[ $< ]');
+    const greater = await evaluate(runtime, 'app', 'greater-character', '[ $> ]');
+    const lambda = await evaluate(runtime, 'app', 'lambda-character', '[ $λ ]');
+    const cases = [
+      ['same object', sameObject, sameObject, false],
+      ['different objects', sameObject, otherObject, true],
+      ['same integer', integerValue(1000), integerValue(1000), false],
+      ['different integers', integerValue(1), integerValue(2), true],
+      ['same Character', less, less, false],
+      ['different Characters', less, greater, true],
+      ['same non-ASCII Character', lambda, lambda, false],
+      ['same Text', textValue('same'), textValue('same'), false],
+      ['different Text', textValue('left'), textValue('right'), true],
+      ['same Boolean', booleanValue(true), booleanValue(true), false],
+      ['different Booleans', booleanValue(true), booleanValue(false), true],
+      ['nil', kernel.nil, kernel.nil, false],
+    ];
+    for (const [index, [label, left, right, expectedInequality]] of cases.entries()) {
+      assert.deepEqual(
+        await evaluate(
+          runtime,
+          'app',
+          `identity-complement-${index}`,
+          '[ :a :b | (a == b) = ((a ~~ b) not) ]',
+          [left, right],
+        ),
+        booleanValue(true),
+        `${label}: the two executed sends are complements`,
+      );
+      assert.deepEqual(
+        await evaluate(runtime, 'app', `identity-inequality-${index}`, '[ :a :b | a ~~ b ]', [left, right]),
+        booleanValue(expectedInequality),
+        label,
+      );
+    }
   });
 });
 
