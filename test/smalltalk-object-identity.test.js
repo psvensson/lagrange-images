@@ -92,6 +92,8 @@ test('equal-but-distinct Associations are =, not ==, and therefore ~~', async ()
 
 test('~~ dynamically sends the native overridable == method', async () => {
   await withRuntime(async (runtime) => {
+    assert.deepEqual(runtime.toolchainProviders.list(), [], 'direct native proof has no Cuis toolchain');
+    assert.deepEqual(runtime.foreignRuntimeProviders.list(), [], 'direct native proof has no Cuis runtime fallback');
     await runtime.images.createImage({id: 'app'});
     await installSymmetricSmalltalkStandardImage({
       images: runtime.images, compilation: runtime.compilation, imageId: 'app',
