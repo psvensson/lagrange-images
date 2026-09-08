@@ -186,6 +186,7 @@ const BRIDGE_METHODS = Object.freeze([
       comparisonContents raisedClass raisedMessage streamContentsOwner
       indexedCharacter streamCharacter tokenizerCharacter unicodeCharacter unicodeStreamCharacter
       supplementaryCharacter supplementaryStreamCharacter tokenizer bareDollar
+      identityOne identityTwo identityProbeClass identityProbeOne identityProbeTwo
       doc root child attributes canonicalStream out |
     out := WriteStream on: (UnicodeString new: 512).
     unicodeClass := Smalltalk at: #UnicodeString.
@@ -327,6 +328,30 @@ const BRIDGE_METHODS = Object.freeze([
     self yaxoReport: 'dollarInCommentLeavesLiteral'
       value: ((self yaxoEvaluationOf: '"$<" $<') = $<) printString on: out.
     self yaxoReport: 'dollarInStringStaysText' value: '$<' on: out.
+    identityOne := Object new.
+    identityTwo := Object new.
+    self yaxoReport: 'identityInequalityOwner'
+      value: (Object whichClassIncludesSelector: #~~) name on: out.
+    self yaxoReport: 'identityInequalitySameObject' value: (identityOne ~~ identityOne) printString on: out.
+    self yaxoReport: 'identityInequalityDistinctObjects' value: (identityOne ~~ identityTwo) printString on: out.
+    self yaxoReport: 'identityInequalitySameInteger' value: (1000 ~~ 1000) printString on: out.
+    self yaxoReport: 'identityInequalityDifferentIntegers' value: (1 ~~ 2) printString on: out.
+    self yaxoReport: 'identityInequalitySameCharacter' value: ($< ~~ $<) printString on: out.
+    self yaxoReport: 'identityInequalityDifferentCharacters' value: ($< ~~ $>) printString on: out.
+    self yaxoReport: 'identityInequalitySameUnicodeCharacter' value: ($λ ~~ $λ) printString on: out.
+    self yaxoReport: 'identityInequalityNil' value: (nil ~~ nil) printString on: out.
+    self yaxoReport: 'identityInequalityEqualDistinctTextEquality' value: ('same' copy = 'same') printString on: out.
+    self yaxoReport: 'identityInequalityEqualDistinctTextIdentity' value: ('same' copy == 'same') printString on: out.
+    self yaxoReport: 'identityInequalityEqualDistinctText' value: ('same' copy ~~ 'same') printString on: out.
+    identityProbeClass := Object subclass: #LagrangeXxm12IdentityProbe
+      instanceVariableNames: '' classVariableNames: '' poolDictionaries: '' category: 'Lagrange-Probe'.
+    identityProbeClass compile: '== anObject ^ true'.
+    identityProbeOne := identityProbeClass new.
+    identityProbeTwo := identityProbeClass new.
+    self yaxoReport: 'identityInequalityDispatchOverrideEquals'
+      value: (identityProbeOne == identityProbeTwo) printString on: out.
+    self yaxoReport: 'identityInequalityDispatchOverrideComplement'
+      value: (identityProbeOne ~~ identityProbeTwo) printString on: out.
     doc := (Smalltalk at: #XMLDOMParser) parseDocumentFrom: aString readStream.
     self yaxoReport: 'parseAnswerClass' value: doc class name on: out.
     self yaxoReport: 'documentElementsClass' value: doc elements class name on: out.

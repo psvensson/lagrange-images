@@ -1,7 +1,7 @@
 # ADR 0048: Smalltalk equality, hashing and durable Dictionary
 
-Status: implemented — Symmetric Smalltalk gains a stable default `=`/`hash` contract and a hashed `Dictionary` whose durable identity points at immutable table snapshots; general lookup uses ordinary `hash`/`=` message sends, while the table representation is deliberately readable by a later Text-only MethodDictionary fast path without executing arbitrary Smalltalk during dispatch.
-Proven by: test/smalltalk-equality-hash.test.js, test/smalltalk-dictionary.test.js
+Status: implemented — later reconciled under YAXO pressure with ordinary identity selectors `==`/`~~`; `~~` dynamically sends the existing `==` method and negates its Boolean answer, adding no second identity primitive.
+Proven by: test/smalltalk-equality-hash.test.js, test/smalltalk-object-identity.test.js, test/smalltalk-dictionary.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
 
@@ -40,10 +40,13 @@ record kind is added to `src/value` or `src/object`.
 Likewise, the existing `lagrange-code` `equals` op remains what it already is: a language-neutral
 structural comparison used by semantic code. It is **not** redefined to mean a Smalltalk `=` send.
 
-Smalltalk installs ordinary methods:
+Smalltalk installs ordinary methods (the identity pair was added by later consumer pressure and is
+recorded here with the owner it extended):
 
 ```smalltalk
 Object >> = other
+Object >> == other
+Object >> ~~ other
 Object >> hash
 ```
 
@@ -82,6 +85,27 @@ integer/float64
 ```
 
 Different nonnumeric kinds are unequal.
+
+### 2a. `==` is the native identity owner; `~~` is its ordinary Boolean complement
+
+The later `==` selector reaches the same built-in relation directly rather than sending overridable
+`=`. It is nevertheless an ordinary, overridable native Smalltalk method: neither the compiler nor
+dispatcher seals the selector.
+
+The YAXO `XMLTokenizer>>nextWhitespace` vertical later forced `~~`. Pinned Cuis installs
+`ProtoObject>>~~` as source composition through `self == anObject`, with true/false complement
+branches; it has no independent inequality primitive. Native Smalltalk therefore installs:
+
+```smalltalk
+Object >> ~~ other
+    ^ (self == other) not
+```
+
+This deliberately follows the native image's already-decided dispatch contract. Cuis marks its own
+primitive `ProtoObject>>==` as `No Lookup`, so a Cuis subclass override is ignored by that VM. Native
+`==` is ordinary and overridable, so native `~~` dynamically observes such an override. That is not
+a second identity rule: there remains one identity decision, made by the receiver's `==` method,
+whose Boolean answer `~~` consumes through the existing `not` protocol.
 
 The ADR 0045 boolean bridge needs one explicit rule: the dispatch image's `true`/`false` singleton is
 the language receiver for a boolean send, so the equality/hash primitives normalize those exact local
@@ -357,6 +381,12 @@ default equality
     boolean sends survive the true/false effective-receiver bridge
     Array inherits Object equality and therefore remains identity-equal only
 
+identity protocol
+    same/different refs, immediates, nil and canonical Characters make == and ~~ exact complements
+    equal-but-distinct Associations are = but not ==, and therefore ~~
+    overriding native == changes ~~; a direct primitive or host/ref comparison fails that proof
+    direct provider-free Smalltalk compiles ~~ as an ordinary binary send
+
 stable hash
     every built-in equal pair above has equal hash
     hash is identical across two fresh runtimes/restarts for the same built-in value/ref
@@ -460,7 +490,6 @@ convenient.
 - user-selectable capacity/load factor and write-performance optimizations
 - multi-record image transactions solely to optimize Dictionary mutation
 - language-level conditions/exceptions, `at:ifAbsent:` and resumable missing-key handling
-- `==` as a distinct public identity selector; this ADR only needs default `=` and `hash`
 - Unicode normalization/collation semantics for Text
 - changing mutable-key behavior; keys whose equality/hash changes while resident remain the program's responsibility
 - a Smalltalk class/behavior for pinned refs
@@ -468,7 +497,8 @@ convenient.
 ## Guardrails
 
 ```text
-= and hash are Smalltalk methods; lagrange-code equals stays frozen and unchanged
+=, ==, ~~ and hash are Smalltalk methods; lagrange-code equals stays frozen and unchanged
+~~ dynamically sends == and Boolean not; it owns no primitive or second identity algorithm
 default ref equality is image/object identity, never revision or contents
 default immediate equality is the built-in relation specified here
 built-in hash is deterministic SHA-256 -> non-negative 63-bit Integer over the equality normal form

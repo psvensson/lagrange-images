@@ -1,6 +1,6 @@
 # ADR 0091: Text stream contents and narrow Cuis Unicode name adaptation
 
-Status: implemented — native `Text class>>streamContents:` composes the existing WriteStream owner; the Cuis adapter normalizes only the exact foreign receiver locator, and unchanged YAXO execution exposes `~~` as the next independent RED.
+Status: implemented — native `Text class>>streamContents:` composes WriteStream and the adapter normalizes only the exact foreign receiver locator; this revision exposed `~~`, later repaired by ADR 0048's equality-owner reconciliation.
 Proven by: test/smalltalk-write-stream.test.js, test/cuis-native-import.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
@@ -77,12 +77,11 @@ stream or text class.
 
 4. **Later identity, stream, and Character protocol remains pressure-driven.**
 
-   The upstream block contains `nextPut:` and `isSeparator`, but real causal execution first sends
-   the ordinary identity-inequality selector `~~`. That selector is absent even though `==` already
-   exists. None of those later selectors is added by this decision merely because it appears in
-   source. A test-only `Object>>~~` fixture lets the unchanged method finish its empty-result
-   observation; the product remains unchanged and the real vertical records `~~` as the next M4
-   child.
+   The upstream block contains `nextPut:` and `isSeparator`, but at this decision's exact revision
+   real causal execution first sent the then-absent identity-inequality selector `~~`. A test-only
+   bridge let this slice prove its empty-result observation while recording that independent child;
+   it was not product protocol. The later ADR 0048 reconciliation removes that bridge, installs
+   product `Object>>~~` at the equality owner, and moves unchanged execution to `isSeparator`.
 
 ## Alternatives rejected
 
@@ -115,8 +114,8 @@ executes, proving one drift-free replacement plan and no macro expansion. Direct
 still refuses the Cuis-only `UnicodeString` name.
 
 The exact real OpenSmalltalk/Cuis lane imports the full unchanged M4 causal scope with no alias. In
-a Cuis-free native runtime, unchanged `XMLTokenizer>>nextWhitespace` observes the empty Text result
-and suppresses `handleWhitespace:`; only a test-local bridge supplies its newly exposed dependency.
-Without that bridge, both EOF and real Text-indexed Character paths expose `~~` before
-`isSeparator` or `nextPut:`. That pressure is recorded, unrepaired, as
-`lagrange-images-xxm.12`. Exact-head CI and final revision evidence live on the owning Bead/PR.
+a Cuis-free native runtime at this decision's revision, unchanged `XMLTokenizer>>nextWhitespace`
+observes the empty Text result and suppresses `handleWhitespace:`; only a test-local bridge supplied
+its newly exposed dependency. The later `lagrange-images-xxm.12` repair removes that bridge and
+proves the product selector before recording `isSeparator` as `lagrange-images-xxm.13`. Exact-head
+CI and final revision evidence live on each owning Bead/PR.

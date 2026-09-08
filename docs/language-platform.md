@@ -159,6 +159,11 @@ result observation the forcing tokenizer makes. Cuis import may normalize the on
 receiver spelling `UnicodeString streamContents: [literalBlock]` to that native locator, but it
 does not evaluate the Block, build text, or publish a UnicodeString alias.
 
+The ordinary equality protocol owns identity inequality too (ADR 0048 reconciliation). Native
+`Object>>~~` is compiled Smalltalk source that dynamically sends the already-existing overridable
+`==` and then Boolean `not`; there is no inequality primitive, syntax rule, Cuis rewrite, generic
+Value operation, or Character-specific branch.
+
 OpenSmalltalkVM/Cuis supplies mature package/compiler semantics and a reference implementation. It does not own native Lagrange class/object identity.
 
 ## 7. Current Cuis compatibility/toolchain machinery
