@@ -90,6 +90,10 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   // models from Array's indexed storage, so these are deliberately a separate family rather than
   // a widening of the ADR 0047 indexed-object primitives (see smalltalk-primitives-bytes.js).
   TEXT_UTF8_BYTES: 'text-utf8-bytes',
+  // Internal codec operation consumed by WriteStream after ordinary Character>>codePoint.
+  // It is deliberately not installed as Character protocol: the byte encoding remains owned by
+  // the existing Text/ByteArray codec family rather than becoming a second Character conversion.
+  UNICODE_SCALAR_UTF8_BYTES: 'unicode-scalar-utf8-bytes',
   BYTEARRAY_UTF8_TEXT: 'bytearray-utf8-text',
   BYTEARRAY_SIZE: 'bytearray-size',
   BYTEARRAY_AT: 'bytearray-at',
@@ -145,6 +149,7 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.PERFORM_SEND_WITH]: 3,
   [SMALLTALK_PRIMITIVE.SUBCLASSES_OF]: 1,
   [SMALLTALK_PRIMITIVE.TEXT_UTF8_BYTES]: 1,
+  [SMALLTALK_PRIMITIVE.UNICODE_SCALAR_UTF8_BYTES]: 1,
   [SMALLTALK_PRIMITIVE.BYTEARRAY_UTF8_TEXT]: 1,
   [SMALLTALK_PRIMITIVE.BYTEARRAY_SIZE]: 1,
   [SMALLTALK_PRIMITIVE.BYTEARRAY_AT]: 2,

@@ -86,6 +86,27 @@ async function textUtf8Bytes({value}) {
   return bytesValue(utf8Encode(text));
 }
 
+// The scalar counterpart of Text>>utf8Bytes, kept in this same codec owner and routed through the
+// same portable utf8Encode operation. WriteStream is its first consumer: Character owns and
+// discloses the valid scalar through ordinary `codePoint`; this operation owns only encoding that
+// scalar as bytes. It is intentionally not Character protocol and knows no Character object shape,
+// identity or image record.
+async function unicodeScalarUtf8Bytes({value}) {
+  const normalized = canonicalizeValue(value);
+  if (normalized.kind !== VALUE_KIND.INTEGER) {
+    throw new SmalltalkPrimitiveReceiverError(
+      'unicode-scalar-utf8-bytes', `a ${normalized.kind} Value; a Unicode scalar integer is required`,
+    );
+  }
+  const scalar = BigInt(normalized.value);
+  if (scalar < 0n || scalar > 0x10ffffn || (scalar >= 0xd800n && scalar <= 0xdfffn)) {
+    throw new SmalltalkPrimitiveReceiverError(
+      'unicode-scalar-utf8-bytes', `${scalar.toString()} is not a Unicode scalar value`,
+    );
+  }
+  return bytesValue(utf8Encode(String.fromCodePoint(Number(scalar))));
+}
+
 async function byteArrayUtf8Text({value}) {
   const buffer = requireBytes(value, 'bytearray-utf8-text');
   return textValue(decodeUtf8Strict(buffer, 'bytearray-utf8-text'));
@@ -150,4 +171,5 @@ export {
   byteArraySize,
   byteArrayUtf8Text,
   textUtf8Bytes,
+  unicodeScalarUtf8Bytes,
 };

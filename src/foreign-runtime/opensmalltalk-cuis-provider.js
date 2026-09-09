@@ -179,6 +179,64 @@ const BRIDGE_METHODS = Object.freeze([
         ifFail: [ #failed ] ]
       on: Error
       do: [ :error | #failed ]`,
+`yaxoMeasureNextPutOn: out
+    | unicodeClass nextPutStream nextPutAnswer nextPutAsciiContents nextPutUnicodeContents
+      nextPutSupplementaryContents nextPutPairContents nextPutMixedContents
+      nextPutAllSingleContents nextPutEmptyBefore nextPutEmptyAfter
+      nextPutOwner yaxoNextPutCharacter yaxoNextPutContents |
+    unicodeClass := Smalltalk at: #UnicodeString.
+    nextPutStream := unicodeClass writeStream.
+    nextPutOwner := nextPutStream class whichClassIncludesSelector: #nextPut:.
+    self yaxoReport: 'nextPutOwner' value: nextPutOwner name on: out.
+    nextPutEmptyBefore := nextPutStream contents.
+    nextPutAnswer := nextPutStream nextPut: $A.
+    nextPutAsciiContents := nextPutStream contents.
+    self yaxoReport: 'nextPutAnswerIsWrittenCharacter' value: (nextPutAnswer == $A) printString on: out.
+    self yaxoReport: 'nextPutAnswerIsStream' value: (nextPutAnswer == nextPutStream) printString on: out.
+    self yaxoReport: 'nextPutAnswerClass' value: nextPutAnswer class name on: out.
+    self yaxoReport: 'nextPutEmptyBeforeClass' value: nextPutEmptyBefore class name on: out.
+    self yaxoReport: 'nextPutEmptyBeforeSize' value: nextPutEmptyBefore size printString on: out.
+    self yaxoReport: 'nextPutAsciiContentsClass' value: nextPutAsciiContents class name on: out.
+    self yaxoReport: 'nextPutAsciiContents' value: nextPutAsciiContents on: out.
+    nextPutStream := unicodeClass writeStream.
+    nextPutStream nextPut: $λ.
+    nextPutUnicodeContents := nextPutStream contents.
+    self yaxoReport: 'nextPutUnicodeContentsClass' value: nextPutUnicodeContents class name on: out.
+    self yaxoReport: 'nextPutUnicodeCodePoint' value: nextPutUnicodeContents first codePoint printString on: out.
+    nextPutStream := unicodeClass writeStream.
+    nextPutStream nextPut: $😀.
+    nextPutSupplementaryContents := nextPutStream contents.
+    self yaxoReport: 'nextPutSupplementaryContentsClass' value: nextPutSupplementaryContents class name on: out.
+    self yaxoReport: 'nextPutSupplementaryCodePoint'
+      value: nextPutSupplementaryContents first codePoint printString on: out.
+    nextPutStream := unicodeClass writeStream.
+    nextPutStream nextPut: $A; nextPut: $λ.
+    nextPutPairContents := nextPutStream contents.
+    self yaxoReport: 'nextPutPairContents' value: nextPutPairContents on: out.
+    nextPutStream := unicodeClass writeStream.
+    nextPutStream nextPut: $A; nextPutAll: 'bc'; nextPut: $λ.
+    nextPutMixedContents := nextPutStream contents.
+    self yaxoReport: 'nextPutMixedContents' value: nextPutMixedContents on: out.
+    nextPutStream := unicodeClass writeStream.
+    nextPutStream nextPutAll: 'λ'.
+    nextPutAllSingleContents := nextPutStream contents.
+    self yaxoReport: 'nextPutEqualsSingleCharacterNextPutAll'
+      value: (nextPutUnicodeContents = nextPutAllSingleContents) printString on: out.
+    self yaxoReport: 'nextPutMatchesSingleCharacterNextPutAllClass'
+      value: (nextPutUnicodeContents class == nextPutAllSingleContents class) printString on: out.
+    nextPutStream := unicodeClass writeStream.
+    nextPutStream nextPutAll: ''.
+    nextPutEmptyAfter := nextPutStream contents.
+    self yaxoReport: 'nextPutEmptyAfterClass' value: nextPutEmptyAfter class name on: out.
+    self yaxoReport: 'nextPutEmptyAfterSize' value: nextPutEmptyAfter size printString on: out.
+    self yaxoReport: 'nextPutEmptyBeforeEqualsAfter'
+      value: (nextPutEmptyBefore = nextPutEmptyAfter) printString on: out.
+    yaxoNextPutCharacter := ((Smalltalk at: #XMLTokenizer) on: ' ' readStream) peek.
+    yaxoNextPutContents := unicodeClass streamContents: [ :stream | stream nextPut: yaxoNextPutCharacter ].
+    self yaxoReport: 'yaxoNextPutCharacterClass' value: yaxoNextPutCharacter class name on: out.
+    self yaxoReport: 'yaxoNextPutCharacterIsSeparator' value: yaxoNextPutCharacter isSeparator printString on: out.
+    self yaxoReport: 'yaxoNextPutContentsClass' value: yaxoNextPutContents class name on: out.
+    self yaxoReport: 'yaxoNextPutContents' value: yaxoNextPutContents on: out`,
 `yaxoMeasure: aString
     | unicodeClass unicodeEmpty unicodeStream emptyContents writeAnswer firstContents secondContents resetAnswer resetContents
       streamContentsEmpty streamContentsAscii streamContentsUnicode streamContentsSupplementary
@@ -278,6 +336,7 @@ const BRIDGE_METHODS = Object.freeze([
       value: (streamContentsMultiple class == comparisonContents class) printString on: out.
     self yaxoReport: 'unicodeStringStreamContentsRaisedClass' value: raisedClass name on: out.
     self yaxoReport: 'unicodeStringStreamContentsRaisedMessage' value: raisedMessage on: out.
+    self yaxoMeasureNextPutOn: out.
     indexedCharacter := '<' at: 1.
     streamCharacter := '<' readStream next.
     tokenizer := (Smalltalk at: #XMLTokenizer) on: aString readStream.

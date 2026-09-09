@@ -68,9 +68,9 @@ import {
 // boundary. The oracle-backed `UnicodeString writeStream` construction repair now executes the real
 // initializer. Character literals then let the real `XMLTokenizer>>nextEntity` compare its input,
 // and the distinct `UnicodeString streamContents:` repair now lets the unchanged nextWhitespace
-// method observe its empty native Text result. Product `Object>>~~` now carries the next ordinary
-// identity protocol step; the same unchanged causal scope classifies whatever execution reaches
-// after it rather than inferring that result from later source text.
+// method observe native Text. Product `Object>>~~`, Character classification, and now
+// WriteStream>>nextPut: carry the execution-earned ordinary protocol steps. The same unchanged
+// causal scope classifies `next` after them rather than inferring it from later source text.
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';
@@ -334,6 +334,32 @@ const M4_ORACLE = Object.freeze({
   unicodeStringStreamContentsMatchesWriteStreamContentsClass: 'true',
   unicodeStringStreamContentsRaisedClass: 'Error',
   unicodeStringStreamContentsRaisedMessage: 'xxm.11-marker',
+  // Direct element writes on the exact UnicodeString-backed stream yielded to YAXO. These are
+  // deliberately separate from the earlier chunk-write oracle: return identity, scalar handling,
+  // mixed ordering and the actual XMLTokenizer-produced Character are all measured here.
+  nextPutOwner: 'Utf8EncodedWriteStream',
+  nextPutAnswerIsWrittenCharacter: 'false',
+  nextPutAnswerIsStream: 'true',
+  nextPutAnswerClass: 'Utf8EncodedWriteStream',
+  nextPutEmptyBeforeClass: 'UnicodeString',
+  nextPutEmptyBeforeSize: '0',
+  nextPutAsciiContentsClass: 'UnicodeString',
+  nextPutAsciiContents: 'A',
+  nextPutUnicodeContentsClass: 'UnicodeString',
+  nextPutUnicodeCodePoint: '955',
+  nextPutSupplementaryContentsClass: 'UnicodeString',
+  nextPutSupplementaryCodePoint: '128512',
+  nextPutPairContents: 'Aλ',
+  nextPutMixedContents: 'Abcλ',
+  nextPutEqualsSingleCharacterNextPutAll: 'true',
+  nextPutMatchesSingleCharacterNextPutAllClass: 'true',
+  nextPutEmptyAfterClass: 'UnicodeString',
+  nextPutEmptyAfterSize: '0',
+  nextPutEmptyBeforeEqualsAfter: 'true',
+  yaxoNextPutCharacterClass: 'Character',
+  yaxoNextPutCharacterIsSeparator: 'true',
+  yaxoNextPutContentsClass: 'UnicodeString',
+  yaxoNextPutContents: ' ',
   // Character literal semantics at the exact source/consumer boundary. The literal is neither a
   // one-character String nor an Integer code point. String indexing, String streaming and the real
   // XMLTokenizer>>peek path all answer the same canonical Character identity as `$<`.
@@ -874,7 +900,7 @@ test('unchanged pinned XMLTokenizer nextWhitespace observes the empty Text resul
   }
 });
 
-test('unchanged nextWhitespace classifies indexed Characters through the product protocol', {skip: !enabled, timeout: 900_000}, async () => {
+test('unchanged nextWhitespace writes indexed Characters through product WriteStream nextPut:', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const runtime = await nativeRuntime();
   try {
@@ -902,28 +928,17 @@ test('unchanged nextWhitespace classifies indexed Characters through the product
       productBinding,
       'the YAXO fixture neither replaces nor supplies Character classification',
     );
-
-    // nextPut: is the later selector the unbridged causal proof below reaches. This test-local
-    // bridge exists only so the unchanged upstream method can expose the classification branch via
-    // its own handleWhitespace: callback; product WriteStream accumulation still owns contents.
     const writeStreamClass = objectRef('native-image', 'smalltalk/class/WriteStream');
-    assert.equal(
+    const nextPutBinding = (await methodBindings({
+      images: runtime.images, imageId: 'native-image', classRef: writeStreamClass,
+    })).find(({selector}) => selector === 'nextPut:');
+    assert.ok(nextPutBinding, 'the standard image installs product WriteStream>>nextPut:');
+    assert.deepEqual(
       (await methodBindings({images: runtime.images, imageId: 'native-image', classRef: writeStreamClass}))
-        .some(({selector}) => selector === 'nextPut:'),
-      false,
-      'the later missing selector is not smuggled into the product image',
+        .find(({selector}) => selector === 'nextPut:'),
+      nextPutBinding,
+      'the acceptance carries no test-local WriteStream bridge',
     );
-    await reconcileMethodsFromSource({
-      images: runtime.images,
-      compilation: runtime.compilation,
-      imageId: 'native-image',
-      classRef: writeStreamClass,
-      lane: 'wasm',
-      methods: [{
-        selector: 'nextPut:',
-        source: "[ :aCharacter | aCharacter = $  ifFalse: [ self xxm13UnexpectedCharacter ]. ^ self nextPutAll: ' ' ]",
-      }],
-    });
 
     const tokenizer = imported.classes.find(({identity}) => identity === 'cuis-class/YAXO/XMLTokenizer');
     const probe = await ensureClassFromDeclaration({
@@ -931,7 +946,7 @@ test('unchanged nextWhitespace classifies indexed Characters through the product
       imageId: 'native-image',
       name: 'M4SeparatorBranchProbe',
       superclassRef: tokenizer.classRef,
-      instanceVariables: ['lagrangeInput', 'lagrangeAdvanced', 'lagrangeHandledWhitespace'],
+      instanceVariables: ['lagrangeInput', 'lagrangePosition', 'lagrangeHandledWhitespace'],
     });
     await reconcileMethodsFromSource({
       images: runtime.images,
@@ -942,13 +957,16 @@ test('unchanged nextWhitespace classifies indexed Characters through the product
       methods: [
         {
           selector: 'lagrangeInput:',
-          source: '[ :input | lagrangeInput := input. lagrangeAdvanced := false. lagrangeHandledWhitespace := false. ^ self ]',
+          source: "[ :input | lagrangeInput := input. lagrangePosition := 1. lagrangeHandledWhitespace := ''. ^ self ]",
         },
-        {selector: 'peek', source: '[ lagrangeAdvanced ifTrue: [ ^ nil ]. ^ lagrangeInput at: 1 ]'},
-        {selector: 'next', source: '[ lagrangeAdvanced := true. ^ self ]'},
+        {
+          selector: 'peek',
+          source: '[ lagrangePosition = 1 ifTrue: [ ^ lagrangeInput at: 1 ]. lagrangePosition = 2 ifTrue: [ ^ lagrangeInput at: 2 ]. ^ nil ]',
+        },
+        {selector: 'next', source: '[ lagrangePosition := lagrangePosition + 1. ^ self ]'},
         {
           selector: 'handleWhitespace:',
-          source: "[ :text | lagrangeHandledWhitespace := text = ' '. ^ self ]",
+          source: '[ :text | lagrangeHandledWhitespace := text. ^ self ]',
         },
         {
           selector: 'exercise:',
@@ -966,14 +984,38 @@ test('unchanged nextWhitespace classifies indexed Characters through the product
       objectRef('native-image', block.id), [probe.classRef, textValue(input)],
     ));
     assert.deepEqual(
-      await run(' '),
-      booleanValue(true),
-      'a separator from ordinary Text indexing takes the loop and delivers accumulated whitespace',
+      await run(' A'),
+      textValue(' '),
+      'an ASCII separator is written as the exact accumulated native Text',
     );
     assert.deepEqual(
-      await run('A'),
-      booleanValue(false),
-      'a non-separator Character leaves the loop and delivers no whitespace',
+      await run('\u00a0A'),
+      textValue('\u00a0'),
+      'the pinned non-ASCII NBSP separator survives Character codePoint and UTF-8 reconstruction',
+    );
+    assert.deepEqual(
+      await run('AZ'),
+      textValue(''),
+      'a non-separator Character leaves the loop without delivering whitespace',
+    );
+    const {block: stopBlock} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'native-image',
+      id: 'm4-separator-stop-position',
+      source: '[ :class :input | | tokenizer | tokenizer := class basicNew. tokenizer exercise: input. tokenizer peek = $A ]',
+    });
+    const stoppedAtA = async (input) => await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('native-image', stopBlock.id), [probe.classRef, textValue(input)],
+    ));
+    assert.deepEqual(
+      await stoppedAtA(' A'),
+      booleanValue(true),
+      'the loop consumes only the separator and stops at the following non-separator',
+    );
+    assert.deepEqual(
+      await stoppedAtA('\u00a0A'),
+      booleanValue(true),
+      'the same stop rule holds for the non-ASCII separator',
     );
   } finally {
     await runtime.close();
@@ -1023,8 +1065,8 @@ test('the unchanged nextWhitespace causal path exposes its next unsupported sele
       (thrown) => thrown,
     );
     assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
-    assert.equal(error.selector, 'nextPut:');
-    assert.match(error.message, /message not understood: nextPut:/);
+    assert.equal(error.selector, 'next');
+    assert.match(error.message, /message not understood: next/);
   } finally {
     await runtime.close();
   }

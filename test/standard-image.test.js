@@ -12,6 +12,7 @@ import {
   rebindGlobal,
   resolveGlobal,
   SYMMETRIC_SMALLTALK_STANDARD_IMAGE_V1,
+  textValue,
 } from '../src/runtime.js';
 
 async function withRuntime(body) {
@@ -166,7 +167,9 @@ const RECOVERY_TARGETS = Object.freeze([
   'smalltalk/class/Array',
   'smalltalk-global-namespace/v1',
   'smalltalk/class/Character',
+  'smalltalk/primitive/unicode-scalar-utf8-bytes',
   'smalltalk/class/OrderedCollection',
+  'smalltalk/class/WriteStream',
 ]);
 
 for (const lane of ['neutral', 'wasm']) {
@@ -200,6 +203,18 @@ for (const lane of ['neutral', 'wasm']) {
             await evaluate(runtime, 'app', `recovered-${lane}-${targetId}-${commitThenThrow}`, '[ 3 + 4 ]'),
             integerValue(7),
           );
+          if (targetId === 'smalltalk/class/WriteStream') {
+            assert.deepEqual(
+              await evaluate(
+                runtime,
+                'app',
+                `recovered-stream-${lane}-${commitThenThrow}`,
+                "[ Text streamContents: [ :stream | stream nextPut: $λ; nextPutAll: 'x'; nextPut: $😀 ] ]",
+              ),
+              textValue('λx😀'),
+              'replay restores Character element writes through the one ordered stream state',
+            );
+          }
         });
       }
     }

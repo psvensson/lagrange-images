@@ -39,6 +39,7 @@ import {
   byteArraySize,
   byteArrayUtf8Text,
   textUtf8Bytes,
+  unicodeScalarUtf8Bytes,
 } from './smalltalk-primitives-bytes.js';
 import {
   SmalltalkDictionaryConflictError,
@@ -277,6 +278,8 @@ function createSmalltalkKernelPrimitiveV1Executor({
           return await performSendWith({images, primitiveImage, value, second, third, context, primitive});
         case SMALLTALK_PRIMITIVE.TEXT_UTF8_BYTES:
           return await textUtf8Bytes({value});
+        case SMALLTALK_PRIMITIVE.UNICODE_SCALAR_UTF8_BYTES:
+          return await unicodeScalarUtf8Bytes({value});
         case SMALLTALK_PRIMITIVE.BYTEARRAY_UTF8_TEXT:
           return await byteArrayUtf8Text({value});
         case SMALLTALK_PRIMITIVE.BYTEARRAY_SIZE:
