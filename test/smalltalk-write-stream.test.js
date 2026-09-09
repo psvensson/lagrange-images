@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {
   booleanValue,
   createRuntime,
@@ -105,7 +106,7 @@ test('WriteStream is an ordinary native class, not a special representation', as
 // asserted by ENUMERATING both method dictionaries, not by listing selectors that happen to be
 // absent. A hand-written absent-list cannot notice an eleventh selector; this can.
 //
-// Three selectors, not two: the two the consumer sends, plus the instance-side `on:` the
+// Four selectors: the three consumers now execute, plus the instance-side `on:` the
 // class-side one delegates to. That split is upstream's own (measured: the instance-side `on:` is
 // implemented in `WriteStream`, the class-side in `PositionableStream class`) and it is forced
 // here too, because a metaclass method cannot assign an instance variable.
@@ -115,11 +116,9 @@ test('WriteStream implements exactly the consumer protocol plus its own initiali
     images: runtime.images, imageId: 'app', classRef: objectRef('app', objectId),
   })).map(({selector}) => selector).sort();
 
-  // `nextPutAll:` is here because EXECUTION named it: native Integer printing sends exactly one
-  // write per print and nothing else (bead lagrange-images-nv1.8). `nextPut:` is still absent — the
-  // newly reached YAXO source contains that send, but its preceding Character predicate has not
-  // yet allowed execution to reach it. Executable pressure, not source inventory, earns breadth.
-  assert.deepEqual(await selectorsOf('smalltalk/class/WriteStream'), ['contents', 'nextPutAll:', 'on:']);
+  // `nextPutAll:` and `nextPut:` are both here because execution named them. No remembered
+  // PositionableStream breadth is admitted alongside the one newly earned element write.
+  assert.deepEqual(await selectorsOf('smalltalk/class/WriteStream'), ['contents', 'nextPut:', 'nextPutAll:', 'on:']);
   assert.deepEqual(await selectorsOf('smalltalk/metaclass/WriteStream'), ['on:']);
   assert.ok(
     await methodBlockRef({
@@ -375,6 +374,99 @@ test('nextPutAll: answers the stream, as the oracle records and not the argument
   assert.deepEqual(
     await evaluate(`[ | s | s := WriteStream on: OrderedCollection new. (s nextPutAll: 'ab') == s ]`),
     booleanValue(true),
+  );
+});
+
+// xxm.14 oracle: the actual Utf8EncodedWriteStream method has no explicit return, so Cuis answers
+// self. This deliberately rejects the tempting claim that element writes answer their element.
+test('nextPut: answers the stream, not the written Character', async () => {
+  assert.deepEqual(
+    await evaluate("[ | s character | s := WriteStream on: ''. character := $A. (s nextPut: character) == s ]"),
+    booleanValue(true),
+  );
+  assert.deepEqual(
+    await evaluate("[ | s character | s := WriteStream on: ''. character := $A. (s nextPut: character) == character ]"),
+    booleanValue(false),
+  );
+});
+
+test('nextPut: writes ASCII, BMP and supplementary Characters into native Text', async () => {
+  for (const glyph of ['A', 'λ', '😀']) {
+    assert.deepEqual(
+      await evaluate(`[ Text streamContents: [ :stream | stream nextPut: $${glyph} ] ]`),
+      textValue(glyph),
+      `${glyph} survives Character -> scalar -> UTF-8 -> Text`,
+    );
+  }
+  assert.deepEqual(
+    await evaluate("[ (Text streamContents: [ :stream | stream nextPut: $λ ]) = (Text streamContents: [ :stream | stream nextPutAll: 'λ' ]) ]"),
+    booleanValue(true),
+    'one Character has the same observable Text as one-character nextPutAll:',
+  );
+});
+
+test('nextPut: executes provider-free in the neutral lane as well as the standard WASM lane', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    await runtime.images.createImage({id: 'neutral-stream'});
+    await installSymmetricSmalltalkStandardImage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'neutral-stream',
+      lane: 'neutral',
+    });
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'neutral-stream',
+      id: 'neutral-next-put',
+      source: "[ Text streamContents: [ :stream | stream nextPut: $λ; nextPutAll: 'x'; nextPut: $😀 ] ]",
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('neutral-stream', block.id), [],
+      )),
+      textValue('λx😀'),
+    );
+    assert.deepEqual(runtime.foreignRuntimeProviders.list(), []);
+    assert.deepEqual(runtime.toolchainProviders.list(), []);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('nextPut: and nextPutAll: share one ordered accumulation', async () => {
+  assert.deepEqual(
+    await evaluate("[ Text streamContents: [ :stream | stream nextPut: $A; nextPutAll: 'bc'; nextPut: $λ ] ]"),
+    textValue('Abcλ'),
+  );
+  assert.deepEqual(
+    await evaluate("[ Text streamContents: [ :stream | stream nextPut: $A; nextPut: $λ ] ]"),
+    textValue('Aλ'),
+  );
+});
+
+test('WriteStream consumes Character protocol and the existing UTF-8 codec owner structurally', async () => {
+  const [streamSource, characterSource, bytesSource] = await Promise.all([
+    readFile(new URL('../src/language/smalltalk-write-stream.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/language/smalltalk-character.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/language/smalltalk-primitives-bytes.js', import.meta.url), 'utf8'),
+  ]);
+  assert.match(streamSource, /entry value codePoint/, 'contents asks ordinary Character protocol for its scalar');
+  assert.doesNotMatch(streamSource, /CHARACTER_CODE_POINT_SLOT|characterObjectId|character\//,
+    'WriteStream has no Character storage/id knowledge');
+  assert.equal((streamSource.match(/instanceVariableNames|write-stream-written/g) ?? []).length > 0, true);
+  assert.match(bytesSource, /utf8Encode\(String\.fromCodePoint/, 'the existing codec owner performs scalar encoding');
+  assert.doesNotMatch(characterSource, /utf8Bytes|asString/, 'xxm.14 adds no public Character conversion');
+  const nextPutSource = streamSource.slice(
+    streamSource.indexOf("selector: 'nextPut:',"),
+    streamSource.indexOf("selector: 'contents',"),
+  );
+  assert.match(nextPutSource, /Association new key: true value: anObject/,
+    'element writes are tagged inside the one ordered stream state');
+  assert.doesNotMatch(
+    nextPutSource,
+    /source: ['"`]\[ :anObject \| \^ self nextPutAll:/,
+    'nextPut: is not an alias for chunk protocol',
   );
 });
 

@@ -14,6 +14,7 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 // primitive family (smalltalk-primitives-bytes.js).
 //
 //   Text       >> utf8Bytes        primitiveTextUtf8Bytes value: self
+//   (private) Unicode scalar       primitiveUnicodeScalarUtf8Bytes value: scalar
 //   Text       >> asString/isEmpty ordinary Text protocol (the latter forced by ADR 0091)
 //   ByteArray  >> utf8Text         primitiveByteArrayUtf8Text value: self
 //   ByteArray  >> size             primitiveByteArraySize value: self
@@ -30,6 +31,7 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 const PRIMITIVE_BLOCK_ID = Object.freeze({
   [SMALLTALK_PRIMITIVE.TEXT_UTF8_BYTES]: 'smalltalk/primitive/text-utf8-bytes',
+  [SMALLTALK_PRIMITIVE.UNICODE_SCALAR_UTF8_BYTES]: 'smalltalk/primitive/unicode-scalar-utf8-bytes',
   [SMALLTALK_PRIMITIVE.BYTEARRAY_UTF8_TEXT]: 'smalltalk/primitive/bytearray-utf8-text',
   [SMALLTALK_PRIMITIVE.BYTEARRAY_SIZE]: 'smalltalk/primitive/bytearray-size',
   [SMALLTALK_PRIMITIVE.BYTEARRAY_AT]: 'smalltalk/primitive/bytearray-at',
@@ -38,6 +40,7 @@ const PRIMITIVE_BLOCK_ID = Object.freeze({
 
 const CAPTURE_NAME = Object.freeze({
   [SMALLTALK_PRIMITIVE.TEXT_UTF8_BYTES]: '$textUtf8Bytes',
+  [SMALLTALK_PRIMITIVE.UNICODE_SCALAR_UTF8_BYTES]: '$unicodeScalarUtf8Bytes',
   [SMALLTALK_PRIMITIVE.BYTEARRAY_UTF8_TEXT]: '$byteArrayUtf8Text',
   [SMALLTALK_PRIMITIVE.BYTEARRAY_SIZE]: '$byteArraySize',
   [SMALLTALK_PRIMITIVE.BYTEARRAY_AT]: '$byteArrayAt',
@@ -97,6 +100,7 @@ async function installSmalltalkTextByteArrayProtocol({images, compilation, image
 
   for (const primitive of [
     SMALLTALK_PRIMITIVE.TEXT_UTF8_BYTES,
+    SMALLTALK_PRIMITIVE.UNICODE_SCALAR_UTF8_BYTES,
     SMALLTALK_PRIMITIVE.BYTEARRAY_UTF8_TEXT,
     SMALLTALK_PRIMITIVE.BYTEARRAY_SIZE,
     SMALLTALK_PRIMITIVE.BYTEARRAY_AT,
@@ -168,5 +172,6 @@ async function installSmalltalkTextByteArrayProtocol({images, compilation, image
 }
 
 export {
+  PRIMITIVE_BLOCK_ID as SMALLTALK_TEXT_CODEC_PRIMITIVE_BLOCK_ID,
   installSmalltalkTextByteArrayProtocol,
 };

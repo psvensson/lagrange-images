@@ -1,6 +1,6 @@
 # ADR 0091: Text stream contents and narrow Cuis Unicode name adaptation
 
-Status: implemented — native `Text class>>streamContents:` composes WriteStream and the adapter normalizes only the exact foreign receiver locator; this revision exposed `~~`, later repaired by ADR 0048's equality-owner reconciliation.
+Status: implemented — native `Text class>>streamContents:` composes WriteStream, including the later execution-earned Character `nextPut:` protocol; the adapter normalizes only the exact foreign receiver locator.
 Proven by: test/smalltalk-write-stream.test.js, test/cuis-native-import.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
@@ -82,6 +82,28 @@ stream or text class.
    bridge let this slice prove its empty-result observation while recording that independent child;
    it was not product protocol. The later ADR 0048 reconciliation removes that bridge, installs
    product `Object>>~~` at the equality owner, and moves unchanged execution to `isSeparator`.
+   ADR 0090's narrow Character-protocol amendment then installs the exact pinned `isSeparator`,
+   after which unchanged execution genuinely reaches `WriteStream>>nextPut:`.
+
+5. **Character element writes share the existing WriteStream state and codec owner.**
+
+   The pinned Cuis 7.9-8090 receiver is `Utf8EncodedWriteStream`. Its `nextPut:` accepts a
+   Character or byte; for a Character it sends `codePoint`, delegates to `nextPutCodePoint:`,
+   remembers the last element, and—with no explicit return—answers the stream. Live execution
+   confirms the stream answer, UnicodeString results for ASCII, U+03BB and U+1F600, ordered
+   consecutive writes, exact interleaving with `nextPutAll:`, and equivalence to a one-character
+   String chunk at the observed result boundary.
+
+   Native `WriteStream>>nextPut:` appends a tagged Character entry to the same private ordered
+   accumulation used by `nextPutAll:` and answers `self`. The private tag preserves the element vs
+   chunk distinction without a second channel. The Character is not passed to `nextPutAll:` and no
+   second accumulator exists. `contents` stays the sole result constructor: it distinguishes the
+   tagged element from Text chunks, sends ordinary `Character>>codePoint`, and
+   gives that scalar to a private captured codec Block installed by the existing Text/ByteArray
+   codec owner. That codec routes through the same portable `utf8Encode` operation as
+   `Text>>utf8Bytes`; neither WriteStream nor Character duplicates UTF-8 arithmetic. No
+   `Character>>utf8Bytes`, `Character>>asString`, generic Value kind, mutable String, importer
+   execution rule, or compiler primitive is introduced.
 
 ## Alternatives rejected
 
@@ -94,6 +116,13 @@ stream or text class.
 - **Return the producer Block's answer.** The pinned oracle proves that answer is ignored.
 - **Implement only ASCII concatenation.** The oracle's BMP and supplementary writes disprove that
   domain.
+- **Delegate `nextPut:` to `nextPutAll:`.** A Character is an element, not a chunk, and does not
+  answer `utf8Bytes`; the real Unicode executions kill that shape.
+- **Teach Character a conversion selector for one stream consumer.** Character already owns the
+  scalar through `codePoint`; byte encoding stays private at the established Text/ByteArray codec
+  owner until another public consumer proves broader Character conversion protocol.
+- **Encode the scalar independently inside WriteStream.** This would create a second UTF-8 owner.
+  The private scalar codec instead reuses the same portable encoder as Text.
 - **Treat ADR 0085's `UnicodeString writeStream` idiom as a general mapping.** It was deliberately
   a closed construction claim and established no class-side convenience protocol.
 
@@ -114,8 +143,10 @@ executes, proving one drift-free replacement plan and no macro expansion. Direct
 still refuses the Cuis-only `UnicodeString` name.
 
 The exact real OpenSmalltalk/Cuis lane imports the full unchanged M4 causal scope with no alias. In
-a Cuis-free native runtime at this decision's revision, unchanged `XMLTokenizer>>nextWhitespace`
-observes the empty Text result and suppresses `handleWhitespace:`; only a test-local bridge supplied
-its newly exposed dependency. The later `lagrange-images-xxm.12` repair removes that bridge and
-proves the product selector before recording `isSeparator` as `lagrange-images-xxm.13`. Exact-head
-CI and final revision evidence live on each owning Bead/PR.
+a Cuis-free native runtime, unchanged `XMLTokenizer>>nextWhitespace` now writes both ASCII space and
+non-ASCII NBSP Characters through the product selector, returns their exact native Text, and stops
+at a following non-separator. There is no test-local WriteStream method. Removing the selector,
+aliasing it to `nextPutAll:`, returning the element, bypassing `codePoint`, separating accumulation,
+or specializing ASCII makes complementary proofs red. The same unbridged causal run advances to
+the independently recorded `lagrange-images-xxm.15` `next` RED. Exact-head CI and final revision
+evidence live on each owning Bead/PR.

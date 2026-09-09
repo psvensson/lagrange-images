@@ -3,6 +3,8 @@ import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {resolveGlobal} from './smalltalk-globals.js';
 import {objectRef} from '../value/index.js';
+import {SMALLTALK_PRIMITIVE} from './smalltalk-primitives.js';
+import {SMALLTALK_TEXT_CODEC_PRIMITIVE_BLOCK_ID} from './smalltalk-text-bytearray.js';
 
 // A native `WriteStream`, added because a real imported consumer names it: the pinned upstream
 // Cuis JSON package opens `Json class>>render:` with `WriteStream on: String new` and closes it
@@ -15,17 +17,16 @@ import {objectRef} from '../value/index.js';
 // SCOPE. Exactly the protocol the acceptance path sends, and nothing else:
 //
 //   WriteStream class >> on:          the stream the source constructs
-//   WriteStream       >> nextPutAll:  the one write EXECUTION named (bead lagrange-images-nv1.8)
+//   WriteStream       >> nextPutAll:  chunk write (bead lagrange-images-nv1.8)
+//   WriteStream       >> nextPut:     Character element write (bead lagrange-images-xxm.14)
 //   WriteStream       >> contents     the answer it takes back out
 //   Text class        >> streamContents:  evaluate one producer Block through that stream owner
 //
-// `nextPut:`, `with:`, positioning, resets, read streams and byte-stream breadth are all real Cuis
-// protocol that this consumer does not yet execute, and are deliberately absent. Execution
-// pressure adds them, one proven consumer at a time — `nextPutAll:` is here because it did exactly
-// that. The newly reached YAXO method stops earlier at the still-missing identity-inequality
-// protocol, so its source alone still does not earn `nextPut:`. `Text class >> streamContents:` is
-// ordinary native Text protocol: the Cuis importer owns only the exact foreign receiver-name
-// adaptation that reaches it.
+// `with:`, positioning, resets, read streams and byte-stream breadth remain absent. Execution
+// pressure adds protocol one proven consumer at a time. `nextPut:` is now earned by unchanged YAXO
+// XMLTokenizer>>nextWhitespace after its preceding Character classification became executable.
+// `Text class >> streamContents:` is ordinary native Text protocol: the Cuis importer owns only
+// the exact foreign receiver-name adaptation that reaches it.
 //
 // RECORDED REAL-CUIS ORACLE (pinned VM + Cuis7.9-8090 image, probed directly; the full transcript
 // is on bead lagrange-images-nv1.4). These are measurements, not Squeak/Pharo recollection:
@@ -72,7 +73,7 @@ import {objectRef} from '../value/index.js';
 // index. A position becomes necessary the first time something can write somewhere other than the
 // end — repositioning, truncation, a read stream — none of which any consumer sends.
 
-// v2: the write protocol added an instance variable, and a Shape record is immutable, so the
+// v2: the chunk-write protocol added an instance variable, and a Shape record is immutable, so the
 // structural change gets a new Shape identity rather than a rewrite (ADR 0047). An image that
 // already holds the v1 class gets an explicit definition conflict from the class owner, which is
 // the designed outcome — never a silent adoption of a differently-shaped class.
@@ -103,6 +104,11 @@ const TEXT_STREAM_WRITE_STREAM_CAPTURE = Object.freeze({
   id: 'smalltalk/text-stream/write-stream-class',
 });
 
+const WRITE_STREAM_SCALAR_CODEC_CAPTURE = Object.freeze({
+  name: 'UnicodeScalarUtf8Bytes',
+  id: SMALLTALK_TEXT_CODEC_PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.UNICODE_SCALAR_UTF8_BYTES],
+});
+
 const TEXT_STREAM_CLASS_METHODS = Object.freeze([Object.freeze({
   selector: 'streamContents:',
   source: `[ :aBlock | | stream |
@@ -123,12 +129,23 @@ const WRITE_STREAM_METHODS = [
   // VALUE, and this image has no text concatenation, no `replaceFrom:to:with:startingAt:` and no
   // mutable String. So the stream owns what it was given, in order, and `contents` builds the
   // answer from it. Still exposed by no selector — the accumulation is how the stream works, not
-  // part of what it promises.
+  // part of what it promises. Each entry carries a private Boolean tag so the one state retains
+  // whether the caller wrote a collection chunk or one stream element; it is not a second channel.
   {
     selector: 'nextPutAll:',
     source: `[ :aCollection |
       written isNil ifTrue: [ written := OrderedCollection new ].
-      written add: aCollection.
+      written add: (Association new key: false value: aCollection).
+      ^ self ]`,
+  },
+  // The pinned UnicodeString stream is Utf8EncodedWriteStream and its nextPut: implicitly answers
+  // self. Keep the Character itself in the SAME ordered accumulation as chunk writes; conversion
+  // belongs to the one contents constructor below, not to a second channel or nextPutAll: alias.
+  {
+    selector: 'nextPut:',
+    source: `[ :anObject |
+      written isNil ifTrue: [ written := OrderedCollection new ].
+      written add: (Association new key: true value: anObject).
       ^ self ]`,
   },
   // THE ANSWER, built here rather than asked of the backing (bead lagrange-images-nv1.7).
@@ -148,7 +165,7 @@ const WRITE_STREAM_METHODS = [
   // the upstream copy does.
   //
   // Two constructions, because this image has two kinds of backing and they are built differently:
-  //   a text backing   the accumulated chunks' bytes, through the existing
+  //   a text backing   the accumulated chunks/elements' bytes, through the existing
   //                    `utf8Bytes` -> `ByteArray class >> fromArray:` -> `ByteArray >> utf8Text`
   //                    conversion that `Integer >> printOn:base:` already uses. Nothing is added to
   //                    Text, which stays an immutable Value with exactly the protocol it had.
@@ -176,8 +193,10 @@ const WRITE_STREAM_METHODS = [
       collection class == Text ifTrue: [
         bytes := OrderedCollection new.
         written isNil ifFalse: [
-          written do: [ :chunk | | chunkBytes index |
-            chunkBytes := chunk utf8Bytes.
+          written do: [ :entry | | chunkBytes index |
+            entry key ifTrue: [
+              chunkBytes := UnicodeScalarUtf8Bytes value: entry value codePoint ].
+            entry key ifFalse: [ chunkBytes := entry value utf8Bytes ].
             index := 1.
             [ index <= chunkBytes size ] whileTrue: [
               bytes add: (chunkBytes at: index).
@@ -185,8 +204,9 @@ const WRITE_STREAM_METHODS = [
         ^ (ByteArray fromArray: bytes asArray) utf8Text ].
       result := collection species new.
       written isNil ifFalse: [
-        written do: [ :chunk | chunk do: [ :each | result add: each ] ] ].
+        written do: [ :entry | entry value do: [ :each | result add: each ] ] ].
       ^ result ]`,
+    captures: [WRITE_STREAM_SCALAR_CODEC_CAPTURE],
   },
 ];
 
@@ -222,7 +242,11 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
   const required = [
     ['smalltalk/class/Collection', 'species'],
     ['smalltalk/class/OrderedCollection', 'add:'],
+    ['smalltalk/class/Association', 'key'],
+    ['smalltalk/class/Association', 'value'],
+    ['smalltalk/class/Association', 'key:value:'],
     ['smalltalk/class/Text', 'utf8Bytes'],
+    ['smalltalk/class/Character', 'codePoint'],
     ['smalltalk/class/ByteArray', 'utf8Text'],
     ['smalltalk/class/ByteArray', 'size'],
     ['smalltalk/class/ByteArray', 'at:'],
@@ -247,7 +271,7 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
   }
   // The source also NAMES these globals, which is a compile-time requirement distinct from the
   // protocol above.
-  for (const name of ['OrderedCollection', 'Text', 'ByteArray']) {
+  for (const name of ['Association', 'OrderedCollection', 'Text', 'ByteArray']) {
     if (!await resolveGlobal({images, imageId, name})) {
       throw new TypeError(`image ${imageId} has not published the global ${name}; publish it first`);
     }
@@ -267,7 +291,18 @@ async function installSmalltalkWriteStreamProtocol({images, compilation, imageId
 
 
   await defineMethodsFromSource({
-    images, compilation, imageId, lane, classRef, methods: WRITE_STREAM_METHODS,
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef,
+    methods: WRITE_STREAM_METHODS.map((method) => ({
+      ...method,
+      captures: method.captures?.map((capture) => ({
+        ...capture,
+        value: objectRef(imageId, capture.id),
+      })),
+    })),
   });
   await defineMethodsFromSource({
     images, compilation, imageId, lane, classRef: metaclassRef, methods: WRITE_STREAM_CLASS_METHODS,

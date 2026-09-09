@@ -358,6 +358,9 @@ test('the library adds no new kernel primitive', async () => {
     'symbol-intern',
     'text-at-character',
     'text-utf8-bytes',
+    // Private codec entry consumed by WriteStream after ordinary Character>>codePoint. It stays in
+    // the existing Text/ByteArray UTF-8 family and is not Collection or Character protocol.
+    'unicode-scalar-utf8-bytes',
   ]);
 });
 

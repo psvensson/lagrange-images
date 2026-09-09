@@ -105,6 +105,21 @@ test('a 4-byte code point encodes to exact UTF-8 bytes', async () => {
   });
 });
 
+test('the private scalar codec shares the UTF-8 owner and refuses non-scalars', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'scalar-codec');
+    const invoke = async (value) => await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('scalar-codec', 'smalltalk/primitive/unicode-scalar-utf8-bytes'), [value],
+    ));
+    assert.deepEqual(await invoke(integerValue(65)), bytesValue(new Uint8Array([65])));
+    assert.deepEqual(await invoke(integerValue(955)), bytesValue(new Uint8Array([206, 187])));
+    assert.deepEqual(await invoke(integerValue(128512)), bytesValue(new Uint8Array([240, 159, 152, 128])));
+    await assert.rejects(invoke(integerValue(0xd800)), /not a Unicode scalar value/);
+    await assert.rejects(invoke(integerValue(0x110000)), /not a Unicode scalar value/);
+    await assert.rejects(invoke(textValue('A')), /Unicode scalar integer is required/);
+  });
+});
+
 test('utf8Bytes answers the exact native bytes Value, with no image ref', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'tb');
