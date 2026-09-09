@@ -9,14 +9,16 @@ import {
   primitiveCodeContent,
 } from './smalltalk-primitives.js';
 import {defineMethods, ensureNamedClass, ensureSmalltalkShape} from './smalltalk-class-builder.js';
+import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {ensureBlock, ensureCodeArtifact} from '../graph/ensure-records.js';
 import {objectRef, textValue} from '../value/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
-// The smallest native Character personality proved by YAXO pressure: canonical identity for a
-// Unicode scalar and Text>>at: production through the same interner. There is deliberately no
-// classification, case, digit, printing or conversion protocol in this slice.
+// The native Character personality: canonical identity for a Unicode scalar, Text>>at: production
+// through the same interner, and the smallest ordinary protocol forced by pinned YAXO. Character
+// owns the scalar and its exact separator classification; there is deliberately no broader
+// classification, case, digit, printing or conversion protocol.
 
 const PRIMITIVE_BLOCK_ID = Object.freeze({
   [SMALLTALK_PRIMITIVE.CHARACTER_INTERN]: 'smalltalk/primitive/character-intern',
@@ -92,6 +94,35 @@ async function installSmalltalkCharacterProtocol({images, compilation, imageId, 
         value: objectRef(imageId, PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.TEXT_AT_CHARACTER]),
       }],
     }],
+  });
+
+  // Character already durably owns this scalar in its one named slot. Expose it through ordinary
+  // instance-variable protocol rather than introducing a second field, host lookup or primitive.
+  // The exact seven-member separator relation is the pinned Cuis semantic claim. Although Cuis
+  // happens to express membership through Array>>statePointsTo:, generic collection membership is
+  // not part of the forcing contract; keep the classification at its Character owner and compose
+  // only the existing Integer equality and lazy Boolean protocol.
+  await defineMethodsFromSource({
+    images,
+    compilation,
+    imageId,
+    lane,
+    classRef,
+    methods: [
+      {selector: 'codePoint', source: '[ ^ codePoint ]'},
+      {
+        selector: 'isSeparator',
+        source: `[ | scalar |
+          scalar := self codePoint.
+          ^ scalar = 32 or: [
+            scalar = 9 or: [
+              scalar = 10 or: [
+                scalar = 13 or: [
+                  scalar = 12 or: [
+                    scalar = 160 or: [ scalar = 8203 ] ] ] ] ] ]
+        ]`,
+      },
+    ],
   });
 
   return Object.freeze({classRef, shapeRef});
