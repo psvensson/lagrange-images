@@ -15,6 +15,9 @@ import {
   createRuntime,
   defineMethodsFromSource,
   installSmalltalkCharacterProtocol,
+  installSmalltalkControlFlow,
+  installSmalltalkEqualityProtocol,
+  installSmalltalkInstanceVariableProtocol,
   installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
   installSymmetricSmalltalkStandardImage,
@@ -164,6 +167,50 @@ test('non-ASCII and supplementary literals share canonical identity with Text in
   });
 });
 
+for (const lane of ['neutral', 'wasm']) {
+  test(`Character codePoint exposes its existing canonical scalar in the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      await seed(runtime, `character-code-point-${lane}`, {lane});
+      for (const [glyph, scalar] of [['A', 65], ['λ', 955], ['😀', 128512]]) {
+        assert.deepEqual(
+          await evaluate(
+            runtime,
+            `character-code-point-${lane}`,
+            `code-point-${scalar}-${lane}`,
+            `[ $${glyph} codePoint ]`,
+          ),
+          integerValue(scalar),
+          `U+${scalar.toString(16).toUpperCase()} exposes the scalar already stored by Character`,
+        );
+      }
+    });
+  });
+
+  test(`Character isSeparator is exactly the pinned seven-member relation in the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      const imageId = `character-separator-${lane}`;
+      await seed(runtime, imageId, {lane});
+      const positives = [32, 9, 10, 13, 12, 160, 8203];
+      const negatives = [0, 11, 27, 65, 133, 8194, 8204, 128512];
+      for (const [expected, scalars] of [[true, positives], [false, negatives]]) {
+        for (const scalar of scalars) {
+          const glyph = String.fromCodePoint(scalar);
+          assert.deepEqual(
+            await evaluate(
+              runtime,
+              imageId,
+              `separator-${scalar}-${lane}`,
+              `[ $${glyph} isSeparator ]`,
+            ),
+            booleanValue(expected),
+            `U+${scalar.toString(16).toUpperCase().padStart(4, '0')} separator classification`,
+          );
+        }
+      }
+    });
+  });
+}
+
 test('direct class-scoped source [ ^ $< ] compiles and executes with no Cuis material', async () => {
   await withRuntime(async (runtime) => {
     const image = await seed(runtime, 'method-character');
@@ -216,6 +263,20 @@ test('the Cuis adapter owns no Character syntax or representation', async () => 
   assert.equal(source.includes('$<'), false);
 });
 
+test('separator classification does not widen Array or bypass ordinary Character protocol', async () => {
+  const [characterSource, indexedSource, adapterSource, primitiveSource] = await Promise.all([
+    readFile(new URL('../src/language/smalltalk-character.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/language/smalltalk-indexed.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/language/cuis-native-import.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/language/smalltalk-primitives-character.js', import.meta.url), 'utf8'),
+  ]);
+  assert.doesNotMatch(indexedSource, /statePointsTo:/, 'xxm.13 adds no generic Array membership');
+  assert.doesNotMatch(adapterSource, /isSeparator|codePoint/, 'the Cuis adapter owns no Character protocol');
+  assert.doesNotMatch(primitiveSource, /IS_SEPARATOR|isSeparator/, 'classification is not a primitive');
+  assert.match(characterSource, /scalar := self codePoint/, 'classification composes through codePoint');
+  assert.doesNotMatch(characterSource, /RegExp|\\s|trim\(|unicode.*white/i, 'no host Unicode classifier');
+});
+
 const compilationFor = (images) => new CompilationService({
   images,
   compilers: createDefaultCodeCompilerRegistry(),
@@ -227,6 +288,22 @@ for (const lane of ['neutral', 'wasm']) {
     const base = await forkableRuntime(async (runtime) => {
       await runtime.images.createImage({id: 'character-recovery'});
       await installSmalltalkKernel({images: runtime.images, imageId: 'character-recovery'});
+      await installSmalltalkEqualityProtocol({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'character-recovery',
+        lane,
+      });
+      await installSmalltalkControlFlow({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'character-recovery',
+        lane,
+      });
+      await installSmalltalkInstanceVariableProtocol({
+        images: runtime.images,
+        imageId: 'character-recovery',
+      });
     });
     try {
       const total = await base.withFork(async (runtime) => {
@@ -261,13 +338,16 @@ for (const lane of ['neutral', 'wasm']) {
               imageId: 'character-recovery',
               lane,
             });
-            const literal = await evaluate(
-              runtime, 'character-recovery', `literal-${lane}-${failAt}-${commitThenThrow}`, '[ $λ ]',
+            assert.deepEqual(
+              await evaluate(
+                runtime,
+                'character-recovery',
+                `recovered-character-${lane}-${failAt}-${commitThenThrow}`,
+                "[ ($λ == ('λ' at: 1)) and: [ ($λ codePoint = 955) and: [ $\u200b isSeparator ] ] ]",
+              ),
+              booleanValue(true),
+              'recovery preserves Character identity, its owned scalar and classification',
             );
-            const indexed = await evaluate(
-              runtime, 'character-recovery', `indexed-${lane}-${failAt}-${commitThenThrow}`, "[ 'λ' at: 1 ]",
-            );
-            assert.deepEqual(indexed, literal, 'retry leaves literal and Text production coherent');
           });
         }
       }

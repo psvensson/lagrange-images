@@ -363,6 +363,24 @@ const M4_ORACLE = Object.freeze({
   supplementaryCharacterLiteralCodePoint: '128512',
   supplementaryStreamCharacterEqualsLiteral: 'true',
   supplementaryStreamCharacterIdenticalToLiteral: 'true',
+  // Character>>isSeparator is exactly the pinned seven-member classification, not Unicode
+  // White_Space and not a control-character range. These values are produced by the same
+  // Character class that XMLTokenizer>>peek supplies to nextWhitespace.
+  separatorSpace: 'true',
+  separatorTab: 'true',
+  separatorLineFeed: 'true',
+  separatorCarriageReturn: 'true',
+  separatorFormFeed: 'true',
+  separatorNoBreakSpace: 'true',
+  separatorZeroWidthSpace: 'true',
+  separatorNull: 'false',
+  separatorVerticalTab: 'false',
+  separatorEscape: 'false',
+  separatorLatinA: 'false',
+  separatorNextLine: 'false',
+  separatorEnSpace: 'false',
+  separatorZeroWidthNonJoiner: 'false',
+  separatorSupplementary: 'false',
   // Lexically `$` consumes exactly one following Unicode code point, including whitespace and
   // punctuation, with no escape convention. At physical EOF Cuis exposes its U+001A scanner end
   // marker as the consumed Character. Strings/comments retain their ordinary boundaries.
@@ -856,7 +874,113 @@ test('unchanged pinned XMLTokenizer nextWhitespace observes the empty Text resul
   }
 });
 
-test('the unchanged nextWhitespace path passes product ~~ and exposes isSeparator as its next RED', {skip: !enabled, timeout: 900_000}, async () => {
+test('unchanged nextWhitespace classifies indexed Characters through the product protocol', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await yaxoSemanticExport());
+  const runtime = await nativeRuntime();
+  try {
+    const characterClass = objectRef('native-image', 'smalltalk/class/Character');
+    const productBinding = (await methodBindings({
+      images: runtime.images,
+      imageId: 'native-image',
+      classRef: characterClass,
+    })).find(({selector}) => selector === 'isSeparator');
+    assert.ok(productBinding, 'the standard image installs product Character>>isSeparator');
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [M4_NEXT_RED_METHOD]},
+    });
+    const bindingAfterImport = (await methodBindings({
+      images: runtime.images,
+      imageId: 'native-image',
+      classRef: characterClass,
+    })).find(({selector}) => selector === 'isSeparator');
+    assert.deepEqual(
+      bindingAfterImport,
+      productBinding,
+      'the YAXO fixture neither replaces nor supplies Character classification',
+    );
+
+    // nextPut: is the later selector the unbridged causal proof below reaches. This test-local
+    // bridge exists only so the unchanged upstream method can expose the classification branch via
+    // its own handleWhitespace: callback; product WriteStream accumulation still owns contents.
+    const writeStreamClass = objectRef('native-image', 'smalltalk/class/WriteStream');
+    assert.equal(
+      (await methodBindings({images: runtime.images, imageId: 'native-image', classRef: writeStreamClass}))
+        .some(({selector}) => selector === 'nextPut:'),
+      false,
+      'the later missing selector is not smuggled into the product image',
+    );
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      classRef: writeStreamClass,
+      lane: 'wasm',
+      methods: [{
+        selector: 'nextPut:',
+        source: "[ :aCharacter | aCharacter = $  ifFalse: [ self xxm13UnexpectedCharacter ]. ^ self nextPutAll: ' ' ]",
+      }],
+    });
+
+    const tokenizer = imported.classes.find(({identity}) => identity === 'cuis-class/YAXO/XMLTokenizer');
+    const probe = await ensureClassFromDeclaration({
+      images: runtime.images,
+      imageId: 'native-image',
+      name: 'M4SeparatorBranchProbe',
+      superclassRef: tokenizer.classRef,
+      instanceVariables: ['lagrangeInput', 'lagrangeAdvanced', 'lagrangeHandledWhitespace'],
+    });
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      classRef: probe.classRef,
+      lane: 'wasm',
+      methods: [
+        {
+          selector: 'lagrangeInput:',
+          source: '[ :input | lagrangeInput := input. lagrangeAdvanced := false. lagrangeHandledWhitespace := false. ^ self ]',
+        },
+        {selector: 'peek', source: '[ lagrangeAdvanced ifTrue: [ ^ nil ]. ^ lagrangeInput at: 1 ]'},
+        {selector: 'next', source: '[ lagrangeAdvanced := true. ^ self ]'},
+        {
+          selector: 'handleWhitespace:',
+          source: "[ :text | lagrangeHandledWhitespace := text = ' '. ^ self ]",
+        },
+        {
+          selector: 'exercise:',
+          source: '[ :input | self lagrangeInput: input. self nextWhitespace. ^ lagrangeHandledWhitespace ]',
+        },
+      ],
+    });
+    const {block} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'native-image',
+      id: 'm4-separator-branch',
+      source: '[ :class :input | class basicNew exercise: input ]',
+    });
+    const run = async (input) => await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('native-image', block.id), [probe.classRef, textValue(input)],
+    ));
+    assert.deepEqual(
+      await run(' '),
+      booleanValue(true),
+      'a separator from ordinary Text indexing takes the loop and delivers accumulated whitespace',
+    );
+    assert.deepEqual(
+      await run('A'),
+      booleanValue(false),
+      'a non-separator Character leaves the loop and delivers no whitespace',
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('the unchanged nextWhitespace causal path exposes its next unsupported selector', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const runtime = await nativeRuntime();
   try {
@@ -893,14 +1017,14 @@ test('the unchanged nextWhitespace path passes product ~~ and exposes isSeparato
       source: '[ :class :input | | tokenizer | tokenizer := class basicNew. tokenizer lagrangeInput: input. tokenizer nextWhitespace ]',
     });
     const error = await runtime.executor.execute(await runtime.invocations.invokeBlock(
-      objectRef('native-image', block.id), [probe.classRef, textValue(M4_DOCUMENT)],
+      objectRef('native-image', block.id), [probe.classRef, textValue(' ')],
     )).then(
-      () => assert.fail('the unchanged causal path executed past its first unsupported Character classification protocol'),
+      () => assert.fail('the unchanged causal path executed past its first unsupported post-classification selector'),
       (thrown) => thrown,
     );
     assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
-    assert.equal(error.selector, 'isSeparator');
-    assert.match(error.message, /message not understood: isSeparator/);
+    assert.equal(error.selector, 'nextPut:');
+    assert.match(error.message, /message not understood: nextPut:/);
   } finally {
     await runtime.close();
   }

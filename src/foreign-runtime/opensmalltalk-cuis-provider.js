@@ -312,6 +312,21 @@ const BRIDGE_METHODS = Object.freeze([
       value: (supplementaryStreamCharacter = supplementaryCharacter) printString on: out.
     self yaxoReport: 'supplementaryStreamCharacterIdenticalToLiteral'
       value: (supplementaryStreamCharacter == supplementaryCharacter) printString on: out.
+    self yaxoReport: 'separatorSpace' value: (Character codePoint: 32) isSeparator printString on: out.
+    self yaxoReport: 'separatorTab' value: (Character codePoint: 9) isSeparator printString on: out.
+    self yaxoReport: 'separatorLineFeed' value: (Character codePoint: 10) isSeparator printString on: out.
+    self yaxoReport: 'separatorCarriageReturn' value: (Character codePoint: 13) isSeparator printString on: out.
+    self yaxoReport: 'separatorFormFeed' value: (Character codePoint: 12) isSeparator printString on: out.
+    self yaxoReport: 'separatorNoBreakSpace' value: (Character codePoint: 160) isSeparator printString on: out.
+    self yaxoReport: 'separatorZeroWidthSpace' value: (Character codePoint: 8203) isSeparator printString on: out.
+    self yaxoReport: 'separatorNull' value: (Character codePoint: 0) isSeparator printString on: out.
+    self yaxoReport: 'separatorVerticalTab' value: (Character codePoint: 11) isSeparator printString on: out.
+    self yaxoReport: 'separatorEscape' value: (Character codePoint: 27) isSeparator printString on: out.
+    self yaxoReport: 'separatorLatinA' value: $A isSeparator printString on: out.
+    self yaxoReport: 'separatorNextLine' value: (Character codePoint: 133) isSeparator printString on: out.
+    self yaxoReport: 'separatorEnSpace' value: (Character codePoint: 8194) isSeparator printString on: out.
+    self yaxoReport: 'separatorZeroWidthNonJoiner' value: (Character codePoint: 8204) isSeparator printString on: out.
+    self yaxoReport: 'separatorSupplementary' value: $😀 isSeparator printString on: out.
     self yaxoReport: 'characterLiteralConsumesOneSourceCharacter' value: (self yaxoEvaluationOf: '$<isAscii') printString on: out.
     self yaxoReport: 'characterLiteralSpaceCodePoint' value: $  codePoint printString on: out.
     self yaxoReport: 'characterLiteralDollarCodePoint' value: $$ codePoint printString on: out.
