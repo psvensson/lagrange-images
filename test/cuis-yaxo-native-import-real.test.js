@@ -69,8 +69,17 @@ import {
 // initializer. Character literals then let the real `XMLTokenizer>>nextEntity` compare its input,
 // and the distinct `UnicodeString streamContents:` repair now lets the unchanged nextWhitespace
 // method observe native Text. Product `Object>>~~`, Character classification, and now
-// WriteStream>>nextPut: carry the execution-earned ordinary protocol steps. The same unchanged
-// causal scope classifies `next` after them rather than inferring it from later source text.
+// WriteStream>>nextPut: carry the execution-earned ordinary protocol steps.
+//
+// The `next` RED those steps exposed was an APPLICATION-SCOPE gap, not a missing generic native
+// Stream protocol (bead lagrange-images-xxm.15): the pinned package itself owns
+// `XMLTokenizer>>next`, and the deliberately incremental method closure simply had not imported
+// it. The positive whitespace acceptance previously carried a synthetic probe `next` bridge —
+// legitimate while `nextPut:` was the target, wrong once the claim is the package's own method.
+// That bridge is gone: the imported canonical method is the claimed binding, a structural
+// assertion proves the probe holds no `next` of its own, and executing the unchanged method moves
+// the first failure to the genuinely absent BASE protocol its first send needs — the two-keyword
+// `ifNil:ifNotNil:` — which this slice records and deliberately does not repair.
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';
@@ -109,6 +118,29 @@ const M4_SCOPE_CLASSES = Object.freeze([
 const M4_ENTRY_POINT = 'cuis-method/YAXO/XMLDOMParser/class/parseDocumentFrom:';
 const M4_ENTRY_POINT_UPSTREAM_SOURCE = 'parseDocumentFrom: aStream\n\t^(super parseDocumentFrom: aStream) document';
 const M4_TOKENIZER_INITIALIZE = 'cuis-method/YAXO/XMLTokenizer/instance/initialize';
+
+// xxm.15: `next` is package-owned application protocol, not a missing generic native Stream
+// protocol. The pinned upstream source, asserted verbatim wherever the method is imported:
+//
+//   peekChar is nil     -> check nested streams when any exist, then answer `stream next`;
+//   peekChar is cached  -> answer the cached Character and clear the cache, never touching the
+//                          underlying stream.
+//
+// No compiler special case and no YAXO adaptation is implied or added: the canonical manifest
+// already carries the method, and the ordinary importer compiles it unchanged.
+const M4_NEXT_METHOD = 'cuis-method/YAXO/XMLTokenizer/instance/next';
+const M4_NEXT_UPSTREAM_SOURCE = 'next\n'
+  + '\t"Return the next character from the current input stream. If the current stream is at end pop to next nesting level if there is one.\n'
+  + '\tDue to the potential nesting of original document, included documents and replacment texts the streams are held in a stack representing the nested streams. The current stream is the top one."\n'
+  + '\t| nextChar |\n'
+  + '\tpeekChar\n'
+  + '\t\tifNil: [\n'
+  + '\t\t\tnestedStreams ifNotNil: [self checkNestedStream].\n'
+  + '\t\t\t^nextChar _ stream next]\n'
+  + '\t\tifNotNil: [\n'
+  + '\t\t\tnextChar _ peekChar.\n'
+  + '\t\t\tpeekChar _ nil.\n'
+  + '\t\t\t^nextChar].';
 
 // The pinned identity, re-asserted here rather than trusted from the setup script. The whole claim
 // of a forcing harness is that the material is the pinned upstream package and not something this
@@ -790,6 +822,9 @@ const M4_PARSE_PATH = Object.freeze([
   'cuis-method/YAXO/SAXHandler/instance/driver',
   'cuis-method/YAXO/XMLTokenizer/instance/nextEntity',
   'cuis-method/YAXO/XMLTokenizer/instance/nextWhitespace',
+  // Causal order, not source order: `nextWhitespace` is reached first and its separator loop is
+  // what sends `self next`. The package owns the method; the closure now imports it (xxm.15).
+  M4_NEXT_METHOD,
 ]);
 const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/XMLTokenizer/instance/nextWhitespace';
 
@@ -900,8 +935,19 @@ test('unchanged pinned XMLTokenizer nextWhitespace observes the empty Text resul
   }
 });
 
-test('unchanged nextWhitespace writes indexed Characters through product WriteStream nextPut:', {skip: !enabled, timeout: 900_000}, async () => {
+// xxm.15: this acceptance previously defined a synthetic probe `next` (advance a position, answer
+// self) — legitimate while `nextPut:` was the target, and the wrong implementation once the claim
+// is the package's own `XMLTokenizer>>next`. The bridge is deleted, the canonical method identity
+// `cuis-method/YAXO/XMLTokenizer/instance/next` is imported beside `nextWhitespace`, and
+// structural assertions prove which binding `self next` resolves to: the imported package method
+// on XMLTokenizer, never a probe-local override and never a generic/native `next` (none exists —
+// no `Object>>next`, no `WriteStream>>next`, no importer-synthesized method; the control test
+// below still shows the unscoped image raising MNU `next`).
+test('unchanged nextWhitespace dispatches self next to the imported package method', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
+  const pinnedNext = manifest.methods.find(({identity}) => identity === M4_NEXT_METHOD);
+  assert.equal(pinnedNext.source, M4_NEXT_UPSTREAM_SOURCE, 'the imported method is the unchanged pinned source');
+
   const runtime = await nativeRuntime();
   try {
     const characterClass = objectRef('native-image', 'smalltalk/class/Character');
@@ -911,28 +957,33 @@ test('unchanged nextWhitespace writes indexed Characters through product WriteSt
       classRef: characterClass,
     })).find(({selector}) => selector === 'isSeparator');
     assert.ok(productBinding, 'the standard image installs product Character>>isSeparator');
-    const imported = await importCuisNativePackage({
-      images: runtime.images,
-      compilation: runtime.compilation,
-      imageId: 'native-image',
-      manifest,
-      scope: {classes: [...M4_SCOPE_CLASSES], methods: [M4_NEXT_RED_METHOD]},
-    });
-    const bindingAfterImport = (await methodBindings({
-      images: runtime.images,
-      imageId: 'native-image',
-      classRef: characterClass,
-    })).find(({selector}) => selector === 'isSeparator');
-    assert.deepEqual(
-      bindingAfterImport,
-      productBinding,
-      'the YAXO fixture neither replaces nor supplies Character classification',
-    );
     const writeStreamClass = objectRef('native-image', 'smalltalk/class/WriteStream');
     const nextPutBinding = (await methodBindings({
       images: runtime.images, imageId: 'native-image', classRef: writeStreamClass,
     })).find(({selector}) => selector === 'nextPut:');
     assert.ok(nextPutBinding, 'the standard image installs product WriteStream>>nextPut:');
+    // No generic or stream-library `next` is added to make the MNU disappear (xxm.15 W1/W2).
+    for (const classRef of [objectRef('native-image', 'smalltalk/class/Object'), writeStreamClass]) {
+      assert.equal(
+        (await methodBindings({images: runtime.images, imageId: 'native-image', classRef}))
+          .find(({selector}) => selector === 'next'),
+        undefined,
+        `no native next binding exists on ${classRef.objectId}`,
+      );
+    }
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [M4_NEXT_RED_METHOD, M4_NEXT_METHOD]},
+    });
+    assert.deepEqual(
+      (await methodBindings({images: runtime.images, imageId: 'native-image', classRef: characterClass}))
+        .find(({selector}) => selector === 'isSeparator'),
+      productBinding,
+      'the YAXO fixture neither replaces nor supplies Character classification',
+    );
     assert.deepEqual(
       (await methodBindings({images: runtime.images, imageId: 'native-image', classRef: writeStreamClass}))
         .find(({selector}) => selector === 'nextPut:'),
@@ -940,13 +991,25 @@ test('unchanged nextWhitespace writes indexed Characters through product WriteSt
       'the acceptance carries no test-local WriteStream bridge',
     );
 
+    // The claimed binding is the imported package method: XMLTokenizer's own method dictionary
+    // binds `next` at the deterministic method identity the native class builder derives for it.
     const tokenizer = imported.classes.find(({identity}) => identity === 'cuis-class/YAXO/XMLTokenizer');
+    const nextBinding = (await methodBindings({
+      images: runtime.images, imageId: 'native-image', classRef: tokenizer.classRef,
+    })).find(({selector}) => selector === 'next');
+    assert.ok(nextBinding, 'the imported XMLTokenizer carries its own package next method');
+    assert.equal(
+      nextBinding.method.objectId,
+      `smalltalk/class/XMLTokenizer/method/${Buffer.from('next', 'utf8').toString('base64url')}`,
+      'the next binding is the deterministic imported package method identity',
+    );
+
     const probe = await ensureClassFromDeclaration({
       images: runtime.images,
       imageId: 'native-image',
       name: 'M4SeparatorBranchProbe',
       superclassRef: tokenizer.classRef,
-      instanceVariables: ['lagrangeInput', 'lagrangePosition', 'lagrangeHandledWhitespace'],
+      instanceVariables: ['lagrangeInput', 'lagrangeHandledWhitespace'],
     });
     await reconcileMethodsFromSource({
       images: runtime.images,
@@ -955,15 +1018,14 @@ test('unchanged nextWhitespace writes indexed Characters through product WriteSt
       classRef: probe.classRef,
       lane: 'wasm',
       methods: [
+        // The probe supplies INPUT and OBSERVATION only. `peek` is the tokenizer's read of its
+        // external input, deliberately fixture-supplied in this slice; `handleWhitespace:`
+        // observes the delivered result. Neither replaces the application method under test.
         {
           selector: 'lagrangeInput:',
-          source: "[ :input | lagrangeInput := input. lagrangePosition := 1. lagrangeHandledWhitespace := ''. ^ self ]",
+          source: "[ :input | lagrangeInput := input. lagrangeHandledWhitespace := ''. ^ self ]",
         },
-        {
-          selector: 'peek',
-          source: '[ lagrangePosition = 1 ifTrue: [ ^ lagrangeInput at: 1 ]. lagrangePosition = 2 ifTrue: [ ^ lagrangeInput at: 2 ]. ^ nil ]',
-        },
-        {selector: 'next', source: '[ lagrangePosition := lagrangePosition + 1. ^ self ]'},
+        {selector: 'peek', source: '[ ^ lagrangeInput at: 1 ]'},
         {
           selector: 'handleWhitespace:',
           source: '[ :text | lagrangeHandledWhitespace := text. ^ self ]',
@@ -974,6 +1036,13 @@ test('unchanged nextWhitespace writes indexed Characters through product WriteSt
         },
       ],
     });
+    assert.equal(
+      (await methodBindings({images: runtime.images, imageId: 'native-image', classRef: probe.classRef}))
+        .find(({selector}) => selector === 'next'),
+      undefined,
+      'the probe subclass has no next binding of its own; self next resolves to the imported method',
+    );
+
     const {block} = await installSymmetricSmalltalkBlock({
       images: runtime.images,
       imageId: 'native-image',
@@ -984,44 +1053,35 @@ test('unchanged nextWhitespace writes indexed Characters through product WriteSt
       objectRef('native-image', block.id), [probe.classRef, textValue(input)],
     ));
     assert.deepEqual(
-      await run(' A'),
-      textValue(' '),
-      'an ASCII separator is written as the exact accumulated native Text',
-    );
-    assert.deepEqual(
-      await run('\u00a0A'),
-      textValue('\u00a0'),
-      'the pinned non-ASCII NBSP separator survives Character codePoint and UTF-8 reconstruction',
-    );
-    assert.deepEqual(
       await run('AZ'),
       textValue(''),
       'a non-separator Character leaves the loop without delivering whitespace',
     );
-    const {block: stopBlock} = await installSymmetricSmalltalkBlock({
-      images: runtime.images,
-      imageId: 'native-image',
-      id: 'm4-separator-stop-position',
-      source: '[ :class :input | | tokenizer | tokenizer := class basicNew. tokenizer exercise: input. tokenizer peek = $A ]',
-    });
-    const stoppedAtA = async (input) => await runtime.executor.execute(await runtime.invocations.invokeBlock(
-      objectRef('native-image', stopBlock.id), [probe.classRef, textValue(input)],
-    ));
-    assert.deepEqual(
-      await stoppedAtA(' A'),
-      booleanValue(true),
-      'the loop consumes only the separator and stops at the following non-separator',
-    );
-    assert.deepEqual(
-      await stoppedAtA('\u00a0A'),
-      booleanValue(true),
-      'the same stop rule holds for the non-ASCII separator',
-    );
+    // The separator branch writes through product WriteStream>>nextPut: and then sends self next,
+    // which now dispatches into the imported package method. That method's own first send is the
+    // two-keyword `ifNil:ifNotNil:` — base nil-checking protocol the standard image does not
+    // install (only the single-keyword variants exist). This is the next genuine RED, recorded
+    // here without repair: nothing in this acceptance supplies `ifNil:ifNotNil:`, so observing
+    // exactly that MNU proves execution entered the imported method rather than any bridge.
+    for (const input of [' A', '\u00a0A']) {
+      const error = await run(input).then(
+        () => assert.fail('the separator branch executed past the first send of the imported XMLTokenizer>>next'),
+        (thrown) => thrown,
+      );
+      assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
+      assert.equal(error.selector, 'ifNil:ifNotNil:');
+      assert.match(error.message, /message not understood: ifNil:ifNotNil:/);
+    }
   } finally {
     await runtime.close();
   }
 });
 
+// FALSIFICATION CONTROL for the dispatch proof above: the same probe, the same input, the same
+// unchanged `nextWhitespace` — but with `cuis-method/YAXO/XMLTokenizer/instance/next` left OUT of
+// the method scope. Only then is `next` missing; widening the application method closure must move
+// the first failure, and it does (to `ifNil:ifNotNil:`, asserted above). If the dispatch proof
+// ever passed through a bridge instead of the imported method, this pair could not disagree.
 test('the unchanged nextWhitespace causal path exposes its next unsupported selector', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const runtime = await nativeRuntime();
@@ -1067,6 +1127,107 @@ test('the unchanged nextWhitespace causal path exposes its next unsupported sele
     assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
     assert.equal(error.selector, 'next');
     assert.match(error.message, /message not understood: next/);
+  } finally {
+    await runtime.close();
+  }
+});
+
+// The imported method itself, entered on BOTH of its materially different paths (xxm.15). The
+// probe subclass exists only for observation/setup — it assigns the inherited `peekChar` slot a
+// real native Character and adds no `next` of its own — because the claim is the unchanged
+// package method's own semantics:
+//
+//   A. cached-peek entry   peekChar holds $A — the uncached path would read the stream; this one
+//                          must answer the cache and never touch the stream;
+//   B. uncached entry      peekChar is nil — the method must delegate one step to `stream next`.
+//
+// Both entries reach the method's first send, `peekChar ifNil: [ ... ] ifNotNil: [ ... ]` — ONE
+// two-keyword message — and stop there: the standard image installs the single-keyword `ifNil:`/
+// `ifNotNil:` pair but no `ifNil:ifNotNil:`. Observing exactly that MNU on BOTH entries (nil
+// receiver on B, the cached Character on A) proves the imported binding executed its real ivar
+// reads and names the precise base-protocol gap. The branch semantics themselves — answer the
+// cache and clear it without consuming the stream; advance the stream exactly once and answer
+// its value — remain to be proven by bead lagrange-images-xxm.16, which repairs
+// `ifNil:ifNotNil:` at its owner; this slice measures and records the gap without repairing it.
+test('the imported XMLTokenizer next reaches the two-keyword nil protocol on both branch entries', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await yaxoSemanticExport());
+  const pinnedNext = manifest.methods.find(({identity}) => identity === M4_NEXT_METHOD);
+  assert.equal(pinnedNext.source, M4_NEXT_UPSTREAM_SOURCE, 'the executed method is the unchanged pinned source');
+
+  const runtime = await nativeRuntime();
+  try {
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      manifest,
+      scope: {classes: [...M4_SCOPE_CLASSES], methods: [M4_NEXT_METHOD]},
+    });
+    const tokenizer = imported.classes.find(({identity}) => identity === 'cuis-class/YAXO/XMLTokenizer');
+    const probe = await ensureClassFromDeclaration({
+      images: runtime.images,
+      imageId: 'native-image',
+      name: 'M4NextSemanticsProbe',
+      superclassRef: tokenizer.classRef,
+      instanceVariables: [],
+    });
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'native-image',
+      classRef: probe.classRef,
+      lane: 'wasm',
+      methods: [
+        // Setup only: seed the inherited cache slot the upstream method reads. No `next` here.
+        {selector: 'lagrangePeekChar:', source: '[ :character | peekChar := character. ^ self ]'},
+      ],
+    });
+    assert.equal(
+      (await methodBindings({images: runtime.images, imageId: 'native-image', classRef: probe.classRef}))
+        .find(({selector}) => selector === 'next'),
+      undefined,
+      'the observation subclass carries no next binding of its own',
+    );
+
+    const {block: cachedEntry} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'native-image',
+      id: 'm4-next-cached-entry',
+      source: '[ :class | | tokenizer | tokenizer := class basicNew. tokenizer lagrangePeekChar: $A. tokenizer next ]',
+    });
+    const cachedError = await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('native-image', cachedEntry.id), [probe.classRef],
+    )).then(
+      () => assert.fail('the cached-peek entry executed past the two-keyword nil protocol send'),
+      (thrown) => thrown,
+    );
+    assert.equal(cachedError.name, 'SmalltalkMessageNotUnderstoodError');
+    assert.equal(cachedError.selector, 'ifNil:ifNotNil:');
+    assert.doesNotMatch(
+      cachedError.message,
+      /sent to native-image\/smalltalk\/nil/,
+      'the cached entry reached the conditional with the non-nil cached Character as receiver',
+    );
+
+    const {block: uncachedEntry} = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'native-image',
+      id: 'm4-next-uncached-entry',
+      source: '[ :class | class basicNew next ]',
+    });
+    const uncachedError = await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('native-image', uncachedEntry.id), [probe.classRef],
+    )).then(
+      () => assert.fail('the uncached entry executed past the two-keyword nil protocol send'),
+      (thrown) => thrown,
+    );
+    assert.equal(uncachedError.name, 'SmalltalkMessageNotUnderstoodError');
+    assert.equal(uncachedError.selector, 'ifNil:ifNotNil:');
+    assert.match(
+      uncachedError.message,
+      /sent to native-image\/smalltalk\/nil/,
+      'the uncached entry reached the conditional with nil peekChar as receiver',
+    );
   } finally {
     await runtime.close();
   }
