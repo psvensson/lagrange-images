@@ -235,8 +235,17 @@ of classes the package itself defines — which is what an M4 restart proof has 
   `XMLTokenizer>>nextWhitespace` (bead `lagrange-images-xxm.12`, ADR 0048 reconciliation): install
   it at the native equality owner as ordinary composition through overridable `==` and Boolean
   `not`, with no primitive/importer/compiler rule; unchanged execution now reaches `isSeparator`;
-- [ ] classify the freshly executed `Character>>isSeparator` RED without preempting the later
+- [x] classify the freshly executed `Character>>isSeparator` RED without preempting the later
   `WriteStream>>nextPut:` source (bead `lagrange-images-xxm.13`);
+- [x] classify and repair the ordinary native `WriteStream>>nextPut:` RED (bead
+  `lagrange-images-xxm.14`): pinned Utf8EncodedWriteStream semantics — Character only through
+  `codePoint`, exact self return, one ordered accumulation and one `contents` constructor reusing
+  the existing UTF-8 codec owner; unchanged `nextWhitespace` writes through the product stream and
+  exposes `next`;
+- [ ] classify the `next` RED as application scope, not native stream protocol (bead
+  `lagrange-images-xxm.15`): import the unchanged package-owned `XMLTokenizer>>next` into the M4
+  method closure, delete the synthetic probe bridge, prove the claimed binding structurally, and
+  record the exposed two-keyword `ifNil:ifNotNil:` base-protocol RED without repairing it;
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;

@@ -447,6 +447,29 @@ existing dynamically dispatched `==`; no fixture, importer rewrite, or second id
 is involved. The same causal vertical now passes `~~` and exposes `Character>>isSeparator` as its
 next first RED, before `nextPut:`.
 
+Two later steps on the same vertical are deliberately different KINDS of repair, and the record
+keeps them distinct. Bead `lagrange-images-xxm.14` was missing ordinary native library protocol:
+the pinned Cuis oracle proved `UnicodeString writeStream` answers a `Utf8EncodedWriteStream` whose
+`nextPut:` accepts a Character, encodes it through the existing UTF-8 codec owner and answers the
+stream itself, so the native WriteStream owner gained one ordered tagged accumulation and one
+`contents` constructor, consuming Character only through ordinary `codePoint`. Unchanged
+`nextWhitespace` then wrote its separator through the product stream and exposed `next`.
+
+Bead `lagrange-images-xxm.15` was NOT a missing generic native Stream protocol. The pinned package
+itself owns `XMLTokenizer>>next` — answer the cached `peekChar` and clear it when one is held,
+otherwise check nested streams and delegate one step to `stream next` — and the deliberately
+incremental M4 method closure simply had not imported it. Widening the closure by the canonical
+identity `cuis-method/YAXO/XMLTokenizer/instance/next` is the whole repair: the ordinary importer
+compiles the unchanged method, the synthetic probe `next` bridge the earlier acceptance carried is
+deleted, and structural assertions prove `self next` resolves to the imported package binding (the
+probe holds none; no `Object>>next`, `WriteStream>>next` or importer-synthesized method exists).
+Executing the real method then exposes its own first dependency rather than a stream question: the
+two-keyword `ifNil:ifNotNil:` send, which the standard image does not install (only the
+single-keyword `ifNil:`/`ifNotNil:` pair exists). That base nil-checking protocol gap is the next
+genuine RED, owned by the native control-flow installer, recorded as bead `lagrange-images-xxm.16`
+without repair in this slice — the nested-stream branch stays unexercised, exactly as the
+non-nested path requires.
+
 The legacy assignment finding is now repaired at its two exact owners. The pinned Cuis scanner/parser
 oracle established that `_` is the legacy arrow only at a token boundary and only when its following
 character is not a letter, digit, underscore or colon. Thus `a _ b` assigns, while `a_b`, `_foo`,
