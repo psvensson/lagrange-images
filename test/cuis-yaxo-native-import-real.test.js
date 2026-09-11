@@ -298,7 +298,7 @@ test('the pinned upstream Cuis YAXO package is a real M4 pressure source, not a 
   };
   assert.deepEqual(
     [...keysOf(manifest)].sort(),
-    ['class', 'classes', 'format', 'identity', 'instanceVariables', 'methods', 'name', 'package',
+    ['class', 'classVariables', 'classes', 'format', 'identity', 'instanceVariables', 'methods', 'name', 'package',
       'packages', 'requires', 'selector', 'side', 'source', 'superclass', 'superclassName'],
     'the canonical manifest uses only semantic vocabulary — no oop, offset or address',
   );
@@ -1489,32 +1489,32 @@ test('a real pinned YAXO arrow method executes a native assignment and reads it 
   }
 });
 
-// DIAGNOSTIC, not a work queue. The epic recorded one open question — whether the canonical v2
-// export carries package load-time expressions at all — and it is answered here by measurement
-// rather than left as a prediction. It does not, and it carries no class-variable facts either.
-// YAXO needs both: `XMLTokenizer class>>initialize` BUILDS four class variables the tokenizer
-// cannot scan without, and the package file ends with five top-level chunks that run it and its
-// siblings at load time. Nothing about that is a YAXO problem — those are semantic facts of the
-// Cuis package that never leave Cuis, so they belong to the EXPORT owner
-// (src/toolchain/opensmalltalk-cuis-toolchain-provider.js, which owns the canonical manifest
-// schema). The native side already HAS the concept: src/language/smalltalk-class-variables.js owns
-// hierarchy-scoped class variables and the semantic compiler resolves them. This slice schedules
-// none of it — it sits behind the first RED on the executable vertical.
-test('the canonical v2 export carries no class-variable and no load-time-expression facts', {skip: !enabled, timeout: 900_000}, async () => {
+// The durable-restart vertical measured (bead lagrange-images-xg3) that the real parse path needs
+// XMLTokenizer's four declared class variables, and that the canonical v2 export carried none. The
+// export owner now carries classVariableNames (bead lagrange-images-9qf): the DECLARED NAMES cross
+// the boundary as definition facts and are declared natively at import, while the class
+// variables' VALUES never do — the package's own class-side initialize (imported as ordinary
+// class-side code) populates them when the vertical executes it. No load-time-expression channel
+// exists or is being added: the five top-level `initialize!` chunks stay outside the manifest.
+test('the canonical v2 export carries class-variable names but no values and no load-time expressions', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
 
   assert.deepEqual(Object.keys(manifest).sort(), ['classes', 'format', 'methods', 'packages']);
   for (const declaration of manifest.classes) {
     assert.deepEqual(
       Object.keys(declaration).sort(),
-      ['identity', 'instanceVariables', 'name', 'package', 'superclass', 'superclassName'],
-      `${declaration.identity} declaration carries no class-variable field`,
+      ['classVariables', 'identity', 'instanceVariables', 'name', 'package', 'superclass', 'superclassName'],
+      `${declaration.identity} declaration carries its class-variable definition`,
     );
   }
-  // XMLTokenizer really does declare four class variables upstream, and the export answers none of
-  // them: its declaration reports only instance variables.
+  // XMLTokenizer really does declare four class variables upstream, and the export now answers
+  // exactly those names.
   const tokenizer = manifest.classes.find(({identity}) => identity === 'cuis-class/YAXO/XMLTokenizer');
-  assert.equal(tokenizer.instanceVariables.includes('CharEscapes'), false);
+  assert.deepEqual(
+    [...tokenizer.classVariables].sort(),
+    ['CharEscapes', 'DigitTable', 'LiteralChars', 'NameDelimiters'],
+  );
+  assert.equal(JSON.stringify(tokenizer.classVariables).includes('Set'), false, 'values never cross the export boundary');
   const tokenizerInit = manifest.methods.find(({identity}) => identity === 'cuis-method/YAXO/XMLTokenizer/class/initialize');
   for (const name of ['CharEscapes', 'LiteralChars', 'NameDelimiters', 'DigitTable']) {
     assert.ok(tokenizerInit.source.includes(`${name} _ `), `${name} is assigned by the upstream class-side initialize`);

@@ -52,12 +52,40 @@ async function installSmalltalkClassVariableSupport({images, compilation, imageI
   return Object.freeze({bindingClass: classRef});
 }
 
-// Declare class variables on a class. Creates the binding objects and returns a
-// name -> binding-id map for the compiler. Stores the declared variable names in the
-// class record's metadata so the hierarchy walk can find them.
-//
-// Each binding is ensure-exact-or-create at its deterministic ID, so re-running
-// converges. The initial value is nil unless specified.
+// Adopt-or-create each binding at its deterministic id for the IMPORT path. Semantics follow the
+// durable Project-replay rule (ADR 0080 decision 4 adapted): the declaration is the creation
+// identity; the binding's VALUE is mutable shared state, so a binding already present comes back
+// AS IT CURRENTLY IS — a replayed import must never reset values the package's own code has since
+// written. An absent binding is created with this image's nil, exactly like a fresh declaration.
+async function ensureClassVariableBindings({images, imageId, className, variables = []} = {}) {
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  const bindings = {};
+  for (const varName of variables) {
+    const bindingId = classVariableBindingId(className, varName);
+    const existing = await images.getObject(imageId, bindingId);
+    if (!existing) {
+      await ensureObject(images, imageId, {
+        id: bindingId,
+        shape: objectRef(imageId, CLASS_VARIABLE_BINDING_SHAPE_ID),
+        behavior: objectRef(imageId, `smalltalk/class/${CLASS_VARIABLE_BINDING_CLASS_NAME}`),
+        slots: {[CLASS_VARIABLE_VALUE_SLOT]: kernel.nil},
+        metadata: {},
+      });
+    } else if (existing.shape?.objectId !== CLASS_VARIABLE_BINDING_SHAPE_ID) {
+      throw new TypeError(
+        `class variable binding ${imageId}/${bindingId} exists with a different shape; refusing to adopt it`,
+      );
+    }
+    bindings[varName] = bindingId;
+  }
+  return bindings;
+}
+
+// Declare class variables on a class: create each binding ensure-exact-or-create at its
+// deterministic ID, so re-running converges, and record the names in metadata. The initial value
+// is nil, and a binding whose value the package has since written is a CONFLICT for this strict
+// declaration path (use ensureClassVariableBindings for the import-path replay semantics).
 async function declareClassVariables({images, imageId, className, variables = []} = {}) {
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
@@ -75,13 +103,17 @@ async function declareClassVariables({images, imageId, className, variables = []
   }
 
   // Store the declared variable names in the class record's metadata so the
-  // hierarchy walk can find them without scanning.
+  // hierarchy walk can find them without scanning. A class DEFINED with its class
+  // variables (defineClass writes the same metadata) already carries them; the
+  // rewrite below is only for a declaration added to an existing class record, and
+  // is skipped entirely when the record already declares exactly these names.
   const classObjectId = `smalltalk/class/${className}`;
   const classRecord = await images.getObject(imageId, classObjectId);
   if (classRecord) {
     const existingVars = classRecord.metadata?.classVariables ?? [];
     const mergedVars = [...new Set([...existingVars, ...variables])];
-    if (mergedVars.length > 0) {
+    if (mergedVars.length > 0
+      && (existingVars.length !== mergedVars.length || [...mergedVars].sort().join('\u0000') !== [...existingVars].sort().join('\u0000'))) {
       await images.putObject(imageId, {
         id: classObjectId,
         shape: classRecord.shape,
@@ -157,5 +189,6 @@ export {
   classVariableBindingId,
   classVariableDeclarations,
   declareClassVariables,
+  ensureClassVariableBindings,
   installSmalltalkClassVariableSupport,
 };

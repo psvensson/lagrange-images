@@ -554,6 +554,7 @@ test('a Cuis-imported WASM method stays in the WASM lane when it is replaced', a
         superclassName: 'Object',
         superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
         instanceVariables: [],
+        classVariables: [],
       }],
       methods: [{
         identity: 'cuis-method/Fixture/LaneUnit/instance/answer',
@@ -608,6 +609,7 @@ test('the Cuis adapter fixture really is WASM-lane material', async () => {
         superclassName: 'Object',
         superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
         instanceVariables: [],
+        classVariables: [],
       }],
       methods: [{
         identity: 'cuis-method/Fixture/LaneProbe/instance/answer',
