@@ -283,6 +283,7 @@ test('canonicalizeSemanticExport v2 preserves ordered local instance-variable de
         superclassName: 'LagrangeNativeImportBase',
         superclassPackage: 'LagrangeNativeImportM1',
         instanceVariables: ['childFirst', 'childSecond'],
+        classVariables: ['Registry'],
       },
       {
         package: 'LagrangeNativeImportM1',
@@ -290,6 +291,7 @@ test('canonicalizeSemanticExport v2 preserves ordered local instance-variable de
         superclassName: 'Object',
         superclassPackage: 'Cuis-Base',
         instanceVariables: ['baseValue'],
+        classVariables: [],
       },
     ],
     methods: [],
@@ -301,6 +303,8 @@ test('canonicalizeSemanticExport v2 preserves ordered local instance-variable de
   const child = out.classes.find((candidate) => candidate.name === 'LagrangeNativeImportChild');
   assert.deepEqual(base.instanceVariables, ['baseValue']);
   assert.deepEqual(child.instanceVariables, ['childFirst', 'childSecond']);
+  assert.deepEqual(child.classVariables, ['Registry'], 'v2 carries the class definition\'s own declared class-variable names');
+  assert.deepEqual(base.classVariables, []);
   assert.equal(child.instanceVariables.includes('baseValue'), false, 'v2 carries local declarations, not flattened inherited layout');
 
   assert.throws(

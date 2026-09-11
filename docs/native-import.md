@@ -484,6 +484,21 @@ uncached entry advances the stream exactly once, and the loop reads the external
 consumed character. The single-keyword `ifNil:`/`ifNotNil:` pair shares these same semantics and
 this same one-argument divergence, which had simply never been forced before.
 
+The durable-restart vertical (bead `lagrange-images-xg3`) then resumed the parent milestone and
+measured the real import boundary by enumerating the whole pinned package one method at a time.
+Two refusals were repaired at their owners and landed together: an EMPTY method body — several
+pinned subclass hooks are empty or comment-only — imports as the ordinary answer-self method
+(bead `lagrange-images-8yv`), and the canonical v2 export now carries classVariableNames as
+definition facts (bead `lagrange-images-9qf`): the declared NAMES cross the boundary, the importer
+declares them on the imported class at creation (with replay comparing the same desired metadata),
+the executable binding objects are adopted-or-created, and the package's own class-side
+`initialize` populates them by execution — no load-time-expression channel was added, and the
+export still carries no values. The same enumeration recorded the remaining work list at the
+compile boundary (literal-array element syntax in the lexer, the read-side stream name
+`ReadStream`, the `Character` constructor global) and the base-protocol cluster the unchanged
+`initialize` executes against — each filed and to be measured against the pinned oracle as its
+turn comes.
+
 The legacy assignment finding is now repaired at its two exact owners. The pinned Cuis scanner/parser
 oracle established that `_` is the legacy arrow only at a token boundary and only when its following
 character is not a letter, digit, underscore or colon. Thus `a _ b` assigns, while `a_b`, `_foo`,

@@ -212,7 +212,8 @@ function semanticExportScript(packages, exportFileName, representation) {
   // without a per-method packageOfMethod: detect: scan.
   const classDeclarationFields = representation === CUIS_SEMANTIC_EXPORT_V2
     ? `,
-    ',"instanceVariables":[', (',' join: (cls instVarNames collect: [ :name | jsonString value: name asString ])), ']'`
+    ',"instanceVariables":[', (',' join: (cls instVarNames collect: [ :name | jsonString value: name asString ])), ']',
+    ',"classVariables":[', (',' join: (cls classVarNames collect: [ :name | jsonString value: name asString ])), ']'`
     : '';
   return `
 "=== Lagrange Cuis semantic export (ADR 0072) ==="
@@ -400,6 +401,22 @@ function canonicalizeSemanticExport(raw) {
           );
         }
         normalized.instanceVariables = [...c.instanceVariables];
+        // Declared class-variable NAMES are part of the class definition (the imported class must
+        // be able to declare them natively); their VALUES never cross the export boundary — they
+        // are the package's own load-time/computation state, populated by its own methods.
+        if (!Array.isArray(c.classVariables) || c.classVariables.some((name) => typeof name !== 'string' || name.length === 0)) {
+          throw new OpenSmalltalkToolchainRunError(
+            'Cuis semantic export v2 class classVariables must be an array of strings',
+            {stderr: JSON.stringify(c.classVariables ?? null), exitCode: null},
+          );
+        }
+        if (new Set(c.classVariables).size !== c.classVariables.length) {
+          throw new OpenSmalltalkToolchainRunError(
+            'Cuis semantic export v2 class classVariables must not contain duplicate names',
+            {stderr: JSON.stringify(c.classVariables), exitCode: null},
+          );
+        }
+        normalized.classVariables = [...c.classVariables];
       }
       return normalized;
     })

@@ -1,7 +1,9 @@
 import test from 'node:test';
+import {isObjectRef} from '../src/value/index.js';
 import assert from 'node:assert/strict';
 import {
   booleanValue,
+  installSmalltalkClassVariableSupport,
   CUIS_NATIVE_INTEGER_IDENTITY,
   CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
   CUIS_SEMANTIC_EXPORT_V2,
@@ -53,6 +55,7 @@ function manifest({classes = null, methods = []} = {}) {
         superclassName: 'ZuluBase',
         superclass: 'cuis-class/Fixture/ZuluBase',
         instanceVariables: ['child'],
+        classVariables: [],
       },
       {
         identity: 'cuis-class/Fixture/ZuluBase',
@@ -61,6 +64,7 @@ function manifest({classes = null, methods = []} = {}) {
         superclassName: 'Object',
         superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
         instanceVariables: ['base'],
+        classVariables: [],
       },
     ],
     methods,
@@ -201,6 +205,142 @@ test('an imported method resolves and executes a sibling package class through n
   });
 });
 
+test('an imported empty method body is the ordinary answer-self method, refused no longer', async () => {
+  await withStandardImage(async (runtime) => {
+    // The exact shape measured on the pinned YAXO package by the M4 vertical (bead
+    // lagrange-images-xg3): subclass hook methods whose bodies are empty or comment-only.
+    const input = manifest({methods: [
+      {
+        identity: 'cuis-method/Fixture/ZuluBase/class/emptyHook',
+        package: 'Fixture',
+        class: 'cuis-class/Fixture/ZuluBase',
+        side: 'class',
+        selector: 'emptyHook',
+        source: 'emptyHook\n',
+      },
+      {
+        identity: 'cuis-method/Fixture/ZuluBase/instance/commentOnlyHook:',
+        package: 'Fixture',
+        class: 'cuis-class/Fixture/ZuluBase',
+        side: 'instance',
+        selector: 'commentOnlyHook:',
+        source: 'commentOnlyHook: anArg\n\t"a genuinely empty subclass hook"\n',
+      },
+    ]});
+
+    const imported = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: input,
+    });
+    const baseClass = imported.classes.find(({identity}) => identity === 'cuis-class/Fixture/ZuluBase');
+
+    // A class-side empty hook answers its receiver — the class object itself.
+    const classSend = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'execute-empty-class-hook', source: '[ ZuluBase emptyHook ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', classSend.block.id), [],
+      )),
+      baseClass.classRef,
+      'an empty class-side body answers the receiver instead of refusing to import',
+    );
+
+    // An instance-side comment-only hook answers its receiver — the instance.
+    const instanceSend = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'execute-comment-only-hook',
+      source: '[ :instance | instance commentOnlyHook: 1 ]',
+    });
+    const allocated = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'allocate-hook-receiver', source: '[ ZuluBase basicNew ]',
+    });
+    const instance = await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('app', allocated.block.id), [],
+    ));
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', instanceSend.block.id), [instance],
+      )),
+      instance,
+      'the comment-only hook executed and answered its receiver',
+    );
+  });
+});
+
+test('an imported class declares its class variables and package code initializes them itself', async () => {
+  await withStandardImage(async (runtime) => {
+    await installSmalltalkClassVariableSupport({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane: 'wasm',
+    });
+    // The canonical export now carries classVariableNames; values never cross the boundary. The
+    // package's own class-side method is what populates the shared state (exactly what the M4
+    // vertical executes as ordinary imported behavior: XMLTokenizer class>>initialize).
+    const input = manifest({methods: []});
+    input.classes = input.classes.map((c) => ({...c, classVariables: []}));
+    input.classes.find((c) => c.name === 'ZuluBase').classVariables = ['Registry'];
+    input.methods.push({
+      identity: 'cuis-method/Fixture/ZuluBase/class/initialize',
+      package: 'Fixture',
+      class: 'cuis-class/Fixture/ZuluBase',
+      side: 'class',
+      selector: 'initialize',
+      source: 'initialize\n\tRegistry := Dictionary new',
+    });
+    input.methods.push({
+      identity: 'cuis-method/Fixture/ZuluBase/class/registry',
+      package: 'Fixture',
+      class: 'cuis-class/Fixture/ZuluBase',
+      side: 'class',
+      selector: 'registry',
+      source: 'registry\n\t^ Registry',
+    });
+
+    const imported = await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: input,
+    });
+    const baseClass = imported.classes.find(({identity}) => identity === 'cuis-class/Fixture/ZuluBase');
+    const classRecord = await runtime.images.getObject('app', baseClass.classRef.objectId);
+    assert.deepEqual(classRecord.metadata.classVariables, ['Registry'], 'the definition names are durable class metadata');
+
+    // Executing the package's own initialize populates the binding; reading it back through an
+    // ordinary compiled method observes that value — creation, write and read all through
+    // imported code and the native class-variable owner, never a host side channel.
+    const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
+    const initiate = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'initialize-imported-class-vars', source: '[ ZuluBase initialize ]',
+    });
+    await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('app', initiate.block.id), [],
+    ));
+    const binding = await runtime.images.getObject('app', 'smalltalk/class-variable/ZuluBase/Registry');
+    assert.ok(binding, 'the declared class variable has its executable binding object');
+    assert.ok(isObjectRef(binding.slots['class-variable-value']), 'the package method stored its computed value in the binding');
+    await runtime.executor.execute(await runtime.invocations.invokeBlock(
+      objectRef('app', initiate.block.id), [],
+    ));
+    // An ordinary compiled class-side getter READS the shared state — proving not only that the
+    // binding was written, but that an installed method resolves its class variable at execution.
+    const current = await runtime.images.getObject('app', 'smalltalk/class-variable/ZuluBase/Registry');
+    const registry = await installSymmetricSmalltalkBlock({
+      images: runtime.images, imageId: 'app', id: 'read-imported-class-var', source: '[ ZuluBase registry ]',
+    });
+    assert.deepEqual(
+      await runtime.executor.execute(await runtime.invocations.invokeBlock(
+        objectRef('app', registry.block.id), [],
+      )),
+      current.slots['class-variable-value'],
+      'a compiled method reads the shared state through its class-variable binding',
+    );
+
+    // Replaying the same import converges: the definition's metadata compares exactly.
+    const frontierBeforeReplay = await runtime.images.frontier('app');
+    assert.deepEqual(await importCuisNativePackage({
+      images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: input,
+    }), imported);
+    assert.equal(await runtime.images.frontier('app'), frontierBeforeReplay);
+    assert.deepEqual(await findSmalltalkKernel({images: runtime.images, imageId: 'app'}), kernel);
+  });
+});
+
 test('an imported class global collision is refused by the native namespace owner without rebinding', async () => {
   await withStandardImage(async (runtime) => {
     const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
@@ -266,10 +406,12 @@ test('the adapter preflights malformed class and method graphs before any native
         {
           identity: 'cuis-class/Fixture/CycleA', package: 'Fixture', name: 'CycleA',
           superclassName: 'CycleB', superclass: 'cuis-class/Fixture/CycleB', instanceVariables: [],
+          classVariables: [],
         },
         {
           identity: 'cuis-class/Fixture/CycleB', package: 'Fixture', name: 'CycleB',
           superclassName: 'CycleA', superclass: 'cuis-class/Fixture/CycleA', instanceVariables: [],
+          classVariables: [],
         },
       ]}),
       message: /cycle/,
@@ -280,10 +422,12 @@ test('the adapter preflights malformed class and method graphs before any native
         {
           identity: 'cuis-class/Fixture/Duplicate', package: 'Fixture', name: 'Duplicate',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+          classVariables: [],
         },
         {
           identity: 'cuis-class/Other/Duplicate', package: 'Other', name: 'Duplicate',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+          classVariables: [],
         },
       ]}),
       message: /native class name Duplicate appears more than once/,
@@ -345,10 +489,12 @@ test('native declaration legality stays with the class owner and a corrected ret
       {
         identity: 'cuis-class/Fixture/Base', package: 'Fixture', name: 'Base',
         superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: ['shared'],
+        classVariables: [],
       },
       {
         identity: 'cuis-class/Fixture/Child', package: 'Fixture', name: 'Child',
         superclassName: 'Base', superclass: 'cuis-class/Fixture/Base', instanceVariables: ['shared'],
+        classVariables: [],
       },
     ]});
     const frontierBefore = await runtime.images.frontier('app');
@@ -805,10 +951,12 @@ test('a declaration outside the scope cannot smuggle a malformed or duplicated c
         {
           identity: 'cuis-class/Fixture/ZuluBase', package: 'Fixture', name: 'ZuluBase',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: ['base'],
+          classVariables: [],
         },
         {
           identity: 'cuis-class/Fixture/Mislabelled', package: 'Fixture', name: 'Other',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+          classVariables: [],
         },
       ]}),
       message: /class semantic identity cuis-class\/Fixture\/Mislabelled does not match its canonical package\/name/,
@@ -819,6 +967,7 @@ test('a declaration outside the scope cannot smuggle a malformed or duplicated c
         {
           identity: 'cuis-class/Fixture/ZuluBase', package: 'Fixture', name: 'ZuluBase',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: ['base'],
+          classVariables: [],
         },
         {
           identity: 'cuis-class/Fixture/Partial', package: 'Fixture', name: 'Partial',
@@ -833,14 +982,17 @@ test('a declaration outside the scope cannot smuggle a malformed or duplicated c
         {
           identity: 'cuis-class/Fixture/ZuluBase', package: 'Fixture', name: 'ZuluBase',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: ['base'],
+          classVariables: [],
         },
         {
           identity: 'cuis-class/Fixture/Twin', package: 'Fixture', name: 'Twin',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+          classVariables: [],
         },
         {
           identity: 'cuis-class/Fixture/Twin', package: 'Fixture', name: 'Twin',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+          classVariables: [],
         },
       ]}),
       message: /class semantic identity cuis-class\/Fixture\/Twin appears more than once/,
@@ -876,14 +1028,17 @@ test('a declaration outside the scope cannot smuggle a malformed or duplicated c
         {
           identity: 'cuis-class/Fixture/ZuluBase', package: 'Fixture', name: 'ZuluBase',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: ['base'],
+          classVariables: [],
         },
         {
           identity: 'cuis-class/Fixture/Clash', package: 'Fixture', name: 'Clash',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+          classVariables: [],
         },
         {
           identity: 'cuis-class/Other/Clash', package: 'Other', name: 'Clash',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+          classVariables: [],
         },
       ]}),
       message: /native class name Clash appears more than once/,
@@ -970,6 +1125,7 @@ test('a mapped method-target identity is not thereby a legal superclass', async 
       superclassName: 'Integer',
       superclass: CUIS_NATIVE_INTEGER_IDENTITY,
       instanceVariables: ['base'],
+      classVariables: [],
     }]});
     const frontierBefore = await runtime.images.frontier('app');
     await assert.rejects(
@@ -1007,6 +1163,7 @@ test('a manifest may not declare a class whose identity the mapping already owns
           superclassName: 'Object',
           superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
           instanceVariables: [],
+          classVariables: [],
         }],
         methods: [],
       };
@@ -1361,6 +1518,7 @@ test('a manifest that declares its own class of the name is not adapted', async 
           superclassName: 'Object',
           superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
           instanceVariables: [],
+          classVariables: [],
         },
         {
           identity: 'cuis-class/Fixture/ZuluBase',
@@ -1369,6 +1527,7 @@ test('a manifest that declares its own class of the name is not adapted', async 
           superclassName: 'Object',
           superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
           instanceVariables: ['base'],
+          classVariables: [],
         },
       ],
       methods: [{
@@ -1645,10 +1804,12 @@ test('a manifest-declared UnicodeString class remains the package class', async 
         {
           identity: 'cuis-class/Fixture/UnicodeString', package: 'Fixture', name: 'UnicodeString',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: [],
+          classVariables: [],
         },
         {
           identity: 'cuis-class/Fixture/ZuluBase', package: 'Fixture', name: 'ZuluBase',
           superclassName: 'Object', superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY, instanceVariables: ['base'],
+          classVariables: [],
         },
       ],
       methods: [

@@ -1,6 +1,7 @@
 import {defineMethods} from './smalltalk-class-builder.js';
 import {installSmalltalkAllocationProtocol} from './smalltalk-allocation.js';
 import {installSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
+import {installSmalltalkClassVariableSupport} from './smalltalk-class-variables.js';
 import {installSmalltalkConditionProtocol, installSmalltalkExceptionAccessors, CONDITION_CLASSES} from './smalltalk-conditions.js';
 import {installSmalltalkControlFlow} from './smalltalk-control-flow.js';
 import {installSmalltalkDictionaryProtocol, installSmalltalkEqualityProtocol} from './smalltalk-dictionary.js';
@@ -112,6 +113,11 @@ async function installSymmetricSmalltalkStandardImage({
   const controlFlow = await installSmalltalkControlFlow(options);
   const indexed = await installSmalltalkIndexedProtocol(options);
   const instanceVariables = await installSmalltalkInstanceVariableProtocol({images, imageId});
+  // Hierarchy-scoped shared bindings (ADR 0057's class-scoped analog). The concept becomes
+  // load-bearing through the import path: a canonical manifest class may DECLARE class-variable
+  // names, and its package's own code reads and writes them. This must exist before that import,
+  // and it is ensure-based, so replay is free.
+  const classVariables = await installSmalltalkClassVariableSupport({images, compilation, imageId, lane});
   const blocks = await installSmalltalkBlockProtocol({images, imageId});
   const integers = await installSmalltalkIntegerProtocol(options);
   const integerAddition = await installIntegerAddition({...options, kernel});
@@ -172,6 +178,7 @@ async function installSymmetricSmalltalkStandardImage({
       controlFlow,
       indexed,
       instanceVariables,
+      classVariables,
       blocks,
       integers,
       integerAddition,

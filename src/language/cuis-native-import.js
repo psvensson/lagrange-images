@@ -1,4 +1,5 @@
 import {ensureClassFromDeclaration} from './smalltalk-class-builder.js';
+import {ensureClassVariableBindings} from './smalltalk-class-variables.js';
 import {findSmalltalkGlobalNamespace, publishSmalltalkClassGlobals} from './smalltalk-globals.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {reconcileMethodsFromSource} from './smalltalk-instance-variables.js';
@@ -411,7 +412,10 @@ function nativeMethodSource({identity, selector, source, declaredNames}) {
   }
   const bodyStart = tokens[index - 1].end;
   const body = adaptDialect(source.slice(bodyStart), tokens, index, bodyStart, parameters, declaredNames).trim();
-  if (body.length === 0) fail(`method ${identity} has no body`, identity);
+  // An empty method body is ordinary Smalltalk: an empty (or comment-only) hook such as the
+  // pinned YAXO `XMLNode>>contentsDo:` answers its receiver. The appended trailing `self` below
+  // is exactly that answer; an empty body needs no statement of its own. Refusing it would make
+  // a fine-grained package method unimportable for no semantic reason.
   const parameterSource = parameters.length === 0 ? '' : ` ${parameters.map((name) => `:${name}`).join(' ')} |`;
   const bodyTokens = tokens.slice(index, -1);
   const statementSeparator = bodyTokens.length === 0 || bodyTokens.at(-1).type === '.' ? '' : '.';
@@ -469,7 +473,7 @@ function importPlan(manifest, scope) {
   for (const item of manifest.classes) {
     exactKeys(
       item,
-      ['identity', 'package', 'name', 'superclassName', 'superclass', 'instanceVariables'],
+      ['identity', 'package', 'name', 'superclassName', 'superclass', 'instanceVariables', 'classVariables'],
       'class declaration',
     );
     const packageName = text(item.package, 'class package');
@@ -498,7 +502,13 @@ function importPlan(manifest, scope) {
       fail(`class ${identity} superclass name does not match ${superclass}`, identity);
     }
     const instanceVariables = textArray(item.instanceVariables, `class ${identity} instanceVariables`);
-    const normalized = Object.freeze({identity, package: packageName, name, superclass, instanceVariables});
+    // Declared class-variable NAMES are definition facts the canonical export now carries; their
+    // values do not cross the boundary and are never normalized here.
+    const classVariables = textArray(item.classVariables, `class ${identity} classVariables`);
+    if (new Set(classVariables).size !== classVariables.length) {
+      fail(`class ${identity} declares duplicate class variable names`, identity);
+    }
+    const normalized = Object.freeze({identity, package: packageName, name, superclass, instanceVariables, classVariables});
     classes.push(normalized);
     byIdentity.set(identity, normalized);
   }
@@ -649,7 +659,15 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
       name: declaration.name,
       superclassRef: superclass.classRef,
       instanceVariables: declaration.instanceVariables,
+      classVariables: declaration.classVariables,
     }));
+    // The declared NAMES became definition metadata at creation; the executable shared state is
+    // the ClassVariableBinding object each name denotes, created here at its deterministic id so
+    // the package's own class-side methods can write them. Values stay the image's nil until the
+    // imported package code itself initializes them.
+    if (declaration.classVariables.length > 0) {
+      await ensureClassVariableBindings({images, imageId, className: declaration.name, variables: declaration.classVariables});
+    }
   }
 
   // Cuis class names live in its image-wide SystemDictionary. When the native image has installed

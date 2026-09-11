@@ -1156,10 +1156,17 @@ async function ensureClassFromDeclaration({
   name,
   superclassRef = null,
   instanceVariables = [],
+  classVariables = [],
 } = {}) {
   requiredText(name, 'class name');
   requiredText(imageId, 'image id');
   const localNames = normalizeLocalInstanceVariables(instanceVariables);
+  if (!Array.isArray(classVariables) || classVariables.some((v) => typeof v !== 'string' || v.length === 0)) {
+    throw new TypeError('classVariables must be an array of non-empty names');
+  }
+  if (new Set(classVariables).size !== classVariables.length) {
+    throw new TypeError('classVariables must not contain duplicate names');
+  }
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const superclass = superclassRef ?? kernel.objectClass;
@@ -1217,7 +1224,7 @@ async function ensureClassFromDeclaration({
   }
 
   return await ensureNamedClass({
-    images, imageId, name, superclassRef: superclass, instanceShapeRef,
+    images, imageId, name, superclassRef: superclass, instanceShapeRef, classVariables,
   });
 }
 
@@ -1228,8 +1235,14 @@ async function ensureClassFromDeclaration({
 // change — names, the class/metaclass behavior edges, superclass, both instance Shapes — and
 // deliberately excludes the method dictionary, which is the mutable part with its own retry-safe
 // installer. Carrying the right instance Shape is not the same as being this class.
-async function ensureNamedClass({images, imageId, name, superclassRef = null, instanceShapeRef = null, metaclassInstanceShapeRef = null} = {}) {
+async function ensureNamedClass({images, imageId, name, superclassRef = null, instanceShapeRef = null, metaclassInstanceShapeRef = null, classVariables = []} = {}) {
   requiredText(name, 'class name');
+  if (!Array.isArray(classVariables) || classVariables.some((v) => typeof v !== 'string' || v.length === 0)) {
+    throw new TypeError('classVariables must be an array of non-empty names');
+  }
+  if (new Set(classVariables).size !== classVariables.length) {
+    throw new TypeError('classVariables must not contain duplicate names');
+  }
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const classRef = objectRef(imageId, `smalltalk/class/${name}`);
@@ -1237,10 +1250,15 @@ async function ensureNamedClass({images, imageId, name, superclassRef = null, in
   const superclass = superclassRef ?? kernel.objectClass;
   const instanceShape = instanceShapeRef ?? kernel.nil;
   const metaclassInstanceShape = metaclassInstanceShapeRef ?? kernel.nil;
+  // The desired metadata, exactly what defineClass writes: declared class-variable NAMES are part
+  // of the definition, so rediscovery demands them and replaying the same definition converges.
+  const desiredMetadata = classVariables.length > 0
+    ? {smalltalk: 'behavior', name, classVariables: [...classVariables]}
+    : {smalltalk: 'behavior', name};
 
   const existing = await images.getObject(imageId, classRef.objectId);
   if (!existing) {
-    const defined = await defineClass({images, imageId, name, superclassRef: superclass, instanceShapeRef, metaclassInstanceShapeRef});
+    const defined = await defineClass({images, imageId, name, superclassRef: superclass, instanceShapeRef, metaclassInstanceShapeRef, classVariables});
     return Object.freeze({classRef: defined.classRef, metaclassRef: defined.metaclassRef});
   }
 
@@ -1256,8 +1274,8 @@ async function ensureNamedClass({images, imageId, name, superclassRef = null, in
   if (behavior.name.value !== name || metaclass.name.value !== `${name} class`) throw conflict();
   // `defineClass` writes this deterministically, so it is part of what "the same class" means. The
   // method dictionary is excluded above because it has a legitimate lifecycle of its own; metadata
-  // has none.
-  if (canonicalJson(behavior.record.metadata) !== canonicalJson({smalltalk: 'behavior', name})) throw conflict();
+  // beyond the definition's own class-variable declaration has none.
+  if (canonicalJson(behavior.record.metadata) !== canonicalJson(desiredMetadata)) throw conflict();
   if (canonicalJson(metaclass.record.metadata) !== canonicalJson({smalltalk: 'behavior', name: `${name} class`})) {
     throw conflict();
   }
@@ -1404,9 +1422,15 @@ async function requireInstanceShape({images, imageId, instanceShapeRef, supercla
   return instanceShapeRef;
 }
 
-async function defineClass({images, imageId, name, superclassRef = null, instanceShapeRef = null, metaclassInstanceShapeRef = null} = {}) {
+async function defineClass({images, imageId, name, superclassRef = null, instanceShapeRef = null, metaclassInstanceShapeRef = null, classVariables = []} = {}) {
   requiredText(name, 'class name');
   requiredText(imageId, 'image id');
+  if (!Array.isArray(classVariables) || classVariables.some((v) => typeof v !== 'string' || v.length === 0)) {
+    throw new TypeError('classVariables must be an array of non-empty names');
+  }
+  if (new Set(classVariables).size !== classVariables.length) {
+    throw new TypeError('classVariables must not contain duplicate names');
+  }
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const ref = (objectId) => objectRef(imageId, objectId);
@@ -1442,9 +1466,14 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
   const metaclassObjectId = `smalltalk/metaclass/${name}`;
 
   // The metaclass keeps `nil` unless a metaclass instance shape is explicitly supplied.
-  for (const [id, behaviorName, superRef, behaviorRef, shapeRef] of [
-    [metaclassObjectId, `${name} class`, superMetaclass, kernel.metaclassClass, metaclassInstanceShape],
-    [classObjectId, name, superclass, ref(metaclassObjectId), instanceShape],
+  // Declared class variables are part of the class DEFINITION (the canonical export's name list
+  // crosses the import boundary; values never do). They live in the CLASS record's metadata —
+  // the same place `classVariableDeclarations` reads them — from creation, so an identical
+  // redefinition/replay compares metadata exactly and converges instead of conflicting. A class
+  // with no declarations keeps today's metadata, so no existing record changes meaning.
+  for (const [id, behaviorName, superRef, behaviorRef, shapeRef, isClass] of [
+    [metaclassObjectId, `${name} class`, superMetaclass, kernel.metaclassClass, metaclassInstanceShape, false],
+    [classObjectId, name, superclass, ref(metaclassObjectId), instanceShape, true],
   ]) {
     await ensureEmptyMethodDictionary(images, imageId, methodsId(id), {owner: id}, kernel.nil);
     await ensureObject(images, imageId, {
@@ -1457,7 +1486,9 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
         'behavior-methods': ref(methodsId(id)),
         'behavior-instance-shape': shapeRef,
       },
-      metadata: {smalltalk: 'behavior', name: behaviorName},
+      metadata: isClass && classVariables.length > 0
+        ? {smalltalk: 'behavior', name: behaviorName, classVariables: [...classVariables]}
+        : {smalltalk: 'behavior', name: behaviorName},
     });
   }
 
