@@ -463,6 +463,7 @@ const CUIS_MANIFEST = Object.freeze({
     superclassName: 'Object',
     superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
     instanceVariables: ['baseValue'],
+    classVariables: [],
   }],
   methods: [{
     identity: 'cuis-method/Fixture/BrowseImported/instance/baseValue',
