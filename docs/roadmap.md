@@ -242,10 +242,17 @@ of classes the package itself defines — which is what an M4 restart proof has 
   `codePoint`, exact self return, one ordered accumulation and one `contents` constructor reusing
   the existing UTF-8 codec owner; unchanged `nextWhitespace` writes through the product stream and
   exposes `next`;
-- [ ] classify the `next` RED as application scope, not native stream protocol (bead
+- [x] classify the `next` RED as application scope, not native stream protocol (bead
   `lagrange-images-xxm.15`): import the unchanged package-owned `XMLTokenizer>>next` into the M4
   method closure, delete the synthetic probe bridge, prove the claimed binding structurally, and
   record the exposed two-keyword `ifNil:ifNotNil:` base-protocol RED without repairing it;
+- [x] measure and repair the two-keyword `ifNil:ifNotNil:` RED at the nil-checking protocol owner
+  (bead `lagrange-images-xxm.16`): pinned Cuis answers — nil arm only on `UndefinedObject`, guard
+  arm only on `Object`, zero-argument blocks observing the oracle exactly; the unchanged separator
+  loop then completes through the package's own `peek`/`next` pair against an instrumented stream
+  (cached entry answers and clears without consuming; uncached entry steps once; one stream read
+  per consumed character), and the recorded one-argument cull divergence (bead
+  `lagrange-images-4j9`) stays deferred to a real consumer;
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;

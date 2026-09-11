@@ -463,12 +463,26 @@ identity `cuis-method/YAXO/XMLTokenizer/instance/next` is the whole repair: the 
 compiles the unchanged method, the synthetic probe `next` bridge the earlier acceptance carried is
 deleted, and structural assertions prove `self next` resolves to the imported package binding (the
 probe holds none; no `Object>>next`, `WriteStream>>next` or importer-synthesized method exists).
-Executing the real method then exposes its own first dependency rather than a stream question: the
-two-keyword `ifNil:ifNotNil:` send, which the standard image does not install (only the
-single-keyword `ifNil:`/`ifNotNil:` pair exists). That base nil-checking protocol gap is the next
-genuine RED, owned by the native control-flow installer, recorded as bead `lagrange-images-xxm.16`
-without repair in this slice — the nested-stream branch stays unexercised, exactly as the
-non-nested path requires.
+Executing the real method then exposed its own first dependency rather than a stream question: the
+two-keyword `ifNil:ifNotNil:` send, which the standard image did not install — the next genuine
+RED, owned by the native control-flow installer.
+
+Bead `lagrange-images-xxm.16` is that base nil-checking protocol, repaired at the owner that
+already installs `ifNil:`/`ifNotNil:`. The pinned Cuis oracle (measured in the pinned
+`.sources`) answers `nilBlock value` on `UndefinedObject` and evaluates the guard block untouched
+by `ifNil:` on `ProtoObject` — phrased there as `valueWithPossibleArgument:`, i.e. cull semantics
+where a one-argument guard block would also receive the receiver. The native install follows the
+pinned answers with ordinary source methods: `ifNil:ifNotNil:` on `UndefinedObject` evaluates only
+the nil arm; on `Object` it evaluates only the guard arm. The guard block is evaluated by plain
+`value` — zero-argument blocks, the only form any consumer has forced, observe exactly the pinned
+answers; the one-argument cull divergence from the pinned oracle is recorded (bead
+`lagrange-images-4j9`) rather than smuggled in as a Block-arity primitive on this slice. With the
+protocol installed, the unchanged separator loop completes through the package's own `peek`/`next`
+pair against an instrumented stream: the exact native Text is delivered through
+`handleWhitespace:`, the cached-peek entry answers its cache and clears it without consuming, the
+uncached entry advances the stream exactly once, and the loop reads the external input once per
+consumed character. The single-keyword `ifNil:`/`ifNotNil:` pair shares these same semantics and
+this same one-argument divergence, which had simply never been forced before.
 
 The legacy assignment finding is now repaired at its two exact owners. The pinned Cuis scanner/parser
 oracle established that `_` is the legacy arrow only at a token boundary and only when its following

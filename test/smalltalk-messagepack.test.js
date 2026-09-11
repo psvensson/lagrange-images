@@ -51,6 +51,12 @@ async function evaluate(runtime, imageId, id, source, args = []) {
   return await runtime.executor.execute(activation);
 }
 
+async function kernelNilOf(runtime, imageId) {
+  const kernel = await import('../src/language/smalltalk-kernel.js').then(m =>
+    m.findSmalltalkKernel({images: runtime.images, imageId}));
+  return kernel.nil;
+}
+
 // --- vertical slice: encode a positive fixint ------------------------------------------------------
 
 test('MessagePack encode: positive fixint 42 produces byte 42', async () => {
@@ -294,6 +300,47 @@ test('MessagePack decode: uint8 header 0xCC then byte 200 reads back as 200', as
 
 // --- ifNil: / ifNotNil: — the missing general capability -------------------------------------------
 
+// The combined two-keyword form (bead lagrange-images-xxm.16). Ordinary nil-checking protocol
+// installed at the same owner as the single-keyword pair; no primitive, no compiler knowledge.
+// The pinned Cuis oracle answers `nilBlock value` on UndefinedObject and evaluates the guard
+// block on non-nil receivers (`valueWithPossibleArgument: self` there); zero-argument blocks —
+// the only form the forcing consumers use — observe exactly those answers.
+
+test('ifNil:ifNotNil: takes the nil arm with a nil receiver', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    // nil arm evaluates its block and answers its value.
+    const result = await evaluate(runtime, 'app', 'ifnilifnotnil-nil', '[ nil ifNil: [ 42 ] ifNotNil: [ 99 ] ]');
+    assert.deepEqual(result, integerValue(42));
+
+    // The nil arm runs ordinary block work, not a literal shortcut.
+    const result2 = await evaluate(runtime, 'app', 'ifnilifnotnil-nil2', '[ nil ifNil: [ 3 + 4 ] ifNotNil: [ 99 ] ]');
+    assert.deepEqual(result2, integerValue(7));
+
+    // The guard arm is never evaluated on the nil path.
+    await assert.doesNotReject(
+      () => evaluate(runtime, 'app', 'ifnilifnotnil-nil3', '[ nil ifNil: [ 42 ] ifNotNil: [ 1 noSuchSelector ] ]'),
+    );
+  });
+});
+
+test('ifNil:ifNotNil: takes the guard arm and answers its block with a non-nil receiver', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    // Non-nil: the nil arm is never evaluated, the guard block answers.
+    const result = await evaluate(runtime, 'app', 'ifnilifnotnil-non', '[ 7 ifNil: [ 42 ] ifNotNil: [ 99 ] ]');
+    assert.deepEqual(result, integerValue(99));
+
+    // The guard block runs ordinary block work and the nil arm stays unevaluated.
+    const result2 = await evaluate(runtime, 'app', 'ifnilifnotnil-non2', '[ 7 ifNil: [ 1 noSuchSelector ] ifNotNil: [ 3 + 4 ] ]');
+    await assert.rejects(
+      () => evaluate(runtime, 'app', 'ifnilifnotnil-non3', '[ 7 ifNil: [ 42 ] ifNotNil: [ 1 noSuchSelector ] ]'),
+      /noSuchSelector/,
+    );
+    assert.deepEqual(result2, integerValue(7));
+  });
+});
+
 test('ifNil: and ifNotNil: are available as general Smalltalk protocol', async () => {
   await withRuntime(async (runtime) => {
     await seed(runtime, 'app');
@@ -311,9 +358,7 @@ test('ifNil: and ifNotNil: are available as general Smalltalk protocol', async (
 
     // ifNotNil: on nil answers nil
     const nilNotResult = await evaluate(runtime, 'app', 'ifnotnil-nil', '[ nil ifNotNil: [ 42 ] ]');
-    const kernel = await import('../src/language/smalltalk-kernel.js').then(m =>
-      m.findSmalltalkKernel({images: runtime.images, imageId: 'app'}));
-    assert.deepEqual(nilNotResult, kernel.nil);
+    assert.deepEqual(nilNotResult, await kernelNilOf(runtime, 'app'));
   });
 });
 
