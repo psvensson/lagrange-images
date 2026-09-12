@@ -84,7 +84,7 @@ export async function prepareApplication(runtime, manifest, scope) {
 }
 
 // B receives exactly the durable locator. An old root ref is not an alternative recovery API.
-export async function recoverApplication(runtime, locator) {
+export async function reacquireDocument(runtime, locator) {
   assert.deepEqual(Object.keys(locator).sort(), ['imageId', 'memberKey', 'projectId']);
   for (const value of Object.values(locator)) assert.equal(typeof value, 'string');
   const descriptor = await readProjectDescriptor({images: runtime.images, imageId: locator.imageId, projectId: locator.projectId});
@@ -92,10 +92,15 @@ export async function recoverApplication(runtime, locator) {
   const member = descriptor.members.find(({key}) => key === locator.memberKey);
   assert.ok(member, 'application root is found only through the Project descriptor');
   assert.equal(member.role, 'application-root');
-  const recovered = await inspectDocument(runtime, member.target);
+  return member.target;
+}
+
+export async function recoverApplication(runtime, locator) {
+  const document = await reacquireDocument(runtime, locator);
+  const recovered = await inspectDocument(runtime, document);
   assert.deepEqual(recovered.lang, textValue('sv'));
   await mutate(runtime, recovered.refs.root, 'se');
-  const resumed = await inspectDocument(runtime, member.target);
+  const resumed = await inspectDocument(runtime, document);
   assert.deepEqual(resumed.refs, recovered.refs, 'resumed behavior preserves graph identities');
   assert.deepEqual(resumed.lang, textValue('se'));
   return resumed.refs;
@@ -131,4 +136,5 @@ export async function runM4Acceptance(filename, manifest, scope) {
   } finally {
     await b.runtime.close();
   }
+  return expected;
 }
