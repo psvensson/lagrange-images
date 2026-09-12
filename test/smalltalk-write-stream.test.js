@@ -106,7 +106,7 @@ test('WriteStream is an ordinary native class, not a special representation', as
 // asserted by ENUMERATING both method dictionaries, not by listing selectors that happen to be
 // absent. A hand-written absent-list cannot notice an eleventh selector; this can.
 //
-// Four selectors: the three consumers now execute, plus the instance-side `on:` the
+// Five selectors: the four consumers now execute, plus the instance-side `on:` the
 // class-side one delegates to. That split is upstream's own (measured: the instance-side `on:` is
 // implemented in `WriteStream`, the class-side in `PositionableStream class`) and it is forced
 // here too, because a metaclass method cannot assign an instance variable.
@@ -118,7 +118,7 @@ test('WriteStream implements exactly the consumer protocol plus its own initiali
 
   // `nextPutAll:` and `nextPut:` are both here because execution named them. No remembered
   // PositionableStream breadth is admitted alongside the one newly earned element write.
-  assert.deepEqual(await selectorsOf('smalltalk/class/WriteStream'), ['contents', 'nextPut:', 'nextPutAll:', 'on:']);
+  assert.deepEqual(await selectorsOf('smalltalk/class/WriteStream'), ['contents', 'nextPut:', 'nextPutAll:', 'on:', 'reset']);
   assert.deepEqual(await selectorsOf('smalltalk/metaclass/WriteStream'), ['on:']);
   assert.ok(
     await methodBlockRef({
