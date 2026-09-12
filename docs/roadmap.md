@@ -286,7 +286,8 @@ of classes the package itself defines — which is what an M4 restart proof has 
   callbacks and XMLElement factory/initializer (`4gs`, `e1q`, `r2j`, `dd1`, `fys`, `ewq`, `91u`, `yll`);
 - [x] intern native Text through `asSymbol` using existing canonical Symbol identity (`tqr`);
   the factory names the real XMLElement and executes its reached inherited `namespace:uri:`
-  initializer (`ekx`), then reaches the omitted `setAttributes:` initializer (`myp`);
+  initializer (`ekx`) and `setAttributes:` initializer (`myp`); the element callback next reaches
+  the omitted XMLDOMParser `incremental` getter (`6nn`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;

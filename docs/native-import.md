@@ -560,9 +560,10 @@ callback, and XMLElement's four-argument class-side factory and `name:` initiali
 `r2j`, `dd1`, `fys`, `ewq`, `91u`, `yll`). Each was added only after its actual refusal. The factory
 now allocates the real native XMLElement. Native Text `asSymbol` delegates to the existing Symbol
 interner (`tqr`), so unchanged `XMLElement>>name:` completes. The reached inherited
-`XMLNodeWithElements>>namespace:uri:` initializer is included unchanged (`ekx`). The same factory
-now reaches the omitted `XMLElement>>setAttributes:` initializer (`myp`) on the real native element.
-The document has not yet returned from parsing.
+`XMLNodeWithElements>>namespace:uri:` initializer is included unchanged (`ekx`), followed by the
+reached `XMLElement>>setAttributes:` initializer (`myp`). The real element factory now completes.
+The unchanged XMLDOMParser element callback next reaches its omitted `incremental` getter (`6nn`);
+the existing initializer already sets that field to false. The document has not yet returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
 The exact RED assertion is temporary; the recovery tail has
