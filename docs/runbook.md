@@ -50,6 +50,8 @@ its ten-minute timeout. The split is about budgets, not coverage: **nothing is s
 sweep still visits every write in both lanes under pre-commit and commit-then-lost-ack failure, and
 a local `npm test` still runs the lot.
 
+New commits cancel obsolete runs of the same PR; only its latest head should consume CI workers.
+
 The two native jobs can reuse a previously successful CI proof when their declared inputs and
 runner environment are identical. `scripts/ci-proof.mjs` owns this decision. It hashes every
 tracked source, ordinary/recovery test, helper, dependency lock, script, workflow and unknown file,
