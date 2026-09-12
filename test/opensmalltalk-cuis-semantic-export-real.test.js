@@ -27,6 +27,7 @@ import {
   textValue,
 } from '../src/runtime.js';
 import {referencesOfRecord} from '../src/graph/references.js';
+import {findSpurHeapIdentity} from './support/cuis-heap-identity.js';
 
 const enabled = process.env.LAGRANGE_OPENSMALLTALK_INTEGRATION === '1';
 const VM_IDENTITY = 'opensmalltalk-vm/202606270913/squeak.cog.spur_linux64x64/sha256:dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba';
@@ -430,9 +431,8 @@ test('real Cuis v2 classes and methods become native WASM behavior after the VM 
       /cuis-(?:class|method)\//,
       'Cuis semantic identity is not native runtime identity',
     );
-    assert.doesNotMatch(
-      nativeIdentityText,
-      /@[0-9a-f]{6,}|\b0x[0-9a-f]+\b|\/\d{7,}\b|\b\d{9,}\b/i,
+    assert.equal(
+      findSpurHeapIdentity(nativeIdentityText), null,
       'no Spur address/oop form leaks into durable identity or graph references',
     );
     assert.doesNotMatch(nativeIdentityText, /\b(?:oop|offset|address)\b/i);
@@ -609,14 +609,13 @@ test('Cuis semantic export captures package/class/method structure with semantic
     // target-class name matching the `class` ref's last segment. No HEAP identity leaks: an actual
     // Spur oop is a memory address (`@`+hex, `0x`+hex, or a long bare decimal). Match THOSE — not
     // the substring 'oop', which false-positives on legitimate Alien-Core selectors oopAt:/oopResult:.
-    const heapIdentity = /@[0-9a-f]{6,}|\b0x[0-9a-f]+\b|\/\d{7,}\b|\b\d{9,}\b/i;
     for (const m of manifest.methods) {
       assert.equal(m.identity, `cuis-method/${m.package}/${classNameOf(m)}/${m.side}/${m.selector}`);
-      assert.ok(!heapIdentity.test(m.identity), `no heap identity in method identity: ${m.identity}`);
+      assert.ok(findSpurHeapIdentity(m.identity) === null, `no heap identity in method identity: ${m.identity}`);
     }
     // Sanity: the guard must actually be able to fire (falsification) — feed it a fake oop identity.
-    assert.ok(heapIdentity.test('cuis-method/P/C/instance/0x0000abcdef12'), 'guard matches a 0x-address identity');
-    assert.ok(heapIdentity.test('cuis-method/P/C/instance/foo@abcdef12'), 'guard matches an @-address identity');
+    assert.ok(findSpurHeapIdentity('cuis-method/P/C/instance/0x0000abcdef12') !== null, 'guard matches a 0x-address identity');
+    assert.ok(findSpurHeapIdentity('cuis-method/P/C/instance/foo@abcdef12') !== null, 'guard matches an @-address identity');
   } finally {
     await runtime.close();
   }
