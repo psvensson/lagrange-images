@@ -264,7 +264,8 @@ of classes the package itself defines — which is what an M4 restart proof has 
 - [x] publish the installed native Character class through standard-image composition (`qpr`);
 - [x] execute native Array `asSet` through an ordinary Set with Dictionary membership (`23y`);
 - [x] fill native Arrays through ordinary `atAllPut:` indexed writes (`7cd`);
-  the unchanged initializer now reaches `do:` on Text (`dph`);
+- [x] enumerate Text through native `size`/`at:` and ordinary `do:` (`dph`);
+  the unchanged initializer callback now reaches Character `asciiValue` (`cmy`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
