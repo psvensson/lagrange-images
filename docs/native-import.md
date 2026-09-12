@@ -558,8 +558,10 @@ The parser then selected canonical SAXDriver `usesNamespaces`, `handleStartTag:a
 and `saxHandler`, SAXHandler `checkEOD` and `eod`, the four-argument XMLDOMParser `startElement:`
 callback, and XMLElement's four-argument class-side factory and `name:` initializer (`4gs`, `e1q`,
 `r2j`, `dd1`, `fys`, `ewq`, `91u`, `yll`). Each was added only after its actual refusal. The factory
-now allocates the real native XMLElement; unchanged `XMLElement>>name:` reaches native Text
-`asSymbol` on `note` (`tqr`). The document has not yet returned from parsing.
+now allocates the real native XMLElement. Native Text `asSymbol` delegates to the existing Symbol
+interner (`tqr`), so unchanged `XMLElement>>name:` completes. The factory next reaches the omitted
+inherited `XMLNodeWithElements>>namespace:uri:` initializer (`ekx`). The document has not yet
+returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
 The exact RED assertion is temporary; the recovery tail has
