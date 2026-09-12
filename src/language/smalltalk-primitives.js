@@ -121,7 +121,10 @@ function createSmalltalkKernelPrimitiveV1Executor({
       if (!isLoop && !isUnwind) {
         assertBlockApplicationReceiver(activation, `${SMALLTALK_KERNEL_PRIMITIVE_V1} ${primitive}`);
       }
-      const expectedArity = SMALLTALK_PRIMITIVE_ARITY[primitive];
+      // Unary whileFalse is the existing false loop without a body. Only that primitive admits
+      // zero arguments; the binary form and every other fixed primitive keep their exact arity.
+      const expectedArity = primitive === SMALLTALK_PRIMITIVE.BLOCK_WHILE_FALSE && activation.arguments.length === 0
+        ? 0 : SMALLTALK_PRIMITIVE_ARITY[primitive];
       // ADR 0089. Exactly one primitive is variadic, because the message it forwards is: `super foo`
       // and `super at: k put: v` are one operation with different argument counts. Its entry in the
       // arity map is therefore a minimum, and every other primitive keeps its exact check.

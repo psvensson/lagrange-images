@@ -24,6 +24,7 @@ function assertImages(images) {
 const LOOP_SELECTOR = Object.freeze({
   'whileTrue:': 'whileTrue',
   'whileFalse:': 'whileFalse',
+  whileFalse: 'whileFalse',
 });
 
 // ADR 0054. A separate protocol object from the loop one, so the dispatcher still knows only slot
@@ -107,7 +108,7 @@ function createSymmetricSmalltalkDispatcher() {
           // simply do not loop; a corrupt one throws out of `findSmalltalkBlockProtocol` rather
           // than being degraded to that.
           const loopSlot = LOOP_SELECTOR[selector];
-          if (loopSlot && request.arguments.length === 1) {
+          if (loopSlot && request.arguments.length === (selector === 'whileFalse' ? 0 : 1)) {
             const protocol = await findSmalltalkBlockProtocol({images, imageId: request.receiver.imageId});
             // Decision 9: the loop primitive is the language's own host operation, so it inherits
             // the caller's frame. The condition and body do not — they are reached by ordinary
