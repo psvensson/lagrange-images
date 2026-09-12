@@ -271,8 +271,9 @@ of classes the package itself defines — which is what an M4 restart proof has 
 - [x] classify all initializer Latin-1 Characters through bounded native `isLetter` (`utl`);
 - [x] construct inclusive native Character ranges as Arrays of canonical elements (`31o`);
 - [x] convert uppercase radix digits through native `Character>>digitValue` (`mtr`);
-  the unchanged initializer now completes; input preparation reaches `Text>>readStream` (`ew7`)
-  before invoking the public parser;
+- [x] construct the native Text ReadStream input (`ew7`);
+  the unchanged initializer completes and the public parser enters `startDocument`; its next
+  refusal is the omitted package `XMLDOMParser>>stack` accessor (`c7u`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
