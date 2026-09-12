@@ -1,7 +1,7 @@
 # ADR 0090: Character literals and canonical Character objects
 
 Status: implemented — direct Symmetric Smalltalk `$x` syntax lowers through an image-local Character interner, native Text indexing and scalar enumeration produce the same canonical Character objects, and the Character personality exposes its scalar plus the first pinned classification protocol.
-Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/smalltalk-character-constructor.test.js, test/cuis-yaxo-native-import-real.test.js
+Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/smalltalk-character-constructor.test.js, test/smalltalk-character-digit.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
 
@@ -98,6 +98,11 @@ belongs in the forcing contract.
    continues to validate the Unicode scalar domain; public construction introduces no new allocation
    or recovery authority.
 
+   The actual M4 initializer forces `isDigit` (ra9). Pinned Cuis defines it as code points 48–57;
+   Arabic, full-width and superscript digits are false. Native ordinary source uses the same
+   `codePoint between: 48 and: 57` relation, preserving Integer ownership of comparisons and
+   adding no Unicode category table, host regular expression or classification primitive.
+
    `Character>>codePoint` is an ordinary instance-variable method that answers the scalar already
    stored in the canonical Character Shape. It adds no state, host lookup or primitive.
 
@@ -108,7 +113,7 @@ belongs in the forcing contract.
    `codePoint` therefore breaks classification too: there is one scalar owner.
 
    No wider classification framework is claimed. Case conversion, digit tables, normalization,
-   printing, conversion protocol, a ReadStream class and escape parsing remain separate pressures.
+   printing, unmeasured conversions, a ReadStream class and escape parsing remain separate pressures.
 
 5. **The real consumer must choose the branch.**
 
@@ -171,8 +176,8 @@ representation.
 
 The Symmetric Smalltalk tokenizer/parser/compiler owns literal syntax and lowering. The Character
 personality owns canonical runtime identity and delegates its records to existing image-object
-owners. It also owns the ordinary `codePoint` accessor over its existing slot and the exact pinned
-seven-value `isSeparator` classification. Text indexing and scalar enumeration are ordinary native producers and
+owners. It also owns the measured scalar access, ASCII conversion, public construction and
+classification protocols above; all consume the same canonical scalar. Text indexing and scalar enumeration are ordinary native producers and
 delegate to that same Character owner. The Cuis adapter and canonical export remain unchanged with
 respect to Character syntax and protocol.
 
