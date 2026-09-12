@@ -536,12 +536,11 @@ which allocates an ordinary Set with Dictionary-owned equality/hash membership. 
 `atAllPut:` then fills the 256-element LiteralChars Array through ordinary indexed writes (`7cd`).
 Native Text `do:` now enumerates that delimiter text through canonical scalar indexing (`dph`),
 with `size` sharing the same Unicode interpretation. Native Character `asciiValue` now answers
-ASCII scalars and canonical nil outside 0–127 (`cmy`). The unchanged initializer next refuses
-`Character>>digitValue` while filling its digit table (`mtr`), after native `to:` constructs
-inclusive ranges as Arrays of canonical Characters (`31o`), after native `isDigit` classifies
-ASCII 48–57 (`ra9`) and bounded `isLetter` matches all 256 Latin-1 entries while explicitly
-refusing wider classification (`utl`). Public `Character class>>codePoint:` delegates to the
-existing canonical scalar interner (`0q8`). The exact RED assertion is temporary; the recovery tail has
+ASCII scalars and canonical nil outside 0–127 (`cmy`). Public Character construction (`0q8`),
+ASCII digit classification (`ra9`), explicitly bounded Latin-1 letter classification (`utl`),
+canonical Array ranges (`31o`) and uppercase-only digit conversion (`mtr`) now let the complete
+unchanged initializer execute. The next refusal is `Text>>readStream` during native input
+preparation (`ew7`), before the public parser is invoked. The exact RED assertion is temporary; the recovery tail has
 not executed and is not yet a successful restart claim. The acceptance, not the earlier survey,
 selects subsequent repairs. F1 and structural recovery guards exist; all seven causal falsifiers
 must be completed before M4 closes.

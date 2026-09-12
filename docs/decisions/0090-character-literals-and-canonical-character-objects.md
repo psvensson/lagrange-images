@@ -1,7 +1,7 @@
 # ADR 0090: Character literals and canonical Character objects
 
 Status: implemented — direct Symmetric Smalltalk `$x` syntax lowers through an image-local Character interner, native Text indexing and scalar enumeration produce the same canonical Character objects, and the Character personality exposes its scalar plus the first pinned classification protocol.
-Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/smalltalk-character-constructor.test.js, test/smalltalk-character-digit.test.js, test/smalltalk-character-letter.test.js, test/smalltalk-character-range.test.js, test/smalltalk-character-range-recovery.test.js, test/cuis-yaxo-native-import-real.test.js
+Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/smalltalk-character-constructor.test.js, test/smalltalk-character-digit.test.js, test/smalltalk-character-letter.test.js, test/smalltalk-character-digit-value.test.js, test/smalltalk-character-range.test.js, test/smalltalk-character-range-recovery.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
 
@@ -118,6 +118,12 @@ belongs in the forcing contract.
    adjacent descending bounds produce an empty Array; wider descending bounds are refused by
    existing negative-size allocation, as measured in pinned Cuis. The basic Character installer
    retains its smaller prerequisites. No Interval class, host range builder or new primitive appears.
+
+   The actual M4 initializer forces `digitValue` (mtr) while filling DigitTable. Ordinary source
+   preserves the pinned uppercase-only mapping: ASCII 48–57 answer 0–9, ASCII 65–90 answer 10–35,
+   and every other scalar answers -1. Lowercase letters are deliberately invalid. Integer range
+   comparison/subtraction and the existing scalar accessor suffice; no host parser, case folding
+   or new primitive is introduced.
 
    `Character>>codePoint` is an ordinary instance-variable method that answers the scalar already
    stored in the canonical Character Shape. It adds no state, host lookup or primitive.
