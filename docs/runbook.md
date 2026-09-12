@@ -50,6 +50,12 @@ its ten-minute timeout. The split is about budgets, not coverage: **nothing is s
 sweep still visits every write in both lanes under pre-commit and commit-then-lost-ack failure, and
 a local `npm test` still runs the lot.
 
+The ordinary job has a finite 30-minute budget. The M4 ASCII-conversion head exhausted the former
+20-minute limit after 1,501 passing tests while still advancing through existing super-send proofs
+(Actions run 34698454936). Native standard-image additions increase the work in many fixtures.
+This budget change removes no assertions or files and leaves the separate recovery and real
+integration lanes intact. A semantic failure still fails the job; an execution stall still times out.
+
 A new sweep must carry the `exhaustive-recovery:` prefix in its test name, or it silently rejoins
 the general gate. `test/ci-split.test.js` enforces that in both directions — an unprefixed sweep
 fails it, and so does a cheap test wearing the prefix.
