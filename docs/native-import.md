@@ -537,7 +537,8 @@ which allocates an ordinary Set with Dictionary-owned equality/hash membership. 
 Native Text `do:` now enumerates that delimiter text through canonical scalar indexing (`dph`),
 with `size` sharing the same Unicode interpretation. Native Character `asciiValue` now answers
 ASCII scalars and canonical nil outside 0–127 (`cmy`). The unchanged initializer next refuses
-`Character>>to:` when constructing its digit range (`31o`), after native `isDigit` classifies
+`Character>>digitValue` while filling its digit table (`mtr`), after native `to:` constructs
+inclusive ranges as Arrays of canonical Characters (`31o`), after native `isDigit` classifies
 ASCII 48–57 (`ra9`) and bounded `isLetter` matches all 256 Latin-1 entries while explicitly
 refusing wider classification (`utl`). Public `Character class>>codePoint:` delegates to the
 existing canonical scalar interner (`0q8`). The exact RED assertion is temporary; the recovery tail has

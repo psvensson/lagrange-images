@@ -17,7 +17,7 @@ import {installSmalltalkLibrary} from './smalltalk-library.js';
 import {installSmalltalkSetProtocol, installSmalltalkArraySetConversion} from './smalltalk-set.js';
 import {installSmalltalkSubclassProtocol} from './smalltalk-subclasses.js';
 import {installSmalltalkSymbolProtocol} from './smalltalk-symbol.js';
-import {installSmalltalkCharacterProtocol} from './smalltalk-character.js';
+import {installSmalltalkCharacterProtocol, installSmalltalkCharacterRangeProtocol} from './smalltalk-character.js';
 import {installSmalltalkTextByteArrayProtocol} from './smalltalk-text-bytearray.js';
 import {installSmalltalkWriteStreamProtocol} from './smalltalk-write-stream.js';
 
@@ -142,6 +142,8 @@ async function installSymmetricSmalltalkStandardImage({
   // particular GlobalBinding stays implementation machinery rather than becoming a user global.
   const globals = await installSmalltalkGlobalNamespace(options);
   await publishSmalltalkClassGlobals({images, imageId, names: [...PRE_LIBRARY_PUBLIC_CLASSES]});
+  // Character ranges compose the published Array and Character bindings.
+  await installSmalltalkCharacterRangeProtocol(options);
 
   // Integer PRINTING, after the namespace because its source names the `Array` and `ByteArray`
   // globals. Ownership is unchanged — the Integer module owns it; only the ordering lives here.

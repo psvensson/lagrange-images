@@ -8,9 +8,10 @@ import {
   SMALLTALK_PRIMITIVE,
   primitiveCodeContent,
 } from './smalltalk-primitives.js';
-import {defineMethods, ensureNamedClass, ensureSmalltalkShape} from './smalltalk-class-builder.js';
+import {defineMethods, ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
+import {resolveGlobal} from './smalltalk-globals.js';
 import {ensureBlock, ensureCodeArtifact} from '../graph/ensure-records.js';
 import {objectRef, textValue} from '../value/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
@@ -175,6 +176,47 @@ async function installSmalltalkCharacterProtocol({images, compilation, imageId, 
   return Object.freeze({classRef, shapeRef});
 }
 
+// This result constructor names public Array/Character bindings. Its stage runs after global
+// publication; basic Character identity and Text production retain their smaller prerequisites.
+const CHARACTER_RANGE_METHODS = Object.freeze([Object.freeze({
+  selector: 'to:',
+  source: `[ :endCharacter | | start stop result index |
+    start := self codePoint. stop := endCharacter codePoint.
+    result := Array new: (stop - start + 1).
+    index := 1.
+    start to: stop do: [:scalar |
+      result at: index put: (Character codePoint: scalar).
+      index := index + 1 ].
+    ^ result ]`,
+})]);
+
+async function installSmalltalkCharacterRangeProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
+  if (!images || typeof images.getObject !== 'function') throw new TypeError('images service is required');
+  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  if (!await findSmalltalkKernel({images, imageId})) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  for (const name of ['Array', CHARACTER_CLASS_NAME]) {
+    if (!await resolveGlobal({images, imageId, name})) {
+      throw new TypeError(`image ${imageId} has not published the global ${name}; publish it first`);
+    }
+  }
+  // Publication alone does not establish protocol in a partially installed image.
+  for (const [objectId, selector] of [
+    ['smalltalk/metaclass/Array', 'new:'], ['smalltalk/class/Array', 'at:put:'],
+    ['smalltalk/metaclass/Character', 'codePoint:'], ['smalltalk/class/Character', 'codePoint'],
+    ['smalltalk/class/Integer', 'to:do:'], ['smalltalk/class/Integer', '+'], ['smalltalk/class/Integer', '-'],
+  ]) {
+    const classRef = objectRef(imageId, objectId);
+    if (!await images.getObject(imageId, objectId)
+      || !await methodBlockRef({images, imageId, classRef, selector})) {
+      throw new TypeError(`image ${imageId} has no ${objectId} ${selector} method; install its protocol first`);
+    }
+  }
+  const classRef = objectRef(imageId, `smalltalk/class/${CHARACTER_CLASS_NAME}`);
+  await defineMethodsFromSource({images, compilation, imageId, lane, classRef, methods: CHARACTER_RANGE_METHODS});
+  return Object.freeze({classRef});
+}
+
 export {
   installSmalltalkCharacterProtocol,
+  installSmalltalkCharacterRangeProtocol,
 };
