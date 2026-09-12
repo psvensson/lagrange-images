@@ -531,14 +531,15 @@ test('valid Cuis source outside the native subset fails explicitly without fallb
     const unsupported = manifest({methods: [{
       identity: 'cuis-method/Fixture/AChild/instance/pair',
       package: 'Fixture', class: 'cuis-class/Fixture/AChild', side: 'instance',
-      selector: 'pair', source: 'pair\n\t^ #(1 2)',
+      // Bare-parenthesis nesting is valid Cuis syntax outside the supported literal subset.
+      selector: 'pair', source: 'pair\n\t^ #((1 2))',
     }]});
 
     await assert.rejects(
       importCuisNativePackage({
         images: runtime.images, compilation: runtime.compilation, imageId: 'app', manifest: unsupported,
       }),
-      /literal Array element syntax is not supported/,
+      /literal Array elements must be literals/,
     );
 
     assert.equal(await runtime.images.frontier('app'), frontierBefore);
