@@ -275,7 +275,8 @@ of classes the package itself defines — which is what an M4 restart proof has 
   the unchanged initializer completes and the public parser enters `startDocument`; its next
   unchanged package `XMLDOMParser>>stack` is included (`c7u`);
 - [x] execute unary Block `whileFalse` through the existing loop owner (`pq5`);
-  the public parser now reaches ReadStream `next` from `XMLTokenizer>>peek` (`w6v`);
+- [x] read canonical Characters through native ReadStream `next` (`w6v`);
+  the public parser now reaches the omitted package `XMLTokenizer>>atEnd` method (`4gx`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
