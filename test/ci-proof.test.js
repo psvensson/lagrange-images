@@ -90,12 +90,18 @@ test('an unavailable CI context falls back to a full run without publishing a su
     execFileSync('git', ['add', 'input.js'], {cwd: directory});
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'fixture'], {cwd: directory});
     const output = join(directory, 'output');
-    const env = {...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: output};
+    const env = {...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: output,
+      LAGRANGE_PROOF_SECRET: 'do-not-record-this-value', NODE_OPTIONS: '--no-warnings'};
     for (const key of ['GITHUB_EVENT_PATH', 'GITHUB_REPOSITORY', 'GITHUB_STEP_SUMMARY', 'GH_TOKEN']) delete env[key];
     const script = fileURLToPath(new URL('../scripts/ci-proof.mjs', import.meta.url));
     const result = execFileSync(process.execPath, [script, 'decide', 'node-test'], {cwd: directory, env, encoding: 'utf8'});
     assert.match(result, /run full suite/);
     assert.equal(readFileSync(output, 'utf8'), 'reuse=false\n');
+    const saved = readFileSync(join(directory, 'ci-proof/node-test/plan.json'), 'utf8');
+    assert.ok(!saved.includes('do-not-record-this-value'));
+    const savedEnvironment = JSON.parse(saved).environment;
+    assert.match(savedEnvironment.variables.find(([key]) => key === 'LAGRANGE_PROOF_SECRET')[1], /^[a-f0-9]{64}$/);
+    assert.match(savedEnvironment.options, /^[a-f0-9]{64}$/);
     assert.throws(() => readFileSync(join(directory, 'ci-proof/node-test/proof.json')), {code: 'ENOENT'});
   } finally { rmSync(directory, {recursive: true, force: true}); }
 });
