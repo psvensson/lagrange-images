@@ -549,8 +549,9 @@ omitted canonical XMLTokenizer methods, one refusal at a time: `atEnd` (`4gx`), 
 (`hko`), `checkAndExpandReference:` (`3c3`), `validating` (`nph`), `nextNode` (`rfe`), `nextTag`
 (`200`) and `nextName` (`ac3`). They are now included unchanged in the single initial import.
 Native WriteStream `reset` now clears its private accumulation and returns the same stream (`p6u`).
-The next refusal is `Character>>isAscii` on the first tag-name Character, `$n`, in unchanged
-`XMLTokenizer>>nextName`.
+Native Character `isAscii` now preserves the pinned seven-bit boundary (`d6k`), so unchanged
+`XMLTokenizer>>nextName` completes. The next refusal is the omitted package
+`XMLTokenizer>>skipSeparators`, sent by `nextTag` on SAXDriver.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
 The exact RED assertion is temporary; the recovery tail has
