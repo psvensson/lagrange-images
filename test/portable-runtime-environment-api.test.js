@@ -146,7 +146,9 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // installer and its canonical interning/Text-indexing primitives. Both are reached through the
   // standard-image and kernel-primitive owners already used by the portable runtime; they add no
   // node:* dependency and no foreign-runtime/import adapter.
-  // 120 after the ordinary native Set owner (smalltalk-set.js, 23y). It composes only\n  // the existing class/method builders and Value model; no new host or foreign dependency.\n  assert.equal(modules.length, 120, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics and the native Set owner');
+  // 120 after the ordinary native Set owner (smalltalk-set.js, 23y). It composes only
+  // the existing class/method builders and Value model; no new host or foreign dependency.
+  assert.equal(modules.length, 120, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics and the native Set owner');
   assert.ok(paths.includes('src/wasm/module-contract.js'));
   assert.ok(paths.includes('src/wasm/function-contract.js'));
   assert.ok(paths.includes('src/language/smalltalk-browse.js'));
@@ -155,7 +157,8 @@ test('the bounded public seam does not broaden the portable static closure', () 
   assert.ok(paths.includes('src/language/smalltalk-method-position-resource.js'));
   assert.ok(paths.includes('src/language/smalltalk-authorized-method-replacement.js'));
   assert.ok(paths.includes('src/language/smalltalk-primitives-super.js'));
-  assert.ok(paths.includes('src/language/smalltalk-character.js'));\n  assert.ok(paths.includes('src/language/smalltalk-set.js'));
+  assert.ok(paths.includes('src/language/smalltalk-character.js'));
+  assert.ok(paths.includes('src/language/smalltalk-set.js'));
   assert.ok(paths.includes('src/language/smalltalk-primitives-character.js'));
   assert.deepEqual(projectPaths, [
     'src/project/model.js',
