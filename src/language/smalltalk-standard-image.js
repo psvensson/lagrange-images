@@ -43,6 +43,7 @@ const INTEGER_PLUS_METHOD = Object.freeze({
 
 const PRE_LIBRARY_PUBLIC_CLASSES = Object.freeze([
   'Array',
+  'Character',
   ...CONDITION_CLASSES.map(({name}) => name),
   'Dictionary',
 ]);
