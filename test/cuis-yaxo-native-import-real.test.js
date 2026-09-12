@@ -855,6 +855,14 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   ...M4_PARSE_PATH,
   'cuis-method/YAXO/XMLTokenizer/class/initialize',
   'cuis-method/YAXO/XMLDOMParser/instance/stack',
+  'cuis-method/YAXO/XMLDOMParser/instance/startElement:namespaceURI:namespace:attributeList:',
+  'cuis-method/YAXO/SAXDriver/instance/usesNamespaces',
+  'cuis-method/YAXO/SAXDriver/instance/handleStartTag:attributes:namespaces:',
+  'cuis-method/YAXO/SAXDriver/instance/saxHandler',
+  'cuis-method/YAXO/SAXHandler/instance/checkEOD',
+  'cuis-method/YAXO/SAXHandler/instance/eod',
+  'cuis-method/YAXO/XMLElement/class/named:namespace:uri:attributes:',
+  'cuis-method/YAXO/XMLElement/instance/name:',
   // Each member was selected by the first refusal of the complete public parsing vertical.
   'cuis-method/YAXO/XMLTokenizer/instance/atEnd',
   'cuis-method/YAXO/XMLTokenizer/instance/parsingMarkup',
@@ -875,17 +883,17 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLStringNode/instance/string',
 ])]);
 
-test('M4 acceptance: complete durable restart vertical currently stops at omitted SAXDriver usesNamespaces', {skip: !enabled, timeout: 900_000}, async () => {
+test('M4 acceptance: complete durable restart vertical currently stops at native Text asSymbol', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const directory = await mkdtemp(join(tmpdir(), 'yaxo-m4-'));
   try {
-    // Temporary exact RED assertion, not an M4 success claim. Importing the reached usesNamespaces must move this
+    // Temporary exact RED assertion, not an M4 success claim. Repairing native Text asSymbol must move this
     // assertion; the complete intended flow lives in runM4Acceptance and is never shortened.
     await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
       classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
     }), {
-      name: 'SmalltalkMessageNotUnderstoodError', selector: 'usesNamespaces',
-      message: /^Symmetric Smalltalk message not understood: usesNamespaces sent to yaxo-m4\/~runtime\/transient\/object\//,
+      name: 'SmalltalkMessageNotUnderstoodError', selector: 'asSymbol',
+      message: 'Symmetric Smalltalk message not understood: asSymbol sent to a text Value',
     });
   } finally {
     await rm(directory, {recursive: true, force: true});
