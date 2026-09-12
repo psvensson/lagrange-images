@@ -54,7 +54,7 @@ for (const lane of ['neutral', 'wasm']) {
             assert.equal(await runtime.images.frontier('read-stream-recovery'), frontier, `${lane} write ${failAt} replay`);
             const {block} = await installSymmetricSmalltalkBlock({
               images: runtime.images, imageId: 'read-stream-recovery', id: 'recovered-read-stream-proof',
-              source: "[ | stream | stream := 'abc' readStream. (stream class == ReadStream) and: [(stream == 'abc' readStream) not] ]",
+              source: "[ | stream | stream := '𝄞' readStream. (stream class == ReadStream) and: [(stream == '𝄞' readStream) not and: [(stream next == $𝄞) and: [stream next == nil]]] ]",
             });
             const activation = await runtime.invocations.invokeBlock(objectRef('read-stream-recovery', block.id), []);
             assert.deepEqual(await runtime.executor.execute(activation), booleanValue(true));

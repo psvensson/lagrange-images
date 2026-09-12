@@ -9,6 +9,7 @@ import {objectRef} from '../value/index.js';
 const READ_STREAM_SHAPE_ID = 'smalltalk/read-stream-instance-shape/v1';
 const READ_STREAM_METHODS = Object.freeze([
   {selector: 'on:', source: '[ :aCollection | collection := aCollection. readLimit := aCollection size. position := 0. ^ self ]'},
+  {selector: 'next', source: '[ ^ position >= readLimit ifFalse: [collection at: (position := position + 1)] ]'},
 ]);
 const READ_STREAM_CLASS_METHODS = Object.freeze([
   {selector: 'on:', source: '[ :aCollection | ^ self basicNew on: aCollection ]'},
@@ -19,7 +20,12 @@ async function installSmalltalkReadStreamProtocol({images, compilation, imageId,
   if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
-  for (const [classRef, selector] of [[kernel.classClass, 'basicNew'], [kernel.textClass, 'size']]) {
+  for (const [classRef, selector] of [
+    [kernel.classClass, 'basicNew'], [kernel.textClass, 'size'], [kernel.textClass, 'at:'],
+    [kernel.integerClass, '>='], [kernel.integerClass, '+'],
+    [objectRef(imageId, 'smalltalk/class/True'), 'ifFalse:'],
+    [objectRef(imageId, 'smalltalk/class/False'), 'ifFalse:'],
+  ]) {
     if (!await methodBlockRef({images, imageId, classRef, selector})) {
       throw new TypeError(`image ${imageId} has no ${classRef.objectId} ${selector} method`);
     }

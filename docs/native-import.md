@@ -543,7 +543,9 @@ unchanged initializer execute. Native Text `readStream` now constructs an ordina
 with private collection/cursor/limit state (`ew7`), and the unchanged public parser enters
 `startDocument`. The reached package `XMLDOMParser>>stack` accessor is included unchanged (`c7u`);
 unary Block `whileFalse` now executes the condition through the existing loop owner (`pq5`).
-The next refusal is ReadStream `next`, sent by unchanged `XMLTokenizer>>peek` (`w6v`).
+Native ReadStream `next` now returns canonical indexed Characters while advancing its own cursor,
+and returns nil at EOF without a write (`w6v`). The next refusal is the omitted package
+`XMLTokenizer>>atEnd` method on SAXDriver (`4gx`), not a native ReadStream protocol request.
 The exact RED assertion is temporary; the recovery tail has
 not executed and is not yet a successful restart claim. The acceptance, not the earlier survey,
 selects subsequent repairs. F1 and structural recovery guards exist; all seven causal falsifiers
