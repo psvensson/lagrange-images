@@ -357,6 +357,8 @@ test('the library adds no new kernel primitive', async () => {
     'super-send',
     'symbol-intern',
     'text-at-character',
+    // ADR0090 scalar cardinality for native Text enumeration; same interpretation as Text at:.
+    'text-size',
     'text-utf8-bytes',
     // Private codec entry consumed by WriteStream after ordinary Character>>codePoint. It stays in
     // the existing Text/ByteArray UTF-8 family and is not Collection or Character protocol.
