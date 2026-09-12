@@ -118,6 +118,8 @@ test('workflow keeps full fallback commands and publishes receipts only after pr
   assert.equal((workflow.match(/if: steps.proof.outputs.reuse == 'true'/g) ?? []).length, 2);
   assert.doesNotMatch(workflow, /if: always\(\)/, 'a failed lane cannot publish a passed receipt');
   assert.match(workflow, /actions: read/);
+  assert.match(workflow, /group: test-pr-\$\{\{ github.event.pull_request.number \}\}/);
+  assert.match(workflow, /cancel-in-progress: true/);
   assert.ok(workflow.indexOf('npm run test:fast') < workflow.indexOf('ci-proof.mjs publish node-test'));
   assert.ok(workflow.indexOf('ci-proof.mjs publish node-test') < workflow.indexOf('npm run beads:init'));
   assert.ok(workflow.indexOf('npm run beads:ready') < workflow.indexOf('name: ci-proof-node-test'), 'bootstrap must pass before artifact upload');
