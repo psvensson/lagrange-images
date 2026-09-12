@@ -277,7 +277,8 @@ of classes the package itself defines — which is what an M4 restart proof has 
 - [x] execute unary Block `whileFalse` through the existing loop owner (`pq5`);
 - [x] read canonical Characters through native ReadStream `next` (`w6v`);
   the public parser selects the required canonical tokenizer closure through `nextName`;
-  its next native refusal is WriteStream `reset` (`p6u`);
+- [x] reuse the native WriteStream buffer through `reset` (`p6u`);
+  the unchanged tag-name loop now reaches Character `isAscii`;
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
