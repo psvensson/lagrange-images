@@ -14,6 +14,7 @@ import {installSmalltalkInstanceVariableProtocol} from './smalltalk-instance-var
 import {installSmalltalkIntegerPrintingProtocol, installSmalltalkIntegerProtocol} from './smalltalk-integer.js';
 import {findSmalltalkKernel, installSmalltalkKernel} from './smalltalk-kernel.js';
 import {installSmalltalkLibrary} from './smalltalk-library.js';
+import {installSmalltalkSetProtocol, installSmalltalkArraySetConversion} from './smalltalk-set.js';
 import {installSmalltalkSubclassProtocol} from './smalltalk-subclasses.js';
 import {installSmalltalkSymbolProtocol} from './smalltalk-symbol.js';
 import {installSmalltalkCharacterProtocol} from './smalltalk-character.js';
@@ -52,6 +53,7 @@ const LIBRARY_PUBLIC_CLASSES = Object.freeze(['Association', 'Collection', 'Orde
 // `ByteArray`, answers a collection result through Collection's `species`, and names the
 // `OrderedCollection`, `Text` and `ByteArray` globals.
 const POST_LIBRARY_PUBLIC_CLASSES = Object.freeze(['WriteStream']);
+const SET_PUBLIC_CLASSES = Object.freeze(['Set']);
 
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be non-empty text`);
@@ -167,6 +169,12 @@ async function installSymmetricSmalltalkStandardImage({
   const writeStream = await installSmalltalkWriteStreamProtocol(options);
   await publishSmalltalkClassGlobals({images, imageId, names: [...POST_LIBRARY_PUBLIC_CLASSES]});
 
+  // Set membership delegates to Dictionary; conversion needs Array enumeration and a published
+  // Set global. Keep class publication in composition, as for every other standard class.
+  const set = await installSmalltalkSetProtocol(options);
+  await publishSmalltalkClassGlobals({images, imageId, names: [...SET_PUBLIC_CLASSES]});
+  await installSmalltalkArraySetConversion(options);
+
   return Object.freeze({
     protocol: SYMMETRIC_SMALLTALK_STANDARD_IMAGE_V1,
     imageId,
@@ -194,6 +202,7 @@ async function installSymmetricSmalltalkStandardImage({
       arrayEnumeration,
       subclasses,
       writeStream,
+      set,
     }),
     classes: Object.freeze({
       Array: indexed.arrayClass,
@@ -203,6 +212,7 @@ async function installSymmetricSmalltalkStandardImage({
       Collection: library.collection,
       OrderedCollection: library.orderedCollection,
       WriteStream: writeStream.classRef,
+      Set: set.classRef,
       ...Object.fromEntries(CONDITION_CLASSES.map(({name}) => [name, conditions[name]])),
     }),
     library,

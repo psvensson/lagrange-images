@@ -262,7 +262,8 @@ of classes the package itself defines — which is what an M4 restart proof has 
   the Project-rooted restart/identity/second-mutation tail is present but not yet reached;
 - [x] repair the acceptance's nonempty literal-array RED at the native parser/compiler (`x4i`);
 - [x] publish the installed native Character class through standard-image composition (`qpr`);
-  the unchanged initializer now executes until `asSet` on its native Array;
+- [x] execute native Array `asSet` through an ordinary Set with Dictionary membership (`23y`);
+  the unchanged initializer now reaches Array `atAllPut:` (`7cd`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
