@@ -1,7 +1,7 @@
 # ADR 0091: Text stream contents and narrow Cuis Unicode name adaptation
 
-Status: implemented — native `Text class>>streamContents:` composes WriteStream, including the later execution-earned Character `nextPut:` protocol; the adapter normalizes only the exact foreign receiver locator.
-Proven by: test/smalltalk-write-stream.test.js, test/cuis-native-import.test.js, test/cuis-yaxo-native-import-real.test.js
+Status: implemented — native `Text class>>streamContents:` composes WriteStream, including the later execution-earned Character `nextPut:` and buffer `reset` protocol; the adapter normalizes only the exact foreign receiver locator.
+Proven by: test/smalltalk-write-stream.test.js, test/smalltalk-write-stream-reset.test.js, test/smalltalk-write-stream-reset-recovery.test.js, test/cuis-native-import.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
 
@@ -104,6 +104,16 @@ stream or text class.
    `Text>>utf8Bytes`; neither WriteStream nor Character duplicates UTF-8 arithmetic. No
    `Character>>utf8Bytes`, `Character>>asString`, generic Value kind, mutable String, importer
    execution rule, or compiler primitive is introduced.
+
+6. **Reset reuses the existing stream and its single accumulation owner.**
+
+   The complete M4 public parsing path reaches `XMLTokenizer>>nextName`, whose first send is
+   `nameBuffer reset` (p6u). The pinned xxm.9 oracle already establishes that the Unicode stream
+   returns itself and answers empty Unicode contents after reset. Native `WriteStream>>reset`
+   clears its private `written` accumulation and returns `self`; backing and stream identity stay
+   intact. Subsequent writes form a new prefix, so a shorter Unicode write cannot expose a stale
+   suffix. There is no new Shape, cursor, primitive, host mutation or Text conversion policy.
+   Arbitrary positioning and reading a WriteStream remain outside the executed protocol.
 
 ## Alternatives rejected
 
