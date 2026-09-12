@@ -535,8 +535,9 @@ now publishes its existing Character class (`qpr`). The selected methods import,
 which allocates an ordinary Set with Dictionary-owned equality/hash membership. Native Array
 `atAllPut:` then fills the 256-element LiteralChars Array through ordinary indexed writes (`7cd`).
 Native Text `do:` now enumerates that delimiter text through canonical scalar indexing (`dph`),
-with `size` sharing the same Unicode interpretation. The callback next refuses `asciiValue` on the
-canonical colon Character (`cmy`). The exact RED assertion is temporary; the recovery tail has
+with `size` sharing the same Unicode interpretation. Native Character `asciiValue` now answers
+ASCII scalars and canonical nil outside 0–127 (`cmy`). The unchanged initializer next refuses
+`Character class>>codePoint:` at the start of its classification loop (`0q8`). The exact RED assertion is temporary; the recovery tail has
 not executed and is not yet a successful restart claim. The acceptance, not the earlier survey,
 selects subsequent repairs. F1 and structural recovery guards exist; all seven causal falsifiers
 must be completed before M4 closes.

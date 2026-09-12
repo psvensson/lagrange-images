@@ -860,15 +860,15 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLStringNode/instance/string',
 ])]);
 
-test('M4 acceptance: complete durable restart vertical currently stops at Character asciiValue', {skip: !enabled, timeout: 900_000}, async () => {
+test('M4 acceptance: complete durable restart vertical currently stops at Character class codePoint:', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const directory = await mkdtemp(join(tmpdir(), 'yaxo-m4-'));
   try {
-    // Temporary exact RED assertion, not an M4 success claim. Repairing Character asciiValue must move this
+    // Temporary exact RED assertion, not an M4 success claim. Repairing Character class codePoint: must move this
     // assertion; the complete intended flow lives in runM4Acceptance and is never shortened.
     await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
       classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
-    }), {name: 'SmalltalkMessageNotUnderstoodError', selector: 'asciiValue', message: 'Symmetric Smalltalk message not understood: asciiValue sent to yaxo-m4/smalltalk/character/3a'});
+    }), {name: 'SmalltalkMessageNotUnderstoodError', selector: 'codePoint:', message: 'Symmetric Smalltalk message not understood: codePoint: sent to yaxo-m4/smalltalk/class/Character'});
   } finally {
     await rm(directory, {recursive: true, force: true});
   }

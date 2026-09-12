@@ -18,7 +18,7 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 // The native Character personality: canonical identity for a Unicode scalar, Text>>at: production
 // through the same interner, and the smallest ordinary protocol forced by pinned YAXO. Character
 // owns the scalar and its exact separator classification; there is deliberately no broader
-// classification, case, digit, printing or conversion protocol.
+// classification, case, digit or printing protocol.
 
 const PRIMITIVE_BLOCK_ID = Object.freeze({
   [SMALLTALK_PRIMITIVE.CHARACTER_INTERN]: 'smalltalk/primitive/character-intern',
@@ -130,6 +130,8 @@ async function installSmalltalkCharacterProtocol({images, compilation, imageId, 
     classRef,
     methods: [
       {selector: 'codePoint', source: '[ ^ codePoint ]'},
+      // Pinned asciiValue is partial: non-ASCII scalars answer the canonical nil.
+      {selector: 'asciiValue', source: '[ ^ self codePoint < 128 ifTrue: [self codePoint] ifFalse: [nil] ]'},
       {
         selector: 'isSeparator',
         source: `[ | scalar |
