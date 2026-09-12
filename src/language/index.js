@@ -47,3 +47,4 @@ export * from './smalltalk-write-stream.js';
 export * from './smalltalk-standard-image.js';
 export * from './cuis-export-materialization.js';
 export * from './smalltalk-set.js';
+export * from './smalltalk-read-stream.js';
