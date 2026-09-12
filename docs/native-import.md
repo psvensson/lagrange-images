@@ -527,8 +527,11 @@ The complete acceptance now lives in `test/support/yaxo-m4-acceptance.js`, invok
 YAXO test. Its intended flow uses the exact minimal XML, one native import, the returned
 XMLDocument as a Project working-state member, a YAXO attribute mutation, two distinct runtimes
 over one SQLite file, Project-only root reacquisition, all four ObjectRef comparisons, and a
-second YAXO mutation. It currently stops during import at `XMLTokenizer class>>initialize`'s
-nonempty literal array (bead `x4i`). The exact RED assertion is temporary; the recovery tail has
+second YAXO mutation. The native parser and semantic compiler now accept its nonempty literal
+arrays (bead `x4i`), using the existing Array intrinsic, ordinary allocation/indexed sends, and
+distinct private temporaries in v1; empty `#()` retains its v0 behavior. It now stops during
+import at the unresolved `Character` name in that same unchanged `XMLTokenizer class>>initialize`
+(bead `qpr`). The exact RED assertion is temporary; the recovery tail has
 not executed and is not yet a successful restart claim. The acceptance, not the earlier survey,
 selects subsequent repairs. F1 and structural recovery guards exist; all seven causal falsifiers
 must be completed before M4 closes.
