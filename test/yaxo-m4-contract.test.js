@@ -13,8 +13,7 @@ test('M4 F1: recovery refuses an old document ref before accessing any runtime',
   }
 });
 
-test('M4 recovery has no setup replay, host graph mutation, or alternative root locator', async () => {
-  const source = await readFile(new URL('./support/yaxo-m4-acceptance.js', import.meta.url), 'utf8');
+function assertRecoveryStructure(source) {
   const recovery = source.slice(source.indexOf('export async function recoverApplication('), source.indexOf('export async function runM4Acceptance('));
   assert.match(recovery, /readProjectDescriptor\(/);
   assert.match(recovery, /inspectDocument\(runtime, member.target\)/);
@@ -28,6 +27,27 @@ test('M4 recovery has no setup replay, host graph mutation, or alternative root 
   assert.match(lifecycle, /await assertRuntimeClosed\(a\)/);
   assert.match(lifecycle, /assertFreshRuntimes\(a, b\)/);
   assert.ok(lifecycle.indexOf('await assertRuntimeClosed(a)') < lifecycle.indexOf('const b = await openRuntime(filename)'));
+}
+
+test('M4 recovery has no setup replay, host graph mutation, or alternative root locator', async () => {
+  assertRecoveryStructure(await readFile(new URL('./support/yaxo-m4-acceptance.js', import.meta.url), 'utf8'));
+});
+
+test('M4 F3/F4: inserting re-import or host mutation makes the structural acceptance fail', async () => {
+  const source = await readFile(new URL('./support/yaxo-m4-acceptance.js', import.meta.url), 'utf8');
+  assertRecoveryStructure(source);
+  const badImport = source.replace(
+    'export async function recoverApplication(runtime, locator) {',
+    'export async function recoverApplication(runtime, locator) {\n  await importCuisNativePackage({images: runtime.images});',
+  );
+  assert.notEqual(badImport, source);
+  assert.throws(() => assertRecoveryStructure(badImport), {code: 'ERR_ASSERTION'});
+  const badMutation = source.replace(
+    "await send(runtime, root, 'attributeAt:put:', [textValue('lang'), textValue(value)]);",
+    'await runtime.images.putObject(root.imageId, {id: root.objectId});',
+  );
+  assert.notEqual(badMutation, source);
+  assert.throws(() => assertRecoveryStructure(badMutation), {code: 'ERR_ASSERTION'});
 });
 
 test('M4 F7: a live A, a reused runtime, and shared WASM machinery each fail the lifecycle guard', async () => {
