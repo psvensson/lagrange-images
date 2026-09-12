@@ -1,7 +1,7 @@
 # ADR 0046: Allocation, initialization and class introspection
 
 Status: implemented — `basicNew`, `new` and `class` stay ordinary Smalltalk messages; allocation and class lookup use language-owned primitive Blocks registered at the composition root and image-local by one rule, instance shape is explicit durable class data, and image-native allocation is not an ADR 0037 capability check.
-Proven by: test/smalltalk-allocation.test.js, test/smalltalk-class-declarations.test.js, test/smalltalk-subclass-concurrency.test.js, test/steering-docs.test.js
+Proven by: test/smalltalk-allocation.test.js, test/smalltalk-class-declarations.test.js, test/smalltalk-subclass-concurrency.test.js, test/smalltalk-type-testing.test.js, test/smalltalk-type-testing-recovery.test.js, test/steering-docs.test.js
 
 ## Problem
 
@@ -511,6 +511,14 @@ semantic methods, derived per lane:
     Class  >> basicNew
     Class  >> new
 ```
+
+The same owner supplies ordinary Object type queries. M4's unchanged YAXO attribute parser
+forces `isString`: Object answers false, while native Text and Symbol answer true, matching the
+pinned Object/CharacterSequence definitions. Character inherits the Object default. This is a
+separate `installSmalltalkStringTestingProtocol` stage after Symbol installation, so base
+allocation retains its earlier prerequisites. The stage validates the Symbol protocol before
+publishing any query. Ordinary method lookup decides inherited and application-overridden
+answers; no host Value-kind test, primitive or new class hierarchy implements this predicate.
 
 The primitive Blocks are lane-independent host implementations. The methods that call them are still
 derived into neutral and WASM executable Blocks from the same semantic definitions, and both lanes
