@@ -56,6 +56,12 @@ The ordinary job has a finite 30-minute budget. The M4 ASCII-conversion head exh
 This budget change removes no assertions or files and leaves the separate recovery and real
 integration lanes intact. A semantic failure still fails the job; an execution stall still times out.
 
+The recovery job also has a finite 30-minute budget. The M4 digit-conversion head exceeded its
+former 20-minute limit with 162 passing entries and no assertion failures (Actions run
+34705349160, job 103584297247). The job annotation explicitly reports the execution-time limit.
+Every publication write, both interruption modes and both execution lanes remain covered; the
+required command and all other job budgets are unchanged by this later adjustment.
+
 A new sweep must carry the `exhaustive-recovery:` prefix in its test name, or it silently rejoins
 the general gate. `test/ci-split.test.js` enforces that in both directions — an unprefixed sweep
 fails it, and so does a cheap test wearing the prefix.

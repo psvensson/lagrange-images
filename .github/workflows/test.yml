@@ -44,7 +44,9 @@ jobs:
   # pushing the general gate toward its timeout.
   recovery-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The M4 digitValue head exceeded 20m while exhaustive proofs were still progressing.
+    # Keep every write/failure mode/lane; retain a finite limit for a stalled run.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
