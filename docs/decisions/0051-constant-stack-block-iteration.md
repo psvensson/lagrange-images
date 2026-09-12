@@ -1,7 +1,7 @@
 # ADR 0051: Constant-stack Block iteration
 
-Status: implemented — `whileTrue:` and `whileFalse:` are two more operations on the existing classless Block personality, dispatched to language-owned loop primitives that drive the condition and body through ordinary `value` sends, so iteration costs no activation depth.
-Proven by: test/block-loop.test.js, test/smalltalk-library.test.js
+Status: implemented — `whileTrue:`, `whileFalse:` and unary `whileFalse` are operations on the existing classless Block personality, dispatched to language-owned loop primitives that drive the condition and body through ordinary `value` sends, so iteration costs no activation depth.
+Proven by: test/block-loop.test.js, test/block-unary-while-false.test.js, test/smalltalk-library.test.js
 
 ## Problem
 
@@ -250,6 +250,15 @@ zero iterations  a condition that stops immediately runs the body zero times, an
 `whileFalse:` is included rather than deferred for the reason ADR 0045 included `ifFalse:ifTrue:`:
 it is the mirror of an operation being added, and omitting it would be an arbitrary hole rather than
 a decision.
+
+The actual M4 public parsing path later forces unary `whileFalse` in unchanged
+`SAXHandler>>parseDocument` (pq5). It routes through the same validated false-loop target with
+zero arguments and evaluates only the condition, until true, then answers the condition image's
+nil. The pinned Cuis definition delegates to `whileFalse: []`; native execution needs no synthetic
+empty Block. The existing false primitive admits exactly zero or one argument; the true primitive
+still requires one. Condition validation, canonical Boolean checks, ordinary invocation, error/non-local
+return propagation and constant iteration depth are unchanged. The binary body remains an ordinary
+nonprimitive Block and is still validated before evaluation. Unary `whileTrue` remains unforced.
 
 ### 9. Frames follow ADR 0050 exactly, with one deliberate difference
 
