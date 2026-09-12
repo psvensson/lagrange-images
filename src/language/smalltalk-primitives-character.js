@@ -62,6 +62,16 @@ function textCodePoints(text, primitive) {
   return points;
 }
 
+function textSize({value}) {
+  const text = canonicalizeValue(value);
+  if (text.kind !== VALUE_KIND.TEXT) {
+    throw new SmalltalkPrimitiveReceiverError(
+      'text-size', `a ${text.kind} Value; the receiver must be a Text Value`,
+    );
+  }
+  return integerValue(textCodePoints(text.value, 'text-size').length);
+}
+
 async function textAtCharacter({images, primitiveImage, value, indexValue}) {
   const text = canonicalizeValue(value);
   if (text.kind !== VALUE_KIND.TEXT) {
@@ -96,4 +106,5 @@ export {
   characterIntern,
   characterObjectId,
   textAtCharacter,
+  textSize,
 };
