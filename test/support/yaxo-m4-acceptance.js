@@ -33,7 +33,7 @@ export async function openRuntime(filename) {
 
 async function assertClass(runtime, ref, expected) {
   const classRef = await send(runtime, ref, 'class');
-  assert.equal((await readBehavior(runtime.images, classRef)).name, expected);
+  assert.equal((await readBehavior(runtime.images, classRef)).name.value, expected);
 }
 
 export async function inspectDocument(runtime, document) {
@@ -84,7 +84,7 @@ export async function prepareApplication(runtime, manifest, scope) {
 }
 
 // B receives exactly the durable locator. An old root ref is not an alternative recovery API.
-export async function recoverApplication(runtime, locator) {
+export async function reacquireDocument(runtime, locator) {
   assert.deepEqual(Object.keys(locator).sort(), ['imageId', 'memberKey', 'projectId']);
   for (const value of Object.values(locator)) assert.equal(typeof value, 'string');
   const descriptor = await readProjectDescriptor({images: runtime.images, imageId: locator.imageId, projectId: locator.projectId});
@@ -92,13 +92,30 @@ export async function recoverApplication(runtime, locator) {
   const member = descriptor.members.find(({key}) => key === locator.memberKey);
   assert.ok(member, 'application root is found only through the Project descriptor');
   assert.equal(member.role, 'application-root');
-  const recovered = await inspectDocument(runtime, member.target);
+  return member.target;
+}
+
+export async function recoverApplication(runtime, locator) {
+  const document = await reacquireDocument(runtime, locator);
+  const recovered = await inspectDocument(runtime, document);
   assert.deepEqual(recovered.lang, textValue('sv'));
   await mutate(runtime, recovered.refs.root, 'se');
-  const resumed = await inspectDocument(runtime, member.target);
+  const resumed = await inspectDocument(runtime, document);
   assert.deepEqual(resumed.refs, recovered.refs, 'resumed behavior preserves graph identities');
   assert.deepEqual(resumed.lang, textValue('se'));
   return resumed.refs;
+}
+
+export async function assertRuntimeClosed(a) {
+  assert.throws(() => a.database.listTables(), /runtime is not started/, 'A database has closed');
+  await assert.rejects(() => a.runtime.images.getObject(M4_LOCATOR.imageId, 'anything'), undefined, 'A cannot read after close');
+}
+
+export function assertFreshRuntimes(a, b) {
+  for (const name of ['images', 'backend', 'executor', 'compilation', 'codeExecutors', 'invocations', 'codeCompilers', 'groupCompilers', 'dispatchers', 'toolchainProviders', 'foreignRuntimeProviders', 'foreignRuntimeInstanceCache']) {
+    assert.notEqual(a.runtime[name], b.runtime[name], `${name} must be fresh`);
+  }
+  for (const name of ['database', 'wasmModuleCache', 'wasmInstancePool']) assert.notEqual(a[name], b[name], `${name} must be fresh`);
 }
 
 export async function runM4Acceptance(filename, manifest, scope) {
@@ -109,18 +126,15 @@ export async function runM4Acceptance(filename, manifest, scope) {
   } finally {
     await a.runtime.close();
   }
-  assert.throws(() => a.database.listTables(), /runtime is not started/, 'A database has closed');
-  await assert.rejects(() => a.runtime.images.getObject(M4_LOCATOR.imageId, 'anything'), undefined, 'A cannot read after close');
+  await assertRuntimeClosed(a);
   const b = await openRuntime(filename);
   try {
-    for (const name of ['images', 'executor', 'compilation', 'codeExecutors', 'invocations', 'codeCompilers', 'groupCompilers', 'dispatchers', 'toolchainProviders', 'foreignRuntimeProviders', 'foreignRuntimeInstanceCache']) {
-      assert.notEqual(a.runtime[name], b.runtime[name], `${name} must be fresh`);
-    }
-    for (const name of ['database', 'wasmModuleCache', 'wasmInstancePool']) assert.notEqual(a[name], b[name]);
+    assertFreshRuntimes(a, b);
     a = null;
     // Expected refs are used only by this comparison, never as input to B's root discovery.
     assert.deepEqual(await recoverApplication(b.runtime, {...M4_LOCATOR}), expected);
   } finally {
     await b.runtime.close();
   }
+  return expected;
 }
