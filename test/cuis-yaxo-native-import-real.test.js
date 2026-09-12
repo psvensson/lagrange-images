@@ -178,6 +178,9 @@ async function put(runtime, id, representation, content, {logicalPath = null, me
 let semanticExportText = null;
 async function yaxoSemanticExport() {
   if (semanticExportText !== null) return semanticExportText;
+  // The focused M4 test must establish the pin itself; it may skip the file-wide pin proof.
+  const yaxoBytes = await readFile(process.env.LAGRANGE_CUIS_YAXO_PACKAGE_PATH);
+  assert.equal(CUIS_YAXO_IDENTITY, `cuis-package/YAXO/${CUIS_COMMIT}/${gitBlobIdentity(yaxoBytes)}`, 'the exact pinned YAXO bytes before export');
   const buildRuntime = await createRuntime({
     backend: {mode: 'mock'},
     toolchainProviders: [[OPENSMALLTALK_CUIS_TOOLCHAIN_PROVIDER_ID, createOpenSmalltalkCuisToolchainProvider({
@@ -195,7 +198,7 @@ async function yaxoSemanticExport() {
     const baseSources = await put(buildRuntime, 'yaxo-bs', CUIS_SOURCES_V1, bytesValue(await readFile(process.env.LAGRANGE_CUIS_SOURCES_PATH)), {
       logicalPath: 'Cuis7.8.sources',
     });
-    const yaxoPackage = await put(buildRuntime, 'yaxo-pkg', CUIS_PACKAGE_V1, textValue(await readFile(process.env.LAGRANGE_CUIS_YAXO_PACKAGE_PATH, 'utf8')), {
+    const yaxoPackage = await put(buildRuntime, 'yaxo-pkg', CUIS_PACKAGE_V1, textValue(yaxoBytes.toString('utf8')), {
       logicalPath: 'YAXO.pck.st', metadata: {identity: CUIS_YAXO_IDENTITY},
     });
     await buildRuntime.images.putCodeArtifact('build-image', {
@@ -851,6 +854,7 @@ const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/XMLTokenizer/instance/nextWhitespac
 const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   ...M4_PARSE_PATH,
   'cuis-method/YAXO/XMLTokenizer/class/initialize',
+  'cuis-method/YAXO/XMLDOMParser/instance/stack',
   'cuis-method/YAXO/XMLNodeWithElements/instance/elements',
   'cuis-method/YAXO/XMLElement/instance/contents',
   'cuis-method/YAXO/XMLElement/instance/attributes',
@@ -860,17 +864,16 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLStringNode/instance/string',
 ])]);
 
-test('M4 acceptance: complete durable restart vertical currently stops at the omitted YAXO stack accessor', {skip: !enabled, timeout: 900_000}, async () => {
+test('M4 acceptance: complete durable restart vertical currently stops at unary Block whileFalse', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const directory = await mkdtemp(join(tmpdir(), 'yaxo-m4-'));
   try {
-    // Temporary exact RED assertion, not an M4 success claim. Importing the reached stack accessor must move this
+    // Temporary exact RED assertion, not an M4 success claim. Repairing unary Block whileFalse must move this
     // assertion; the complete intended flow lives in runM4Acceptance and is never shortened.
     await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
       classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
     }), {
-      name: 'SmalltalkMessageNotUnderstoodError', selector: 'stack',
-      message: /^Symmetric Smalltalk message not understood: stack sent to yaxo-m4\/~runtime\/transient\/object\//,
+      name: 'TypeError', message: 'Symmetric Smalltalk Block does not understand: whileFalse',
     });
   } finally {
     await rm(directory, {recursive: true, force: true});
