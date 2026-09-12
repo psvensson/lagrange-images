@@ -529,9 +529,10 @@ XMLDocument as a Project working-state member, a YAXO attribute mutation, two di
 over one SQLite file, Project-only root reacquisition, all four ObjectRef comparisons, and a
 second YAXO mutation. The native parser and semantic compiler now accept its nonempty literal
 arrays (bead `x4i`), using the existing Array intrinsic, ordinary allocation/indexed sends, and
-distinct private temporaries in v1; empty `#()` retains its v0 behavior. It now stops during
-import at the unresolved `Character` name in that same unchanged `XMLTokenizer class>>initialize`
-(bead `qpr`). The exact RED assertion is temporary; the recovery tail has
+distinct private temporaries in v1; empty `#()` retains its v0 behavior. Standard-image composition
+now publishes its existing Character class (`qpr`). The selected methods import, and the unchanged
+`XMLTokenizer class>>initialize` executes until `asSet` on its native literal Array. This measured
+collection-protocol refusal is the next repair. The exact RED assertion is temporary; the recovery tail has
 not executed and is not yet a successful restart claim. The acceptance, not the earlier survey,
 selects subsequent repairs. F1 and structural recovery guards exist; all seven causal falsifiers
 must be completed before M4 closes.
@@ -571,8 +572,9 @@ needed:
 - `ImageService.setRoot` / `image.rootObjectId` is the only thing literally shaped like "the image's
   root object" and is not a candidate: single-valued, unnamed, and called by no production code.
 
-Two recorded gaps that are ownership defects rather than M4 blockers: `docs/ownership.md` names no
-owner for "durable named/application roots", and has no row for the global namespace at all.
+`docs/ownership.md` names Project working-state membership as the application-root boundary,
+and the Smalltalk global namespace as the owner of global binding identity. Standard-image
+composition explicitly owns which installed native classes it publishes, including Character.
 
 #### The state rule
 
