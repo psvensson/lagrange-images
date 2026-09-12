@@ -19,6 +19,7 @@ import {
   installSmalltalkEqualityProtocol,
   installSmalltalkInstanceVariableProtocol,
   installSmalltalkKernel,
+  installSmalltalkIntegerProtocol,
   installSymmetricSmalltalkBlock,
   installSymmetricSmalltalkStandardImage,
   installWasmBlockTree,
@@ -300,6 +301,9 @@ for (const lane of ['neutral', 'wasm']) {
         imageId: 'character-recovery',
         lane,
       });
+      await installSmalltalkIntegerProtocol({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'character-recovery', lane,
+      });
       await installSmalltalkInstanceVariableProtocol({
         images: runtime.images,
         imageId: 'character-recovery',
@@ -343,7 +347,7 @@ for (const lane of ['neutral', 'wasm']) {
                 runtime,
                 'character-recovery',
                 `recovered-character-${lane}-${failAt}-${commitThenThrow}`,
-                "[ ('λ😀' size = 2) and: [ ($λ == ('λ' at: 1)) and: [ ($λ codePoint = 955) and: [ $\u200b isSeparator ] ] ] ]",
+                "[ ('λ😀' size = 2) and: [ ($λ == ('λ' at: 1)) and: [ ($λ codePoint = 955) and: [ ($λ asciiValue == nil) and: [ ($: asciiValue = 58) and: [$\u200b isSeparator] ] ] ] ] ]",
               ),
               booleanValue(true),
               'recovery preserves Character identity, its owned scalar and classification',
