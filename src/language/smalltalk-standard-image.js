@@ -14,6 +14,7 @@ import {installSmalltalkInstanceVariableProtocol} from './smalltalk-instance-var
 import {installSmalltalkIntegerPrintingProtocol, installSmalltalkIntegerProtocol} from './smalltalk-integer.js';
 import {findSmalltalkKernel, installSmalltalkKernel} from './smalltalk-kernel.js';
 import {installSmalltalkLibrary} from './smalltalk-library.js';
+import {installSmalltalkReadStreamProtocol, installSmalltalkTextReadStreamProtocol} from './smalltalk-read-stream.js';
 import {installSmalltalkSetProtocol, installSmalltalkArraySetConversion} from './smalltalk-set.js';
 import {installSmalltalkSubclassProtocol} from './smalltalk-subclasses.js';
 import {installSmalltalkSymbolProtocol} from './smalltalk-symbol.js';
@@ -177,6 +178,10 @@ async function installSymmetricSmalltalkStandardImage({
   await publishSmalltalkClassGlobals({images, imageId, names: [...SET_PUBLIC_CLASSES]});
   await installSmalltalkArraySetConversion(options);
 
+  const readStream = await installSmalltalkReadStreamProtocol(options);
+  await publishSmalltalkClassGlobals({images, imageId, names: ['ReadStream']});
+  await installSmalltalkTextReadStreamProtocol(options);
+
   return Object.freeze({
     protocol: SYMMETRIC_SMALLTALK_STANDARD_IMAGE_V1,
     imageId,
@@ -205,6 +210,7 @@ async function installSymmetricSmalltalkStandardImage({
       subclasses,
       writeStream,
       set,
+      readStream,
     }),
     classes: Object.freeze({
       Array: indexed.arrayClass,
@@ -215,6 +221,7 @@ async function installSymmetricSmalltalkStandardImage({
       OrderedCollection: library.orderedCollection,
       WriteStream: writeStream.classRef,
       Set: set.classRef,
+      ReadStream: readStream.classRef,
       ...Object.fromEntries(CONDITION_CLASSES.map(({name}) => [name, conditions[name]])),
     }),
     library,
