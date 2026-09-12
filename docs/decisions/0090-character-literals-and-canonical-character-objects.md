@@ -1,7 +1,7 @@
 # ADR 0090: Character literals and canonical Character objects
 
 Status: implemented — direct Symmetric Smalltalk `$x` syntax lowers through an image-local Character interner, native Text indexing and scalar enumeration produce the same canonical Character objects, and the Character personality exposes its scalar plus the first pinned classification protocol.
-Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/cuis-yaxo-native-import-real.test.js
+Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/smalltalk-character-constructor.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
 
@@ -91,6 +91,12 @@ belongs in the forcing contract.
    answers the scalar for ASCII 0–127 and canonical nil otherwise. Native ordinary source composes
    `codePoint`, Integer comparison and Boolean branches; it adds no scalar representation, primitive
    or unforced `isAscii` surface. The unrestricted `codePoint` alias fails the non-ASCII proof.
+
+   The full M4 initializer forces public `Character class>>codePoint:` (0q8). Its ordinary class
+   method captures the existing Character interner Block. Repeated construction, literal production
+   and Text indexing therefore share exactly one ObjectRef per image/scalar. The existing interner
+   continues to validate the Unicode scalar domain; public construction introduces no new allocation
+   or recovery authority.
 
    `Character>>codePoint` is an ordinary instance-variable method that answers the scalar already
    stored in the canonical Character Shape. It adds no state, host lookup or primitive.
