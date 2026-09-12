@@ -4,6 +4,7 @@ import {readFile, mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {runM4Acceptance} from './support/yaxo-m4-acceptance.js';
+import {runM4Falsifiers} from './support/yaxo-m4-falsifiers.js';
 import {createHash} from 'node:crypto';
 import {
   CUIS_BUILD_CONTRACT_V0,
@@ -866,9 +867,13 @@ test('M4 acceptance: complete durable restart vertical currently stops at x4i li
   try {
     // Temporary exact RED assertion, not an M4 success claim. Repairing x4i must move this
     // assertion; the complete intended flow lives in runM4Acceptance and is never shortened.
-    await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
-      classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
-    }), {name: 'SymmetricSmalltalkSyntaxError', message: 'literal Array element syntax is not supported; only the empty literal #() is at 69'});
+    await assert.rejects((async () => {
+      const filename = join(directory, 'application.sqlite');
+      const expected = await runM4Acceptance(filename, manifest, {
+        classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
+      });
+      await runM4Falsifiers(filename, expected);
+    })(), {name: 'SymmetricSmalltalkSyntaxError', message: 'literal Array element syntax is not supported; only the empty literal #() is at 69'});
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
