@@ -273,8 +273,9 @@ of classes the package itself defines — which is what an M4 restart proof has 
 - [x] convert uppercase radix digits through native `Character>>digitValue` (`mtr`);
 - [x] construct the native Text ReadStream input (`ew7`);
   the unchanged initializer completes and the public parser enters `startDocument`; its next
-  refusal after the unchanged package `XMLDOMParser>>stack` accessor (`c7u`) is unary Block
-  `whileFalse` in `SAXHandler>>parseDocument` (`pq5`);
+  unchanged package `XMLDOMParser>>stack` is included (`c7u`);
+- [x] execute unary Block `whileFalse` through the existing loop owner (`pq5`);
+  the public parser now reaches ReadStream `next` from `XMLTokenizer>>peek` (`w6v`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
