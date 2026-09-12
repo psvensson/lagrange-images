@@ -238,7 +238,7 @@ async function blockWhile({images, activation, context, primitive, wanted}) {
   const condition = await assertLoopBlock({
     images, value: activation.receiver, primitive, role: 'condition',
   });
-  const body = await assertLoopBlock({
+  const body = !wanted && activation.arguments.length === 0 ? null : await assertLoopBlock({
     images, value: activation.arguments[0], primitive, role: 'body',
   });
   const sendMessage = requireSendMessage(context, primitive);
@@ -270,7 +270,7 @@ async function blockWhile({images, activation, context, primitive, wanted}) {
       );
     }
     if (verdict.value !== wanted) return kernel.nil;
-    await sendMessage({
+    if (body !== null) await sendMessage({
       languageId: SYMMETRIC_SMALLTALK_ID,
       receiver: body,
       message: textValue('value'),
