@@ -550,8 +550,10 @@ omitted canonical XMLTokenizer methods, one refusal at a time: `atEnd` (`4gx`), 
 (`200`) and `nextName` (`ac3`). They are now included unchanged in the single initial import.
 Native WriteStream `reset` now clears its private accumulation and returns the same stream (`p6u`).
 Native Character `isAscii` now preserves the pinned seven-bit boundary (`d6k`), so unchanged
-`XMLTokenizer>>nextName` completes. The next refusal is the omitted package
-`XMLTokenizer>>skipSeparators`, sent by `nextTag` on SAXDriver.
+`XMLTokenizer>>nextName` completes. The public parse then selected canonical `skipSeparators`
+(`9gn`), `nextAttributeInto:namespaces:` (`nmw`) and `nextAttributeValue` (`pke`), one actual
+refusal at a time. They are included unchanged in the initial import. The next refusal is
+native `isString` on Character `$e` inside `XMLTokenizer>>nextAttributeValue` (`6gw`).
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
 The exact RED assertion is temporary; the recovery tail has
