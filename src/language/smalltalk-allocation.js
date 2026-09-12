@@ -1,5 +1,5 @@
 import {objectRef, textValue} from '../value/index.js';
-import {defineMethods, ensureBlock, ensureCodeArtifact} from './smalltalk-class-builder.js';
+import {defineMethods, ensureBlock, ensureCodeArtifact, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {
@@ -188,9 +188,31 @@ async function installSmalltalkAllocationProtocol({images, compilation, imageId,
   });
 }
 
+// Pinned Object/CharacterSequence type query. Native Text and Symbol are separate classes, so
+// both receive the true override. Ordinary lookup owns inheritance and application overrides.
+// Keep this after Symbol installation rather than adding a dependency to base allocation.
+async function installSmalltalkStringTestingProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
+  if (!images || typeof images.getObject !== 'function') throw new TypeError('images service is required');
+  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+  const symbolClass = objectRef(imageId, 'smalltalk/class/Symbol');
+  if (!await methodBlockRef({images, imageId, classRef: symbolClass, selector: 'asString'})) {
+    throw new TypeError(`image ${imageId} has no Symbol asString method`);
+  }
+  for (const [classRef, source] of [
+    [kernel.objectClass, '[ ^ false ]'],
+    [kernel.textClass, '[ ^ true ]'],
+    [symbolClass, '[ ^ true ]'],
+  ]) {
+    await defineMethodsFromSource({images, compilation, imageId, lane, classRef, methods: [{selector: 'isString', source}]});
+  }
+}
+
 export {
   BASIC_NEW_CAPTURE as SMALLTALK_BASIC_NEW_CAPTURE,
   CLASS_OF_CAPTURE as SMALLTALK_CLASS_OF_CAPTURE,
   PRIMITIVE_BLOCK_ID as SMALLTALK_PRIMITIVE_BLOCK_ID,
   installSmalltalkAllocationProtocol,
+  installSmalltalkStringTestingProtocol,
 };
