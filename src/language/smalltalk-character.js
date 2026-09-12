@@ -159,6 +159,14 @@ async function installSmalltalkCharacterProtocol({images, compilation, imageId, 
         ]`,
       },
       {
+        selector: 'digitValue',
+        source: `[ | scalar |
+          scalar := self codePoint.
+          (scalar between: 48 and: 57) ifTrue: [ ^ scalar - 48 ].
+          (scalar between: 65 and: 90) ifTrue: [ ^ scalar - 55 ].
+          ^ -1 ]`,
+      },
+      {
         selector: 'isSeparator',
         source: `[ | scalar |
           scalar := self codePoint.
