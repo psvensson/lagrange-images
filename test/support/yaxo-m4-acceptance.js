@@ -101,6 +101,18 @@ export async function recoverApplication(runtime, locator) {
   return resumed.refs;
 }
 
+export async function assertRuntimeClosed(a) {
+  assert.throws(() => a.database.listTables(), /runtime is not started/, 'A database has closed');
+  await assert.rejects(() => a.runtime.images.getObject(M4_LOCATOR.imageId, 'anything'), undefined, 'A cannot read after close');
+}
+
+export function assertFreshRuntimes(a, b) {
+  for (const name of ['images', 'backend', 'executor', 'compilation', 'codeExecutors', 'invocations', 'codeCompilers', 'groupCompilers', 'dispatchers', 'toolchainProviders', 'foreignRuntimeProviders', 'foreignRuntimeInstanceCache']) {
+    assert.notEqual(a.runtime[name], b.runtime[name], `${name} must be fresh`);
+  }
+  for (const name of ['database', 'wasmModuleCache', 'wasmInstancePool']) assert.notEqual(a[name], b[name], `${name} must be fresh`);
+}
+
 export async function runM4Acceptance(filename, manifest, scope) {
   let a = await openRuntime(filename);
   let expected;
@@ -109,14 +121,10 @@ export async function runM4Acceptance(filename, manifest, scope) {
   } finally {
     await a.runtime.close();
   }
-  assert.throws(() => a.database.listTables(), /runtime is not started/, 'A database has closed');
-  await assert.rejects(() => a.runtime.images.getObject(M4_LOCATOR.imageId, 'anything'), undefined, 'A cannot read after close');
+  await assertRuntimeClosed(a);
   const b = await openRuntime(filename);
   try {
-    for (const name of ['images', 'executor', 'compilation', 'codeExecutors', 'invocations', 'codeCompilers', 'groupCompilers', 'dispatchers', 'toolchainProviders', 'foreignRuntimeProviders', 'foreignRuntimeInstanceCache']) {
-      assert.notEqual(a.runtime[name], b.runtime[name], `${name} must be fresh`);
-    }
-    for (const name of ['database', 'wasmModuleCache', 'wasmInstancePool']) assert.notEqual(a[name], b[name]);
+    assertFreshRuntimes(a, b);
     a = null;
     // Expected refs are used only by this comparison, never as input to B's root discovery.
     assert.deepEqual(await recoverApplication(b.runtime, {...M4_LOCATOR}), expected);
