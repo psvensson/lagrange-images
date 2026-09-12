@@ -33,7 +33,7 @@ export async function openRuntime(filename) {
 
 async function assertClass(runtime, ref, expected) {
   const classRef = await send(runtime, ref, 'class');
-  assert.equal((await readBehavior(runtime.images, classRef)).name, expected);
+  assert.equal((await readBehavior(runtime.images, classRef)).name.value, expected);
 }
 
 export async function inspectDocument(runtime, document) {
