@@ -14,9 +14,11 @@ test('M4 F1: recovery refuses an old document ref before accessing any runtime',
 });
 
 function assertRecoveryStructure(source) {
-  const recovery = source.slice(source.indexOf('export async function recoverApplication('), source.indexOf('export async function runM4Acceptance('));
+  const recovery = source.slice(source.indexOf('export async function reacquireDocument('), source.indexOf('export async function runM4Acceptance('));
   assert.match(recovery, /readProjectDescriptor\(/);
-  assert.match(recovery, /inspectDocument\(runtime, member.target\)/);
+  assert.match(recovery, /return member.target;/);
+  assert.match(recovery, /const document = await reacquireDocument\(runtime, locator\)/);
+  assert.match(recovery, /inspectDocument\(runtime, document\)/);
   assert.match(recovery, /await mutate\(runtime, recovered.refs.root, 'se'\)/);
   assert.doesNotMatch(recovery, /importCuisNativePackage|installSymmetricSmalltalk|parseDocumentFrom:|M4_XML|prepareApplication|putObject|putCodeArtifact/);
   assert.doesNotMatch(source, /\.putObject\(|\.putShape\(|\.putBlock\(|\.setRoot\(|ProjectInstallation/);
