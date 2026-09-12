@@ -314,8 +314,8 @@ The native image has exactly one textual representation (`Text`) and already own
 text-backed stream. The adapter therefore translates only the exact token sequence
 `UnicodeString writeStream` to the parenthesized native construction `(WriteStream on: '')`.
 Parentheses preserve Smalltalk precedence when a later unary send follows. It does not publish a
-`UnicodeString` global, alias it to `Text`, invent `Utf8EncodedWriteStream`, or pre-implement the
-later `nextPut:`/`reset` breadth. Every other use of the name, a cascade, a local binding and a
+`UnicodeString` global, alias it to `Text`, invent `Utf8EncodedWriteStream`, or implement stream execution. Later `nextPut:` and `reset` operations are earned separately
+at the native WriteStream owner when the actual vertical reaches them. Every other use of the name, a cascade, a local binding and a
 manifest-declared `UnicodeString` stays untouched, as do strings and comments. The real unedited
 initializer executes natively and a native probe reads both assigned buffers back through ordinary
 stream behavior, including non-Latin text.
@@ -548,7 +548,9 @@ and returns nil at EOF without a write (`w6v`). The complete public parse then s
 omitted canonical XMLTokenizer methods, one refusal at a time: `atEnd` (`4gx`), `parsingMarkup`
 (`hko`), `checkAndExpandReference:` (`3c3`), `validating` (`nph`), `nextNode` (`rfe`), `nextTag`
 (`200`) and `nextName` (`ac3`). They are now included unchanged in the single initial import.
-The next native refusal is `WriteStream>>reset`, sent by `nextName` to nameBuffer (`p6u`).
+Native WriteStream `reset` now clears its private accumulation and returns the same stream (`p6u`).
+The next refusal is `Character>>isAscii` on the first tag-name Character, `$n`, in unchanged
+`XMLTokenizer>>nextName`.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
 The exact RED assertion is temporary; the recovery tail has
