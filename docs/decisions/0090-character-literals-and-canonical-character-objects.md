@@ -1,7 +1,7 @@
 # ADR 0090: Character literals and canonical Character objects
 
 Status: implemented — direct Symmetric Smalltalk `$x` syntax lowers through an image-local Character interner, native Text indexing and scalar enumeration produce the same canonical Character objects, and the Character personality exposes its scalar plus the first pinned classification protocol.
-Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/smalltalk-character-constructor.test.js, test/smalltalk-character-digit.test.js, test/smalltalk-character-letter.test.js, test/cuis-yaxo-native-import-real.test.js
+Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/smalltalk-character-constructor.test.js, test/smalltalk-character-digit.test.js, test/smalltalk-character-letter.test.js, test/smalltalk-character-range.test.js, test/smalltalk-character-range-recovery.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
 
@@ -110,6 +110,14 @@ belongs in the forcing contract.
    executing consumer requires it. The guard follows the existing bounded Integer printing
    protocol precedent. Classification uses ordinary Integer/Boolean methods, with no new primitive,
    host Unicode category rule or imported runtime table.
+
+   The actual M4 initializer forces Character `to:` (31o) when constructing its digit/letter
+   ranges. A separate post-publication stage installs ordinary source that allocates a fresh Array,
+   iterates inclusive scalar bounds through Integer `to:do:`, and writes canonical elements from
+   public `Character class>>codePoint:` through Array `at:put:`. Equal bounds produce a singleton;
+   adjacent descending bounds produce an empty Array; wider descending bounds are refused by
+   existing negative-size allocation, as measured in pinned Cuis. The basic Character installer
+   retains its smaller prerequisites. No Interval class, host range builder or new primitive appears.
 
    `Character>>codePoint` is an ordinary instance-variable method that answers the scalar already
    stored in the canonical Character Shape. It adds no state, host lookup or primitive.
