@@ -3,7 +3,7 @@ import {
   LagrangeBackend, WasmModuleCache, WasmInstancePool,
   createRuntime, createProject, addProjectMember, readProjectDescriptor,
   importCuisNativePackage, installSymmetricSmalltalkStandardImage,
-  textValue, integerValue,
+  textValue, integerValue, readBehavior,
 } from '../../src/runtime.js';
 import {createSqliteApplicationRuntime} from './sqlite-application-runtime.js';
 
@@ -32,7 +32,8 @@ export async function openRuntime(filename) {
 }
 
 async function assertClass(runtime, ref, expected) {
-  assert.deepEqual(await send(runtime, await send(runtime, ref, 'class'), 'name'), textValue(expected));
+  const classRef = await send(runtime, ref, 'class');
+  assert.equal((await readBehavior(runtime.images, classRef)).name, expected);
 }
 
 export async function inspectDocument(runtime, document) {
