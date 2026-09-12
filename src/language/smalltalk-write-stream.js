@@ -19,10 +19,11 @@ import {SMALLTALK_TEXT_CODEC_PRIMITIVE_BLOCK_ID} from './smalltalk-text-bytearra
 //   WriteStream class >> on:          the stream the source constructs
 //   WriteStream       >> nextPutAll:  chunk write (bead lagrange-images-nv1.8)
 //   WriteStream       >> nextPut:     Character element write (bead lagrange-images-xxm.14)
+//   WriteStream       >> reset        reuse the same stream for a new written prefix (p6u)
 //   WriteStream       >> contents     the answer it takes back out
 //   Text class        >> streamContents:  evaluate one producer Block through that stream owner
 //
-// `with:`, positioning, resets, read streams and byte-stream breadth remain absent. Execution
+// `with:`, arbitrary positioning and byte-stream breadth remain absent. Execution
 // pressure adds protocol one proven consumer at a time. `nextPut:` is now earned by unchanged YAXO
 // XMLTokenizer>>nextWhitespace after its preceding Character classification became executable.
 // `Text class >> streamContents:` is ordinary native Text protocol: the Cuis importer owns only
@@ -69,9 +70,10 @@ import {SMALLTALK_TEXT_CODEC_PRIMITIVE_BLOCK_ID} from './smalltalk-text-bytearra
 //
 // NOT MODELLED. Cuis puts WriteStream under `PositionableStream`, and its `on:` also resets a
 // position and a read limit. This class is a direct subclass of Object and models no position:
-// the accumulation is append-only and `contents` consumes all of it, so there is no prefix to
-// index. A position becomes necessary the first time something can write somewhere other than the
-// end — repositioning, truncation, a read stream — none of which any consumer sends.
+// writes append and `contents` consumes the current accumulation. The measured `reset` operation
+// starts a new written prefix by clearing that accumulation, preserving the stream and backing.
+// Arbitrary positioning or reading this stream would require a broader state model; neither is
+// part of the currently forced protocol.
 
 // v2: the chunk-write protocol added an instance variable, and a Shape record is immutable, so the
 // structural change gets a new Shape identity rather than a rewrite (ADR 0047). An image that
@@ -208,6 +210,9 @@ const WRITE_STREAM_METHODS = [
       ^ result ]`,
     captures: [WRITE_STREAM_SCALAR_CODEC_CAPTURE],
   },
+  // Pinned UnicodeString writeStream reset answers self and empty contents. With only append,
+  // contents and reset exposed, forgetting the written prefix preserves that exact behavior.
+  {selector: 'reset', source: '[ written := nil. ^ self ]'},
 ];
 
 function requiredText(value, label) {
