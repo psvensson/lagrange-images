@@ -484,8 +484,9 @@ uncached entry advances the stream exactly once, and the loop reads the external
 consumed character. The single-keyword `ifNil:`/`ifNotNil:` pair shares these same semantics and
 this same one-argument divergence, which had simply never been forced before.
 
-The durable-restart vertical (bead `lagrange-images-xg3`) then resumed the parent milestone and
-measured the real import boundary by enumerating the whole pinned package one method at a time.
+An import investigation (bead `lagrange-images-xg3`) then measured the import boundary by
+enumerating the whole pinned package one method at a time. This was diagnostic evidence, not
+the complete M4 acceptance and not a scheduler for further compatibility work.
 Two refusals were repaired at their owners and landed together: an EMPTY method body — several
 pinned subclass hooks are empty or comment-only — imports as the ordinary answer-self method
 (bead `lagrange-images-8yv`), and the canonical v2 export now carries classVariableNames as
@@ -522,14 +523,20 @@ accepted execution scope, and M4's first slice imported `methods: []`; neither m
 The lesson for future method-bearing slices is narrower: admission is not success when a foreign
 dialect token can be absorbed into another valid native parse.
 
-Two facts worth recording because they were predicted to block first and measurably do not — they sit
-BEHIND all of the above on the executable vertical, and none of it is scheduled by this slice:
+The complete acceptance now lives in `test/support/yaxo-m4-acceptance.js`, invoked by the real
+YAXO test. Its intended flow uses the exact minimal XML, one native import, the returned
+XMLDocument as a Project working-state member, a YAXO attribute mutation, two distinct runtimes
+over one SQLite file, Project-only root reacquisition, all four ObjectRef comparisons, and a
+second YAXO mutation. It currently stops during import at `XMLTokenizer class>>initialize`'s
+nonempty literal array (bead `x4i`). The exact RED assertion is temporary; the recovery tail has
+not executed and is not yet a successful restart claim. The acceptance, not the earlier survey,
+selects subsequent repairs. F1 and structural recovery guards exist; all seven causal falsifiers
+must be completed before M4 closes.
 
-- the canonical v2 export carries **no class-variable facts**. YAXO's `XMLTokenizer` declares four
-  class variables that its class-side `initialize` builds and its tokenizer cannot scan without, and
-  the manifest's class declaration has no field for them. That is the EXPORT owner's gap, not YAXO's.
-  The native side already has the concept: `src/language/smalltalk-class-variables.js` owns
-  hierarchy-scoped class variables and the semantic compiler resolves them.
+Two class-initialization boundary facts:
+
+- the canonical v2 export now carries declared `classVariables` names. Native class construction
+  and the class-variable owner declare the bindings; package code must populate their values.
 - the canonical v2 export carries **no package load-time expressions**. The package file ends with
   five top-level `... initialize!` chunks that run those initializers at load; the manifest
   represents packages, classes and methods only. Also the EXPORT owner's gap.
@@ -544,8 +551,8 @@ needed:
 - **The Project working-state owner** (`src/project/working-state.js`) is the generic, language-neutral
   one. `project/<projectId>` is a deterministic id derived from caller-chosen text; a member is
   `{key, role, target}` where `target` is an arbitrary unpinned `ObjectRef`, and `readProjectDescriptor`
-  rebuilds the whole descriptor from records alone. Its own "restart" test admits it only re-reads
-  rather than restarting, so M4 would be the first proof that it survives a real one.
+  rebuilds the whole descriptor from records alone. Its unit proof is accurately named "durable
+  reread"; M4's two-runtime application proof remains the load-bearing restart acceptance.
 - **The ProjectInstallation deterministic head** (`src/project/installation-state.js`,
   `lagrange-project-installation/<projectId>/head`) is the same shape and IS restart-proven:
   `test/mixed-language-project-real.test.js` closes a runtime over a real backend and reacquires

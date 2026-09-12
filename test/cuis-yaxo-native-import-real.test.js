@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile, mkdtemp, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {runM4Acceptance} from './support/yaxo-m4-acceptance.js';
 import {createHash} from 'node:crypto';
 import {
   CUIS_BUILD_CONTRACT_V0,
@@ -842,6 +845,34 @@ const M4_PARSE_PATH = Object.freeze([
   M4_PEEK_METHOD,
 ]);
 const M4_NEXT_RED_METHOD = 'cuis-method/YAXO/XMLTokenizer/instance/nextWhitespace';
+
+// The complete M4 acceptance is the scheduler. Keep the restart/identity/behavior tail intact
+// when an earlier import or execution step exposes the next owner-local RED.
+const M4_APPLICATION_METHODS = Object.freeze([...new Set([
+  ...M4_PARSE_PATH,
+  'cuis-method/YAXO/XMLTokenizer/class/initialize',
+  'cuis-method/YAXO/XMLNodeWithElements/instance/elements',
+  'cuis-method/YAXO/XMLElement/instance/contents',
+  'cuis-method/YAXO/XMLElement/instance/attributes',
+  'cuis-method/YAXO/XMLElement/instance/attributeAt:',
+  'cuis-method/YAXO/XMLElement/instance/attributeAt:ifAbsent:',
+  'cuis-method/YAXO/XMLElement/instance/attributeAt:put:',
+  'cuis-method/YAXO/XMLStringNode/instance/string',
+])]);
+
+test('M4 acceptance: complete durable restart vertical currently stops at x4i literal-array syntax', {skip: !enabled, timeout: 900_000}, async () => {
+  const manifest = JSON.parse(await yaxoSemanticExport());
+  const directory = await mkdtemp(join(tmpdir(), 'yaxo-m4-'));
+  try {
+    // Temporary exact RED assertion, not an M4 success claim. Repairing x4i must move this
+    // assertion; the complete intended flow lives in runM4Acceptance and is never shortened.
+    await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
+      classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
+    }), {name: 'SymmetricSmalltalkSyntaxError', message: 'literal Array element syntax is not supported; only the empty literal #() is at 69'});
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
 
 test('the repaired M4 forcing scope imports unchanged UnicodeString streamContents: without an alias', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());

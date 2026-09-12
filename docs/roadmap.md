@@ -253,13 +253,14 @@ of classes the package itself defines — which is what an M4 restart proof has 
   (cached entry answers and clears without consuming; uncached entry steps once; one stream read
   per consumed character), and the recorded one-argument cull divergence (bead
   `lagrange-images-4j9`) stays deferred to a real consumer;
-- [x] resume the M4 acceptance vertical itself (bead `lagrange-images-xg3`): the real
-  parse/mutate/restart chain, not a compatibility survey — its measured import-boundary repairs
+- [x] land the M4 import investigation (bead `lagrange-images-xg3`): its import-boundary repairs
   (beads `lagrange-images-8yv` empty hooks, `lagrange-images-9qf` class variables across the
   export/import/class-builder owners) landed together, and the remaining measured work list is
   filed (`x4i` literal-array syntax, `qpr` read-stream/Character naming, `23y` the
-  initialize base-protocol cluster) with the causal re-measurement probe recorded in the vertical
-  bead;
+  initialize base-protocol cluster); this survey does not schedule further compatibility work;
+- [x] build the complete durable M4 acceptance skeleton in `test/support/yaxo-m4-acceptance.js`:
+  the real YAXO test now executes it into `XMLTokenizer class>>initialize`'s literal-array RED
+  (`x4i`); the Project-rooted restart/identity/second-mutation tail is present but not yet reached;
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;

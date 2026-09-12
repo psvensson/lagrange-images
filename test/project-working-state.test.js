@@ -120,7 +120,7 @@ test('storage order is irrelevant: the descriptor is identical after re-reading'
   });
 });
 
-test('restart/recreate preserves the descriptor exactly (durable, not in-process)', async () => {
+test('durable reread preserves the descriptor exactly within one runtime', async () => {
   // Two runtimes over the same mock backend would need a shared backend; instead
   // prove durability by re-reading from the durable image records a second time
   // after other writes, confirming the descriptor is recomputed from storage.
