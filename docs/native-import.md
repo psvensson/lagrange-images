@@ -539,8 +539,10 @@ with `size` sharing the same Unicode interpretation. Native Character `asciiValu
 ASCII scalars and canonical nil outside 0–127 (`cmy`). Public Character construction (`0q8`),
 ASCII digit classification (`ra9`), explicitly bounded Latin-1 letter classification (`utl`),
 canonical Array ranges (`31o`) and uppercase-only digit conversion (`mtr`) now let the complete
-unchanged initializer execute. The next refusal is `Text>>readStream` during native input
-preparation (`ew7`), before the public parser is invoked. The exact RED assertion is temporary; the recovery tail has
+unchanged initializer execute. Native Text `readStream` now constructs an ordinary ReadStream
+with private collection/cursor/limit state (`ew7`), and the unchanged public parser enters
+`startDocument`. Its next refusal is the omitted package `XMLDOMParser>>stack` accessor (`c7u`)
+from `push:`. No read/cursor protocol is implied by construction. The exact RED assertion is temporary; the recovery tail has
 not executed and is not yet a successful restart claim. The acceptance, not the earlier survey,
 selects subsequent repairs. F1 and structural recovery guards exist; all seven causal falsifiers
 must be completed before M4 closes.
