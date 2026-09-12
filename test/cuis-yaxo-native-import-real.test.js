@@ -856,6 +856,7 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLTokenizer/class/initialize',
   'cuis-method/YAXO/XMLDOMParser/instance/stack',
   'cuis-method/YAXO/XMLDOMParser/instance/incremental',
+  'cuis-method/YAXO/XMLDOMParser/instance/top',
   'cuis-method/YAXO/XMLDOMParser/instance/startElement:namespaceURI:namespace:attributeList:',
   'cuis-method/YAXO/SAXDriver/instance/usesNamespaces',
   'cuis-method/YAXO/SAXDriver/instance/handleStartTag:attributes:namespaces:',
@@ -886,18 +887,18 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLStringNode/instance/string',
 ])]);
 
-test('M4 acceptance: complete durable restart vertical currently stops at the parser top accessor', {skip: !enabled, timeout: 900_000}, async () => {
+test('M4 acceptance: complete durable restart vertical currently stops at document addElement:', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const directory = await mkdtemp(join(tmpdir(), 'yaxo-m4-'));
   try {
-    // Temporary exact RED assertion, not an M4 success claim. Importing the canonical top accessor must move this
+    // Temporary exact RED assertion, not an M4 success claim. Importing canonical addElement: must move this
     // assertion; the complete intended flow lives in runM4Acceptance and is never shortened.
     await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
       classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
     }), error => {
       assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
-      assert.equal(error.selector, 'top');
-      assert.match(error.message, /^Symmetric Smalltalk message not understood: top sent to yaxo-m4\/~runtime\/transient\/object\/\d+\/[0-9a-f-]+$/);
+      assert.equal(error.selector, 'addElement:');
+      assert.match(error.message, /^Symmetric Smalltalk message not understood: addElement: sent to yaxo-m4\/~runtime\/transient\/object\/\d+\/[0-9a-f-]+$/);
       return true;
     });
   } finally {
