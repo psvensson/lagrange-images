@@ -883,17 +883,19 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLStringNode/instance/string',
 ])]);
 
-test('M4 acceptance: complete durable restart vertical currently stops at native Text asSymbol', {skip: !enabled, timeout: 900_000}, async () => {
+test('M4 acceptance: complete durable restart vertical currently stops at canonical namespace initializer', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const directory = await mkdtemp(join(tmpdir(), 'yaxo-m4-'));
   try {
-    // Temporary exact RED assertion, not an M4 success claim. Repairing native Text asSymbol must move this
+    // Temporary exact RED assertion, not an M4 success claim. Importing the canonical namespace initializer must move this
     // assertion; the complete intended flow lives in runM4Acceptance and is never shortened.
     await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
       classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
-    }), {
-      name: 'SmalltalkMessageNotUnderstoodError', selector: 'asSymbol',
-      message: 'Symmetric Smalltalk message not understood: asSymbol sent to a text Value',
+    }), error => {
+      assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
+      assert.equal(error.selector, 'namespace:uri:');
+      assert.match(error.message, /^Symmetric Smalltalk message not understood: namespace:uri: sent to yaxo-m4\/~runtime\/transient\/object\/\d+\/[0-9a-f-]+$/);
+      return true;
     });
   } finally {
     await rm(directory, {recursive: true, force: true});
