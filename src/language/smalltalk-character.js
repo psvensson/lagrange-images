@@ -143,6 +143,7 @@ async function installSmalltalkCharacterProtocol({images, compilation, imageId, 
     classRef,
     methods: [
       {selector: 'codePoint', source: '[ ^ codePoint ]'},
+      {selector: 'isAscii', source: '[ ^ self codePoint < 128 ]'},
       // Pinned asciiValue is partial: non-ASCII scalars answer the canonical nil.
       {selector: 'asciiValue', source: '[ ^ self codePoint < 128 ifTrue: [self codePoint] ifFalse: [nil] ]'},
       {selector: 'isDigit', source: '[ ^ self codePoint between: 48 and: 57 ]'},
