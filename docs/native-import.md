@@ -542,8 +542,9 @@ canonical Array ranges (`31o`) and uppercase-only digit conversion (`mtr`) now l
 unchanged initializer execute. Native Text `readStream` now constructs an ordinary ReadStream
 with private collection/cursor/limit state (`ew7`), and the unchanged public parser enters
 `startDocument`. The reached package `XMLDOMParser>>stack` accessor is included unchanged (`c7u`);
-the next refusal is unary Block `whileFalse` in `SAXHandler>>parseDocument` (`pq5`).
-No read/cursor protocol is implied by construction. The exact RED assertion is temporary; the recovery tail has
+unary Block `whileFalse` now executes the condition through the existing loop owner (`pq5`).
+The next refusal is ReadStream `next`, sent by unchanged `XMLTokenizer>>peek` (`w6v`).
+The exact RED assertion is temporary; the recovery tail has
 not executed and is not yet a successful restart claim. The acceptance, not the earlier survey,
 selects subsequent repairs. F1 and structural recovery guards exist; all seven causal falsifiers
 must be completed before M4 closes.
