@@ -537,7 +537,10 @@ which allocates an ordinary Set with Dictionary-owned equality/hash membership. 
 Native Text `do:` now enumerates that delimiter text through canonical scalar indexing (`dph`),
 with `size` sharing the same Unicode interpretation. Native Character `asciiValue` now answers
 ASCII scalars and canonical nil outside 0–127 (`cmy`). The unchanged initializer next refuses
-`Character>>isLetter` in the lazy classification alternative (`utl`), after native `isDigit` correctly classifies only ASCII 48–57 (`ra9`). Public `Character class>>codePoint:` now delegates to the existing canonical scalar interner (`0q8`). The exact RED assertion is temporary; the recovery tail has
+`Character>>to:` when constructing its digit range (`31o`), after native `isDigit` classifies
+ASCII 48–57 (`ra9`) and bounded `isLetter` matches all 256 Latin-1 entries while explicitly
+refusing wider classification (`utl`). Public `Character class>>codePoint:` delegates to the
+existing canonical scalar interner (`0q8`). The exact RED assertion is temporary; the recovery tail has
 not executed and is not yet a successful restart claim. The acceptance, not the earlier survey,
 selects subsequent repairs. F1 and structural recovery guards exist; all seven causal falsifiers
 must be completed before M4 closes.
