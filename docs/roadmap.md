@@ -282,7 +282,9 @@ of classes the package itself defines — which is what an M4 restart proof has 
   the unchanged tag-name loop completes; the public parser selects its whitespace and attribute
   parsing closure (`9gn`, `nmw`, `pke`);
 - [x] answer native `isString` through ordinary Object/Text/Symbol methods (`6gw`);
-  the attribute-value loop completes and reaches omitted `SAXDriver>>usesNamespaces`;
+  the attribute-value loop completes; the public parser selects its actual SAXDriver/handler
+  callbacks and XMLElement factory/initializer (`4gs`, `e1q`, `r2j`, `dd1`, `fys`, `ewq`, `91u`, `yll`);
+  the factory allocates a native XMLElement and `name:` reaches Text `asSymbol` (`tqr`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
