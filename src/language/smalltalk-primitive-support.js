@@ -77,6 +77,7 @@ const SMALLTALK_PRIMITIVE = Object.freeze({
   // Characters are language objects, deliberately not a generic Value kind.
   CHARACTER_INTERN: 'character-intern',
   TEXT_AT_CHARACTER: 'text-at-character',
+  TEXT_SIZE: 'text-size',
   // Dynamic send: extracts the selector from a Symbol and re-enters the ordinary message
   // runtime. `perform-send` is the 0-argument form; `perform-send-with` takes one argument.
   PERFORM_SEND: 'perform-send',
@@ -145,6 +146,7 @@ const SMALLTALK_PRIMITIVE_ARITY = Object.freeze({
   [SMALLTALK_PRIMITIVE.SYMBOL_INTERN]: 1,
   [SMALLTALK_PRIMITIVE.CHARACTER_INTERN]: 1,
   [SMALLTALK_PRIMITIVE.TEXT_AT_CHARACTER]: 2,
+  [SMALLTALK_PRIMITIVE.TEXT_SIZE]: 1,
   [SMALLTALK_PRIMITIVE.PERFORM_SEND]: 2,
   [SMALLTALK_PRIMITIVE.PERFORM_SEND_WITH]: 3,
   [SMALLTALK_PRIMITIVE.SUBCLASSES_OF]: 1,

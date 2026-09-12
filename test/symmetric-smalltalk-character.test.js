@@ -343,7 +343,7 @@ for (const lane of ['neutral', 'wasm']) {
                 runtime,
                 'character-recovery',
                 `recovered-character-${lane}-${failAt}-${commitThenThrow}`,
-                "[ ($λ == ('λ' at: 1)) and: [ ($λ codePoint = 955) and: [ $\u200b isSeparator ] ] ]",
+                "[ ('λ😀' size = 2) and: [ ($λ == ('λ' at: 1)) and: [ ($λ codePoint = 955) and: [ $\u200b isSeparator ] ] ] ]",
               ),
               booleanValue(true),
               'recovery preserves Character identity, its owned scalar and classification',

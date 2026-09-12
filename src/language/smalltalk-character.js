@@ -23,6 +23,7 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 const PRIMITIVE_BLOCK_ID = Object.freeze({
   [SMALLTALK_PRIMITIVE.CHARACTER_INTERN]: 'smalltalk/primitive/character-intern',
   [SMALLTALK_PRIMITIVE.TEXT_AT_CHARACTER]: 'smalltalk/primitive/text-at-character',
+  [SMALLTALK_PRIMITIVE.TEXT_SIZE]: 'smalltalk/primitive/text-size',
 });
 
 async function installPrimitiveBlock({images, imageId, primitive}) {
@@ -94,6 +95,25 @@ async function installSmalltalkCharacterProtocol({images, compilation, imageId, 
         value: objectRef(imageId, PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.TEXT_AT_CHARACTER]),
       }],
     }],
+  });
+
+  // Scalar cardinality shares Text indexing's interpretation. Enumeration itself stays in
+  // ordinary Smalltalk, so Integer/Block own callback sequencing and exception propagation.
+  await defineMethodsFromSource({
+    images, compilation, imageId, lane, classRef: kernel.textClass,
+    methods: [
+      {
+        selector: 'size', source: '[ ^ primitiveTextSize value: self ]',
+        captures: [{
+          id: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.TEXT_SIZE], name: 'primitiveTextSize',
+          value: objectRef(imageId, PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.TEXT_SIZE]),
+        }],
+      },
+      {
+        selector: 'do:',
+        source: '[ :aBlock | 1 to: self size do: [:index | aBlock value: (self at: index)]. ^ self ]',
+      },
+    ],
   });
 
   // Character already durably owns this scalar in its one named slot. Expose it through ordinary
