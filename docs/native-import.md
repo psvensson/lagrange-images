@@ -544,8 +544,13 @@ with private collection/cursor/limit state (`ew7`), and the unchanged public par
 `startDocument`. The reached package `XMLDOMParser>>stack` accessor is included unchanged (`c7u`);
 unary Block `whileFalse` now executes the condition through the existing loop owner (`pq5`).
 Native ReadStream `next` now returns canonical indexed Characters while advancing its own cursor,
-and returns nil at EOF without a write (`w6v`). The next refusal is the omitted package
-`XMLTokenizer>>atEnd` method on SAXDriver (`4gx`), not a native ReadStream protocol request.
+and returns nil at EOF without a write (`w6v`). The complete public parse then selected seven
+omitted canonical XMLTokenizer methods, one refusal at a time: `atEnd` (`4gx`), `parsingMarkup`
+(`hko`), `checkAndExpandReference:` (`3c3`), `validating` (`nph`), `nextNode` (`rfe`), `nextTag`
+(`200`) and `nextName` (`ac3`). They are now included unchanged in the single initial import.
+The next native refusal is `WriteStream>>reset`, sent by `nextName` to nameBuffer (`p6u`).
+The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
+has not been added.
 The exact RED assertion is temporary; the recovery tail has
 not executed and is not yet a successful restart claim. The acceptance, not the earlier survey,
 selects subsequent repairs. F1 and structural recovery guards exist; all seven causal falsifiers
