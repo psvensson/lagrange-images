@@ -146,6 +146,18 @@ async function installSmalltalkCharacterProtocol({images, compilation, imageId, 
       {selector: 'asciiValue', source: '[ ^ self codePoint < 128 ifTrue: [self codePoint] ifFalse: [nil] ]'},
       {selector: 'isDigit', source: '[ ^ self codePoint between: 48 and: 57 ]'},
       {
+        selector: 'isLetter',
+        source: `[ | scalar |
+          scalar := self codePoint.
+          255 < scalar ifTrue: [ ^ self isLetterOutsideLatin1 ].
+          ^ (scalar between: 65 and: 90) or: [
+            (scalar between: 97 and: 122) or: [
+              scalar = 170 or: [ scalar = 181 or: [ scalar = 186 or: [
+                (scalar between: 192 and: 255) and: [
+                  (scalar = 215 or: [ scalar = 247 ]) not ] ] ] ] ] ]
+        ]`,
+      },
+      {
         selector: 'isSeparator',
         source: `[ | scalar |
           scalar := self codePoint.

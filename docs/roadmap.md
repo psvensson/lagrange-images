@@ -268,7 +268,8 @@ of classes the package itself defines — which is what an M4 restart proof has 
 - [x] convert ASCII Characters through native `asciiValue`, with nil outside ASCII (`cmy`);
 - [x] construct Characters through public `Character class>>codePoint:` and the existing interner (`0q8`);
 - [x] classify ASCII digits through native `Character>>isDigit` (`ra9`);
-  the unchanged initializer now reaches `Character>>isLetter` (`utl`);
+- [x] classify all initializer Latin-1 Characters through bounded native `isLetter` (`utl`);
+  the unchanged initializer now reaches `Character>>to:` (`31o`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;

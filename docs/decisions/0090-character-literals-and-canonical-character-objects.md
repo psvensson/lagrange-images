@@ -1,7 +1,7 @@
 # ADR 0090: Character literals and canonical Character objects
 
 Status: implemented — direct Symmetric Smalltalk `$x` syntax lowers through an image-local Character interner, native Text indexing and scalar enumeration produce the same canonical Character objects, and the Character personality exposes its scalar plus the first pinned classification protocol.
-Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/smalltalk-character-constructor.test.js, test/smalltalk-character-digit.test.js, test/cuis-yaxo-native-import-real.test.js
+Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/smalltalk-character-constructor.test.js, test/smalltalk-character-digit.test.js, test/smalltalk-character-letter.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
 
@@ -102,6 +102,14 @@ belongs in the forcing contract.
    Arabic, full-width and superscript digits are false. Native ordinary source uses the same
    `codePoint between: 48 and: 57` relation, preserving Integer ownership of comparisons and
    adding no Unicode category table, host regular expression or classification primitive.
+
+   The M4 initializer forces `isLetter` on its complete 0–255 domain (utl). Native support matches
+   every pinned Latin-1 result: ASCII letters, 170/181/186, 192–214, 216–246 and 248–255. Code points
+   above 255 send the deliberately unsupported `isLetterOutsideLatin1`; they never silently answer
+   false. Pinned Cuis has wider Unicode tables, but that is outside this native contract until an
+   executing consumer requires it. The guard follows the existing bounded Integer printing
+   protocol precedent. Classification uses ordinary Integer/Boolean methods, with no new primitive,
+   host Unicode category rule or imported runtime table.
 
    `Character>>codePoint` is an ordinary instance-variable method that answers the scalar already
    stored in the canonical Character Shape. It adds no state, host lookup or primitive.
