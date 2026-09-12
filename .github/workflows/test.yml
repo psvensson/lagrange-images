@@ -4,8 +4,13 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: test-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
+  actions: read
 
 jobs:
   # The ordinary gate: everything except the exhaustive publication-recovery sweeps, which run
@@ -25,8 +30,19 @@ jobs:
       - run: npm install --ignore-scripts
       - name: Install Beads native binary
         run: CI= node node_modules/@beads/bd/scripts/postinstall.js
+      - name: Resolve prior native proof
+        id: proof
+        run: node scripts/ci-proof.mjs decide node-test
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: npm run test:fast
+        if: steps.proof.outputs.reuse != 'true'
+      - name: Verify current documentation and real-test module loading
+        if: steps.proof.outputs.reuse == 'true'
+        run: node scripts/ci-proof.mjs check node-test
       - run: npm run demo
+      - name: Record successful native tests before the mutable Beads bootstrap
+        run: node scripts/ci-proof.mjs publish node-test
       - name: Verify provider-independent Beads bootstrap
         shell: bash
         run: |
@@ -38,6 +54,12 @@ jobs:
           npx bd version
           npm run beads:prime >/dev/null
           npm run beads:ready >/dev/null
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-proof-node-test
+          path: ${{ runner.temp }}/ci-proof/node-test/proof.json
+          if-no-files-found: error
+          overwrite: true
 
   # Every write, both lanes, pre-commit and commit-then-lost-ack. These sweeps grow with each new
   # protocol, so they get their own budget: a protocol added later lengthens this job rather than
@@ -53,7 +75,24 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts
+      - name: Resolve prior recovery proof
+        id: proof
+        run: node scripts/ci-proof.mjs decide recovery-test
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: npm run test:recovery
+        if: steps.proof.outputs.reuse != 'true'
+      - name: Verify current real-test module loading in the recovery lane
+        if: steps.proof.outputs.reuse == 'true'
+        run: node scripts/ci-proof.mjs check recovery-test
+      - name: Publish successful recovery proof
+        run: node scripts/ci-proof.mjs publish recovery-test
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-proof-recovery-test
+          path: ${{ runner.temp }}/ci-proof/recovery-test/proof.json
+          if-no-files-found: error
+          overwrite: true
 
   lagrange-backend-integration:
     runs-on: ubuntu-latest

@@ -50,6 +50,28 @@ its ten-minute timeout. The split is about budgets, not coverage: **nothing is s
 sweep still visits every write in both lanes under pre-commit and commit-then-lost-ack failure, and
 a local `npm test` still runs the lot.
 
+New commits cancel obsolete runs of the same PR; only its latest head should consume CI workers.
+
+The two native jobs can reuse a previously successful CI proof when their declared inputs and
+runner environment are identical. `scripts/ci-proof.mjs` owns this decision. It hashes every
+tracked source, ordinary/recovery test, helper, dependency lock, script, workflow and unknown file,
+plus the actual Node version, platform, architecture, runner image and relevant environment.
+It excludes documentation and the explicit real-integration test modules: documentation assertions
+belong in `steering-docs.test.js` or `agent-governance.test.js`, and those modules, the split guard,
+and native-environment loading of the real-test files are checked on the current head when reusing.
+Real integration jobs always execute their complete existing commands. Any new document-dependent
+proof must join the current-head documentation checks; test files must not communicate through
+undeclared mutable cross-file fixtures.
+
+Reuse requires a receipt published after lane success by the PR that produced the merged base.
+That PR's tested tree must equal the base tree, its exact-head `test` workflow must have all six
+required jobs green, and the receipt must match the lane, inputs, runner and producer identity.
+Missing, expired, malformed or mismatched evidence runs the full lane. A proof-policy or workflow
+change therefore cold-runs both suites. The job summary records the reused run explicitly; all six
+required checks still report on the current head. Local results cannot stand in for these CI
+receipts. This is conservative reuse of the two native test groups, not an assumption that modules
+using the broad runtime/standard-image composition are independent.
+
 The ordinary job has a finite 30-minute budget. The M4 ASCII-conversion head exhausted the former
 20-minute limit after 1,501 passing tests while still advancing through existing super-send proofs
 (Actions run 34698454936). Native standard-image additions increase the work in many fixtures.
