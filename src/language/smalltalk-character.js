@@ -59,7 +59,7 @@ async function installSmalltalkCharacterProtocol({images, compilation, imageId, 
     id: CHARACTER_SHAPE_ID,
     slots: [{id: CHARACTER_CODE_POINT_SLOT, name: 'codePoint'}],
   });
-  const {classRef} = await ensureNamedClass({
+  const {classRef, metaclassRef} = await ensureNamedClass({
     images,
     imageId,
     name: CHARACTER_CLASS_NAME,
@@ -69,6 +69,18 @@ async function installSmalltalkCharacterProtocol({images, compilation, imageId, 
   for (const primitive of Object.keys(PRIMITIVE_BLOCK_ID)) {
     await installPrimitiveBlock({images, imageId, primitive});
   }
+
+  // Public construction delegates identity and scalar validation to the same literal/Text interner.
+  await defineMethodsFromSource({
+    images, compilation, imageId, lane, classRef: metaclassRef,
+    methods: [{
+      selector: 'codePoint:', source: '[ :aScalar | ^ primitiveCharacterIntern value: aScalar ]',
+      captures: [{
+        id: PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.CHARACTER_INTERN], name: 'primitiveCharacterIntern',
+        value: objectRef(imageId, PRIMITIVE_BLOCK_ID[SMALLTALK_PRIMITIVE.CHARACTER_INTERN]),
+      }],
+    }],
+  });
 
   await defineMethods({
     images,
