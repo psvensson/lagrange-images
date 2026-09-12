@@ -271,6 +271,9 @@ async function installSmalltalkIndexedProtocol({images, compilation, imageId, la
 // sends `array do:`); Array is a kernel class outside the `Collection`
 // hierarchy, so it does not inherit the library's `Collection do:`.
 const ARRAY_ENUMERATION_METHODS = Object.freeze([
+  // Fill preserves the receiver and its length. The loop bound is read once, and indexed
+  // writes retain the supplied Value/ref exactly; no bulk storage or copying rule lives here.
+  {selector: 'atAllPut:', source: '[ :anObject | 1 to: self size do: [:index | self at: index put: anObject]. self ]'},
   {
     selector: 'do:',
     source: `[ :aBlock | | index |
