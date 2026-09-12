@@ -64,8 +64,9 @@ function runnerEnvironment() {
   return {
     node: process.version, platform: process.platform, arch: process.arch,
     imageOS: process.env.ImageOS ?? '', imageVersion: process.env.ImageVersion ?? '',
-    options: process.env.NODE_OPTIONS ?? '',
+    options: hash(process.env.NODE_OPTIONS ?? ''),
     variables: Object.entries(process.env).filter(([key]) => /^(LAGRANGE_|TZ$|LANG$|LC_)/.test(key))
+      .map(([key, value]) => [key, hash(value)])
       .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
   };
 }
