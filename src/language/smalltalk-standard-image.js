@@ -1,5 +1,5 @@
 import {defineMethods} from './smalltalk-class-builder.js';
-import {installSmalltalkAllocationProtocol} from './smalltalk-allocation.js';
+import {installSmalltalkAllocationProtocol, installSmalltalkStringTestingProtocol} from './smalltalk-allocation.js';
 import {installSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
 import {installSmalltalkClassVariableSupport} from './smalltalk-class-variables.js';
 import {installSmalltalkConditionProtocol, installSmalltalkExceptionAccessors, CONDITION_CLASSES} from './smalltalk-conditions.js';
@@ -131,6 +131,7 @@ async function installSymmetricSmalltalkStandardImage({
   const exceptionAccessors = await installSmalltalkExceptionAccessors(options);
   const dictionary = await installSmalltalkDictionaryProtocol(options);
   const symbol = await installSmalltalkSymbolProtocol(options);
+  await installSmalltalkStringTestingProtocol(options);
   // Character literals and Text indexing share one canonical, image-local Character interner.
   // Character remains distinct from both Text and Integer without widening the generic Value model.
   const character = await installSmalltalkCharacterProtocol(options);

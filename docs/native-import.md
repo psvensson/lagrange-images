@@ -552,8 +552,10 @@ Native WriteStream `reset` now clears its private accumulation and returns the s
 Native Character `isAscii` now preserves the pinned seven-bit boundary (`d6k`), so unchanged
 `XMLTokenizer>>nextName` completes. The public parse then selected canonical `skipSeparators`
 (`9gn`), `nextAttributeInto:namespaces:` (`nmw`) and `nextAttributeValue` (`pke`), one actual
-refusal at a time. They are included unchanged in the initial import. The next refusal is
-native `isString` on Character `$e` inside `XMLTokenizer>>nextAttributeValue` (`6gw`).
+refusal at a time. They are included unchanged in the initial import. Native `isString` now
+answers through ordinary Object/Text/Symbol methods (`6gw`), so the attribute-value loop completes.
+The next refusal is the omitted canonical `SAXDriver>>usesNamespaces` override, sent by
+`XMLTokenizer>>nextAttributeInto:namespaces:`.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
 The exact RED assertion is temporary; the recovery tail has
