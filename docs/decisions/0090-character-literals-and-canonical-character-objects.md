@@ -1,7 +1,7 @@
 # ADR 0090: Character literals and canonical Character objects
 
-Status: implemented — direct Symmetric Smalltalk `$x` syntax lowers through an image-local Character interner, native Text indexing produces the same canonical Character object, and the Character personality exposes its scalar plus the first pinned classification protocol.
-Proven by: test/symmetric-smalltalk-character.test.js, test/cuis-yaxo-native-import-real.test.js
+Status: implemented — direct Symmetric Smalltalk `$x` syntax lowers through an image-local Character interner, native Text indexing and scalar enumeration produce the same canonical Character objects, and the Character personality exposes its scalar plus the first pinned classification protocol.
+Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
 
@@ -62,9 +62,11 @@ belongs in the forcing contract.
 
    This is language-specific object personality, composed from the existing graph/object and Value
    owners. `VALUE_KIND` and `lagrange-code` remain unchanged. The Character class is not published
-   as a global merely because the representation exists; the forcing source names no such global.
+   as a global merely because the representation exists. The original literal pressure named no
+   such global; standard-image composition later publishes the installed class when the actual M4
+   initializer names `Character` (qpr), through the existing namespace owner.
 
-3. **Literal and indexed production share one interner.**
+3. **Literal, indexed and enumerated production share one interner.**
 
    The compiler lowers a literal to an ordinary send of `value:` to its reserved `$character`
    intrinsic with the scalar as an Integer literal. Installation binds that intrinsic to the
@@ -74,6 +76,14 @@ belongs in the forcing contract.
    the same interner. Indexing is one-based and counts Unicode scalar values, so a supplementary
    character occupies one Smalltalk element rather than two UTF-16 code units. A lone surrogate is
    refused rather than becoming an invalid Character. No second identity or equality rule exists.
+
+   The actual M4 initializer later forced `Text>>do:` (bead dph). Its scalar count comes from
+   `text-size`, a pure language-local primitive reusing the exact `textCodePoints` interpretation
+   of `text-at-character`, exposed through ordinary `Text>>size`. Enumeration is ordinary native
+   source over `size`/`at:` and the existing Integer/Block loop: one canonical Character per scalar
+   in order, callback answers ignored, receiver returned, empty text makes no callback, and callback
+   failures propagate. Neither UTF-16 units nor UTF-8 bytes determine the element count. The generic
+   executor gains no iterator and the codec gains no second scalar interpretation.
 
 4. **Character exposes only the measured ordinary protocol.**
 
@@ -151,8 +161,8 @@ representation.
 The Symmetric Smalltalk tokenizer/parser/compiler owns literal syntax and lowering. The Character
 personality owns canonical runtime identity and delegates its records to existing image-object
 owners. It also owns the ordinary `codePoint` accessor over its existing slot and the exact pinned
-seven-value `isSeparator` classification. Text indexing is the ordinary native producer and
-delegates to that same Character owner. The Cuis adapter and canonical export remain unchanged with
+seven-value `isSeparator` classification. Text indexing and scalar enumeration are ordinary native producers and
+delegate to that same Character owner. The Cuis adapter and canonical export remain unchanged with
 respect to Character syntax and protocol.
 
 The original literal repair exposed the distinct `UnicodeString streamContents:` pressure, followed
