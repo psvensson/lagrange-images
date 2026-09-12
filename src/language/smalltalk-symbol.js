@@ -16,7 +16,7 @@ import {objectRef, textValue} from '../value/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 // Symbol protocol installation: the Symbol class, its Shape, the interner primitive,
-// and Object>>perform: / perform:with:.
+// Object>>perform: / perform:with:, and Text>>asSymbol through the same interner as literals.
 //
 // This is a primitive-backed protocol (Pattern B): primitive Blocks installed first,
 // then methods that capture refs to them and send value:/value:value:.
@@ -137,6 +137,16 @@ async function installSmalltalkSymbolProtocol({images, compilation, imageId, lan
         imageId,
       }),
     ],
+  });
+
+  // The real YAXO element-name initializer reaches this conversion. The existing interner owns
+  // arbitrary spelling and canonical identity; Text adds only an ordinary call to it.
+  await defineMethods({
+    images, compilation, imageId, lane, classRef: kernel.textClass,
+    methods: [capturedMethod({
+      selector: 'asSymbol', primitive: SMALLTALK_PRIMITIVE.SYMBOL_INTERN,
+      args: [{op: 'receiver'}], imageId,
+    })],
   });
 
   return Object.freeze({symbolClass: symbolClassRef});
