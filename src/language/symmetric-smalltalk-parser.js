@@ -252,20 +252,56 @@ class Parser {
       this.expect(')', 'expected )');
       return expression;
     }
-    // Literal Array `#( ... )` (WS3). The authentic upstream MessagePack RED demands only the
-    // empty form `#()`; element forms are a separate general facility, so a non-empty literal is
-    // rejected deterministically here rather than half-parsed.
+    // Literal Array `#( ... )` (WS3 empty form; elements demanded by the M4 vertical, bead
+    // lagrange-images-x4i). An element position accepts only true literals — integers (with an
+    // optional minus sign), Strings, Characters, symbols (hash-marked or, per Smalltalk's literal-array
+    // rule, bare identifiers), the boolean/nil reserved words, and nested literal Arrays. Bare
+    // identifiers are SYMBOLS here, never variable references, and any other construct (sends,
+    // blocks, parentheses) is refused deterministically rather than half-parsed.
     if (this.match('arrayOpen')) {
-      if (this.current().type !== ')') {
-        throw new SymmetricSmalltalkSyntaxError(
-          'literal Array element syntax is not supported; only the empty literal #() is', this.current().start,
-        );
+      const elements = [];
+      while (this.current().type !== ')') {
+        elements.push(this.parseArrayLiteralElement());
       }
       this.expect(')', 'expected ) to close a literal Array');
-      return node('arrayLiteral', {elements: Object.freeze([])});
+      return node('arrayLiteral', {elements: Object.freeze(elements)});
     }
     if (this.match('[')) return this.parseBlockAfterOpen(token.start);
     throw new SymmetricSmalltalkSyntaxError('expected expression', token.start);
+  }
+
+  parseArrayLiteralElement() {
+    const token = this.current();
+    if (isNegativeIntegerLiteralAt(this.tokens, this.index)) {
+      this.advance();
+      const digits = this.advance();
+      return node('integer', {value: `-${digits.value}`});
+    }
+    if (token.type === 'integer' || token.type === 'string' || token.type === 'character' || token.type === 'symbol') {
+      this.advance();
+      return node(token.type, {value: token.value});
+    }
+    if (token.type === 'identifier') {
+      this.advance();
+      if (token.value === 'true') return node('true');
+      if (token.value === 'false') return node('false');
+      if (token.value === 'nil') return node('nil');
+      // Smalltalk's literal-array rule: a bare identifier element is a Symbol.
+      return node('symbol', {value: token.value});
+    }
+    if (token.type === 'arrayOpen') {
+      this.advance();
+      const elements = [];
+      while (this.current().type !== ')') {
+        elements.push(this.parseArrayLiteralElement());
+      }
+      this.expect(')', 'expected ) to close a nested literal Array');
+      return node('arrayLiteral', {elements: Object.freeze(elements)});
+    }
+    throw new SymmetricSmalltalkSyntaxError(
+      'literal Array elements must be literals: integers, Strings, Characters, symbols, '
+      + 'true/false/nil or a nested literal Array', token.start,
+    );
   }
 
   parseBlockAfterOpen(start) {

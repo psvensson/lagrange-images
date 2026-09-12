@@ -8,6 +8,9 @@ import {
   installWasmBlockTree,
   integerValue,
   objectRef,
+  parseSymmetricSmalltalkBlock,
+  compileSymmetricSmalltalkBlock,
+  textValue,
 } from '../src/runtime.js';
 
 // The empty literal Array `#()` — a general Smalltalk literal facility, demanded
@@ -18,8 +21,8 @@ import {
 // literal carrying nested Smalltalk objects, and no baked image-local ref
 // (`Array` resolves through the ordinary global namespace at install time).
 //
-// Element forms `#( 1 2 3 )` are a separate general facility the upstream RED
-// does not demand; the parser rejects them deterministically until one is.
+// YAXO's unchanged XMLTokenizer class>>initialize now demands literal elements (x4i).
+// They compose this same allocation with ordered native at:put: sends.
 
 async function withRuntime(body) {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
@@ -97,23 +100,50 @@ test('#() agrees across neutral and WASM lanes', async () => {
   });
 });
 
-test('malformed/unsupported literal-Array syntax is rejected deterministically', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'lit4');
-    // Element syntax is not the demanded facility — refused at compile time.
-    await assert.rejects(
-      evaluate(runtime, 'lit4', 'elem', '[ #( 1 2 ) ]'),
-      /literal Array element syntax is not supported/,
-    );
-    // Byte-array literal `#[...]` is a separate classification, not this facility.
-    await assert.rejects(
-      evaluate(runtime, 'lit4', 'bytes', '[ #[ 1 2 ] ]'),
-      /byte-array literal syntax/,
-    );
-    // An unterminated literal is rejected deterministically, never silently
-    // mis-parsed — the parser refuses the non-`)` token it finds next.
-    await assert.rejects(
-      evaluate(runtime, 'lit4', 'unclosed', '[ #( ]'), /literal Array element syntax is not supported/,
-    );
+test('literal Arrays accept literal elements and never evaluate expression syntax', () => {
+  const parsed = parseSymmetricSmalltalkBlock(`[ #( $& $" $' $> $< ) ]`);
+  assert.deepEqual(parsed.body.elements, ['&', '"', "'", '>', '<'].map(value => ({kind: 'character', value})));
+  assert.deepEqual(parseSymmetricSmalltalkBlock('[ #(9 10 12 13 32 61 "comment" 62 47) ]').body.elements.map(x => x.value), ['9', '10', '12', '13', '32', '61', '62', '47']);
+  assert.deepEqual(parseSymmetricSmalltalkBlock('[ #(unboundName) ]').body.elements, [{kind: 'symbol', value: 'unboundName'}]);
+  for (const expression of ['[ #( ]', '[ #(1', '[ #( [1] ) ]', '[ #(x := 1) ]', '[ #(1 + 2) ]']) {
+    assert.throws(() => parseSymmetricSmalltalkBlock(expression), /literal Array elements must be literals/);
+  }
+  assert.throws(() => parseSymmetricSmalltalkBlock('[ #[1 2] ]'), /byte-array literal syntax/);
+});
+
+test('nonempty literal Arrays use existing v1 operations with distinct temporary identities', () => {
+  const {program} = compileSymmetricSmalltalkBlock('[ #(1 #(2)) size + #(3) size ]');
+  assert.equal(program.temporaries.length, 3);
+  assert.equal(new Set(program.temporaries.map(x => x.id)).size, 3);
+  assert.doesNotMatch(JSON.stringify(program), /"kind":"ref"|"op":"array/);
+  assert.equal(compileSymmetricSmalltalkBlock('[ #() ]').program.body.op, 'send');
+});
+
+test('literal elements preserve order, type, nesting and separate evaluations in both lanes', async () => {
+  await withRuntime(async runtime => {
+    await seed(runtime, 'elements', {lane: 'wasm'});
+    let serial = 0;
+    for (const lane of ['neutral', 'wasm']) {
+      const run = async source => {
+        const id = `elements-${serial++}`;
+        const installed = await installSymmetricSmalltalkBlock({images: runtime.images, imageId: 'elements', id, source});
+        const block = lane === 'neutral' ? installed.block : (await installWasmBlockTree({
+          images: runtime.images, compilation: runtime.compilation,
+          semanticRef: objectRef('elements', installed.semanticArtifact.id), id: `${id}:wasm`, environment: installed.block.environment,
+        })).block;
+        return runtime.executor.execute(await runtime.invocations.invokeBlock(objectRef('elements', block.id), []));
+      };
+      for (const [source, expected] of [
+        [`[ #( $& $" $' $> $< ) size ]`, integerValue(5)],
+        [`[ (#( $& $" $' $> $< ) at: 5) = $< ]`, booleanValue(true)],
+        ['[ #(9 10 12 13 32 61 62 47) at: 8 ]', integerValue(47)],
+        ['[ #(-1 0 16rFF) at: 1 ]', integerValue(-1)],
+        ["[ #(true false nil 'text' name) at: 4 ]", textValue('text')],
+        ['[ (#(unknownName) at: 1) == #unknownName ]', booleanValue(true)],
+        ['[ (#(1 #(2 3)) at: 2) at: 1 ]', integerValue(2)],
+        ['[ #(1) == #(1) ]', booleanValue(false)],
+        ['[ [ #(1 2) at: 2 ] value ]', integerValue(2)],
+      ]) assert.deepEqual(await run(source), expected, `${lane}: ${source}`);
+    }
   });
 });

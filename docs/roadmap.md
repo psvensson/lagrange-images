@@ -259,8 +259,9 @@ of classes the package itself defines — which is what an M4 restart proof has 
   filed (`x4i` literal-array syntax, `qpr` read-stream/Character naming, `23y` the
   initialize base-protocol cluster); this survey does not schedule further compatibility work;
 - [x] build the complete durable M4 acceptance skeleton in `test/support/yaxo-m4-acceptance.js`:
-  the real YAXO test now executes it into `XMLTokenizer class>>initialize`'s literal-array RED
-  (`x4i`); the Project-rooted restart/identity/second-mutation tail is present but not yet reached;
+  the Project-rooted restart/identity/second-mutation tail is present but not yet reached;
+- [x] repair the acceptance's nonempty literal-array RED at the native parser/compiler (`x4i`);
+  the unchanged initializer now reaches the unresolved `Character` global (`qpr`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;

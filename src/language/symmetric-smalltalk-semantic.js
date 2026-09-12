@@ -75,6 +75,11 @@ function needsMutableLexicalState(syntax) {
     case 'symbol':
     case 'character':
       return false;
+    // A non-empty literal Array lowers to the cascade machinery's hidden temporaries, so it needs
+    // the mutable-lexical-state (v1) grammar for exactly the same reason a cascade does. The empty
+    // form remains a single send in v0.
+    case 'arrayLiteral':
+      return syntax.elements.length > 0;
     default:
       return false;
   }
@@ -610,24 +615,47 @@ function compileExpression(syntax, scope, state) {
         message: textValue('value:'),
         arguments: Object.freeze([Object.freeze({op: 'literal', value: textValue(syntax.value)})]),
       });
-    // Literal Array `#( )` (WS3). The authentic upstream RED demands only the empty form, which
-    // lowers to `new: 0` sent to the image-local Array class through the `$array` intrinsic —
-    // composed from the existing Array allocation machinery, exactly as Symbol lowers to a send
-    // to the interner. The compiler names no class and bakes no image-local ref (the intrinsic
-    // binding carries the id; installation supplies the class). No new lagrange-code op, no
-    // generic Value array-literal kind, no literal carrying nested Smalltalk objects. Element
-    // forms are a separate facility; the parser rejects them deterministically until demanded.
+    // Literal Array `#( )` (WS3 empty form) and its literal-element extension (bead
+    // lagrange-images-x4i, forced by the unchanged `XMLTokenizer class>>initialize`). An
+    // N-element literal lowers to the SAME machinery the cascade lowering already owns: the
+    // Array-class construction is evaluated ONCE into a hidden temporary, then N ordinary ordered
+    // `at:put:` sends fill it. No new lagrange-code op, no generic Value array-literal kind, and
+    // nothing image-local baked into the artifact — the `$array`/`$character`/symbol intrinsics
+    // carry ids only, and installation supplies this image's owners. Element positions accepted
+    // only true literals (parser-enforced), so no evaluation order or side effects hide here.
     case 'arrayLiteral': {
-      if (syntax.elements.length !== 0) {
-        throw new TypeError('literal Array element syntax is not supported; only the empty literal #() is');
+      if (syntax.elements.length === 0) {
+        return Object.freeze({
+          op: 'send',
+          languageId: SYMMETRIC_SMALLTALK_ID,
+          receiver: scope.requireIntrinsic(ARRAY_CAPTURE),
+          message: textValue('new:'),
+          arguments: Object.freeze([Object.freeze({op: 'literal', value: integerValue(0)})]),
+        });
       }
-      return Object.freeze({
-        op: 'send',
-        languageId: SYMMETRIC_SMALLTALK_ID,
-        receiver: scope.requireIntrinsic(ARRAY_CAPTURE),
-        message: textValue('new:'),
-        arguments: Object.freeze([Object.freeze({op: 'literal', value: integerValue(0)})]),
-      });
+      const arrayId = scope.declareHiddenTemporary(`$arrayLiteral:${state.nextArrayLiteral++}`);
+      const statements = [
+        Object.freeze({
+          op: 'binding-write',
+          id: arrayId,
+          value: Object.freeze({
+            op: 'send',
+            languageId: SYMMETRIC_SMALLTALK_ID,
+            receiver: scope.requireIntrinsic(ARRAY_CAPTURE),
+            message: textValue('new:'),
+            arguments: Object.freeze([Object.freeze({op: 'literal', value: integerValue(syntax.elements.length)})]),
+          }),
+        }),
+        ...syntax.elements.map((element, index) => compileSend(
+          Object.freeze({op: 'binding', id: arrayId}),
+          'at:put:',
+          [Object.freeze({kind: 'integer', value: String(index + 1)}), element],
+          scope,
+          state,
+        )),
+        Object.freeze({op: 'binding', id: arrayId}),
+      ];
+      return Object.freeze({op: 'sequence', statements: Object.freeze(statements)});
     }
     case 'name':
       return scope.resolveName(syntax.name);
@@ -764,7 +792,7 @@ function compileBlockSyntax(syntax, {
     parent, path, parameters: syntax.parameters, rootCaptures, instanceVariables, methodHome,
     intrinsics, globals, classVariables,
   });
-  const state = {path, nextBlock: 0, nextCascade: 0, representation};
+  const state = {path, nextBlock: 0, nextCascade: 0, nextArrayLiteral: 0, representation};
   const body = compileBody(syntax.body, scope, state);
   const program = representation === LAGRANGE_CODE_V1
     ? Object.freeze({
