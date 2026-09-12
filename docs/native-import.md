@@ -562,8 +562,9 @@ now allocates the real native XMLElement. Native Text `asSymbol` delegates to th
 interner (`tqr`), so unchanged `XMLElement>>name:` completes. The reached inherited
 `XMLNodeWithElements>>namespace:uri:` initializer is included unchanged (`ekx`), followed by the
 reached `XMLElement>>setAttributes:` initializer (`myp`). The real element factory now completes.
-The unchanged XMLDOMParser element callback next reaches its omitted `incremental` getter (`6nn`);
-the existing initializer already sets that field to false. The document has not yet returned from parsing.
+The unchanged XMLDOMParser element callback reads its reached `incremental` getter (`6nn`), which
+answers the false value supplied by the existing initializer, then reaches the omitted `top`
+accessor (`0vo`). The document has not yet returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
 The exact RED assertion is temporary; the recovery tail has
