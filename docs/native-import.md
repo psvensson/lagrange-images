@@ -532,8 +532,9 @@ arrays (bead `x4i`), using the existing Array intrinsic, ordinary allocation/ind
 distinct private temporaries in v1; empty `#()` retains its v0 behavior. Standard-image composition
 now publishes its existing Character class (`qpr`). The selected methods import, and the unchanged
 `XMLTokenizer class>>initialize` now converts its literal Array through native `asSet` (`23y`),
-which allocates an ordinary Set with Dictionary-owned equality/hash membership. It next refuses
-`atAllPut:` on the 256-element LiteralChars Array (`7cd`). The exact RED assertion is temporary; the recovery tail has
+which allocates an ordinary Set with Dictionary-owned equality/hash membership. Native Array
+`atAllPut:` then fills the 256-element LiteralChars Array through ordinary indexed writes (`7cd`).
+The next refusal is `do:` on the Text `':-_.'` (`dph`), before the callback reaches Character protocol. The exact RED assertion is temporary; the recovery tail has
 not executed and is not yet a successful restart claim. The acceptance, not the earlier survey,
 selects subsequent repairs. F1 and structural recovery guards exist; all seven causal falsifiers
 must be completed before M4 closes.
