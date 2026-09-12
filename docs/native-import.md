@@ -554,8 +554,12 @@ Native Character `isAscii` now preserves the pinned seven-bit boundary (`d6k`), 
 (`9gn`), `nextAttributeInto:namespaces:` (`nmw`) and `nextAttributeValue` (`pke`), one actual
 refusal at a time. They are included unchanged in the initial import. Native `isString` now
 answers through ordinary Object/Text/Symbol methods (`6gw`), so the attribute-value loop completes.
-The next refusal is the omitted canonical `SAXDriver>>usesNamespaces` override, sent by
-`XMLTokenizer>>nextAttributeInto:namespaces:`.
+The parser then selected canonical SAXDriver `usesNamespaces`, `handleStartTag:attributes:namespaces:`
+and `saxHandler`, SAXHandler `checkEOD` and `eod`, the four-argument XMLDOMParser `startElement:`
+callback, and XMLElement's four-argument class-side factory and `name:` initializer (`4gs`, `e1q`,
+`r2j`, `dd1`, `fys`, `ewq`, `91u`, `yll`). Each was added only after its actual refusal. The factory
+now allocates the real native XMLElement; unchanged `XMLElement>>name:` reaches native Text
+`asSymbol` on `note` (`tqr`). The document has not yet returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
 The exact RED assertion is temporary; the recovery tail has
