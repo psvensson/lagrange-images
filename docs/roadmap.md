@@ -279,7 +279,8 @@ of classes the package itself defines — which is what an M4 restart proof has 
   the public parser selects the required canonical tokenizer closure through `nextName`;
 - [x] reuse the native WriteStream buffer through `reset` (`p6u`);
 - [x] classify seven-bit ASCII Characters through native `isAscii` (`d6k`);
-  the unchanged tag-name loop completes and `nextTag` reaches omitted `skipSeparators`;
+  the unchanged tag-name loop completes; the public parser selects its whitespace and attribute
+  parsing closure (`9gn`, `nmw`, `pke`) and reaches native `isString` on Character `$e` (`6gw`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
