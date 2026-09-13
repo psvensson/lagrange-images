@@ -568,8 +568,9 @@ accessor (`0vo`). That returns the real package-created XMLDocument; the callbac
 through the reached inherited `XMLNodeWithElements>>addElement:` method (`d8h`). The reached
 `XMLTokenizer>>nextPCData` method (`4yq`) now scans character data and its reached
 `SAXDriver>>handlePCData:` callback (`uza`) forwards that data to the real XMLDOMParser.
-The reached `XMLDOMParser>>characters:` callback (`6kd`) now attempts the real text-node
-factory. Its next omitted method is `XMLStringNode class>>string:` (`q38`).
+The reached `XMLDOMParser>>characters:` callback (`6kd`) invokes the canonical
+`XMLStringNode class>>string:` factory (`q38`), which allocates a real native XMLStringNode.
+The next omitted method is its instance-side `XMLStringNode>>string:` initializer (`7iu`).
 The document has not yet returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
