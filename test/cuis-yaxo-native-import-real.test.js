@@ -888,21 +888,22 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLElement/instance/attributeAt:',
   'cuis-method/YAXO/XMLElement/instance/attributeAt:ifAbsent:',
   'cuis-method/YAXO/XMLElement/instance/attributeAt:put:',
+  'cuis-method/YAXO/XMLStringNode/class/string:',
   'cuis-method/YAXO/XMLStringNode/instance/string',
 ])]);
 
-test('M4 acceptance: complete durable restart vertical currently stops at XMLStringNode string: factory', {skip: !enabled, timeout: 900_000}, async () => {
+test('M4 acceptance: complete durable restart vertical currently stops at XMLStringNode string: initializer', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const directory = await mkdtemp(join(tmpdir(), 'yaxo-m4-'));
   try {
-    // Temporary exact RED assertion, not an M4 success claim. Importing canonical class-side string: must move this
+    // Temporary exact RED assertion, not an M4 success claim. Importing canonical instance-side string: must move this
     // assertion; the complete intended flow lives in runM4Acceptance and is never shortened.
     await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
       classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
     }), error => {
       assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
       assert.equal(error.selector, 'string:');
-      assert.equal(error.message, 'Symmetric Smalltalk message not understood: string: sent to yaxo-m4/smalltalk/class/XMLStringNode');
+      assert.match(error.message, /^Symmetric Smalltalk message not understood: string: sent to yaxo-m4\/~runtime\/transient\/object\/\d+\/[0-9a-f-]+$/);
       return true;
     });
   } finally {
