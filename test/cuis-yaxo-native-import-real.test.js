@@ -860,6 +860,7 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLDOMParser/instance/startElement:namespaceURI:namespace:attributeList:',
   'cuis-method/YAXO/SAXDriver/instance/usesNamespaces',
   'cuis-method/YAXO/SAXDriver/instance/handleStartTag:attributes:namespaces:',
+  'cuis-method/YAXO/SAXDriver/instance/handlePCData:',
   'cuis-method/YAXO/SAXDriver/instance/saxHandler',
   'cuis-method/YAXO/SAXHandler/instance/checkEOD',
   'cuis-method/YAXO/SAXHandler/instance/eod',
@@ -889,18 +890,18 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLStringNode/instance/string',
 ])]);
 
-test('M4 acceptance: complete durable restart vertical currently stops at character-data callback handlePCData:', {skip: !enabled, timeout: 900_000}, async () => {
+test('M4 acceptance: complete durable restart vertical currently stops at DOM characters: callback', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const directory = await mkdtemp(join(tmpdir(), 'yaxo-m4-'));
   try {
-    // Temporary exact RED assertion, not an M4 success claim. Importing canonical handlePCData: must move this
+    // Temporary exact RED assertion, not an M4 success claim. Importing canonical characters: must move this
     // assertion; the complete intended flow lives in runM4Acceptance and is never shortened.
     await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
       classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
     }), error => {
       assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
-      assert.equal(error.selector, 'handlePCData:');
-      assert.match(error.message, /^Symmetric Smalltalk message not understood: handlePCData: sent to yaxo-m4\/~runtime\/transient\/object\/\d+\/[0-9a-f-]+$/);
+      assert.equal(error.selector, 'characters:');
+      assert.match(error.message, /^Symmetric Smalltalk message not understood: characters: sent to yaxo-m4\/~runtime\/transient\/object\/\d+\/[0-9a-f-]+$/);
       return true;
     });
   } finally {

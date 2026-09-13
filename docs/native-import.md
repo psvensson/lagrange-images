@@ -566,8 +566,9 @@ The unchanged XMLDOMParser element callback reads its reached `incremental` gett
 answers the false value supplied by the existing initializer, then reads its reached `top`
 accessor (`0vo`). That returns the real package-created XMLDocument; the callback attaches elements
 through the reached inherited `XMLNodeWithElements>>addElement:` method (`d8h`). The reached
-`XMLTokenizer>>nextPCData` method (`4yq`) now scans character data, then reaches the omitted
-`SAXDriver>>handlePCData:` callback (`uza`) on the actual SAXDriver receiver.
+`XMLTokenizer>>nextPCData` method (`4yq`) now scans character data and its reached
+`SAXDriver>>handlePCData:` callback (`uza`) forwards that data to the real XMLDOMParser.
+The next omitted method is the canonical `XMLDOMParser>>characters:` callback (`6kd`).
 The document has not yet returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
