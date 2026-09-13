@@ -879,6 +879,7 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   // Each member was selected by the first refusal of the complete public parsing vertical.
   'cuis-method/YAXO/XMLTokenizer/instance/atEnd',
   'cuis-method/YAXO/XMLTokenizer/instance/handleEndDocument',
+  'cuis-method/YAXO/XMLTokenizer/instance/log:',
   'cuis-method/YAXO/XMLTokenizer/instance/parsingMarkup',
   'cuis-method/YAXO/XMLTokenizer/instance/checkAndExpandReference:',
   'cuis-method/YAXO/XMLTokenizer/instance/validating',
@@ -902,25 +903,30 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLStringNode/instance/string',
 ])]);
 
-test('M4 acceptance: complete durable restart vertical currently stops at XMLTokenizer log:', {skip: !enabled, timeout: 900_000}, async () => {
+test('M4 acceptance: the real YAXO application graph is native, durable and restartable', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const directory = await mkdtemp(join(tmpdir(), 'yaxo-m4-'));
   try {
-    // Temporary exact RED assertion, not an M4 success claim. The imported handleEndDocument
-    // (unchanged source) ran its `self log: 'End Doc '`, moving the vertical past nextEntity's
-    // end-of-input guard. Importing it is this slice; log: — the no-op private method its source
-    // names — is the next. The complete intended flow lives in runM4Acceptance and is never shortened.
-    await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
+    // The complete xxm DONE-WHEN flow, exactly as written in test/support/yaxo-m4-acceptance.js and
+    // never shortened: native parse -> one durable Project root -> ordinary-native mutation -> real
+    // runtime close -> fresh runtime B over the same durable backend -> root reacquired from the
+    // locator alone -> SAME ObjectRefs, relationships and the mutation observed -> behavior resumed.
+    // openRuntime and assertFreshRuntimes additionally assert B has no Cuis toolchain or
+    // foreign-runtime provider, so no Cuis authority can participate after import. The unchanged
+    // log: import (bdvt) was the last refusal this vertical produced; without it the same flow
+    // REDs on MNU log: inside unedited handleEndDocument.
+    const resumed = await runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
       classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
-    }), error => {
-      assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
-      assert.equal(error.selector, 'log:');
-      // The unchanged handleEndDocument source names log: on the same tokenizer. That tokenizer
-      // is a parser-stage object still inside the public parse, so its id is transient (xxm's
-      // receiver-lifetime memory); the image prefix is the discriminator.
-      assert.match(error.message, /^Symmetric Smalltalk message not understood: log: sent to yaxo-m4\//);
-      return true;
     });
+    assert.deepEqual(
+      Object.keys(resumed).sort(),
+      ['child', 'document', 'root', 'text'],
+      'the recovered application graph keeps its domain relationships',
+    );
+    for (const [name, ref] of Object.entries(resumed)) {
+      assert.equal(ref.imageId, 'yaxo-m4', `${name} lives in the durable application image`);
+      assert.match(ref.objectId, /^object\//, `${name} survived as the same durable ObjectRef, not a transient or rebuilt one`);
+    }
   } finally {
     await rm(directory, {recursive: true, force: true});
   }

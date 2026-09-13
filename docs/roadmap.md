@@ -299,12 +299,30 @@ of classes the package itself defines — which is what an M4 restart proof has 
   whose reached inherited `XMLNodeWithElements>>namespace` getter (`oll`) returns its namespace;
   reached `XMLElement>>localName` (`omz`) returns its Symbol. Native string equality (`6lc5`)
   repairs closing-name comparison with matching hashes and distinct identities. The next actual
-  failure is ReadStream `atEnd` (`ilxv`), reached by unchanged `XMLTokenizer>>atEnd`;
-- [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
-- [ ] create a linked application domain graph through imported/native application code;
-- [ ] restart Images and recover the same ObjectRefs, state and relationships;
-- [ ] resume behavior without a Cuis snapshot/Spur heap as authoritative persistence;
-- [ ] prove one authority for native state: the Lagrange image graph.
+  failure was native ReadStream `atEnd` (`ilxv`), reached by unchanged `XMLTokenizer>>atEnd`;
+- [x] answer native ReadStream `atEnd` at the existing stream owner (`ilxv`): one ordinary library
+  method, `^ position >= readLimit`, over the ADR 0053 Integer protocol — no new primitive, no IR
+  op; the unchanged package `atEnd` then forwards `stream atEnd` to it and `nextEntity` passes its
+  end-of-input guard;
+- [x] import the reached unchanged `XMLTokenizer>>handleEndDocument` (`y4lo`) and
+  `XMLTokenizer>>log:` (`bdvt`): the public parsing vertical meets no further refusal;
+- [x] establish imported application roots, globals/class state and domain objects as ordinary
+  Lagrange image state — one durable Project root member (`application/root`) names the document;
+- [x] create a linked application domain graph through imported/native application code —
+  `XMLDocument -> XMLElement -> XMLStringNode` instances constructed by the unchanged package code;
+- [x] restart Images and recover the same ObjectRefs, state and relationships — runtime A closes,
+  fresh runtime B over the same durable backend reacquires the root through the Project locator
+  alone, and every recovered ref is the same `yaxo-m4/object/...` identity;
+- [x] resume behavior without a Cuis snapshot/Spur heap as authoritative persistence — the restart
+  runtime asserts zero toolchain and foreign-runtime providers, and the second mutation observes
+  the first (`en -> sv`) before making its own (`sv -> se`);
+- [x] prove one authority for native state: the full flow is the green,
+  never-shortened `runM4Acceptance` in
+  `test/support/yaxo-m4-acceptance.js`
+  (`test/cuis-yaxo-native-import-real.test.js`, "M4 acceptance: the real YAXO application graph is
+  native, durable and restartable"), structurally guarded by `test/yaxo-m4-contract.test.js`
+  against re-import replay, host-side mutation, alternative root locators and shared runtime
+  machinery.
 
 ### M5 — one real independently authored Cuis application
 
