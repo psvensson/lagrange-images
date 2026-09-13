@@ -575,8 +575,10 @@ The reached `XMLElement>>addContent:` method (`agp`) attaches that node through 
 contents collection. The reached `XMLTokenizer>>nextEndTag` method (`t01`) reads closing-tag
 names through reached `nextTrimmedBlanksUpTo:` (`2fg`). Reached `SAXDriver>>handleEndTag:`
 (`fbb`) forwards the closing tag to the actual XMLDOMParser. Its reached
-`endElement:namespace:namespaceURI:qualifiedName:` override (`rjt`) next calls the omitted
-`XMLDOMParser>>pop` method (`1qs`).
+`endElement:namespace:namespaceURI:qualifiedName:` override (`rjt`) calls reached
+`XMLDOMParser>>pop` (`1qs`), which removes and returns the current element through existing native
+collection behavior. The callback next reaches its omitted inherited
+`XMLNodeWithElements>>namespace` getter (`oll`) on XMLElement.
 The document has not yet returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.

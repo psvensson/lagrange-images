@@ -295,7 +295,8 @@ of classes the package itself defines — which is what an M4 restart proof has 
   `XMLElement>>addContent:` (`agp`) attaches it. Reached `XMLTokenizer>>nextEndTag` (`t01`)
   reads closing-tag names through reached `nextTrimmedBlanksUpTo:` (`2fg`); reached
   `SAXDriver>>handleEndTag:` (`fbb`) forwards the tag to the reached four-argument
-  XMLDOMParser `endElement:` callback (`rjt`), which next reaches omitted `pop` (`1qs`);
+  XMLDOMParser `endElement:` callback (`rjt`); reached `pop` (`1qs`) returns the current element,
+  whose inherited `XMLNodeWithElements>>namespace` getter is the next omitted method (`oll`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
