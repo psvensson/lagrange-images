@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createRuntime, installSymmetricSmalltalkStandardImage, installSymmetricSmalltalkBlock,
   installSmalltalkReadStreamProtocol, installSmalltalkTextReadStreamProtocol,
-  objectRef, textValue, integerValue,
+  objectRef, textValue, integerValue, booleanValue,
 } from '../src/runtime.js';
 
 for (const lane of ['neutral', 'wasm']) {
@@ -23,9 +23,11 @@ for (const lane of ['neutral', 'wasm']) {
         const stream = await open(text);
         const independent = await open(text);
         let position = 0;
+        assert.deepEqual(await send(stream, 'atEnd'), booleanValue(position >= [...text].length));
         for (const scalar of [...text]) {
           assert.deepEqual(await send(stream, 'next'), await send(textValue(scalar), 'at:', [integerValue(1)]));
           position++;
+          assert.deepEqual(await send(stream, 'atEnd'), booleanValue(position >= [...text].length));
           const record = await runtime.images.getObject(stream.imageId, stream.objectId);
           assert.deepEqual(record.slots['read-stream-position'], integerValue(position));
           const frontier = await runtime.images.frontier(imageId);
@@ -36,6 +38,7 @@ for (const lane of ['neutral', 'wasm']) {
         }
         const atEnd = await runtime.images.getObject(stream.imageId, stream.objectId);
         assert.deepEqual(await send(stream, 'next'), kernel.nil);
+        assert.deepEqual(await send(stream, 'atEnd'), booleanValue(true));
         assert.deepEqual(await send(stream, 'next'), kernel.nil);
         assert.deepEqual(await runtime.images.getObject(stream.imageId, stream.objectId), atEnd, 'EOF does not mutate the cursor or record');
         assert.deepEqual(await send(independent, 'next'), text.length === 0 ? kernel.nil : await send(textValue(text), 'at:', [integerValue(1)]));
