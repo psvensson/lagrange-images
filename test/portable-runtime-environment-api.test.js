@@ -149,7 +149,10 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // 120 after the ordinary native Set owner (smalltalk-set.js, 23y). It composes only
   // the existing class/method builders and Value model; no new host or foreign dependency.
   // 121 adds the ordinary ReadStream construction owner, using existing class/slot/global owners only.
-  assert.equal(modules.length, 121, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics and the native Set and ReadStream owners');
+  // 122 adds the native string equality owner (6lc5), composed only from existing Value,
+  // kernel, class/method publication and Symbol modules; no new host or foreign dependency.
+  assert.equal(modules.length, 122, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics and the native Set, ReadStream and string equality owners');
+  assert.ok(paths.includes('src/language/smalltalk-string-equality.js'));
   assert.ok(paths.includes('src/wasm/module-contract.js'));
   assert.ok(paths.includes('src/wasm/function-contract.js'));
   assert.ok(paths.includes('src/language/smalltalk-browse.js'));

@@ -40,6 +40,7 @@ export * from './smalltalk-lookup.js';
 export * from './smalltalk-class-variables.js';
 export * from './smalltalk-class-state.js';
 export * from './smalltalk-symbol.js';
+export * from './smalltalk-string-equality.js';
 export * from './smalltalk-character.js';
 export * from './smalltalk-subclasses.js';
 export * from './smalltalk-text-bytearray.js';

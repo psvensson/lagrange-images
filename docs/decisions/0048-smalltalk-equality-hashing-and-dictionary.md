@@ -1,7 +1,7 @@
 # ADR 0048: Smalltalk equality, hashing and durable Dictionary
 
 Status: implemented — later reconciled under YAXO pressure with ordinary identity selectors `==`/`~~`; `~~` dynamically sends the existing `==` method and negates its Boolean answer, adding no second identity primitive.
-Proven by: test/smalltalk-equality-hash.test.js, test/smalltalk-object-identity.test.js, test/smalltalk-dictionary.test.js, test/cuis-yaxo-native-import-real.test.js
+Proven by: test/smalltalk-equality-hash.test.js, test/smalltalk-object-identity.test.js, test/smalltalk-dictionary.test.js, test/smalltalk-string-equality.test.js, test/smalltalk-string-equality-recovery.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
 
@@ -177,6 +177,24 @@ Smalltalk systems.
 
 The default methods satisfy the contract by construction. A user-defined semantic equality must
 supply the matching user-defined hash.
+
+### 4a. Text and Symbol share exact spelling equality and hashing
+
+The native string equality owner (`src/language/smalltalk-string-equality.js`) publishes ordinary
+Text `=` and Symbol `=`/`hash`. Text first asks `isString`, then compares its exact spelling with
+the other's `asString`; Symbol delegates equality and hashing through its existing `asString`.
+Thus Text `to` and Symbol `#to` are equal and interchangeable Dictionary keys, while `==` keeps
+their identities distinct. Case, whitespace and Unicode normalization are not erased.
+
+This is class-specific protocol, not a change to `builtInEquals`, `builtInHash`, reference identity
+or interning. MethodDictionary's pure built-in lookup is unchanged. Standard-image composition
+installs the protocol after Symbol/string testing/Text conversion and before application tables
+are populated. Installing it into an older image does not migrate already-populated Symbol-keyed
+tables: changing a resident key's equality/hash still carries the obligation described above.
+
+Both native lanes prove comparison symmetry, matching hashes, distinct identity, ordinary
+Dictionary lookup/overwrite, prerequisite refusal before writes, and interruption/replay at
+every method-publication write, including atomic compiled-artifact batches.
 
 ### 5. Dictionary identity is stable; its table is an immutable snapshot
 

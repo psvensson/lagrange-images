@@ -18,6 +18,7 @@ import {installSmalltalkReadStreamProtocol, installSmalltalkTextReadStreamProtoc
 import {installSmalltalkSetProtocol, installSmalltalkArraySetConversion} from './smalltalk-set.js';
 import {installSmalltalkSubclassProtocol} from './smalltalk-subclasses.js';
 import {installSmalltalkSymbolProtocol} from './smalltalk-symbol.js';
+import {installSmalltalkStringEqualityProtocol} from './smalltalk-string-equality.js';
 import {installSmalltalkCharacterProtocol, installSmalltalkCharacterRangeProtocol} from './smalltalk-character.js';
 import {installSmalltalkTextByteArrayProtocol} from './smalltalk-text-bytearray.js';
 import {installSmalltalkWriteStreamProtocol} from './smalltalk-write-stream.js';
@@ -138,6 +139,9 @@ async function installSymmetricSmalltalkStandardImage({
   // Native Text/ByteArray protocol over the byte-sequence primitives (WS3). Independent of the
   // library — Text/ByteArray are native Values dispatching through their kernel classes.
   const textByteArray = await installSmalltalkTextByteArrayProtocol(options);
+  // String equality shares Text spelling/hash; its prerequisites include Symbol type testing
+  // and the Text conversion above. Publish it before application collections are populated.
+  await installSmalltalkStringEqualityProtocol(options);
 
   // Namespace publication is deliberately separate from class creation. Installing the namespace
   // publishes the kernel classes; the public post-kernel classes are named explicitly here. In
