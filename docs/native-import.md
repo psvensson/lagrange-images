@@ -578,8 +578,13 @@ names through reached `nextTrimmedBlanksUpTo:` (`2fg`). Reached `SAXDriver>>hand
 `endElement:namespace:namespaceURI:qualifiedName:` override (`rjt`) calls reached
 `XMLDOMParser>>pop` (`1qs`), which removes and returns the current element through existing native
 collection behavior. The reached inherited `XMLNodeWithElements>>namespace` getter (`oll`)
-answers the element namespace. The closing-element check next reaches omitted
-`XMLElement>>localName` (`omz`).
+answers the element namespace. Reached `XMLElement>>localName` (`omz`) returns the stored Symbol.
+The valid closing-tag check now exposes a native mismatch (`6lc5`): Symbol `#to` compared with
+Text `to` answers false in both native lanes, whereas pinned Cuis answers true in both orders
+and gives equal hashes. Native Symbol currently inherits reference equality/hash. YAXO enters
+its mismatched-tag error branch, where Text comma is the surfaced selector failure. String
+equality and matching hash are the next repair; adding error-message concatenation would hide
+why valid XML reached that branch.
 The document has not yet returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
