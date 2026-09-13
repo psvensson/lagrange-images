@@ -572,8 +572,8 @@ The reached `XMLDOMParser>>characters:` callback (`6kd`) invokes the canonical
 `XMLStringNode class>>string:` factory (`q38`), which allocates a real native XMLStringNode.
 Its reached instance-side `XMLStringNode>>string:` initializer (`7iu`) assigns the text.
 The reached `XMLElement>>addContent:` method (`agp`) attaches that node through the element
-contents collection. The parser now reaches the omitted `XMLTokenizer>>nextEndTag` method (`t01`)
-from unchanged `XMLTokenizer>>nextTag` on SAXDriver.
+contents collection. The reached `XMLTokenizer>>nextEndTag` method (`t01`) begins closing-tag
+parsing, then reaches the omitted `XMLTokenizer>>nextTrimmedBlanksUpTo:` reader (`2fg`) on SAXDriver.
 The document has not yet returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
