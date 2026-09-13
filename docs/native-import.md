@@ -574,8 +574,9 @@ Its reached instance-side `XMLStringNode>>string:` initializer (`7iu`) assigns t
 The reached `XMLElement>>addContent:` method (`agp`) attaches that node through the element
 contents collection. The reached `XMLTokenizer>>nextEndTag` method (`t01`) reads closing-tag
 names through reached `nextTrimmedBlanksUpTo:` (`2fg`). Reached `SAXDriver>>handleEndTag:`
-(`fbb`) forwards the closing tag to the actual XMLDOMParser, which next reaches its omitted
-`endElement:namespace:namespaceURI:qualifiedName:` override (`rjt`).
+(`fbb`) forwards the closing tag to the actual XMLDOMParser. Its reached
+`endElement:namespace:namespaceURI:qualifiedName:` override (`rjt`) next calls the omitted
+`XMLDOMParser>>pop` method (`1qs`).
 The document has not yet returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
