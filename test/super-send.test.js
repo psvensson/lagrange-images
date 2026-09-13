@@ -488,3 +488,13 @@ test('STRUCTURAL: the super facility delegates lookup and owns no walk of its ow
     assert.doesNotMatch(code, forbidden, `the super facility must not contain ${forbidden}`);
   }
 });
+
+// ADR 0089 decision 4b names `$superSend` the ONE variadic primitive. The executor's arity branch
+// (`variadic -> minimum arity`, `else -> exact arity`) is only safe while that set has exactly one
+// member: every other primitive keeps its exact-arity guard precisely by not being a member. A
+// second member added without restating its own arity contract would silently relax guards
+// elsewhere with this suite green, so the set's membership is pinned here.
+test('STRUCTURAL: $superSend is the only variadic Smalltalk primitive', async () => {
+  const {SMALLTALK_PRIMITIVE, SMALLTALK_PRIMITIVE_VARIADIC} = await import('../src/language/smalltalk-primitive-support.js');
+  assert.deepEqual([...SMALLTALK_PRIMITIVE_VARIADIC], [SMALLTALK_PRIMITIVE.SUPER_SEND]);
+});
