@@ -570,7 +570,8 @@ through the reached inherited `XMLNodeWithElements>>addElement:` method (`d8h`).
 `SAXDriver>>handlePCData:` callback (`uza`) forwards that data to the real XMLDOMParser.
 The reached `XMLDOMParser>>characters:` callback (`6kd`) invokes the canonical
 `XMLStringNode class>>string:` factory (`q38`), which allocates a real native XMLStringNode.
-The next omitted method is its instance-side `XMLStringNode>>string:` initializer (`7iu`).
+Its reached instance-side `XMLStringNode>>string:` initializer (`7iu`) assigns the text.
+The DOM callback next reaches omitted `XMLElement>>addContent:` (`agp`) on the containing element.
 The document has not yet returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
