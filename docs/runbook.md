@@ -95,6 +95,14 @@ per lane instead of once per write × 2 failure modes. The fork copies versions 
 optimistic concurrency behaves identically on either side. Coverage rules are unchanged — every
 write, both failure modes, nothing sampled; only the installs under test repeat per iteration.
 
+The same prepared-backend helper reduces repeated setup in `test/super-send.test.js`: that module
+builds its standard image once per lane, then runs every behavioral case in a fresh runtime over
+an isolated fork. Its isolation proof rejects shared graph writes and runtime services. This is
+mock fixture setup reuse, with module teardown closing the templates; it makes no durable restart
+claim and skips no test. The measured trigger was M4 run 34735443456 exhausting the ordinary
+30-minute job budget after 1,541 passing entries while the super-send module repeatedly installed
+the same standard image. CI test selection and time budgets remain unchanged.
+
 ### `npm test` skipping is not the same as passing
 
 `npm test` reports a handful of skips. Those skips are the tests that exercise a real
