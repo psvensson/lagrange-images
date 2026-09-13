@@ -291,8 +291,9 @@ of classes the package itself defines — which is what an M4 restart proof has 
   inherited `addElement:` (`d8h`); reached `nextPCData` (`4yq`) scans character data and
   SAXDriver `handlePCData:` (`uza`) forwards it to reached XMLDOMParser `characters:` (`6kd`),
   whose reached `XMLStringNode class>>string:` factory (`q38`) allocates the native text node
-  and initializes its text through reached instance-side `string:` (`7iu`); the callback next
-  reaches omitted `XMLElement>>addContent:` (`agp`);
+  and initializes its text through reached instance-side `string:` (`7iu`); reached
+  `XMLElement>>addContent:` (`agp`) attaches it. Closing-tag parsing next reaches omitted
+  `XMLTokenizer>>nextEndTag` (`t01`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
