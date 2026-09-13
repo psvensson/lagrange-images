@@ -289,7 +289,8 @@ of classes the package itself defines — which is what an M4 restart proof has 
   initializer (`ekx`) and `setAttributes:` initializer (`myp`); the element callback reads its
   reached `incremental` getter (`6nn`) and `top` accessor (`0vo`), then attaches elements through
   inherited `addElement:` (`d8h`); reached `nextPCData` (`4yq`) scans character data and
-  SAXDriver `handlePCData:` (`uza`) forwards it to the omitted XMLDOMParser `characters:` callback (`6kd`);
+  SAXDriver `handlePCData:` (`uza`) forwards it to reached XMLDOMParser `characters:` (`6kd`),
+  which next reaches the omitted `XMLStringNode class>>string:` factory (`q38`);
 - [ ] establish imported application roots, globals/class state and domain objects as ordinary Lagrange image state;
 - [ ] create a linked application domain graph through imported/native application code;
 - [ ] restart Images and recover the same ObjectRefs, state and relationships;
