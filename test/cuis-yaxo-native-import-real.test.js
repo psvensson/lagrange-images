@@ -871,6 +871,7 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLElement/class/named:namespace:uri:attributes:',
   'cuis-method/YAXO/XMLElement/instance/name:',
   'cuis-method/YAXO/XMLNodeWithElements/instance/namespace:uri:',
+  'cuis-method/YAXO/XMLNodeWithElements/instance/namespace',
   'cuis-method/YAXO/XMLNodeWithElements/instance/addElement:',
   'cuis-method/YAXO/XMLElement/instance/setAttributes:',
   'cuis-method/YAXO/XMLElement/instance/addContent:',
@@ -899,18 +900,18 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLStringNode/instance/string',
 ])]);
 
-test('M4 acceptance: complete durable restart vertical currently stops at XMLElement namespace getter', {skip: !enabled, timeout: 900_000}, async () => {
+test('M4 acceptance: complete durable restart vertical currently stops at XMLElement localName getter', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const directory = await mkdtemp(join(tmpdir(), 'yaxo-m4-'));
   try {
-    // Temporary exact RED assertion, not an M4 success claim. Importing canonical namespace must move this
+    // Temporary exact RED assertion, not an M4 success claim. Importing canonical localName must move this
     // assertion; the complete intended flow lives in runM4Acceptance and is never shortened.
     await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
       classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
     }), error => {
       assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
-      assert.equal(error.selector, 'namespace');
-      assert.match(error.message, /^Symmetric Smalltalk message not understood: namespace sent to yaxo-m4\/~runtime\/transient\/object\/\d+\/[0-9a-f-]+$/);
+      assert.equal(error.selector, 'localName');
+      assert.match(error.message, /^Symmetric Smalltalk message not understood: localName sent to yaxo-m4\/~runtime\/transient\/object\/\d+\/[0-9a-f-]+$/);
       return true;
     });
   } finally {

@@ -577,8 +577,9 @@ names through reached `nextTrimmedBlanksUpTo:` (`2fg`). Reached `SAXDriver>>hand
 (`fbb`) forwards the closing tag to the actual XMLDOMParser. Its reached
 `endElement:namespace:namespaceURI:qualifiedName:` override (`rjt`) calls reached
 `XMLDOMParser>>pop` (`1qs`), which removes and returns the current element through existing native
-collection behavior. The callback next reaches its omitted inherited
-`XMLNodeWithElements>>namespace` getter (`oll`) on XMLElement.
+collection behavior. The reached inherited `XMLNodeWithElements>>namespace` getter (`oll`)
+answers the element namespace. The closing-element check next reaches omitted
+`XMLElement>>localName` (`omz`).
 The document has not yet returned from parsing.
 The cached first Character still bypasses native ReadStream `atEnd`; that unexecuted protocol
 has not been added.
