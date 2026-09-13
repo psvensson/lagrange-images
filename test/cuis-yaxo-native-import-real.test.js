@@ -901,19 +901,25 @@ const M4_APPLICATION_METHODS = Object.freeze([...new Set([
   'cuis-method/YAXO/XMLStringNode/instance/string',
 ])]);
 
-test('M4 acceptance: complete durable restart vertical currently stops at native ReadStream atEnd', {skip: !enabled, timeout: 900_000}, async () => {
+test('M4 acceptance: complete durable restart vertical currently stops at XMLTokenizer handleEndDocument', {skip: !enabled, timeout: 900_000}, async () => {
   const manifest = JSON.parse(await yaxoSemanticExport());
   const directory = await mkdtemp(join(tmpdir(), 'yaxo-m4-'));
   try {
-    // Temporary exact RED assertion, not an M4 success claim. Native ReadStream atEnd must move this
-    // assertion; the complete intended flow lives in runM4Acceptance and is never shortened.
+    // Temporary exact RED assertion, not an M4 success claim. The native ReadStream atEnd removed
+    // by this slice let the unchanged XMLTokenizer>>atEnd answer its `nestedStreams ... stream atEnd`
+    // question, so nextEntity passed the guard `self atEnd ifTrue: [self handleEndDocument. ^ nil]`
+    // and execution now stops at handleEndDocument — an unchanged YAXO method that is simply not yet
+    // in the import scope. Importing it is the next slice; the complete intended flow lives in
+    // runM4Acceptance and is never shortened.
     await assert.rejects(runM4Acceptance(join(directory, 'application.sqlite'), manifest, {
       classes: [...M4_SCOPE_CLASSES], methods: [...M4_APPLICATION_METHODS],
     }), error => {
       assert.equal(error.name, 'SmalltalkMessageNotUnderstoodError');
-      assert.equal(error.selector, 'atEnd');
-      // Unchanged XMLTokenizer atEnd now reaches the native stream after its cached peek is empty.
-      assert.match(error.message, /^Symmetric Smalltalk message not understood: atEnd sent to yaxo-m4\/object\//);
+      assert.equal(error.selector, 'handleEndDocument');
+      // The unchanged nextEntity guard names handleEndDocument on the imported tokenizer. That
+      // tokenizer is a parser-stage object still inside the public parse, so its id is transient
+      // (xxm's receiver-lifetime memory); the image prefix is the discriminator.
+      assert.match(error.message, /^Symmetric Smalltalk message not understood: handleEndDocument sent to yaxo-m4\//);
       return true;
     });
   } finally {

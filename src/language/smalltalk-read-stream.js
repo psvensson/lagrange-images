@@ -9,6 +9,7 @@ import {objectRef} from '../value/index.js';
 const READ_STREAM_SHAPE_ID = 'smalltalk/read-stream-instance-shape/v1';
 const READ_STREAM_METHODS = Object.freeze([
   {selector: 'on:', source: '[ :aCollection | collection := aCollection. readLimit := aCollection size. position := 0. ^ self ]'},
+  {selector: 'atEnd', source: '[ ^ position >= readLimit ]'},
   {selector: 'next', source: '[ ^ position >= readLimit ifFalse: [collection at: (position := position + 1)] ]'},
 ]);
 const READ_STREAM_CLASS_METHODS = Object.freeze([

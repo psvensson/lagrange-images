@@ -5,7 +5,7 @@ import {
   installSymmetricSmalltalkStandardImage, installSmalltalkReadStreamProtocol, installSmalltalkTextReadStreamProtocol,
   publishSmalltalkClassGlobals, READ_STREAM_SHAPE_ID, installSymmetricSmalltalkBlock, objectRef, booleanValue,
 } from '../src/runtime.js';
-import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
+import {faultingImages, forkableRuntime, WRITE_METHODS} from './support/recovery-harness.js';
 
 for (const lane of ['neutral', 'wasm']) {
   test(`exhaustive-recovery: every write installing native ${lane} ReadStream recovers and replays cleanly`, async () => {
@@ -38,7 +38,7 @@ for (const lane of ['neutral', 'wasm']) {
     try {
       let total;
       await forks.withFork(async runtime => {
-        const counting = faultingImages(runtime.images);
+        const counting = faultingImages(runtime.images, {writeMethods: [...WRITE_METHODS, 'createRecords']});
         await install(counting.images);
         total = counting.writeCount();
       });
@@ -46,7 +46,7 @@ for (const lane of ['neutral', 'wasm']) {
       for (const commitThenThrow of [false, true]) {
         for (let failAt = 1; failAt <= total; failAt++) {
           await forks.withFork(async runtime => {
-            const fault = faultingImages(runtime.images, {failAt, commitThenThrow});
+            const fault = faultingImages(runtime.images, {failAt, commitThenThrow, writeMethods: [...WRITE_METHODS, 'createRecords']});
             await assert.rejects(install(fault.images), /injected (post-commit )?failure at write/);
             await install(runtime.images);
             const frontier = await runtime.images.frontier('read-stream-recovery');
