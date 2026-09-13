@@ -549,6 +549,32 @@ test('STRUCTURAL: the compiled super method names no class in any durable record
   });
 });
 
+// The frame is trusted for PROVENANCE, not assumed for LOCALITY. Allocating primitives restate the
+// intra-image rule on every ref they touch; the super primitive owns the same restatement for the
+// defining Behavior it reads out of the ADR 0050 envelope, so a foreign-image frame fails as an
+// explicit locality error at THIS owner instead of surfacing as a kernel failure of the other image.
+test('the super primitive restates intra-image locality on the defining Behavior it reads', async () => {
+  const {superSend} = await import('../src/language/smalltalk-primitives-super.js');
+  const {SmalltalkPrimitiveLocalityError} = await import('../src/language/smalltalk-primitive-support.js');
+  await withRuntime(async (runtime) => {
+    const localization = {
+      images: runtime.images,
+      activation: {
+        block: {imageId: IMAGE, objectId: 'smalltalk/primitive/super-send'},
+        arguments: [{kind: 'text', value: 'answer'}],
+      },
+      context: {
+        invocationFrame: {
+          self: {kind: 'ref', imageId: IMAGE, objectId: 'smalltalk/class/Child'},
+          definingBehavior: {kind: 'ref', imageId: 'another-image', objectId: 'smalltalk/class/Parent'},
+        },
+      },
+      primitive: 'super-send',
+    };
+    await assert.rejects(superSend(localization), SmalltalkPrimitiveLocalityError);
+  });
+});
+
 // --- ownership ------------------------------------------------------------------------------------------
 
 // The architectural condition, checked structurally because the behavioural tests above cannot see
