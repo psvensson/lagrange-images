@@ -1,10 +1,9 @@
-import test from 'node:test';
+import test, {after} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {
-  createRuntime,
   defineMethodsFromSource,
   ensureClassFromDeclaration,
   findSmalltalkKernel,
@@ -14,6 +13,7 @@ import {
   objectRef,
   reconcileMethodsFromSource,
 } from '../src/runtime.js';
+import {forkableRuntime} from './support/recovery-harness.js';
 
 // ADR 0089. `super` at the Symmetric Smalltalk language owner.
 //
@@ -25,21 +25,47 @@ import {
 // shape of the central tests below.
 
 const IMAGE = 'app';
+// Install this module's unchanged baseline once per execution lane. Every test gets a fresh
+// runtime and isolated backend copy; no mutable graph or executable registry is shared.
+const templates = new Map();
+
+after(async () => {
+  for (const pending of templates.values()) {
+    const template = await pending;
+    await template.close();
+  }
+});
 
 async function withRuntime(body, {lane = 'neutral'} = {}) {
-  const runtime = await createRuntime({backend: {mode: 'mock'}});
-  try {
-    await runtime.images.createImage({id: IMAGE});
-    await installSymmetricSmalltalkStandardImage({
-      images: runtime.images, compilation: runtime.compilation, imageId: IMAGE, lane,
-    });
-    return await body(runtime, {
-      images: runtime.images, compilation: runtime.compilation, imageId: IMAGE, lane,
-    });
-  } finally {
-    await runtime.close();
+  if (!templates.has(lane)) {
+    templates.set(lane, forkableRuntime(async runtime => {
+      await runtime.images.createImage({id: IMAGE});
+      await installSymmetricSmalltalkStandardImage({
+        images: runtime.images, compilation: runtime.compilation, imageId: IMAGE, lane,
+      });
+    }));
   }
+  const template = await templates.get(lane);
+  return template.withFork(runtime => body(runtime, {
+    images: runtime.images, compilation: runtime.compilation, imageId: IMAGE, lane,
+  }));
 }
+
+test('super-send fixtures isolate graph writes and runtime machinery between cases', async () => {
+  let first;
+  await withRuntime(async runtime => {
+    first = runtime;
+    await runtime.images.createImage({id: 'fixture-only'});
+  });
+  await withRuntime(async runtime => {
+    for (const field of ['images', 'backend', 'executor', 'compilation', 'codeExecutors', 'invocations']) {
+      assert.notEqual(runtime[field], first[field], `fresh fixture ${field}`);
+    }
+    await assert.rejects(runtime.images.getImage('fixture-only'), {
+      name: 'TypeError', message: 'image not found: fixture-only',
+    }, 'prior fixture writes are absent');
+  });
+});
 
 const declare = (runtime, name, superclassRef = null, instanceVariables = []) => ensureClassFromDeclaration({
   images: runtime.images, imageId: IMAGE, name, superclassRef, instanceVariables,
