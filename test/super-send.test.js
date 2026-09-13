@@ -10,6 +10,7 @@ import {
   installSymmetricSmalltalkBlock,
   installSymmetricSmalltalkStandardImage,
   integerValue,
+  methodBindings,
   objectRef,
   reconcileMethodsFromSource,
 } from '../src/runtime.js';
@@ -66,6 +67,16 @@ test('super-send fixtures isolate graph writes and runtime machinery between cas
     }, 'prior fixture writes are absent');
   });
 });
+
+async function readDurableRecord(images, ref) {
+  // Refs are opaque: discovering which record-kind owner answers is the walk's job.
+  return (await Promise.all([
+    images.getObject(ref.imageId, ref.objectId),
+    images.getBlock(ref.imageId, ref.objectId),
+    images.getCodeArtifact(ref.imageId, ref.objectId),
+    images.getLexicalEnvironment(ref.imageId, ref.objectId),
+  ])).find((record) => record != null) ?? null;
+}
 
 const declare = (runtime, name, superclassRef = null, instanceVariables = []) => ensureClassFromDeclaration({
   images: runtime.images, imageId: IMAGE, name, superclassRef, instanceVariables,
@@ -466,6 +477,75 @@ test('super inside a closure that outlived its execution fails closed', async ()
       (error) => error.name === 'SmalltalkSuperFrameMissingError',
       'no frame is invented, borrowed from the caller, or recovered from the receiver',
     );
+  });
+});
+
+// ADR 0089 calls a class named inside a durable super artifact a FORGERY SURFACE: if the compiled
+// method recorded its own lookup starting point, a hand-written or tampered artifact could state a
+// starting Behavior of its choosing and super would obey it. The property must therefore hold as a
+// RUNTIME FACT OF THE FRAME: the durable surface of a compiled super method — its Block record, its
+// code artifact, its semantic artifact and its lexical environment, with every ref those records
+// name — carries the selector text and the arguments and names no class.
+test('STRUCTURAL: the compiled super method names no class in any durable record', async () => {
+  await withRuntime(async (runtime, options) => {
+    const parent = await declare(runtime, 'Parent');
+    const child = await declare(runtime, 'Child', parent.classRef);
+    await defineMethodsFromSource({
+      ...options, classRef: parent.classRef, methods: [{selector: 'answer', source: '[ ^ 1 ]'}],
+    });
+    await defineMethodsFromSource({
+      ...options, classRef: child.classRef,
+      methods: [{selector: 'throughSuper', source: '[ | answer | answer := super answer. ^ answer ]'}],
+    });
+    const binding = (await methodBindings({images: runtime.images, imageId: IMAGE, classRef: child.classRef}))
+      .find(({selector}) => selector === 'throughSuper');
+    assert.ok(binding, 'the super method is installed');
+
+    // Only the record-kind owner may read each kind; the walk follows every ref, bounded.
+    const records = [];
+    const walk = async (value, stack, depth) => {
+      if (depth > 5) return;
+      if (value && typeof value === 'object') {
+        if (value.kind === 'ref') {
+          if (stack.some((seen) => seen.imageId === value.imageId && seen.objectId === value.objectId)) return;
+          const record = await readDurableRecord(runtime.images, value);
+          if (!record) return;
+          records.push(record);
+          for (const sub of Object.values(record)) await walk(sub, [...stack, value], depth + 1);
+          return;
+        }
+        for (const sub of Array.isArray(value) ? value : Object.values(value)) await walk(sub, stack, depth + 1);
+      }
+    };
+    await walk(binding.method, [], 0);
+    assert.ok(records.length >= 3, 'the method block, its code and its environment are all read');
+
+    const json = JSON.stringify(records);
+    assert.match(json, /"selector"/, 'the durable surface carries the selector text');
+    assert.match(json, /smalltalk\/primitive\/super-send/, 'the forwarded selector arrives through the $superSend primitive send');
+    assert.match(json, /\\"answer\\"/, 'the forwarded selector is an arguments/text literal');
+    assert.doesNotMatch(json, /superclass/, 'no durable record carries a superclass entry');
+    const refs = [];
+    const collectRefs = (value) => {
+      if (value && typeof value === 'object') {
+        if (value.kind === 'ref') refs.push(value);
+        else for (const sub of Array.isArray(value) ? value : Object.values(value)) collectRefs(sub);
+      }
+    };
+    collectRefs(records);
+    const namesClassRecord = (objectId) =>
+      /^smalltalk\/class\/[^/]+$/.test(objectId) || /^smalltalk\/class\/[^/]+ class$/.test(objectId);
+    for (const ref of refs) {
+      assert.ok(!namesClassRecord(ref.objectId), `a durable ref names a Class or Metaclass: ${ref.objectId}`);
+      assert.ok(!/metaclass/.test(ref.objectId), `no durable ref names a metaclass: ${ref.objectId}`);
+    }
+    const environment = records.find((record) => record.metadata?.smalltalk === 'method-environment');
+    for (const bindingValue of Object.values(environment.bindings)) {
+      assert.match(
+        bindingValue.value.objectId, /^smalltalk\/primitive\//,
+        'the lexical environment binds only kernel-primitive blocks',
+      );
+    }
   });
 });
 
