@@ -30,6 +30,19 @@ CUIS_JSON_BLOB=47fab65d0d9017d706aa07d39ab0451619488ccd
 CUIS_YAXO_BLOB=67d670ed38cc136d88afdf7e0df5bf8bc6519087
 CUIS_TESTS_YAXO_BLOB=8c50cbe6f29f3f4b25c883511eb905e44120ec5e
 
+# The ADR 0085 M5 forcing application (Bead lagrange-images-nfv1; selected with a frozen
+# acceptance contract). Life is the package's own model of Conway's cellular automaton:
+# LifeArray extends Array2D, LifeModel extends TextModel, and the acceptance behavior is the
+# blinker state transition LifeModel>>nextState, twice. Unlike the distribution packages above,
+# Life does NOT live in the pinned Cuis-Smalltalk-Dev tree; the Games repository is the ONE
+# immutable external trust anchor M5 introduces, pinned by commit + Git blob hash:
+#   repository : Cuis-Smalltalk/Games
+#   commit     : 52aad9c547fb54ad0e3bbc427aff3f601a75d54c   (January 2026)
+#   package    : Life/Life.pck.st, git blob f9180bba8cf9e7aa47aedc4699ca5043af93c9b5
+#   license    : MIT at that commit (repo LICENSE)
+CUIS_GAMES_COMMIT=52aad9c547fb54ad0e3bbc427aff3f601a75d54c
+CUIS_LIFE_BLOB=f9180bba8cf9e7aa47aedc4699ca5043af93c9b5
+
 # Multi-package Cuis cluster (Bead lagrange-images-d57): a real upstream dependency DAG
 # with a diamond, used to prove dependency ordering / Feature-requirement resolution and
 # failure diagnostics through the toolchain. All from the same pinned commit, pinned by
@@ -102,6 +115,9 @@ fetch "$CUIS_ROOT/Packages/Features/YAXO.pck.st" .integration/cuis/YAXO.pck.st
 test "$(git hash-object .integration/cuis/YAXO.pck.st)" = "$CUIS_YAXO_BLOB"
 fetch "$CUIS_ROOT/Packages/Features/Tests-YAXO.pck.st" .integration/cuis/Tests-YAXO.pck.st
 test "$(git hash-object .integration/cuis/Tests-YAXO.pck.st)" = "$CUIS_TESTS_YAXO_BLOB"
+
+fetch "https://raw.githubusercontent.com/Cuis-Smalltalk/Games/$CUIS_GAMES_COMMIT/Life/Life.pck.st" .integration/cuis/Life.pck.st
+test "$(git hash-object .integration/cuis/Life.pck.st)" = "$CUIS_LIFE_BLOB"
 
 # The multi-package cluster (see the pin block above).
 fetch "$CUIS_ROOT/Packages/System/ExtendedClipboard.pck.st" .integration/cuis/ExtendedClipboard.pck.st
