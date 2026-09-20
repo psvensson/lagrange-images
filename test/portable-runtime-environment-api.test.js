@@ -151,7 +151,13 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // 121 adds the ordinary ReadStream construction owner, using existing class/slot/global owners only.
   // 122 adds the native string equality owner (6lc5), composed only from existing Value,
   // kernel, class/method publication and Symbol modules; no new host or foreign dependency.
-  assert.equal(modules.length, 122, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics and the native Set, ReadStream and string equality owners');
+  // 126 after the four native value-model owners the M5 witness measured into existence
+  // (bead lagrange-images-nfv1.3, seeded by the frozen nfv1.1
+  // measurement): smalltalk-point.js, smalltalk-array2d.js, smalltalk-interval.js and
+  // smalltalk-active-model.js — each an ordinary image-resident Smalltalk class composed only
+  // from the class/slot/method owners the standard-image installer already carries, no new host
+  // or foreign dependency and no node:*.
+  assert.equal(modules.length, 126, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, and the four native Point/Array2D/Interval/TextModel value-model owners');
   assert.ok(paths.includes('src/language/smalltalk-string-equality.js'));
   assert.ok(paths.includes('src/wasm/module-contract.js'));
   assert.ok(paths.includes('src/wasm/function-contract.js'));
@@ -165,6 +171,10 @@ test('the bounded public seam does not broaden the portable static closure', () 
   assert.ok(paths.includes('src/language/smalltalk-set.js'));
   assert.ok(paths.includes('src/language/smalltalk-read-stream.js'));
   assert.ok(paths.includes('src/language/smalltalk-primitives-character.js'));
+  assert.ok(paths.includes('src/language/smalltalk-point.js'));
+  assert.ok(paths.includes('src/language/smalltalk-array2d.js'));
+  assert.ok(paths.includes('src/language/smalltalk-interval.js'));
+  assert.ok(paths.includes('src/language/smalltalk-active-model.js'));
   assert.deepEqual(projectPaths, [
     'src/project/model.js',
     'src/project/working-state.js',
