@@ -20,7 +20,11 @@ import {installSmalltalkSubclassProtocol} from './smalltalk-subclasses.js';
 import {installSmalltalkSymbolProtocol} from './smalltalk-symbol.js';
 import {installSmalltalkStringEqualityProtocol} from './smalltalk-string-equality.js';
 import {installSmalltalkCharacterProtocol, installSmalltalkCharacterRangeProtocol} from './smalltalk-character.js';
+import {installSmalltalkArray2DProtocol, installSmalltalkArray2DCopyProtocol} from './smalltalk-array2d.js';
+import {installSmalltalkIntervalProtocol, installSmalltalkIntervalConstructionProtocol} from './smalltalk-interval.js';
+import {installSmalltalkActiveModelProtocol} from './smalltalk-active-model.js';
 import {installSmalltalkTextByteArrayProtocol} from './smalltalk-text-bytearray.js';
+import {installSmalltalkPointProtocol, installSmalltalkPointConstructionProtocol} from './smalltalk-point.js';
 import {installSmalltalkWriteStreamProtocol} from './smalltalk-write-stream.js';
 
 // The normal, complete Symmetric Smalltalk image. This is composition, not a new semantic layer:
@@ -187,6 +191,29 @@ async function installSymmetricSmalltalkStandardImage({
   await publishSmalltalkClassGlobals({images, imageId, names: ['ReadStream']});
   await installSmalltalkTextReadStreamProtocol(options);
 
+  // Two native value-model classes required by real imported application code (M5, bead
+  // lagrange-images-nfv1.3, classified by the frozen nfv1.1 measurement). `Array2D` because
+  // Life's own `LifeArray` extends it and the witness reaches its measured grid protocol;
+  // `TextModel` because `LifeModel` extends it and the unchanged `nextState` fires events with
+  // zero subscribers; `Point` because the unchanged grid code constructs and decomposes
+  // positions. Each is an ordinary native class published as an ordinary global; the Cuis
+  // import adapter's correspondence seam resolves only their SEALED identities to them, never
+  // by name-guessing. Publication then its derived construction/copy stages, as everywhere
+  // above: bodies naming the globals compile only after publication.
+  const point = await installSmalltalkPointProtocol(options);
+  await publishSmalltalkClassGlobals({images, imageId, names: ['Point']});
+  await installSmalltalkPointConstructionProtocol(options);
+  const array2d = await installSmalltalkArray2DProtocol(options);
+  await publishSmalltalkClassGlobals({images, imageId, names: ['Array2D']});
+  await installSmalltalkArray2DCopyProtocol(options);
+  const activeModel = await installSmalltalkActiveModelProtocol(options);
+  await publishSmalltalkClassGlobals({images, imageId, names: ['TextModel']});
+  // `Interval`, because the imported Life code iterates with `(a to: b) do:` — a `to:` answered
+  // by an Interval and then `do:`, which is a different message chain from Integer's `to:do:`.
+  const interval = await installSmalltalkIntervalProtocol(options);
+  await publishSmalltalkClassGlobals({images, imageId, names: ['Interval']});
+  await installSmalltalkIntervalConstructionProtocol(options);
+
   return Object.freeze({
     protocol: SYMMETRIC_SMALLTALK_STANDARD_IMAGE_V1,
     imageId,
@@ -216,6 +243,10 @@ async function installSymmetricSmalltalkStandardImage({
       writeStream,
       set,
       readStream,
+      point,
+      array2d,
+      activeModel,
+      interval,
     }),
     classes: Object.freeze({
       Array: indexed.arrayClass,
@@ -227,6 +258,10 @@ async function installSymmetricSmalltalkStandardImage({
       WriteStream: writeStream.classRef,
       Set: set.classRef,
       ReadStream: readStream.classRef,
+      Point: point.classRef,
+      Array2D: array2d.classRef,
+      TextModel: activeModel.classRef,
+      Interval: interval.classRef,
       ...Object.fromEntries(CONDITION_CLASSES.map(({name}) => [name, conditions[name]])),
     }),
     library,

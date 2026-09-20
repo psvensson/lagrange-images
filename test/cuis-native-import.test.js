@@ -1140,7 +1140,7 @@ test('a mapped method-target identity is not thereby a legal superclass', async 
       (error) => error instanceof CuisNativeImportError
         && /unsupported superclass semantic identity cuis-class\/Cuis-Base\/Integer/.test(error.message)
         // The refusal names the superclass position specifically, not the whole table.
-        && /only these map to a native superclass: cuis-class\/Cuis-Base\/Object$/.test(error.message)
+        && /only these map to a native superclass: cuis-class\/Cuis-Base\/Object, cuis-class\/Cuis-Base\/Array2D, cuis-class\/Cuis-Base\/TextModel$/.test(error.message)
         && error.semanticIdentity === 'cuis-class/Fixture/ZuluBase',
     );
     assert.equal(await runtime.images.frontier('app'), frontierBefore);

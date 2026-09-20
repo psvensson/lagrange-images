@@ -194,6 +194,13 @@ async function installSmalltalkIntegerProtocol({images, compilation, imageId, la
     classRef: kernel.integerClass,
     methods: [
       {selector: 'negated', source: '[ ^ 0 - self ]'},
+      // `abs`, measured Cuis Number>>abs (`self < 0 ifTrue: [^0 - self] ^ self`), required by
+      // the imported Life code's interval construction (bead lagrange-images-nfv1.3).
+      {selector: 'abs', source: '[ self < 0 ifTrue: [ ^ 0 - self ]. ^ self ]'},
+      // `min:`/`max:`, measured Cuis magnitudes (`self < another ifTrue: [...]`), required by
+      // the imported Life `set:at:` clamping (bead lagrange-images-nfv1.3).
+      {selector: 'min:', source: '[ :another | self < another ifTrue: [ ^ self ] ifFalse: [ ^ another ] ]'},
+      {selector: 'max:', source: '[ :another | self < another ifTrue: [ ^ another ] ifFalse: [ ^ self ] ]'},
       {selector: 'between:and:', source: '[ :min :max | ^ (min <= self) and: [ self <= max ] ]'},
       {
         selector: 'to:do:',

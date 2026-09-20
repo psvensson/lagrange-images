@@ -326,13 +326,31 @@ of classes the package itself defines — which is what an M4 restart proof has 
 
 ### M5 — one real independently authored Cuis application
 
-- [ ] choose a nontrivial existing application/package set;
-- [ ] keep its core application source unchanged for Lagrange;
-- [ ] represent the complete source/package closure in a Project/release;
-- [ ] install into a fresh Image;
-- [ ] run useful existing application behavior/tests using native classes, methods and domain objects;
-- [ ] require neither OpenSmalltalkVM nor a Cuis image in the ordinary execution path after import;
-- [ ] expose any remaining foreign dependency as an explicit, inspectable boundary.
+- [x] choose a nontrivial existing application/package set: the pinned Cuis distribution carries no
+  convincing independently authored application, so M5 selected **Life** (Conway's cellular
+  automaton) from one new immutable external pin, `Cuis-Smalltalk/Games @ 52aad9c5…`
+  (`Life/Life.pck.st`, blob `f9180bba…`, MIT), chosen through the hard-gate-then-score selection
+  and a frozen, real-Cuis-oracle-verified acceptance contract (bead `lagrange-images-nfv1.1`,
+  with Construction recorded as the objective-condition fallback);
+- [x] keep its core application source unchanged for Lagrange: the scoped import accepts only the
+  declared upstream classes/methods, and the witness proves the unchanged pattern protocol;
+- [x] represent the complete source/package closure in a Project/release: the pinned package
+  artifact plus the real-toolchain-derived canonical semantic export as a managed, replay-safe
+  release that installs into a fresh image of a real backend (bead `lagrange-images-nfv1.2`);
+- [x] install into a fresh Image and import natively with the original environment GONE: the
+  recovered release alone produces the native Life installation, in a runtime composed with no
+  Cuis/toolchain/foreign provider at all (bead `lagrange-images-nfv1.3`);
+- [x] run useful existing application behavior using native classes, methods and domain objects:
+  the frozen blinker oracle executes unchanged `LifeModel>>nextState` twice over a constructed
+  4x5 grid — `|00000|01110|00000|00000| -> |00100|00100|00100|00000| -> (first state)` — and
+  again after a full runtime restart, found through the native global namespace alone;
+- [x] require neither OpenSmalltalkVM nor a Cuis image in the ordinary execution path after
+  import: both witness runtimes assert empty toolchain and foreign-runtime provider registries,
+  and the whole witness runs in the ORDINARY test lane without any integration environment;
+- [x] expose any remaining foreign dependency as an explicit, inspectable boundary: the measured
+  export records the GUI-adjacent superclass identities the acceptance scope does not import
+  (`GridCell -> PluggableButtonMorph`, `LifeView -> SystemWindow`) as visible, recorded foreign
+  boundaries; the correspondence seam itself is closed and refuses anything beyond its entries.
 
 ### M6 — distribution without language rewrites
 
