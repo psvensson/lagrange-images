@@ -3,6 +3,7 @@ import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
 import {SmalltalkDanglingEdgeError, lookupSelector} from './smalltalk-lookup.js';
 import {
   SmalltalkPrimitiveReceiverError,
+  assertLocalRef,
   requireInvokeResolvedMethod,
 } from './smalltalk-primitive-support.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
@@ -60,6 +61,11 @@ async function superSend({images, activation, context, primitive}) {
   const selector = selectorValue.value;
 
   const {definingBehavior, self} = frame;
+  // The frame is trusted for PROVENANCE, not assumed for LOCALITY: like the allocating primitives
+  // of the same family, this primitive restates the intra-image rule on every ref it touches rather
+  // than inheriting it from the current call graph. A defining Behavior of another image is a
+  // locality failure named here, not a hang at the kernel owner below.
+  assertLocalRef(definingBehavior, activation.block.imageId, primitive, 'the defining Behavior of the running method');
   const kernel = await findSmalltalkKernel({images, imageId: definingBehavior.imageId});
   if (!kernel) throw new TypeError(`image ${definingBehavior.imageId} has no Smalltalk kernel`);
 
