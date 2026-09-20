@@ -23,6 +23,8 @@ export LAGRANGE_CUIS_JSON_PACKAGE_PATH="$LAGRANGE_INTEGRATION_ROOT/.integration/
 # The ADR 0085 M4 forcing application (Bead lagrange-images-xxm); see scripts/integration-setup.sh.
 export LAGRANGE_CUIS_YAXO_PACKAGE_PATH="$LAGRANGE_INTEGRATION_ROOT/.integration/cuis/YAXO.pck.st"
 export LAGRANGE_CUIS_TESTS_YAXO_PACKAGE_PATH="$LAGRANGE_INTEGRATION_ROOT/.integration/cuis/Tests-YAXO.pck.st"
+# The ADR 0085 M5 forcing application (Bead lagrange-images-nfv1); see scripts/integration-setup.sh.
+export LAGRANGE_CUIS_LIFE_PACKAGE_PATH="$LAGRANGE_INTEGRATION_ROOT/.integration/cuis/Life.pck.st"
 # Multi-package cluster (Bead lagrange-images-d57); see scripts/integration-setup.sh.
 export LAGRANGE_CUIS_EXTENDEDCLIPBOARD_PACKAGE_PATH="$LAGRANGE_INTEGRATION_ROOT/.integration/cuis/ExtendedClipboard.pck.st"
 export LAGRANGE_CUIS_FFI_PACKAGE_PATH="$LAGRANGE_INTEGRATION_ROOT/.integration/cuis/FFI.pck.st"
