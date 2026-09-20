@@ -685,9 +685,20 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
   if (!kernel) fail(`image ${imageId} has no Smalltalk kernel`);
 
   // The compatibility facts, resolved through the one seam. Each answers an EXISTING native class
-  // ref owned by the kernel; none is created, rewritten or renamed here.
+  // ref owned by the kernel or the native global namespace; none is created, rewritten or renamed
+  // here. Resolution is LAZY by necessity, not preference: the M1 seam deliberately supports
+  // kernel-only images where namespace-backed entries (Array2D, TextModel) could not resolve at
+  // all, and those imports never reference those superclasses — so only the mapped identities
+  // THIS plan references are resolved, and each must resolve for the import to proceed.
   const resolved = new Map();
-  for (const identity of CUIS_NATIVE_CLASS_MAPPINGS.keys()) {
+  const requiredMappedIdentities = new Set();
+  for (const declaration of plan.ordered) {
+    if (isMappedCuisClass(declaration.superclass)) requiredMappedIdentities.add(declaration.superclass);
+  }
+  for (const method of plan.methods) {
+    if (isMappedCuisClass(method.classIdentity)) requiredMappedIdentities.add(method.classIdentity);
+  }
+  for (const identity of requiredMappedIdentities) {
     const classRef = await resolveMappedCuisClass(identity, kernel, {images, imageId});
     if (!classRef) fail(`image ${imageId} has no native class for ${identity}`, identity);
     resolved.set(identity, Object.freeze({classRef}));
