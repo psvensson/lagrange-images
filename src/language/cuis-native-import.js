@@ -1,6 +1,6 @@
 import {ensureClassFromDeclaration} from './smalltalk-class-builder.js';
 import {ensureClassVariableBindings} from './smalltalk-class-variables.js';
-import {findSmalltalkGlobalNamespace, publishSmalltalkClassGlobals} from './smalltalk-globals.js';
+import {GLOBAL_BINDING_VALUE_SLOT, findSmalltalkGlobalNamespace, publishSmalltalkClassGlobals, resolveGlobal} from './smalltalk-globals.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {reconcileMethodsFromSource} from './smalltalk-instance-variables.js';
 import {isAssignmentToken, tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
@@ -9,8 +9,6 @@ import {isAssignmentToken, tokenizeSymmetricSmalltalk} from './symmetric-smallta
 // by the OpenSmalltalk/Cuis toolchain provider; native builders/compilers remain the sole owners of
 // Class, Metaclass, Shape, slot and method identity and behavior.
 const CUIS_SEMANTIC_EXPORT_V2 = 'smalltalk/cuis-semantic-export-v2';
-const CUIS_NATIVE_ROOT_OBJECT_IDENTITY = 'cuis-class/Cuis-Base/Object';
-const CUIS_NATIVE_INTEGER_IDENTITY = 'cuis-class/Cuis-Base/Integer';
 
 // The ONE seam where a Cuis semantic class identity corresponds to an already-proven native class.
 // Keyed by the export owner's COMPLETE semantic identity and never by class name: a Cuis class
@@ -43,14 +41,45 @@ const CUIS_NATIVE_INTEGER_IDENTITY = 'cuis-class/Cuis-Base/Integer';
 //                                 no integer ever dispatches to. Refused until something proves
 //                                 otherwise.
 //
+//   cuis-class/Cuis-Base/Array2D  `superclass` only. Required by the frozen M5.2 measurement
+//                                 (bead lagrange-images-nfv1.1: `LifeArray < Array2D`; the
+//                                 witness refused exactly this identity before the entry
+//                                 existed). The native Array2D owner is the measured Cuis
+//                                 grid protocol the unchanged Life code reaches. Resolved
+//                                 through the image's native global namespace (the standard
+//                                 image publishes the class as `Array2D`), not a kernel slot:
+//                                 it is an ordinary library class, not an immediate-value
+//                                 dispatch owner. NOT a method target: the package defines no
+//                                 extension selector on Array2D, and no consumer declared one.
+//   cuis-class/Cuis-Base/TextModel `superclass` only. Same frozen measurement
+//                                 (`LifeModel < TextModel`; `TextModel < ActiveModel` in Cuis
+//                                 is flattened into the native base, whose measured surface —
+//                                 silent `triggerEvent:` with zero subscribers — is what the
+//                                 unchanged `nextState` exercises). Also namespace-resolved
+//                                 (`TextModel`), also refused as a method target.
+//
 // A Map, not an object literal, so a hostile identity such as `__proto__` cannot resolve.
 const CUIS_NATIVE_MAPPING_POSITION = Object.freeze({SUPERCLASS: 'superclass', METHOD_TARGET: 'method-target'});
+const CUIS_NATIVE_ROOT_OBJECT_IDENTITY = 'cuis-class/Cuis-Base/Object';
+const CUIS_NATIVE_INTEGER_IDENTITY = 'cuis-class/Cuis-Base/Integer';
+const CUIS_NATIVE_ARRAY2D_IDENTITY = 'cuis-class/Cuis-Base/Array2D';
+const CUIS_NATIVE_TEXTMODEL_IDENTITY = 'cuis-class/Cuis-Base/TextModel';
 const CUIS_NATIVE_CLASS_MAPPINGS = new Map([
   [CUIS_NATIVE_ROOT_OBJECT_IDENTITY, Object.freeze({
     slot: 'objectClass', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS]),
   })],
   [CUIS_NATIVE_INTEGER_IDENTITY, Object.freeze({
     slot: 'integerClass', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.METHOD_TARGET]),
+  })],
+  // Ordinary library classes resolve through the image's own global namespace — the namespace
+  // owner's replay/rebind semantics, never a second lookup implementation and never a name
+  // guess: the NAME is part of this sealed entry, matched against the namespace as-is, and a
+  // missing native class fails the import explicitly.
+  [CUIS_NATIVE_ARRAY2D_IDENTITY, Object.freeze({
+    globalName: 'Array2D', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS]),
+  })],
+  [CUIS_NATIVE_TEXTMODEL_IDENTITY, Object.freeze({
+    globalName: 'TextModel', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS]),
   })],
 ]);
 
@@ -70,11 +99,24 @@ function isMappedCuisClassAt(identity, position) {
 }
 
 // Resolution needs the kernel, so it happens in the import phase; the plan phase asks only whether
-// an identity is mapped at the position it appears in. The kernel owns the ref — this never
+// an identity is mapped at the position it appears in. Kernel-slot entries answer the kernel's own
+// class ref; namespace entries resolve through the durable global namespace (the same owner the
+// import publishes application classes through). The kernel/namespace own the ref — this never
 // creates, rewrites or names a class.
-function resolveMappedCuisClass(identity, kernel) {
+async function resolveMappedCuisClass(identity, kernel, {images, imageId}) {
   const entry = CUIS_NATIVE_CLASS_MAPPINGS.get(identity);
-  return entry === undefined ? null : kernel[entry.slot];
+  if (entry === undefined) return null;
+  if (entry.slot) return kernel[entry.slot];
+  return await namespaceMappedClass(images, imageId, entry.globalName);
+}
+
+// One namespace read per required mapping, through the namespace owner. The binding's value is
+// the native Class object; a missing name refuses the import exactly like a missing kernel slot.
+async function namespaceMappedClass(images, imageId, name) {
+  const binding = await resolveGlobal({images, imageId, name});
+  if (!binding) return null;
+  const record = await images.getObject(imageId, binding.objectId);
+  return record?.slots?.[GLOBAL_BINDING_VALUE_SLOT] ?? null;
 }
 
 class CuisNativeImportError extends TypeError {
@@ -646,7 +688,7 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
   // ref owned by the kernel; none is created, rewritten or renamed here.
   const resolved = new Map();
   for (const identity of CUIS_NATIVE_CLASS_MAPPINGS.keys()) {
-    const classRef = resolveMappedCuisClass(identity, kernel);
+    const classRef = await resolveMappedCuisClass(identity, kernel, {images, imageId});
     if (!classRef) fail(`image ${imageId} has no native class for ${identity}`, identity);
     resolved.set(identity, Object.freeze({classRef}));
   }
