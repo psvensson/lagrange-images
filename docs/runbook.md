@@ -95,6 +95,17 @@ per lane instead of once per write × 2 failure modes. The fork copies versions 
 optimistic concurrency behaves identically on either side. Coverage rules are unchanged — every
 write, both failure modes, nothing sampled; only the installs under test repeat per iteration.
 
+The ordinary lane has the same mechanism in `test/support/standard-image-fixture.js`:
+`withStandardImage({lane, imageId}, body)` installs the standard image once per (lane, imageId) per
+test process and runs `body` over a fresh `MockBackend.fork()` runtime. A file with many tests pays
+one install per lane instead of one per test, and every test still starts from exactly the state a
+fresh install produces, with nothing shared between tests — which is what distinguishes it from
+`sharedFixture`, whose tests share one live image and must therefore be add-only. Use it for tests
+that exercise the installed image; tests of installation itself (the preflight, write-free replay
+and interrupted installs) keep a real install. Measured on the reference workstation at one worker
+(Sept 23 2026): one standard-image install cost roughly 13-14 s per lane, and
+`test/cuis-native-import.test.js` alone made 32 of them (527 s for the file).
+
 The same prepared-backend helper reduces repeated setup in `test/super-send.test.js`: that module
 builds its standard image once per lane, then runs every behavioral case in a fresh runtime over
 an isolated fork. Its isolation proof rejects shared graph writes and runtime services. This is
