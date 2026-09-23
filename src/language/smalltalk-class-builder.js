@@ -1529,7 +1529,16 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
   return Object.freeze({classRef: ref(classObjectId), metaclassRef: ref(metaclassObjectId)});
 }
 
+// The deterministic identity of a native Class object by name (`smalltalk/class/<name>`), the
+// convention `defineClass` and the kernel installer both write. Exported so a public seam can name a
+// Class object's authority resource from a caller-supplied name BEFORE any graph read.
+function smalltalkClassObjectId(name) {
+  if (typeof name !== 'string' || name.length === 0) throw new TypeError('class name must be non-empty text');
+  return `smalltalk/class/${name}`;
+}
+
 export {
+  smalltalkClassObjectId,
   SmalltalkMethodDictionaryContentionError,
   SmalltalkMethodLaneError,
   SmalltalkMethodRedefinitionError,

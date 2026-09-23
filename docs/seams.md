@@ -437,6 +437,44 @@ The module is deliberately NOT listed in `src/language/index.js`: that barrel is
 public name is re-exported by name from both reviewed roots instead. See the barrel trap in
 [the runbook](runbook.md#traps).
 
+## Authorized Cuis native import
+
+`src/language/smalltalk-authorized-import.js` (ADR 0094, Object Environment E4) is the public WRITE seam
+for bringing a canonical `smalltalk/cuis-semantic-export-v2` manifest, or a caller-declared scope of
+it, into an image:
+
+```text
+authorizedImportCuisPackage({images, compilation, imageId, manifest, scope, require,
+                             signal, onProgress})  ->  {imported, admitted}
+```
+
+Order is the contract: validate caller-owned input and the adapter's pure plan (no read) -> demand
+the set computed from that plan, in canonical order -> hand the import to the adapter with progress
+and cancellation plumbing -> map the outcome. The demand set, as data:
+
+| the import | demand |
+| --- | --- |
+| declares class `Name` | `object/create` on `smalltalk/class/Name` |
+| names a mapped superclass (`Object`, `Array2D`, `TextModel`) | `object/write` on that Class object (its subclass registry is its storage representation) |
+| installs an extension method on mapped `Integer` | `object/write` on `smalltalk/class/Integer` (ADR 0088's rule) |
+| declares any class | `object/write` on `smalltalk-global-namespace/v1` (publication) |
+
+Progress events are `{event: 'begin' | 'admitted', phase: 'class' | 'globals' | 'methods', identity,
+methods?, totals}`; cancellation is checked before each declaration, before publication and before each
+class's method group, never inside an owner's write. Outcomes by `error.name`:
+
+| `error.name` | Meaning |
+| --- | --- |
+| `SmalltalkImportInputError` | malformed caller-owned input |
+| `CuisNativeImportError` | the adapter refused the manifest/scope before the first native write; nothing admitted |
+| `AuthorityError` | the caller's own `require` denied a demand; nothing read |
+| `CuisNativeImportAbortedError` | cancelled between declarations; `admitted` and `reason` are exact |
+| `SmalltalkImportRefusedError` | a native owner refused a covered declaration after earlier admissions; `phase`, `identity`, `admitted`, and the owner's refusal as `cause` |
+
+Nothing rolls back; a corrected or repeated import converges (exact replay is write-free) and reports
+the already-landed declarations as admitted again. Published by name from `src/runtime.js`, never
+through the language barrel.
+
 ## ABI and contract identifiers
 
 Not representations — these appear inside artifact content as an `abi` or contract tag.
