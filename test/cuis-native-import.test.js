@@ -18,7 +18,6 @@ import {
   installSmalltalkInstanceVariableProtocol,
   installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
-  installSymmetricSmalltalkStandardImage,
   integerValue,
   methodBlockRef,
   objectRef,
@@ -29,6 +28,7 @@ import {
   resolveGlobal,
   textValue,
 } from '../src/runtime.js';
+import {withStandardImage as withForkedStandardImage} from './support/standard-image-fixture.js';
 
 async function withKernel(body) {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
@@ -1192,17 +1192,10 @@ test('a manifest may not declare a class whose identity the mapping already owns
 // result must be ordinary too: the explicit identity mapping resolves the target, and the EXISTING
 // native class's EXISTING MethodDictionary owner installs the selector. No proxy subclass, no
 // second Integer, no importer-owned extension store, no behavior attached to a package object.
+// One prepared WASM-lane standard image per process, forked per test (test/support/standard-image-fixture.js):
+// every test still starts from exactly the state a fresh install produces, with nothing shared.
 async function withStandardImage(body) {
-  const runtime = await createRuntime({backend: {mode: 'mock'}});
-  try {
-    await runtime.images.createImage({id: 'app'});
-    await installSymmetricSmalltalkStandardImage({
-      images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane: 'wasm',
-    });
-    return await body(runtime);
-  } finally {
-    await runtime.close();
-  }
+  return await withForkedStandardImage({lane: 'wasm', imageId: 'app'}, (runtime) => body(runtime));
 }
 
 const extensionManifest = (body) => manifest({methods: [{
