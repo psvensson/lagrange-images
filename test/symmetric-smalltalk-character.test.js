@@ -21,30 +21,14 @@ import {
   installSmalltalkKernel,
   installSmalltalkIntegerProtocol,
   installSymmetricSmalltalkBlock,
-  installSymmetricSmalltalkStandardImage,
   installWasmBlockTree,
   integerValue,
   objectRef,
   parseSymmetricSmalltalk,
   tokenizeSymmetricSmalltalk,
 } from '../src/runtime.js';
+import {withStandardImage} from './support/standard-image-fixture.js';
 import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
-
-async function withRuntime(body) {
-  const runtime = await createRuntime({backend: {mode: 'mock'}});
-  try {
-    return await body(runtime);
-  } finally {
-    await runtime.close();
-  }
-}
-
-async function seed(runtime, imageId, {lane = 'neutral'} = {}) {
-  await runtime.images.createImage({id: imageId});
-  return await installSymmetricSmalltalkStandardImage({
-    images: runtime.images, compilation: runtime.compilation, imageId, lane,
-  });
-}
 
 async function evaluate(runtime, imageId, id, source, args = []) {
   const installed = await installSymmetricSmalltalkBlock({
@@ -133,8 +117,7 @@ test('semantic lowering names only the image-local Character interner and a code
 });
 
 test('direct provider-free native source answers canonical Characters distinct from Text and Integer', async () => {
-  await withRuntime(async (runtime) => {
-    const image = await seed(runtime, 'character');
+  await withStandardImage({lane: 'neutral', imageId: 'character'}, async (runtime, {installed: image}) => {
     const literal = await evaluate(runtime, 'character', 'literal', '[ $< ]');
     const indexed = await evaluate(runtime, 'character', 'indexed', "[ '<' at: 1 ]");
     assert.deepEqual(literal, indexed, 'literal and Text indexing answer the same image identity');
@@ -151,18 +134,17 @@ test('direct provider-free native source answers canonical Characters distinct f
 });
 
 test('non-ASCII and supplementary literals share canonical identity with Text indexing', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'unicode-character');
+  await withStandardImage({lane: 'neutral', imageId: 'character'}, async (runtime) => {
     assert.deepEqual(
-      await evaluate(runtime, 'unicode-character', 'lambda', "[ $λ == ('λ' at: 1) ]"),
+      await evaluate(runtime, 'character', 'lambda', "[ $λ == ('λ' at: 1) ]"),
       booleanValue(true),
     );
     assert.deepEqual(
-      await evaluate(runtime, 'unicode-character', 'supplementary', "[ $😀 == ('😀' at: 1) ]"),
+      await evaluate(runtime, 'character', 'supplementary', "[ $😀 == ('😀' at: 1) ]"),
       booleanValue(true),
     );
     await assert.rejects(
-      evaluate(runtime, 'unicode-character', 'supplementary-bound', "[ '😀' at: 2 ]"),
+      evaluate(runtime, 'character', 'supplementary-bound', "[ '😀' at: 2 ]"),
       /outside the 1\.\.1 range/,
     );
   });
@@ -170,13 +152,13 @@ test('non-ASCII and supplementary literals share canonical identity with Text in
 
 for (const lane of ['neutral', 'wasm']) {
   test(`Character codePoint exposes its existing canonical scalar in the ${lane} lane`, async () => {
-    await withRuntime(async (runtime) => {
-      await seed(runtime, `character-code-point-${lane}`, {lane});
+    const imageId = lane === 'neutral' ? 'character' : 'character-wasm';
+    await withStandardImage({lane, imageId}, async (runtime) => {
       for (const [glyph, scalar] of [['A', 65], ['λ', 955], ['😀', 128512]]) {
         assert.deepEqual(
           await evaluate(
             runtime,
-            `character-code-point-${lane}`,
+            imageId,
             `code-point-${scalar}-${lane}`,
             `[ $${glyph} codePoint ]`,
           ),
@@ -188,9 +170,8 @@ for (const lane of ['neutral', 'wasm']) {
   });
 
   test(`Character isSeparator is exactly the pinned seven-member relation in the ${lane} lane`, async () => {
-    await withRuntime(async (runtime) => {
-      const imageId = `character-separator-${lane}`;
-      await seed(runtime, imageId, {lane});
+    const imageId = lane === 'neutral' ? 'character' : 'character-wasm';
+    await withStandardImage({lane, imageId}, async (runtime) => {
       const positives = [32, 9, 10, 13, 12, 160, 8203];
       const negatives = [0, 11, 27, 65, 133, 8194, 8204, 128512];
       for (const [expected, scalars] of [[true, positives], [false, negatives]]) {
@@ -213,18 +194,17 @@ for (const lane of ['neutral', 'wasm']) {
 }
 
 test('direct class-scoped source [ ^ $< ] compiles and executes with no Cuis material', async () => {
-  await withRuntime(async (runtime) => {
-    const image = await seed(runtime, 'method-character');
+  await withStandardImage({lane: 'neutral', imageId: 'character'}, async (runtime, {installed: image}) => {
     await defineMethodsFromSource({
       images: runtime.images,
       compilation: runtime.compilation,
-      imageId: 'method-character',
+      imageId: 'character',
       lane: 'wasm',
       classRef: image.kernel.objectClass,
       methods: [{selector: 'literalLessThan', source: '[ ^ $< ]'}],
     });
     assert.deepEqual(
-      await evaluate(runtime, 'method-character', 'call-method', '[ 1 literalLessThan == $< ]'),
+      await evaluate(runtime, 'character', 'call-method', '[ 1 literalLessThan == $< ]'),
       booleanValue(true),
     );
     assert.deepEqual(runtime.foreignRuntimeProviders.list(), []);
@@ -233,22 +213,21 @@ test('direct class-scoped source [ ^ $< ] compiles and executes with no Cuis mat
 });
 
 test('Character literals and Text production agree across neutral and WASM execution', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'character-lanes', {lane: 'wasm'});
+  await withStandardImage({lane: 'wasm', imageId: 'character-wasm'}, async (runtime) => {
     const source = "[ $😀 = ('😀' at: 1) ]";
-    const neutral = await evaluate(runtime, 'character-lanes', 'character-neutral', source);
+    const neutral = await evaluate(runtime, 'character-wasm', 'character-neutral', source);
     const installed = await installSymmetricSmalltalkBlock({
-      images: runtime.images, imageId: 'character-lanes', id: 'character-wasm', source,
+      images: runtime.images, imageId: 'character-wasm', id: 'character-wasm', source,
     });
     const tree = await installWasmBlockTree({
       images: runtime.images,
       compilation: runtime.compilation,
-      semanticRef: objectRef('character-lanes', installed.semanticArtifact.id),
+      semanticRef: objectRef('character-wasm', installed.semanticArtifact.id),
       id: 'character-wasm:tree',
       environment: installed.block.environment,
     });
     const wasm = await runtime.executor.execute(
-      await runtime.invocations.invokeBlock(objectRef('character-lanes', tree.block.id), []),
+      await runtime.invocations.invokeBlock(objectRef('character-wasm', tree.block.id), []),
     );
     assert.deepEqual(neutral, booleanValue(true));
     assert.deepEqual(wasm, neutral);
