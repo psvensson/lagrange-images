@@ -3,14 +3,13 @@ import assert from 'node:assert/strict';
 import {
   booleanValue,
   bytesValue,
-  createRuntime,
   installSymmetricSmalltalkBlock,
-  installSymmetricSmalltalkStandardImage,
   installWasmBlockTree,
   integerValue,
   objectRef,
   textValue,
 } from '../src/runtime.js';
+import {withStandardImage} from './support/standard-image-fixture.js';
 
 // WS3 Text/ByteArray slice: the general Text/ByteArray + UTF-8 protocol over the
 // native immutable Value representations.
@@ -33,22 +32,6 @@ import {
 // neutral/WASM agreement; no concrete image ref in the Text/bytes data and no
 // new generic Value kind.
 
-async function withRuntime(body) {
-  const runtime = await createRuntime({backend: {mode: 'mock'}});
-  try {
-    return await body(runtime);
-  } finally {
-    await runtime.close();
-  }
-}
-
-async function seed(runtime, imageId, {lane = 'neutral'} = {}) {
-  await runtime.images.createImage({id: imageId});
-  return await installSymmetricSmalltalkStandardImage({
-    images: runtime.images, compilation: runtime.compilation, imageId, lane,
-  });
-}
-
 async function evaluate(runtime, imageId, id, source, args = []) {
   const installed = await installSymmetricSmalltalkBlock({images: runtime.images, imageId, id, source});
   const activation = await runtime.invocations.invokeBlock(objectRef(imageId, installed.block.id), args);
@@ -58,15 +41,13 @@ async function evaluate(runtime, imageId, id, source, args = []) {
 // --- utf8Bytes: Text -> bytes ------------------------------------------------------------------
 
 test('empty Text encodes to an empty ByteArray', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb');
+  await withStandardImage({lane: 'neutral', imageId: 'tb'}, async (runtime) => {
     assert.deepEqual(await evaluate(runtime, 'tb', 'e-size', `[ '' utf8Bytes size ]`), integerValue(0));
   });
 });
 
 test('ASCII Text encodes to exact UTF-8 bytes', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb');
+  await withStandardImage({lane: 'neutral', imageId: 'tb'}, async (runtime) => {
     // "hi" -> 0x68 0x69
     assert.deepEqual(await evaluate(runtime, 'tb', 'a-size', `[ 'hi' utf8Bytes size ]`), integerValue(2));
     assert.deepEqual(await evaluate(runtime, 'tb', 'a-1', `[ ('hi' utf8Bytes) at: 1 ]`), integerValue(104));
@@ -75,8 +56,7 @@ test('ASCII Text encodes to exact UTF-8 bytes', async () => {
 });
 
 test('a 2-byte code point encodes to exact UTF-8 bytes', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb');
+  await withStandardImage({lane: 'neutral', imageId: 'tb'}, async (runtime) => {
     // U+00E9 "é" -> 0xC3 0xA9
     assert.deepEqual(await evaluate(runtime, 'tb', 'b-size', `[ 'é' utf8Bytes size ]`), integerValue(2));
     assert.deepEqual(await evaluate(runtime, 'tb', 'b-1', `[ ('é' utf8Bytes) at: 1 ]`), integerValue(195));
@@ -85,8 +65,7 @@ test('a 2-byte code point encodes to exact UTF-8 bytes', async () => {
 });
 
 test('a 3-byte code point encodes to exact UTF-8 bytes', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb');
+  await withStandardImage({lane: 'neutral', imageId: 'tb'}, async (runtime) => {
     // U+20AC "€" -> 0xE2 0x82 0xAC
     assert.deepEqual(await evaluate(runtime, 'tb', 'c-size', `[ '€' utf8Bytes size ]`), integerValue(3));
     assert.deepEqual(await evaluate(runtime, 'tb', 'c-1', `[ ('€' utf8Bytes) at: 1 ]`), integerValue(226));
@@ -96,8 +75,7 @@ test('a 3-byte code point encodes to exact UTF-8 bytes', async () => {
 });
 
 test('a 4-byte code point encodes to exact UTF-8 bytes', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb');
+  await withStandardImage({lane: 'neutral', imageId: 'tb'}, async (runtime) => {
     // U+1F600 "😀" -> 0xF0 0x9F 0x98 0x80
     assert.deepEqual(await evaluate(runtime, 'tb', 'd-size', `[ '😀' utf8Bytes size ]`), integerValue(4));
     assert.deepEqual(await evaluate(runtime, 'tb', 'd-1', `[ ('😀' utf8Bytes) at: 1 ]`), integerValue(240));
@@ -106,8 +84,7 @@ test('a 4-byte code point encodes to exact UTF-8 bytes', async () => {
 });
 
 test('the private scalar codec shares the UTF-8 owner and refuses non-scalars', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'scalar-codec');
+  await withStandardImage({lane: 'neutral', imageId: 'scalar-codec'}, async (runtime) => {
     const invoke = async (value) => await runtime.executor.execute(await runtime.invocations.invokeBlock(
       objectRef('scalar-codec', 'smalltalk/primitive/unicode-scalar-utf8-bytes'), [value],
     ));
@@ -121,8 +98,7 @@ test('the private scalar codec shares the UTF-8 owner and refuses non-scalars', 
 });
 
 test('utf8Bytes answers the exact native bytes Value, with no image ref', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb');
+  await withStandardImage({lane: 'neutral', imageId: 'tb'}, async (runtime) => {
     // The result IS a native bytes Value — not a ref into the image, not an Array.
     const encoded = await evaluate(runtime, 'tb', 'raw', `[ 'hi' utf8Bytes ]`);
     assert.deepEqual(encoded, bytesValue(new Uint8Array([104, 105])));
@@ -133,8 +109,7 @@ test('utf8Bytes answers the exact native bytes Value, with no image ref', async 
 // --- utf8Text: bytes -> Text -------------------------------------------------------------------
 
 test('utf8Text decodes a ByteArray back to the original Text (mixed round-trip)', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb');
+  await withStandardImage({lane: 'neutral', imageId: 'tb'}, async (runtime) => {
     const source = 'aé€😀z'; // ASCII + 2/3/4-byte code points
     assert.deepEqual(
       await evaluate(runtime, 'tb', 'rt', `[ :t | (t utf8Bytes) utf8Text = t ]`, [textValue(source)]),
@@ -148,8 +123,7 @@ test('utf8Text decodes a ByteArray back to the original Text (mixed round-trip)'
 });
 
 test('malformed UTF-8 decode is explicitly refused', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb');
+  await withStandardImage({lane: 'neutral', imageId: 'tb'}, async (runtime) => {
     // 0xC3 alone is a truncated 2-byte lead; 0xFF is never valid UTF-8. Both must
     // be refused, never lossy-decoded to U+FFFD.
     await assert.rejects(
@@ -169,8 +143,7 @@ test('malformed UTF-8 decode is explicitly refused', async () => {
 });
 
 test('a Text Value containing a lone surrogate is refused, not silently replaced', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb');
+  await withStandardImage({lane: 'neutral', imageId: 'tb'}, async (runtime) => {
     // A lone high surrogate is ill-formed Unicode scalar data: no valid UTF-8
     // exists, so encode refuses rather than emitting a replacement char.
     const lone = textValue(`lone${String.fromCharCode(0xd800)}surrogate`);
@@ -184,8 +157,7 @@ test('a Text Value containing a lone surrogate is refused, not silently replaced
 // --- ByteArray>>size / at: ----------------------------------------------------------------------
 
 test('ByteArray>>size answers the byte count and at: is 1-based', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb');
+  await withStandardImage({lane: 'neutral', imageId: 'tb'}, async (runtime) => {
     const bytes = bytesValue(new Uint8Array([10, 20, 30]));
     assert.deepEqual(await evaluate(runtime, 'tb', 's-size', `[ :b | b size ]`, [bytes]), integerValue(3));
     assert.deepEqual(await evaluate(runtime, 'tb', 's-1', `[ :b | b at: 1 ]`, [bytes]), integerValue(10));
@@ -199,8 +171,7 @@ test('ByteArray>>size answers the byte count and at: is 1-based', async () => {
 // --- ByteArray class>>fromArray: -----------------------------------------------------------------
 
 test('fromArray: converts an integer Array buffer, validating every element 0..255', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb');
+  await withStandardImage({lane: 'neutral', imageId: 'tb'}, async (runtime) => {
     const build = (tail) => `[ | a | a := Array new: 3. a at: 1 put: 104. a at: 2 put: 105. a at: 3 put: 33. ${tail} ]`;
     assert.deepEqual(
       await evaluate(runtime, 'tb', 'fa-bytes', build('ByteArray fromArray: a')),
@@ -231,8 +202,7 @@ test('fromArray: converts an integer Array buffer, validating every element 0..2
 // --- lanes agree -----------------------------------------------------------------------------------
 
 test('Text/ByteArray UTF-8 agrees across neutral and WASM lanes', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'tb-w', {lane: 'wasm'});
+  await withStandardImage({lane: 'wasm', imageId: 'tb-w'}, async (runtime) => {
     const run = async (id, source, args) => {
       const installed = await installSymmetricSmalltalkBlock({
         images: runtime.images, imageId: 'tb-w', id, source,
