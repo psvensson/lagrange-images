@@ -2,9 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   booleanValue,
-  createRuntime,
   installSymmetricSmalltalkBlock,
-  installSymmetricSmalltalkStandardImage,
   installWasmBlockTree,
   integerValue,
   objectRef,
@@ -12,6 +10,7 @@ import {
   compileSymmetricSmalltalkBlock,
   textValue,
 } from '../src/runtime.js';
+import {withStandardImage} from './support/standard-image-fixture.js';
 
 // The empty literal Array `#()` — a general Smalltalk literal facility, demanded
 // by the authentic upstream MessagePack RED (`MpDecoder>>createArray:` =
@@ -24,22 +23,6 @@ import {
 // YAXO's unchanged XMLTokenizer class>>initialize now demands literal elements (x4i).
 // They compose this same allocation with ordered native at:put: sends.
 
-async function withRuntime(body) {
-  const runtime = await createRuntime({backend: {mode: 'mock'}});
-  try {
-    return await body(runtime);
-  } finally {
-    await runtime.close();
-  }
-}
-
-async function seed(runtime, imageId, {lane = 'neutral'} = {}) {
-  await runtime.images.createImage({id: imageId});
-  return await installSymmetricSmalltalkStandardImage({
-    images: runtime.images, compilation: runtime.compilation, imageId, lane,
-  });
-}
-
 async function evaluate(runtime, imageId, id, source, args = []) {
   const installed = await installSymmetricSmalltalkBlock({images: runtime.images, imageId, id, source});
   const activation = await runtime.invocations.invokeBlock(objectRef(imageId, installed.block.id), args);
@@ -47,8 +30,7 @@ async function evaluate(runtime, imageId, id, source, args = []) {
 }
 
 test('#() evaluates to an empty Array', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'lit');
+  await withStandardImage({lane: 'neutral', imageId: 'lit'}, async (runtime) => {
     assert.deepEqual(await evaluate(runtime, 'lit', 'size', '[ #() size ]'), integerValue(0));
     assert.deepEqual(
       await evaluate(runtime, 'lit', 'class', '[ #() class == Array ]'), booleanValue(true),
@@ -57,30 +39,27 @@ test('#() evaluates to an empty Array', async () => {
 });
 
 test('two evaluations of #() are equal empty Arrays with no baked ref', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'lit2');
+  await withStandardImage({lane: 'neutral', imageId: 'lit'}, async (runtime) => {
     // Each evaluation allocates a fresh Array — they are distinct objects but
     // equal in size, and neither is a pre-baked image-local reference.
-    assert.deepEqual(await evaluate(runtime, 'lit2', 'eq', '[ #() size = #() size ]'), booleanValue(true));
+    assert.deepEqual(await evaluate(runtime, 'lit', 'eq', '[ #() size = #() size ]'), booleanValue(true));
     assert.deepEqual(
-      await evaluate(runtime, 'lit2', 'not-identical', '[ #() == #() ]'), booleanValue(false),
+      await evaluate(runtime, 'lit', 'not-identical', '[ #() == #() ]'), booleanValue(false),
     );
   });
 });
 
 test('#() works after re-entering the executor over the same image', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'lit3');
-    assert.deepEqual(await evaluate(runtime, 'lit3', 'first', '[ #() size ]'), integerValue(0));
+  await withStandardImage({lane: 'neutral', imageId: 'lit'}, async (runtime) => {
+    assert.deepEqual(await evaluate(runtime, 'lit', 'first', '[ #() size ]'), integerValue(0));
     // A fresh executor entry over the same durable image compiles and runs the
     // same literal identically.
-    assert.deepEqual(await evaluate(runtime, 'lit3', 'second', '[ #() class == Array ]'), booleanValue(true));
+    assert.deepEqual(await evaluate(runtime, 'lit', 'second', '[ #() class == Array ]'), booleanValue(true));
   });
 });
 
 test('#() agrees across neutral and WASM lanes', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'lit-w', {lane: 'wasm'});
+  await withStandardImage({lane: 'wasm', imageId: 'lit-w'}, async (runtime) => {
     const run = async (id, source, args = []) => {
       const installed = await installSymmetricSmalltalkBlock({
         images: runtime.images, imageId: 'lit-w', id, source,
@@ -120,8 +99,7 @@ test('nonempty literal Arrays use existing v1 operations with distinct temporary
 });
 
 test('literal elements preserve order, type, nesting and separate evaluations in both lanes', async () => {
-  await withRuntime(async runtime => {
-    await seed(runtime, 'elements', {lane: 'wasm'});
+  await withStandardImage({lane: 'wasm', imageId: 'elements'}, async runtime => {
     let serial = 0;
     for (const lane of ['neutral', 'wasm']) {
       const run = async source => {
