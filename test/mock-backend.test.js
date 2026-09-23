@@ -62,3 +62,43 @@ test('a fork copies the whole state and is isolated in both directions', async (
     await backend.stop();
   }
 });
+
+// A transaction draft copies the committed state's STRUCTURE (buckets, event arrays) and shares
+// its stored values, which are never mutated in place: `put`/`append` store freshly built objects
+// and every read answers a clone. These are the two proofs that make the sharing legal — a
+// rolled-back draft leaves the committed state exactly as it was, and a value read inside a
+// transaction is a detached copy whose mutation reaches neither the draft nor the base.
+test('a rolled-back draft leaves committed records, versions and streams untouched, and reads are detached copies', async () => {
+  const backend = new MockBackend();
+  await backend.start();
+  try {
+    await backend.put('things', 'one', {value: {nested: 1}}, {expectedVersion: 0});
+    await backend.append('events', {happened: 'first'});
+    const recordBefore = await backend.get('things', 'one');
+    const streamBefore = await backend.readStream('events');
+
+    await assert.rejects(backend.transaction(async (transaction) => {
+      const read = await transaction.get('things', 'one');
+      read.value.nested = 99;
+      assert.deepEqual(await transaction.get('things', 'one'), recordBefore, 'a read is a detached copy');
+      await transaction.put('things', 'one', {value: {nested: 2}}, {expectedVersion: 1});
+      await transaction.put('things', 'two', {value: 2}, {expectedVersion: 0});
+      await transaction.append('events', {happened: 'second'});
+      assert.equal((await transaction.get('things', 'one'))._version, 2, 'the draft sees its own write');
+      assert.equal(await transaction.streamHead('events'), 2, 'the draft sees its own append');
+      throw new Error('abandon this draft');
+    }), /abandon this draft/);
+
+    assert.deepEqual(await backend.get('things', 'one'), recordBefore, 'the committed record is untouched');
+    assert.equal(await backend.get('things', 'two'), undefined, 'the draft-only record never landed');
+    assert.deepEqual(await backend.scan('things'), [{key: 'one', value: recordBefore}]);
+    assert.deepEqual(await backend.readStream('events'), streamBefore, 'the committed stream is untouched');
+    assert.equal(await backend.streamHead('events'), 1);
+
+    // The base still commits normally afterwards, from the untouched version.
+    await backend.put('things', 'one', {value: {nested: 3}}, {expectedVersion: 1});
+    assert.equal((await backend.get('things', 'one'))._version, 2);
+  } finally {
+    await backend.stop();
+  }
+});
