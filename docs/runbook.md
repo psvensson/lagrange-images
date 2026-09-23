@@ -110,13 +110,28 @@ OpenSmalltalkVM, a real Lagrange backend and a real Cargo/rustc container — th
 prove the foreign boundaries actually work. They skip silently when their environment is absent, so
 a green `npm test` is **not** evidence that the foreign lanes are healthy.
 
-| Gated test | Environment | Proves |
-| --- | --- | --- |
-| `test/opensmalltalk-cuis-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | live Cuis image through `ForeignRuntimeService` |
-| `test/opensmalltalk-cuis-toolchain-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | Cuis toolchain build + mixed Lagrange-WASM program |
-| `test/mixed-language-project-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | one durable Project spanning native Smalltalk, a live Cuis VM and a real Rust Component, captured/installed/recovered |
-| `test/lagrange-backend-real.test.js` | `LAGRANGE_IMAGES_REAL_LAGRANGE=1` | schema and atomic transactions on real Lagrange |
-| `test/cargo-rustc-oci-real.test.js` | `LAGRANGE_CARGO_OCI_INTEGRATION=1` | real Cargo/rustc in a digest-pinned image, closed inputs, executable output |
+| Gated test | Environment | CI lane | Proves |
+| --- | --- | --- | --- |
+| `test/opensmalltalk-cuis-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | opensmalltalk-cuis-integration | live Cuis image through `ForeignRuntimeService` |
+| `test/opensmalltalk-cuis-toolchain-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | opensmalltalk-cuis-integration | Cuis toolchain build + mixed Lagrange-WASM program |
+| `test/opensmalltalk-cuis-multipackage-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | opensmalltalk-cuis-integration | the six-package upstream cluster with its real `!requires:` DAG |
+| `test/opensmalltalk-cuis-semantic-export-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | opensmalltalk-cuis-integration | deterministic `smalltalk/cuis-semantic-export-v1`/`v2` and the M1/M2 two-runtime native import |
+| `test/cuis-export-materialize-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | opensmalltalk-cuis-integration | canonical export materialized into ordinary objects |
+| `test/cuis-json-native-import-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | opensmalltalk-cuis-integration | the M3 forcing harness: `Json render:` natively with Cuis gone |
+| `test/cuis-yaxo-native-import-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | opensmalltalk-cuis-integration | the M4 acceptance: a native YAXO application graph, durable and restartable |
+| `test/cuis-life-project-release-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | opensmalltalk-cuis-integration | M5.1: the Life package closure captured as a managed, replay-safe Project release from the real toolchain |
+| `test/two-lane-callable-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | opensmalltalk-cuis-integration | one callable interface satisfied by a real Rust Component and a live Cuis image |
+| `test/mixed-language-project-real.test.js` | `LAGRANGE_OPENSMALLTALK_INTEGRATION=1` | opensmalltalk-cuis-integration | one durable Project spanning native Smalltalk, a live Cuis VM and a real Rust Component, captured/installed/recovered |
+| `test/lagrange-backend-real.test.js` | `LAGRANGE_IMAGES_REAL_LAGRANGE=1` | lagrange-backend-integration | schema and atomic transactions on real Lagrange |
+| `test/cargo-rustc-oci-real.test.js` | `LAGRANGE_CARGO_OCI_INTEGRATION=1` | cargo-rustc-oci-integration | real Cargo/rustc in a digest-pinned image, closed inputs, executable output |
+| `test/common-lisp-sbcl-real.test.js` | `LAGRANGE_SBCL_INTEGRATION=1` | common-lisp-integration | real SBCL through the unchanged generic foreign-runtime contracts (ADR 0084) |
+
+Every file in this table is listed in `package.json`'s `test:integration` command or named directly
+by its workflow job, and `scripts/ci-proof.mjs` carries the same list as `REAL_TEST_FILES`;
+`test/ci-proof.test.js` checks that each entry has an always-running real lane. A new env-gated
+file that is not added to both is a proof that never runs: the M5.1 Life release test sat outside
+the integration file list from PR #295 until this table was completed, and its only trace in a
+merge run was a skip in the ordinary lane.
 
 If you changed anything under `src/foreign-runtime/`, `src/wasm/`, `src/toolchain/` or
 `src/backend/`, run the matching real proof before claiming the change works.
