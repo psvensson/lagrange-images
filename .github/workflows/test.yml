@@ -101,10 +101,15 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
+      # The pinned public Lagrange: the v0.2.5 release commit (2026-09-13), the first 0.2 release that
+      # shipped. The previous pin (cd6f6d5, 2026-08-15, the commit that added embedded application
+      # database sessions) was 641 commits behind it; the adapter still uses only the public
+      # `createEmbeddedLagrange` -> `start` -> `openApplicationDatabase` -> `query`/`transaction`
+      # path, which this lane proves against the pin.
       - uses: actions/checkout@v7
         with:
           repository: psvensson/lagrange
-          ref: cd6f6d5251cc41d1a49d928c36ed6727037f5deb
+          ref: 0d66b0cb67e7778500e33e65dcd9155163070458
           path: .integration/lagrange
       - uses: actions/setup-node@v7
         with:
