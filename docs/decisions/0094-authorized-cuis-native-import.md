@@ -84,8 +84,8 @@ declarations as admitted again. The seam's success value is `{imported, admitted
 
 ### 5. Publication
 
-`authorizedImportCuisPackage` is re-exported by name from `src/runtime.js` and, once the portable
-execution surface (bead `lagrange-images-hygu`) is on main, from `src/portable-runtime.js`. The
+`authorizedImportCuisPackage` is re-exported by name from `src/runtime.js` and from the portable
+root `src/portable-runtime.js` (the portable execution surface, bead `lagrange-images-hygu`). The
 module is deliberately NOT in `src/language/index.js`: that barrel is `export *` and would publish
 the seam's internal error classes; consumers discriminate by `error.name`.
 
