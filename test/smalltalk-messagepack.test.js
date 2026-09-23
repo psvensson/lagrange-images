@@ -1,14 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createRuntime,
   installSymmetricSmalltalkBlock,
-  installSymmetricSmalltalkStandardImage,
   booleanValue,
   integerValue,
   objectRef,
   textValue,
 } from '../src/runtime.js';
+import {withStandardImage} from './support/standard-image-fixture.js';
 import {isObjectRef} from '../src/value/index.js';
 
 // WS3 prereq C: MessagePack encode/decode vertical slice.
@@ -26,25 +25,6 @@ import {isObjectRef} from '../src/value/index.js';
 //   uint16:           0xcd         (then 2 bytes BE)
 //   nil:              0xc0
 
-async function withRuntime(body) {
-  const runtime = await createRuntime({backend: {mode: 'mock'}});
-  try {
-    return await body(runtime);
-  } finally {
-    await runtime.close();
-  }
-}
-
-async function seed(runtime, imageId, {lane = 'neutral'} = {}) {
-  await runtime.images.createImage({id: imageId});
-  await installSymmetricSmalltalkStandardImage({
-    images: runtime.images,
-    compilation: runtime.compilation,
-    imageId,
-    lane,
-  });
-}
-
 async function evaluate(runtime, imageId, id, source, args = []) {
   const installed = await installSymmetricSmalltalkBlock({images: runtime.images, imageId, id, source});
   const activation = await runtime.invocations.invokeBlock(objectRef(imageId, installed.block.id), args);
@@ -60,8 +40,7 @@ async function kernelNilOf(runtime, imageId) {
 // --- vertical slice: encode a positive fixint ------------------------------------------------------
 
 test('MessagePack encode: positive fixint 42 produces byte 42', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // The simplest possible MessagePack encode: a positive fixint is its own byte.
     // This exercises: integer literal, comparison, OrderedCollection as a byte accumulator.
     const result = await evaluate(runtime, 'app', 'mp-int', `[ | bytes value |
@@ -74,8 +53,7 @@ test('MessagePack encode: positive fixint 42 produces byte 42', async () => {
 });
 
 test('MessagePack encode: positive fixint byte value is correct', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     const result = await evaluate(runtime, 'app', 'mp-byte', `[ | bytes value |
       value := 42.
       bytes := OrderedCollection new.
@@ -88,8 +66,7 @@ test('MessagePack encode: positive fixint byte value is correct', async () => {
 // --- vertical slice: encode a uint8 (>127) ---------------------------------------------------------
 
 test('MessagePack encode: uint8 200 produces bytes 0xCC 200', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // 200 > 127, so it needs the uint8 form: 0xCC then the byte value.
     const result = await evaluate(runtime, 'app', 'mp-uint8', `[ | bytes value |
       value := 200.
@@ -104,8 +81,7 @@ test('MessagePack encode: uint8 200 produces bytes 0xCC 200', async () => {
 // --- vertical slice: encode a small string ---------------------------------------------------------
 
 test('MessagePack encode: fixstr "hi" produces bytes 0xA2 104 105', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // fixstr: 0xa0 + length, then UTF-8 bytes.
     // "hi" = [104, 105], length 2, so header is 0xa0 + 2 = 0xa2.
     // This needs: string length, integer addition, OrderedCollection accumulation.
@@ -123,8 +99,7 @@ test('MessagePack encode: fixstr "hi" produces bytes 0xA2 104 105', async () => 
 // --- census: what protocol does MessagePack actually need? ------------------------------------------
 
 test('census: OrderedCollection supports the accumulator pattern MessagePack needs', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // MessagePack encoding accumulates bytes into an ordered collection, then reads
     // them back as a flat byte sequence. Prove the accumulator round-trip works.
     const result = await evaluate(runtime, 'app', 'census-oc', `[ | bytes |
@@ -149,8 +124,7 @@ test('census: OrderedCollection supports the accumulator pattern MessagePack nee
 });
 
 test('census: bitwise primitives support MessagePack header construction', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // fixstr header: 0xa0 bitOr: length
     assert.deepEqual(
       await evaluate(runtime, 'app', 'census-fixstr', '[ 16rA0 bitOr: 2 ]'),
@@ -175,8 +149,7 @@ test('census: bitwise primitives support MessagePack header construction', async
 });
 
 test('census: integer comparison and between:and: support MessagePack type dispatch', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // Positive fixint range: 0-127
     assert.deepEqual(
       await evaluate(runtime, 'app', 'census-fixint', '[ 42 between: 0 and: 127 ]'),
@@ -196,8 +169,7 @@ test('census: integer comparison and between:and: support MessagePack type dispa
 });
 
 test('census: perform: dispatches type-mapped encoding methods', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // MessagePack's MpTypeMapper uses perform: to dispatch to #writeInteger:, #writeArray: etc.
     // Prove that the Symbol + perform: machinery works for this pattern.
     const result = await evaluate(runtime, 'app', 'census-perform', `[ | mapper |
@@ -212,8 +184,7 @@ test('census: perform: dispatches type-mapped encoding methods', async () => {
 // --- deeper vertical slice: full encode of a small structure ---------------------------------------
 
 test('MessagePack encode: [1, 2, 3] as fixarray of fixints', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // [1, 2, 3] encodes as: fixarray header (0x93), then three fixint bytes (1, 2, 3).
     // This exercises: fixarray header construction, iteration, byte accumulation.
     const result = await evaluate(runtime, 'app', 'mp-arr', `[ | bytes |
@@ -233,8 +204,7 @@ test('MessagePack encode: [1, 2, 3] as fixarray of fixints', async () => {
 });
 
 test('MessagePack encode: {"a": 1} as fixmap with fixstr key and fixint value', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // {"a": 1} encodes as: fixmap header (0x81), fixstr "a" (0xA1, 97), fixint 1 (1).
     const result = await evaluate(runtime, 'app', 'mp-map', `[ | bytes |
       bytes := OrderedCollection new.
@@ -263,8 +233,7 @@ test('MessagePack encode: {"a": 1} as fixmap with fixstr key and fixint value', 
 });
 
 test('MessagePack encode: uint16 big-endian byte extraction', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // 300 needs uint16: 0xCD, then 0x01, 0x2C (big-endian).
     // (300 >> 8) bitAnd: 16rFF = 1; 300 bitAnd: 16rFF = 44 = 0x2C
     const hi = await evaluate(runtime, 'app', 'mp-u16-hi', '[ (300 >> 8) bitAnd: 16rFF ]');
@@ -275,8 +244,7 @@ test('MessagePack encode: uint16 big-endian byte extraction', async () => {
 });
 
 test('MessagePack decode: fixint byte 42 reads back as integer 42', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // Simplest decode: if the byte is <= 0x7F, it IS the value.
     const result = await evaluate(runtime, 'app', 'mp-dec', `[ | byte value |
       byte := 42.
@@ -287,8 +255,7 @@ test('MessagePack decode: fixint byte 42 reads back as integer 42', async () => 
 });
 
 test('MessagePack decode: uint8 header 0xCC then byte 200 reads back as 200', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // Decode: 0xCC means read the next byte as uint8.
     const result = await evaluate(runtime, 'app', 'mp-dec-u8', `[ | header value |
       header := 16rCC.
@@ -307,8 +274,7 @@ test('MessagePack decode: uint8 header 0xCC then byte 200 reads back as 200', as
 // the only form the forcing consumers use — observe exactly those answers.
 
 test('ifNil:ifNotNil: takes the nil arm with a nil receiver', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // nil arm evaluates its block and answers its value.
     const result = await evaluate(runtime, 'app', 'ifnilifnotnil-nil', '[ nil ifNil: [ 42 ] ifNotNil: [ 99 ] ]');
     assert.deepEqual(result, integerValue(42));
@@ -325,8 +291,7 @@ test('ifNil:ifNotNil: takes the nil arm with a nil receiver', async () => {
 });
 
 test('ifNil:ifNotNil: takes the guard arm and answers its block with a non-nil receiver', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // Non-nil: the nil arm is never evaluated, the guard block answers.
     const result = await evaluate(runtime, 'app', 'ifnilifnotnil-non', '[ 7 ifNil: [ 42 ] ifNotNil: [ 99 ] ]');
     assert.deepEqual(result, integerValue(99));
@@ -342,8 +307,7 @@ test('ifNil:ifNotNil: takes the guard arm and answers its block with a non-nil r
 });
 
 test('ifNil: and ifNotNil: are available as general Smalltalk protocol', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // ifNil: on nil evaluates the block
     const nilResult = await evaluate(runtime, 'app', 'ifnil-nil', '[ nil ifNil: [ 42 ] ]');
     assert.deepEqual(nilResult, integerValue(42));
@@ -365,8 +329,7 @@ test('ifNil: and ifNotNil: are available as general Smalltalk protocol', async (
 // --- MessagePack lazy singleton with ifNil: ----------------------------------------------------------
 
 test('MessagePack-style class>>default using ifNil:', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     const kernel = await import('../src/language/smalltalk-kernel.js').then(m =>
       m.findSmalltalkKernel({images: runtime.images, imageId: 'app'}));
 
