@@ -414,7 +414,10 @@ A package/Project UI is not part of this layer; portable artifact and Project re
 
 ## 6. Execution, authority and distribution
 
-M6 depends on the generic distribution owners, not on language-specific routing:
+M6 depends on the generic distribution owners, not on language-specific routing. ADR 0092 names
+them — the object locator (residency, whole-image first), a separate placement policy owner, and
+remote resolution as an interaction owner over Lagrange's routing — and fixes that Images never owns
+transport, membership, replication or consensus:
 
 - [ ] object locator and placement policy;
 - [ ] local vs remote call semantics;
