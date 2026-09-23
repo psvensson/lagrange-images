@@ -1,5 +1,6 @@
 import {ensureBlock, ensureCodeArtifact} from '../graph/ensure-records.js';
 import {uuid as randomUUID} from '../support/default-crypto.js';
+import {base64urlEncode, utf8Encode} from '../support/portable-bytes.js';
 import {
   LAGRANGE_CODE_V0,
   normalizeLagrangeCodeProgram,
@@ -66,7 +67,7 @@ function directNestedBlocks(expression, result = []) {
 
 function blockKey(blockId) {
   if (typeof blockId !== 'string' || blockId.length === 0) throw new TypeError('semantic block id must be non-empty text');
-  return Buffer.from(blockId, 'utf8').toString('base64url');
+  return base64urlEncode(utf8Encode(blockId));
 }
 
 function preflightProgram(program) {

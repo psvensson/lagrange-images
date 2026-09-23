@@ -13,9 +13,10 @@
 // this root simply (a) imports the narrow registry/service owners directly instead
 // of the broad `foreign-runtime`/`toolchain`/`wasm` barrels that also export
 // host-specific process/OCI providers, and (b) composes only the portable-relevant
-// lanes (image create/read/mutate/observe, neutral expression, the Smalltalk
-// kernel), leaving foreign-runtime/toolchain/WASM-component executors to the Node
-// root that actually has those hosts.
+// lanes (image create/read/mutate/observe, neutral expression, the image-native
+// WASM function lane, image-native compilation, the Smalltalk kernel), leaving
+// foreign-runtime/toolchain/WASM-component executors to the Node root that
+// actually has those hosts.
 //
 // CRYPTO. A portable host MUST install its synchronous crypto provider via
 // `setDefaultCryptoProvider(nativeProvider)` BEFORE calling `createPortableRuntime`
@@ -79,12 +80,28 @@ import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
   createSmalltalkKernelPrimitiveV1Executor,
 } from './language/smalltalk-primitives.js';
+// The image-native compilation owner and the WASM function lane (bead lagrange-images-hygu). Both
+// are imported from their owner modules, never from the `compilation`/`wasm` barrels: the wasm
+// barrel also re-exports the foreign-callable, Component and jco modules, which need Node.
+import {
+  CompilationService,
+  createDefaultCodeCompilerRegistry,
+  createDefaultCompilationGroupCompilerRegistry,
+} from './compilation/index.js';
+import {WASM_FUNCTION_V1, WASM_FUNCTION_V2} from './code/wasm-artifacts.js';
+import {createWasmFunctionV1Executor} from './wasm/function-executor.js';
 import {
   createSmalltalkTemporaryInitializer,
   findSmalltalkKernel,
   installSmalltalkKernel,
 } from './language/smalltalk-kernel.js';
-import {defineClass} from './language/smalltalk-class-builder.js';
+import {defineClass, ensureClassFromDeclaration} from './language/smalltalk-class-builder.js';
+import {defineMethodsFromSource} from './language/smalltalk-instance-variables.js';
+import {installSymmetricSmalltalkStandardImage} from './language/smalltalk-standard-image.js';
+import {resolveGlobal} from './language/smalltalk-globals.js';
+import {importCuisNativePackage} from './language/cuis-native-import.js';
+import {installManagedProjectRelease} from './project/managed-installation.js';
+import {readManagedProjectInstallation} from './project/installation-state.js';
 import {
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
@@ -120,10 +137,22 @@ import {
 // WASM-component and foreign-runtime executors, which require hosts a portable
 // runtime does not have. This is the portable-relevant subset of
 // `createDefaultCodeExecutorRegistry`, built from the same executor factories.
-function createPortableCodeExecutorRegistry({creationObjectIds, observationCrypto} = {}) {
+function createPortableCodeExecutorRegistry({
+  creationObjectIds, observationCrypto, wasmModuleCache, wasmInstancePool,
+} = {}) {
   const registry = new CodeExecutorRegistry();
   registry.register(NEUTRAL_EXPRESSION_V0, neutralExpressionV0Executor);
   registry.register(NEUTRAL_EXPRESSION_V1, neutralExpressionV1Executor);
+  // The image-native WASM lane: one executor for both durable function versions, dispatching on
+  // the MODULE's ABI (ADR 0082), exactly as `createDefaultCodeExecutorRegistry` registers it. It
+  // needs only the host's WebAssembly API. Every Cuis-imported method is installed in this lane,
+  // so without it a portable host could browse an imported application but never run it.
+  const wasmOptions = {};
+  if (wasmModuleCache !== undefined) wasmOptions.moduleCache = wasmModuleCache;
+  if (wasmInstancePool !== undefined) wasmOptions.instancePool = wasmInstancePool;
+  const wasmFunctionExecutor = createWasmFunctionV1Executor(wasmOptions);
+  registry.register(WASM_FUNCTION_V1, wasmFunctionExecutor);
+  registry.register(WASM_FUNCTION_V2, wasmFunctionExecutor);
   registry.register(IMAGE_PROJECTION_BINDING_V1, createImageProjectionBindingV1Executor());
   registry.register(IMAGE_MUTATION_BINDING_V1, createImageMutationBindingV1Executor());
   // ADR 0062. The creation lane mints object identity; injectable through the same
@@ -172,6 +201,25 @@ async function createRuntimeCore(options = {}, {registerExtraCodeExecutors} = {}
   const images = new ImageService({backend, clock: options.clock});
   const languages = createDefaultLanguagePlatform();
 
+  // Image-native compilation: the same default registries and the same embedder options the Node
+  // root honours. The compilation service is what turns semantic code into a `wasm-module/v2`, so
+  // it is what the standard image, Cuis import and the authorized method-replacement seam need.
+  const codeCompilers = createDefaultCodeCompilerRegistry();
+  for (const entry of options.codeCompilers ?? []) {
+    if (!Array.isArray(entry) || entry.length !== 3) {
+      throw new TypeError('codeCompilers entries must be [sourceRepresentation, targetRepresentation, compiler]');
+    }
+    codeCompilers.register(entry[0], entry[1], entry[2]);
+  }
+  const groupCompilers = createDefaultCompilationGroupCompilerRegistry();
+  for (const entry of options.groupCompilers ?? []) {
+    if (!Array.isArray(entry) || entry.length !== 3) {
+      throw new TypeError('groupCompilers entries must be [policyId, targetRepresentation, compiler]');
+    }
+    groupCompilers.register(entry[0], entry[1], entry[2]);
+  }
+  const compilation = new CompilationService({images, compilers: codeCompilers, groupCompilers});
+
   const dispatchers = new DispatchRegistry();
   for (const [languageId, dispatcher] of Object.entries(options.dispatchers ?? {})) {
     dispatchers.register(languageId, dispatcher);
@@ -184,6 +232,8 @@ async function createRuntimeCore(options = {}, {registerExtraCodeExecutors} = {}
   const codeExecutors = createPortableCodeExecutorRegistry({
     creationObjectIds: options.smalltalkObjectIds,
     observationCrypto: options.observationCrypto,
+    wasmModuleCache: options.wasmModuleCache,
+    wasmInstancePool: options.wasmInstancePool,
   });
   // The Node root registers its WASM-component/foreign-runtime executors here,
   // BEFORE the embedder's overrides and the default Smalltalk kernel primitive.
@@ -219,6 +269,9 @@ async function createRuntimeCore(options = {}, {registerExtraCodeExecutors} = {}
     backend,
     images,
     languages,
+    codeCompilers,
+    groupCompilers,
+    compilation,
     dispatchers,
     invocations,
     codeExecutors,
@@ -255,6 +308,18 @@ export {
   installSmalltalkKernel,
   findSmalltalkKernel,
   defineClass,
+  // The install/import owners a portable host needs to bring an application INTO an image and
+  // run it (bead lagrange-images-hygu; the Object Environment's E4-E6 vertical): the standard
+  // image, native class declaration and from-source method definition, the Cuis native-import
+  // adapter, the managed Project release install and its recovery read, and global-name
+  // resolution. Exact owner functions, re-exported by name from their owner modules.
+  installSymmetricSmalltalkStandardImage,
+  ensureClassFromDeclaration,
+  defineMethodsFromSource,
+  importCuisNativePackage,
+  installManagedProjectRelease,
+  readManagedProjectInstallation,
+  resolveGlobal,
   installCallableInterfaceV2,
   installImageCreationBinding,
   installImageMutationBinding,

@@ -1,4 +1,5 @@
 import {VersionConflictError} from './backend-contract.js';
+import {utf8DecodeLossy} from '../support/portable-bytes.js';
 import {
   LAGRANGE_IMAGE_SCHEMA,
   LAGRANGE_IMAGE_TABLES,
@@ -24,7 +25,9 @@ function encodePayload(value, field) {
 }
 
 function decodePayload(payload) {
-  const source = Buffer.isBuffer(payload) ? payload.toString('utf8') : payload;
+  // A Node Buffer is a Uint8Array, so the portable decoder covers it; the lossy decode keeps
+  // Buffer's own `toString('utf8')` substitution behaviour for the bytes a session may hand back.
+  const source = payload instanceof Uint8Array ? utf8DecodeLossy(payload) : payload;
   if (typeof source !== 'string') throw new TypeError('stored payload must be text');
   return JSON.parse(source);
 }
