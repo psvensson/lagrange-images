@@ -15,6 +15,21 @@ function cloneStreams(streams) {
   return new Map([...streams].map(([name, events]) => [name, clone(events)]));
 }
 
+// A transaction draft needs its own Map and array STRUCTURE, never its own copies of the stored
+// values: `putInto` and `appendTo` replace entries with freshly built objects and every read
+// answers a clone, so a stored value is never mutated in place and can be shared between the
+// committed state and a draft. A draft therefore copies buckets and event arrays shallowly. The
+// deep `cloneCollections`/`cloneStreams` above stay for `fork()`, which promises two independent
+// backends. Before this, every transaction deep-cloned the whole state, so one durable write cost
+// O(records) and a standard-image install was quadratic in its own size.
+function copyCollections(collections) {
+  return new Map([...collections].map(([name, bucket]) => [name, new Map(bucket)]));
+}
+
+function copyStreams(streams) {
+  return new Map([...streams].map(([name, events]) => [name, events.slice()]));
+}
+
 function getFrom(state, collection, key) {
   return clone(state.collections.get(collection)?.get(key));
 }
@@ -185,8 +200,8 @@ class MockBackend {
 
     return await this.exclusive(async () => {
       const draft = {
-        collections: cloneCollections(this.collections),
-        streams: cloneStreams(this.streams),
+        collections: copyCollections(this.collections),
+        streams: copyStreams(this.streams),
       };
       let active = true;
       const transaction = transactionView(draft, () => active);
