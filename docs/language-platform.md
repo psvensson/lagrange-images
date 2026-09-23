@@ -147,6 +147,12 @@ Smalltalk currently has two bodies of machinery with one convergence direction:
 
 Symmetric Smalltalk owns the native semantics: parser/compiler policy, lexical capture, message lookup, Behavior/Class/Metaclass, Shapes/slots, method dictionaries, allocation, class state, collections and conditions.
 
+It grows in three tiers with three growth rules (ADR 0093, [native-smalltalk.md](native-smalltalk.md)):
+kernel primitives only for host-sensitive semantics a real consumer reaches; native library classes
+and methods only with a named consumer's exact protocol, oracle-anchored when the consumer is Cuis
+code; and Cuis correspondence or translation entries only from a frozen measurement for an exact
+position or idiom. Under application pressure the tier is classified before the repair is written.
+
 That ownership includes Character syntax and runtime personality (ADR 0090). A direct `$x` literal
 and native `Text>>at:` both reach one image-local Character interner. Characters are canonical
 ordinary Smalltalk objects, distinct from Text and Integer, while the shared Value model and
