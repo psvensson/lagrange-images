@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
+import {collectStaticModuleClosure, findNodeGlobalUses} from '../src/portable-artifact/module-closure.js';
 import {createNodeSourceReader} from '../src/portable-artifact/node-source-reader.js';
 import {setDefaultCryptoProvider, resetDefaultCryptoProvider} from '../src/support/default-crypto.js';
 import {createNodeCryptoProvider} from '../src/support/node-crypto-provider.js';
@@ -45,8 +45,8 @@ function walkStaticClosure(entryLogicalPath) {
   return {
     visited: new Set(modules.map(({path}) => path)),
     offenders: violations
-      .filter(({reason}) => reason === 'node-builtin')
-      .map(({path, specifier}) => ({file: path, spec: specifier})),
+      .filter(({reason}) => reason === 'node-builtin' || reason === 'node-global')
+      .map(({path, specifier, reason}) => ({file: path, spec: specifier, reason})),
     violations,
     dynamic,
   };
@@ -60,6 +60,31 @@ test('STRUCTURAL: portable-runtime.js static closure contains no forbidden node:
     [],
     'the portable entrypoint must not statically reach any forbidden node:* module',
   );
+});
+
+test('STRUCTURAL: portable-runtime.js static closure uses no Node-only global', () => {
+  // A `node:*` import is not the only way to depend on Node: `Buffer`, `process`, `__dirname`
+  // and `__filename` are host globals that load fine here and throw on the first call anywhere
+  // else. Two WASM tree installers and the Lagrange payload decoder used `Buffer` that way while
+  // the import-only proof stayed green (bead lagrange-images-hygu).
+  const {offenders} = walkStaticClosure('src/portable-runtime.js');
+  assert.deepEqual(
+    offenders.filter(({reason}) => reason === 'node-global').map(({file, spec}) => `${spec} <- ${file}`),
+    [],
+    'the portable closure must not read a Node-only global',
+  );
+});
+
+test('STRUCTURAL is non-vacuous: the walker flags a Node-only global, not only a node:* import', () => {
+  // The jco Component runtime decodes with `Buffer.from` and imports no node:* module itself, so
+  // only the global rule can catch it; the scanner also has to see through comments, strings and
+  // the `typeof process` guard the backend loader uses on purpose.
+  const {offenders} = walkStaticClosure('src/wasm/jco-component-runtime.js');
+  assert.ok(offenders.some(({spec, reason, file}) => reason === 'node-global' && spec === 'Buffer' && file === 'src/wasm/jco-component-runtime.js'),
+    'walker catches Buffer in the jco Component runtime');
+  assert.deepEqual(findNodeGlobalUses('// Buffer in a comment\nconst message = "no Buffer here"; const b = `x ${Buffer.from(y)}`;'), ['Buffer']);
+  assert.deepEqual(findNodeGlobalUses("const mode = typeof process !== 'undefined' && process.env ? process.env.X : 'auto';"), []);
+  assert.deepEqual(findNodeGlobalUses('process.env.X; const {require} = context; require({operation});'), ['process']);
 });
 
 test('STRUCTURAL is non-vacuous: the SAME walker flags the broad-barrel Node-runtime shape', () => {

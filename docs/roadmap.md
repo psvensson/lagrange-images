@@ -354,6 +354,16 @@ of classes the package itself defines — which is what an M4 restart proof has 
 
 ### M6 — distribution without language rewrites
 
+M6.2 measured the first RED (bead `lagrange-images-0pxf.3`, `test/cuis-life-m6-two-node-red.test.js`):
+with the exact M5 Life installation on node B and an independent node A, the `cells` LifeArray
+instance the unchanged `nextState` path needs on every send cannot be placed on A through any
+existing owner — node A refuses the image scope (`image not found`), its object owner refuses the
+record's layout edge (`shape not found`), and no backend or image operation can release the record
+from B — and once the record is relocated as raw evidence the unchanged oracle fails on B at the
+receiver lookup (`Symmetric Smalltalk receiver not found`) while node A, holding the record alone,
+fails at the Behavior lookup. The missing owners are generic (residency, placement, remote
+resolution); ADR 0092 decides where they live before M6.3 repairs the first one.
+
 - [ ] run the same M5 application with application objects placed across Lagrange nodes;
 - [ ] keep placement/routing entirely out of the Cuis importer and application semantics;
 - [ ] prove generic Lagrange owners decide object location and execution placement;
@@ -414,7 +424,10 @@ A package/Project UI is not part of this layer; portable artifact and Project re
 
 ## 6. Execution, authority and distribution
 
-M6 depends on the generic distribution owners, not on language-specific routing:
+M6 depends on the generic distribution owners, not on language-specific routing. ADR 0092 names
+them — the object locator (residency, whole-image first), a separate placement policy owner, and
+remote resolution as an interaction owner over Lagrange's routing — and fixes that Images never owns
+transport, membership, replication or consensus:
 
 - [ ] object locator and placement policy;
 - [ ] local vs remote call semantics;

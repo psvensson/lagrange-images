@@ -64,6 +64,111 @@ function resolveLogicalPath(fromPath, specifier) {
   return out.length === 0 ? null : out.join('/');
 }
 
+// Host globals a portable module must not reach for: `Buffer`, `process` and the CommonJS path
+// globals exist in Node and nowhere else, and a module that uses one loads fine on Node and fails
+// on the first call on any other host — invisible to a proof that only looks at `node:*` imports.
+// Two WASM tree installers and the Lagrange backend's payload decoder did exactly that with
+// `Buffer` until this check existed (bead lagrange-images-hygu). The scan works on source with
+// comments and string literals removed, so a comment or an error message naming a global is not a
+// use; and a line that tests `typeof process` is the one sanctioned defensive read
+// (`create-backend.js` reads `LAGRANGE_BACKEND` only where a `process` global exists), so `process`
+// on such a line is not reported. CommonJS `require` is deliberately not in the list: this
+// repository is ESM only, and `require` is the name of the ADR 0037 authority check.
+const NODE_GLOBAL_RE = /\b(?:Buffer|process|__dirname|__filename)\b/g;
+
+function stripCommentsAndStrings(source) {
+  let out = '';
+  let index = 0;
+  const templateDepth = [];
+  while (index < source.length) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (char === '/' && next === '/') {
+      const end = source.indexOf('\n', index);
+      index = end === -1 ? source.length : end;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      const end = source.indexOf('*/', index + 2);
+      index = end === -1 ? source.length : end + 2;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      let cursor = index + 1;
+      while (cursor < source.length && source[cursor] !== char) {
+        if (source[cursor] === '\\') cursor += 1;
+        cursor += 1;
+      }
+      out += ' ';
+      index = cursor + 1;
+      continue;
+    }
+    if (char === '`') {
+      // A template literal: skip its text, but keep scanning inside `${ ... }` substitutions,
+      // whose closing brace is tracked so the literal resumes after it.
+      let cursor = index + 1;
+      while (cursor < source.length && source[cursor] !== '`') {
+        if (source[cursor] === '\\') { cursor += 2; continue; }
+        if (source[cursor] === '$' && source[cursor + 1] === '{') {
+          templateDepth.push(0);
+          out += ' ';
+          index = cursor + 2;
+          break;
+        }
+        cursor += 1;
+      }
+      if (index !== cursor + 2 || templateDepth.length === 0) {
+        out += ' ';
+        index = cursor + 1;
+      }
+      continue;
+    }
+    if (templateDepth.length > 0) {
+      if (char === '{') templateDepth[templateDepth.length - 1] += 1;
+      if (char === '}') {
+        if (templateDepth[templateDepth.length - 1] === 0) {
+          // End of the substitution: resume skipping the enclosing template literal's text.
+          templateDepth.pop();
+          let cursor = index + 1;
+          while (cursor < source.length && source[cursor] !== '`') {
+            if (source[cursor] === '\\') { cursor += 2; continue; }
+            if (source[cursor] === '$' && source[cursor + 1] === '{') {
+              templateDepth.push(0);
+              break;
+            }
+            cursor += 1;
+          }
+          out += ' ';
+          index = templateDepth.length > 0 && source[cursor] === '$' ? cursor + 2 : cursor + 1;
+          continue;
+        }
+        templateDepth[templateDepth.length - 1] -= 1;
+      }
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
+}
+
+function findNodeGlobalUses(source) {
+  const code = stripCommentsAndStrings(source);
+  const uses = new Set();
+  for (const match of code.matchAll(NODE_GLOBAL_RE)) {
+    // Property names (`x.process`) are not global reads.
+    const before = code.slice(Math.max(0, match.index - 1), match.index);
+    if (before === '.') continue;
+    if (match[0] === 'process') {
+      const lineStart = code.lastIndexOf('\n', match.index) + 1;
+      const lineEnd = code.indexOf('\n', match.index);
+      const line = code.slice(lineStart, lineEnd === -1 ? code.length : lineEnd);
+      if (/typeof\s+process\b/.test(line)) continue;
+    }
+    uses.add(match[0]);
+  }
+  return [...uses].sort();
+}
+
 function scanModuleSpecifiers(source) {
   const staticSpecifiers = [];
   const dynamicSpecifiers = [];
@@ -84,6 +189,7 @@ function scanModuleSpecifiers(source) {
 //               'bare'          a bare (npm/builtin) static import
 //               'unresolved'    a relative static import that resolves to nothing
 //               'escape'        a relative static import leaving the source root
+//               'node-global'   a use of a Node-only global (Buffer, process, require, ...)
 //
 // `sourceRoot`, when given, is the logical prefix every closure member must stay under
 // (the artifact passes 'src/'). A dependency that resolves outside it is an 'escape'
@@ -110,6 +216,10 @@ function collectStaticModuleClosure({entry, readSource, sourceRoot} = {}) {
       continue;
     }
     sources.set(path, source);
+
+    for (const name of findNodeGlobalUses(source)) {
+      violations.push({path, specifier: name, reason: 'node-global'});
+    }
 
     const {staticSpecifiers, dynamicSpecifiers} = scanModuleSpecifiers(source);
     for (const specifier of dynamicSpecifiers) dynamic.push({path, specifier});
@@ -161,4 +271,5 @@ export {
   resolveLogicalPath,
   resolutionCandidates,
   scanModuleSpecifiers,
+  findNodeGlobalUses,
 };
