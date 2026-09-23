@@ -12,12 +12,12 @@ import {
   installSmalltalkEqualityProtocol,
   installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
-  installSymmetricSmalltalkStandardImage,
   integerValue,
   objectRef,
   reconcileMethodsFromSource,
   textValue,
 } from '../src/runtime.js';
+import {withStandardImage} from './support/standard-image-fixture.js';
 
 // Workstream 3 (MessagePack pressure). `Object>>==` is *identity*, and it must not be an alias for
 // `=` — `=` is overridable (Association overrides it for value equality), so `^self = other` would
@@ -55,13 +55,9 @@ async function evaluate(runtime, imageId, id, source, args = []) {
 // override) but not `==` (distinct refs), and an object that is `==` to itself. This is the one test
 // that separates identity from equality — if `==` were `^self = other`, the middle assertion fails.
 test('equal-but-distinct Associations are =, not ==, and therefore ~~', async () => {
-  await withRuntime(async (runtime) => {
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // Association is a library class, so this case uses the composed standard image; the rest of
     // the file proves `==` against a minimal seed.
-    await runtime.images.createImage({id: 'app'});
-    await installSymmetricSmalltalkStandardImage({
-      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
-    });
     const associationClass = objectRef('app', 'smalltalk/class/Association');
     const a = await evaluate(runtime, 'app', 'a', "[ :c | c new key: 'k' value: 1 ]", [associationClass]);
     const b = await evaluate(runtime, 'app', 'b', "[ :c | c new key: 'k' value: 1 ]", [associationClass]);
@@ -91,13 +87,9 @@ test('equal-but-distinct Associations are =, not ==, and therefore ~~', async ()
 });
 
 test('~~ dynamically sends the native overridable == method', async () => {
-  await withRuntime(async (runtime) => {
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     assert.deepEqual(runtime.toolchainProviders.list(), [], 'direct native proof has no Cuis toolchain');
     assert.deepEqual(runtime.foreignRuntimeProviders.list(), [], 'direct native proof has no Cuis runtime fallback');
-    await runtime.images.createImage({id: 'app'});
-    await installSymmetricSmalltalkStandardImage({
-      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
-    });
     const shape = objectRef('app', (await runtime.images.putShape('app', {id: 'identity-probe-shape', slots: []})).id);
     const probe = await defineClass({
       images: runtime.images, imageId: 'app', name: 'IdentityProbe', instanceShapeRef: shape,
@@ -129,11 +121,7 @@ test('~~ dynamically sends the native overridable == method', async () => {
 });
 
 test('~~ is exactly the Smalltalk-level complement of == across native representations', async () => {
-  await withRuntime(async (runtime) => {
-    await runtime.images.createImage({id: 'app'});
-    await installSymmetricSmalltalkStandardImage({
-      images: runtime.images, compilation: runtime.compilation, imageId: 'app',
-    });
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     const kernel = await findSmalltalkKernel({images: runtime.images, imageId: 'app'});
     const associationClass = objectRef('app', 'smalltalk/class/Association');
     const sameObject = await evaluate(runtime, 'app', 'same-object', '[ :class | class new ]', [associationClass]);
