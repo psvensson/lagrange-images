@@ -17,7 +17,8 @@ npm run test:cargo-oci    # the real Cargo/rustc OCI proof; needs scripts/cargo-
 
 ### Local runs are paced; some files are CI-only on some hosts
 
-Local suite runs are a convenience, not the gate: `.github/workflows/test.yml` is the merge
+Prefer [the lab](#running-the-suite-on-the-lab) for a full-suite receipt; it runs nothing on this
+machine. Local suite runs are a convenience, not the gate: `.github/workflows/test.yml` is the merge
 authority, and targeted tests plus the relevant real lane plus exact-head CI are sufficient merge
 evidence. `node --test` defaults to `availableParallelism() - 1` workers, which on a 20-core
 workstation starts nineteen CPU-bound files at once. Pace every local run:
@@ -41,6 +42,56 @@ This is a HOST policy, not a property of the test. The file carries no skip, its
 unchanged, and **product code and test semantics are never altered to accommodate workstation
 thermals**. If the inability to run it locally becomes a real developer-productivity problem, that
 is its own test-performance investigation — never a side change inside a compatibility PR.
+
+### Running the suite on the lab
+
+The Lagrange repository keeps a home-lab inventory of Linux machines reachable over SSH
+(`~/.config/lagrange/lab/inventory.json`, managed by that repository's `node scripts/lab.js`; see
+its `docs/development/home-lab.md`). `scripts/lab-suite.mjs` runs this repository's two CI lanes
+across those machines and prints one verdict, so a full-suite receipt costs the workstation nothing:
+
+```sh
+npm run test:lab                                   # both lanes, every reachable worker
+node scripts/lab-suite.mjs --lanes fast            # the ordinary lane only
+node scripts/lab-suite.mjs test/a.test.js test/b.test.js   # targeted files
+node scripts/lab-suite.mjs --nodes tv-dator        # one worker
+node scripts/lab-suite.mjs --dry-run               # the plan, nothing shipped
+```
+
+It ships the working tree as it is (HEAD plus uncommitted and untracked-but-not-ignored files,
+snapshotted through a temporary index, never the real one), so a branch can be tested before it is
+committed. Each worker gets `git archive` of that tree into its own checkout under a `flock`, runs
+`npm ci --ignore-scripts` only when the lockfile changed, and runs exactly CI's lane flags over its
+share of node's default test-file set. Files are shared out by measured duration (timings are kept
+in `~/.cache/lagrange-images/lab-timings.json` and improve run over run); a worker runs its lanes one
+after the other, so the planner never puts the two lanes' longest files on the same machine. The run
+ends with the same `# fail` and `EXIT=` lines a local run prints and writes a JSON receipt naming the
+exact tree it tested under `~/.cache/lagrange-images/lab-receipts/`.
+
+Workers are the inventory's Linux nodes with the `runner` role that answer SSH at the start of the
+run. The controller's own machine is never used (a node whose probed boot id equals the
+controller's is the same box under another name). Settings that belong to this repository live in
+`~/.config/lagrange-images/lab.json`, never in the Lagrange inventory:
+
+```json
+{"defaultDir": "~/lab/lagrange-images",
+ "nodes": {"adam-laptop": {"dir": "/mnt/old/lab/lagrange-images"}, "some-node": {"slots": 2, "exclude": false}}}
+```
+
+A checkout directory must end in `/lagrange-images`, and the script cleans it only when it is empty
+or carries the script's owner marker, so a wrong path cannot wipe someone's directory.
+
+Reading the counts: the ordinary lane's totals equal a single-machine run of the same tree (verified
+1780/1737/43 skipped on one worker and on four). The recovery lane gets only the files that name a
+sweep, so its `tests` is the sweep count plus one entry per such file with no matching test; the
+line prints `sweeps` separately. CI's recovery total is larger only because node reports every other
+file as one empty entry.
+
+The lab is **evidence for iteration, not merge authority**: exact-head CI remains the gate. It does
+not run the real OpenSmalltalk/Cuis, Cargo/OCI, SBCL or Lagrange lanes (their tests skip there
+exactly as in the ordinary CI lanes). Measured on the first four workers (Sept 23 2026): both lanes in
+133 s wall, against 303 s on the fastest single worker and about 5 minutes per lane on the hosted
+runners.
 
 ### CI splits the suite; `npm test` does not
 
