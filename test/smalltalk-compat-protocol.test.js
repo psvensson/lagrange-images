@@ -1,14 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createRuntime,
   installSymmetricSmalltalkBlock,
-  installSymmetricSmalltalkStandardImage,
   booleanValue,
   integerValue,
   objectRef,
   textValue,
 } from '../src/runtime.js';
+import {withStandardImage} from './support/standard-image-fixture.js';
 
 // Workstream 3 (MessagePack pressure). The source-only compatibility seam: ordinary Smalltalk
 // methods, no new primitive, no compiler knowledge. Each is proven here by *behaviour*, not by the
@@ -17,25 +16,6 @@ import {
 //
 // These run against the composed standard image so the install ordering (allocation → integer →
 // dictionary → exception accessors) is exercised exactly as a real image assembles it.
-
-async function withRuntime(body) {
-  const runtime = await createRuntime({backend: {mode: 'mock'}});
-  try {
-    return await body(runtime);
-  } finally {
-    await runtime.close();
-  }
-}
-
-async function seed(runtime, imageId, {lane = 'neutral'} = {}) {
-  await runtime.images.createImage({id: imageId});
-  await installSymmetricSmalltalkStandardImage({
-    images: runtime.images,
-    compilation: runtime.compilation,
-    imageId,
-    lane,
-  });
-}
 
 async function evaluate(runtime, imageId, id, source, args = []) {
   const installed = await installSymmetricSmalltalkBlock({images: runtime.images, imageId, id, source});
@@ -46,8 +26,7 @@ async function evaluate(runtime, imageId, id, source, args = []) {
 // --- Object >> yourself / isNil -----------------------------------------------------------------
 
 test('Object>>yourself answers the receiver, and isNil separates nil from everything else', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // `yourself` is identity: the same object comes back, so a cascade can keep its target.
     assert.deepEqual(
       await evaluate(runtime, 'app', 'ys-nil', '[ nil yourself isNil ]'),
@@ -68,8 +47,7 @@ test('Object>>yourself answers the receiver, and isNil separates nil from everyt
 // --- Integer convenience / control --------------------------------------------------------------
 
 test('Integer>>between:and: is inclusive on both bounds', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     const cases = [
       ['5 between: 0 and: 10', true],
       ['0 between: 0 and: 10', true],
@@ -88,8 +66,7 @@ test('Integer>>between:and: is inclusive on both bounds', async () => {
 });
 
 test('Integer>>negated flips sign across zero', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     assert.deepEqual(await evaluate(runtime, 'app', 'neg-pos', '[ 5 negated ]'), integerValue(-5));
     assert.deepEqual(await evaluate(runtime, 'app', 'neg-neg', '[ (0 - 5) negated ]'), integerValue(5));
     assert.deepEqual(await evaluate(runtime, 'app', 'neg-zero', '[ 0 negated ]'), integerValue(0));
@@ -97,8 +74,7 @@ test('Integer>>negated flips sign across zero', async () => {
 });
 
 test('Integer>>to:do: iterates inclusively and timesRepeat: repeats', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // 1 to: 5 sums 1+2+3+4+5 = 15, accumulated into an OrderedCollection then reduced.
     assert.deepEqual(
       await evaluate(runtime, 'app', 'todo', `[ | sum |
@@ -129,8 +105,7 @@ test('Integer>>to:do: iterates inclusively and timesRepeat: repeats', async () =
 // --- Dictionary lookup conveniences + class-side new: -------------------------------------------
 
 test('Dictionary>>at:ifAbsent: and at:ifAbsentPut: honour present and missing keys', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // Present key answers the stored value; the absent block does not run.
     assert.deepEqual(
       await evaluate(runtime, 'app', 'present', `[ | d |
@@ -167,8 +142,7 @@ test('Dictionary>>at:ifAbsent: and at:ifAbsentPut: honour present and missing ke
 });
 
 test('Dictionary class>>new: accepts a capacity hint and answers an empty usable Dictionary', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // The hint is ignored (grow-on-demand), but the result must be a real, empty, writable
     // Dictionary — this is the metaclass dispatch path upstream `createDictionary:` relies on.
     assert.deepEqual(
@@ -185,8 +159,7 @@ test('Dictionary class>>new: accepts a capacity hint and answers an empty usable
 // --- Exception >> messageText -------------------------------------------------------------------
 
 test('Exception>>messageText reads the text a host-generated condition actually carried', async () => {
-  await withRuntime(async (runtime) => {
-    await seed(runtime, 'app');
+  await withStandardImage({lane: 'neutral', imageId: 'app'}, async (runtime) => {
     // `1 // 0` signals a host ZeroDivide whose messageText slot is populated with the host message.
     // Catching it and reading messageText proves the accessor reaches the real slot, not a literal.
     const answer = await evaluate(runtime, 'app', 'messagetext', `[ | text |
