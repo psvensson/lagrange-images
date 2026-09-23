@@ -18,6 +18,7 @@ export const REAL_TEST_FILES = Object.freeze([
   'test/opensmalltalk-cuis-toolchain-real.test.js', 'test/opensmalltalk-cuis-multipackage-real.test.js',
   'test/opensmalltalk-cuis-semantic-export-real.test.js', 'test/cuis-export-materialize-real.test.js',
   'test/cuis-json-native-import-real.test.js', 'test/cuis-yaxo-native-import-real.test.js',
+  'test/cuis-life-project-release-real.test.js',
   'test/two-lane-callable-real.test.js', 'test/mixed-language-project-real.test.js',
 ]);
 const DOC_CHECKS = ['test/steering-docs.test.js', 'test/agent-governance.test.js', 'test/ci-split.test.js'];
