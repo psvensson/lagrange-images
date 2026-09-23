@@ -1,5 +1,6 @@
 import {ensureBlock, ensureCodeArtifact} from '../graph/ensure-records.js';
 import {uuid as randomUUID} from '../support/default-crypto.js';
+import {base64urlEncode, utf8Encode} from '../support/portable-bytes.js';
 import {
   LAGRANGE_CODE_V1,
   normalizeLagrangeCodeV1Program,
@@ -82,7 +83,7 @@ function directNestedBlocks(expression, result = []) {
 }
 
 function blockKey(blockId) {
-  return Buffer.from(requiredText(blockId, 'semantic block id'), 'utf8').toString('base64url');
+  return base64urlEncode(utf8Encode(requiredText(blockId, 'semantic block id')));
 }
 
 // Preflight both backends before anything is written: the simple one where legal, the resumable one
