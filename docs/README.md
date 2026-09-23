@@ -17,6 +17,7 @@ If you are here to change something rather than to understand it, start with:
 - [Ownership registry](ownership.md) — single owners for major subsystems and every cross-subsystem interaction
 - [Runbook](runbook.md) — how to run and debug the repository
 - [Seam map](seams.md) — exact representations, installers and executors
+- [Native Smalltalk owners](native-smalltalk.md) — the three protocol tiers (ADR 0093) and the full contracts of the personality's large owners
 - [Domain agent rules](domain-agent-rules.md) — accumulated low-level implementation invariants preserved from the original `AGENTS.md`
 
 ## Focused concepts
