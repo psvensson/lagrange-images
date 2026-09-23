@@ -12,6 +12,7 @@ import {resolveGlobal} from '../src/language/smalltalk-globals.js';
 import {importCuisNativePackage} from '../src/language/cuis-native-import.js';
 import {installManagedProjectRelease} from '../src/project/managed-installation.js';
 import {readManagedProjectInstallation} from '../src/project/installation-state.js';
+import {authorizedImportCuisPackage} from '../src/language/smalltalk-authorized-import.js';
 import {installCallableInterfaceV2} from '../src/callable/interface-v2-artifacts.js';
 import {installImageCreationBinding} from '../src/callable/image-creation-binding.js';
 import {installImageMutationBinding} from '../src/callable/image-mutation-binding.js';
@@ -86,6 +87,8 @@ const owned = Object.freeze({
   installManagedProjectRelease,
   readManagedProjectInstallation,
   resolveGlobal,
+  // The authorized Cuis native import seam (ADR 0094).
+  authorizedImportCuisPackage,
 });
 
 test('portable-runtime exposes the exact method-position authority operation', () => {
@@ -180,7 +183,10 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // materializer plus src/graph/bundle.js they compose). Twelve modules, each imported from its
   // owner and never through the wasm barrel; no node:* import and no Node-only global (the walker
   // now refuses `Buffer`/`process`/`__dirname`/`__filename` outside comments and strings).
-  assert.equal(modules.length, 138, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, and the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery)');
+  // 139 after the authorized Cuis native import seam (src/language/smalltalk-authorized-import.js,
+  // ADR 0094) — ONE module composing the adapter, class builder, namespace and authority owners the
+  // closure already carried; no new dependency and no node:*.
+  assert.equal(modules.length, 139, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), and the authorized Cuis native import seam');
   assert.ok(paths.includes('src/language/smalltalk-string-equality.js'));
   assert.ok(paths.includes('src/wasm/function-executor.js'));
   assert.ok(paths.includes('src/language/cuis-native-import.js'));

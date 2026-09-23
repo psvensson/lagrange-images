@@ -683,6 +683,11 @@ Do not pre-generalize the Cuis importer for Lisp. Extract common owners only whe
 
 ## Object Environment boundary
 
+The Environment imports through `authorizedImportCuisPackage` (ADR 0094, [seams](seams.md#authorized-cuis-native-import)):
+authority named from the manifest before any read, progress and cancellation between declarations,
+and the partial-publication rule below restated as a public error taxonomy. It never wraps the
+privileged adapter and keeps no import state of its own.
+
 Lagrange Object Environment owns human interaction over imported content: import commands/progress, browsers, source editing, inspectors, diagnostics and provenance presentation.
 
 Once imported natively, a Cuis-origin class or object is navigated and edited through the same public Images APIs as any other native class or object. The environment may show that it originated from Cuis, but it must not create a shadow Cuis object database or runtime-specific identity model.

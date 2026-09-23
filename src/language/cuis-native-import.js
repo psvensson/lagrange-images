@@ -66,22 +66,30 @@ const CUIS_NATIVE_ARRAY2D_IDENTITY = 'cuis-class/Cuis-Base/Array2D';
 const CUIS_NATIVE_TEXTMODEL_IDENTITY = 'cuis-class/Cuis-Base/TextModel';
 const CUIS_NATIVE_CLASS_MAPPINGS = new Map([
   [CUIS_NATIVE_ROOT_OBJECT_IDENTITY, Object.freeze({
-    slot: 'objectClass', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS]),
+    slot: 'objectClass', className: 'Object', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS]),
   })],
   [CUIS_NATIVE_INTEGER_IDENTITY, Object.freeze({
-    slot: 'integerClass', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.METHOD_TARGET]),
+    slot: 'integerClass', className: 'Integer', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.METHOD_TARGET]),
   })],
   // Ordinary library classes resolve through the image's own global namespace — the namespace
   // owner's replay/rebind semantics, never a second lookup implementation and never a name
   // guess: the NAME is part of this sealed entry, matched against the namespace as-is, and a
   // missing native class fails the import explicitly.
   [CUIS_NATIVE_ARRAY2D_IDENTITY, Object.freeze({
-    globalName: 'Array2D', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS]),
+    globalName: 'Array2D', className: 'Array2D', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS]),
   })],
   [CUIS_NATIVE_TEXTMODEL_IDENTITY, Object.freeze({
-    globalName: 'TextModel', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS]),
+    globalName: 'TextModel', className: 'TextModel', positions: Object.freeze([CUIS_NATIVE_MAPPING_POSITION.SUPERCLASS]),
   })],
 ]);
+
+// The native class NAME a sealed entry denotes, answered purely (no graph read). The authorized
+// import seam names its authority demands from it BEFORE any read, through the class builder's
+// deterministic `smalltalk/class/<name>` identity; resolution of the actual class ref stays lazy and
+// graph-backed below.
+function mappedCuisClassName(identity) {
+  return CUIS_NATIVE_CLASS_MAPPINGS.get(identity)?.className ?? null;
+}
 
 function isMappedCuisClass(identity) {
   return CUIS_NATIVE_CLASS_MAPPINGS.has(identity);
@@ -674,10 +682,38 @@ function importPlan(manifest, scope) {
   return {classes: scopedClasses, ordered, methods};
 }
 
-async function importCuisNativePackage({images, compilation, imageId, manifest, scope = null} = {}) {
+// Cancellation between declarations. The adapter checks the caller's `signal` before each class
+// declaration, before namespace publication and before each class's method group — never inside
+// an owner's write, so what has been admitted is complete and a retry converges through the owners'
+// own admission rules (exact replay is write-free). `admitted` lists the canonical identities that
+// landed before the check; nothing else about the import is retained.
+class CuisNativeImportAbortedError extends Error {
+  constructor({admitted, reason = null}) {
+    super(`Cuis native import aborted after ${admitted.classes.length} class(es) and ${admitted.methods.length} method(s)`);
+    this.name = 'CuisNativeImportAbortedError';
+    this.admitted = Object.freeze({classes: Object.freeze([...admitted.classes]), methods: Object.freeze([...admitted.methods])});
+    this.reason = reason;
+  }
+}
+
+function assertProgressOptions(signal, onProgress) {
+  if (signal !== null && (typeof signal !== 'object' || typeof signal.aborted !== 'boolean')) {
+    fail('signal must be null or an AbortSignal-like object with a boolean aborted');
+  }
+  if (onProgress !== null && typeof onProgress !== 'function') fail('onProgress must be null or a function');
+}
+
+async function importCuisNativePackage({images, compilation, imageId, manifest, scope = null, signal = null, onProgress = null} = {}) {
   text(imageId, 'image id');
   if (!images || typeof images !== 'object') fail('images must be an image service');
+  assertProgressOptions(signal, onProgress);
   const plan = importPlan(manifest, scope);
+  const admitted = {classes: [], methods: []};
+  const checkpoint = (reason) => {
+    if (signal?.aborted) throw new CuisNativeImportAbortedError({admitted, reason: signal.reason ?? reason ?? null});
+  };
+  const progress = (event) => { if (onProgress) onProgress(Object.freeze(event)); };
+  const totals = Object.freeze({classes: plan.ordered.length, methods: plan.methods.length});
   if (plan.methods.length > 0 && (!compilation || typeof compilation.compileArtifact !== 'function')) {
     fail('compilation must be a compilation service when methods are present');
   }
@@ -704,6 +740,8 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
     resolved.set(identity, Object.freeze({classRef}));
   }
   for (const declaration of plan.ordered) {
+    checkpoint(`before class ${declaration.identity}`);
+    progress({event: 'begin', phase: 'class', identity: declaration.identity, totals});
     const superclass = resolved.get(declaration.superclass);
     if (!superclass) fail(`superclass ${declaration.superclass} was not resolved`, declaration.identity);
     resolved.set(declaration.identity, await ensureClassFromDeclaration({
@@ -721,6 +759,8 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
     if (declaration.classVariables.length > 0) {
       await ensureClassVariableBindings({images, imageId, className: declaration.name, variables: declaration.classVariables});
     }
+    admitted.classes.push(declaration.identity);
+    progress({event: 'admitted', phase: 'class', identity: declaration.identity, totals});
   }
 
   // Cuis class names live in its image-wide SystemDictionary. When the native image has installed
@@ -730,13 +770,16 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
   // just as it could before this step; without a namespace it has no native name-resolution
   // contract for the adapter to target. Collision identity, replay and rebind preservation remain
   // wholly owned by publishSmalltalkClassGlobals/publishGlobal (ADR 0057), never duplicated here.
+  checkpoint('before namespace publication');
   const globalNamespace = await findSmalltalkGlobalNamespace({images, imageId});
   if (globalNamespace && plan.classes.length > 0) {
+    progress({event: 'begin', phase: 'globals', identity: null, totals});
     await publishSmalltalkClassGlobals({
       images,
       imageId,
       names: plan.classes.map(({name}) => name),
     });
+    progress({event: 'admitted', phase: 'globals', identity: null, totals});
   }
 
   const methodGroups = new Map();
@@ -744,11 +787,16 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
     const target = resolved.get(method.classIdentity);
     const classRef = method.side === 'class' ? target.metaclassRef : target.classRef;
     const key = `${classRef.imageId}\u0000${classRef.objectId}`;
-    const group = methodGroups.get(key) ?? {classRef, methods: []};
+    const group = methodGroups.get(key) ?? {classRef, classIdentity: method.classIdentity, methods: [], identities: []};
     group.methods.push({selector: method.selector, source: method.source});
+    group.identities.push(method.identity);
     methodGroups.set(key, group);
   }
-  for (const {classRef, methods} of methodGroups.values()) {
+  for (const {classRef, classIdentity, methods, identities} of methodGroups.values()) {
+    // One class's methods are one reconciliation (one MethodDictionary publication), so the unit of
+    // progress and of cancellation is the group: a group is admitted whole or not at all.
+    checkpoint(`before the methods of ${classIdentity}`);
+    progress({event: 'begin', phase: 'methods', identity: classIdentity, methods: Object.freeze([...identities]), totals});
     await reconcileMethodsFromSource({
       images,
       compilation,
@@ -757,6 +805,8 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
       methods,
       lane: 'wasm',
     });
+    admitted.methods.push(...identities);
+    progress({event: 'admitted', phase: 'methods', identity: classIdentity, methods: Object.freeze([...identities]), totals});
   }
 
   // Semantic identity is useful to the caller, but this is deliberately transient output: the
@@ -769,9 +819,18 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
   });
 }
 
+// The pure import plan (schema, canonical identities, scope, dependency topology), answered with no
+// graph read, so the authorized import seam can name its authority demands from the caller's own
+// manifest before anything is read. Same function the import itself runs first.
+const planCuisNativeImport = importPlan;
+
 export {
   CUIS_NATIVE_INTEGER_IDENTITY,
   CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
+  CuisNativeImportAbortedError,
   CuisNativeImportError,
   importCuisNativePackage,
+  isMappedCuisClass,
+  mappedCuisClassName,
+  planCuisNativeImport,
 };
