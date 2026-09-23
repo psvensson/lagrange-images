@@ -5,7 +5,13 @@ import {fileURLToPath} from 'node:url';
 
 import * as portable from '../src/portable-runtime.js';
 import {installSmalltalkKernel, findSmalltalkKernel} from '../src/language/smalltalk-kernel.js';
-import {defineClass} from '../src/language/smalltalk-class-builder.js';
+import {defineClass, ensureClassFromDeclaration} from '../src/language/smalltalk-class-builder.js';
+import {defineMethodsFromSource} from '../src/language/smalltalk-instance-variables.js';
+import {installSymmetricSmalltalkStandardImage} from '../src/language/smalltalk-standard-image.js';
+import {resolveGlobal} from '../src/language/smalltalk-globals.js';
+import {importCuisNativePackage} from '../src/language/cuis-native-import.js';
+import {installManagedProjectRelease} from '../src/project/managed-installation.js';
+import {readManagedProjectInstallation} from '../src/project/installation-state.js';
 import {installCallableInterfaceV2} from '../src/callable/interface-v2-artifacts.js';
 import {installImageCreationBinding} from '../src/callable/image-creation-binding.js';
 import {installImageMutationBinding} from '../src/callable/image-mutation-binding.js';
@@ -72,6 +78,14 @@ const owned = Object.freeze({
   authorizedDescribeSmalltalkMethod,
   authorizedReadSmalltalkMethodForUpdate,
   authorizedReplaceSmalltalkMethod,
+  // The install/import owners of the portable execution surface (bead lagrange-images-hygu).
+  installSymmetricSmalltalkStandardImage,
+  ensureClassFromDeclaration,
+  defineMethodsFromSource,
+  importCuisNativePackage,
+  installManagedProjectRelease,
+  readManagedProjectInstallation,
+  resolveGlobal,
 });
 
 test('portable-runtime exposes the exact method-position authority operation', () => {
@@ -157,8 +171,23 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // smalltalk-active-model.js — each an ordinary image-resident Smalltalk class composed only
   // from the class/slot/method owners the standard-image installer already carries, no new host
   // or foreign dependency and no node:*.
-  assert.equal(modules.length, 126, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, and the four native Point/Array2D/Interval/TextModel value-model owners');
+  // 138 after the portable execution surface (bead lagrange-images-hygu): the image-native WASM
+  // function lane (src/wasm/function-executor.js with the executor.js, executor-v1.js,
+  // resumable-executor.js, resumable-executor-v2.js, cell-access.js and module-cache.js it
+  // composes — the instance pool was already carried), the Cuis native-import adapter
+  // (src/language/cuis-native-import.js), and the managed release install/recovery owners
+  // (src/project/managed-installation.js, installation-state.js and the graph release
+  // materializer plus src/graph/bundle.js they compose). Twelve modules, each imported from its
+  // owner and never through the wasm barrel; no node:* import and no Node-only global (the walker
+  // now refuses `Buffer`/`process`/`__dirname`/`__filename` outside comments and strings).
+  assert.equal(modules.length, 138, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, and the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery)');
   assert.ok(paths.includes('src/language/smalltalk-string-equality.js'));
+  assert.ok(paths.includes('src/wasm/function-executor.js'));
+  assert.ok(paths.includes('src/language/cuis-native-import.js'));
+  assert.ok(paths.includes('src/project/managed-installation.js'));
+  assert.ok(!paths.includes('src/wasm/index.js'), 'the wasm barrel (Node-dependent re-exports) must never enter the portable closure');
+  assert.ok(!paths.includes('src/wasm/jco-component-runtime.js'));
+  assert.ok(!paths.includes('src/wasm/foreign-callable-executor.js'));
   assert.ok(paths.includes('src/wasm/module-contract.js'));
   assert.ok(paths.includes('src/wasm/function-contract.js'));
   assert.ok(paths.includes('src/language/smalltalk-browse.js'));
@@ -175,9 +204,19 @@ test('the bounded public seam does not broaden the portable static closure', () 
   assert.ok(paths.includes('src/language/smalltalk-array2d.js'));
   assert.ok(paths.includes('src/language/smalltalk-interval.js'));
   assert.ok(paths.includes('src/language/smalltalk-active-model.js'));
+  // The Project modules the seam carries are exactly the working-state and model owners plus the
+  // managed release install/recovery owners (installation-state, managed-installation and the
+  // graph release materializer they compose, bead lagrange-images-hygu). The broad Project barrel,
+  // the capture coordinator and the unmanaged release installer stay out.
   assert.deepEqual(projectPaths, [
+    'src/project/graph-release-materialization.js',
+    'src/project/installation-state.js',
+    'src/project/managed-installation.js',
     'src/project/model.js',
     'src/project/working-state.js',
-  ], 'the bounded seam must not pull the broader Project barrel or release/deployment graph into the artifact');
+  ], 'the bounded seam carries exactly the working-state, model and managed-installation owners, never the Project barrel, the capture coordinator or the unmanaged installer');
+  assert.ok(!paths.includes('src/project/index.js'));
+  assert.ok(!paths.includes('src/project/release-capture.js'));
+  assert.ok(!paths.includes('src/project/release-installation.js'));
   assert.deepEqual(violations, [], 'the portable closure remains closed and Node-free');
 });
