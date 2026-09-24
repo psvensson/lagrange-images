@@ -55,6 +55,24 @@ test('a fork copies the whole state and is isolated in both directions', async (
       // Same key, both sides: each advances its own version history independently.
       await fork.put('things', 'shared', {value: 30}, {expectedVersion: 2});
       assert.equal((await backend.get('things', 'shared')).value, 2);
+
+      // The fork shares the base's stored values rather than copying them, which is legal only
+      // because nothing reaches a stored value to mutate it: a read on either side is a detached
+      // copy, and an append on one side never lengthens the other's stream.
+      await backend.put('things', 'nested', {value: {deep: [1, 2]}}, {expectedVersion: 0});
+      const second = backend.fork();
+      await second.start();
+      try {
+        const read = await second.get('things', 'nested');
+        read.value.deep.push(3);
+        assert.deepEqual((await second.get('things', 'nested')).value, {deep: [1, 2]});
+        assert.deepEqual((await backend.get('things', 'nested')).value, {deep: [1, 2]});
+        await second.append('events', {happened: 'fork-only'});
+        assert.equal(await backend.streamHead('events'), 1);
+        assert.equal(await second.streamHead('events'), 2);
+      } finally {
+        await second.stop();
+      }
     } finally {
       await fork.stop();
     }
