@@ -1,0 +1,14 @@
+{
+  "schema": "solve-quest/2",
+  "id": "http-server-contract-coverage",
+  "statement": "The public image-service HTTP surface in src/server.js is under machine-checked contract test: health, image list/create/get with unknown-image failure shape, records, shapes, objects with optimistic expected-version behavior, history, snapshots, and the not-found and error response shapes all have committed tests that pass on every run.",
+  "epic": "image-service-surface",
+  "doneWhen": {
+    "probe": "cmd",
+    "args": {
+      "argv": ["node", "--test", "test/server-contract.test.js"]
+    }
+  },
+  "constraints": [],
+  "sealedAt": "c03e57fc72c8f092434b558ae7533ae7b04ae8b6"
+}
