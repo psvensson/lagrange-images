@@ -60,13 +60,20 @@ node scripts/lab-suite.mjs --dry-run               # the plan, nothing shipped
 
 It ships the working tree as it is (HEAD plus uncommitted and untracked-but-not-ignored files,
 snapshotted through a temporary index, never the real one), so a branch can be tested before it is
-committed. Each worker gets `git archive` of that tree into its own checkout under a `flock`, runs
-`npm ci --ignore-scripts` only when the lockfile changed, and runs exactly CI's lane flags over its
-share of node's default test-file set. Files are shared out by measured duration (timings are kept
-in `~/.cache/lagrange-images/lab-timings.json` and improve run over run); a worker runs its lanes one
-after the other, so the planner never puts the two lanes' longest files on the same machine. The run
-ends with the same `# fail` and `EXIT=` lines a local run prints and writes a JSON receipt naming the
-exact tree it tested under `~/.cache/lagrange-images/lab-receipts/`.
+committed. Each worker gets one SSH session: the snapshot as a `git archive` tar into its own checkout
+under a `flock`, `npm ci --ignore-scripts` only when the lockfile changed, and then test files one at
+a time on request (`scripts/lab-suite-worker.mjs`), each as its own `node --test` process with exactly
+CI's lane flag. The controller keeps one queue of all files, longest first by recorded duration
+(`~/.cache/lagrange-images/lab-timings.json`), and tops each worker up as its files finish, so a
+worker that runs slower than expected simply takes fewer files. The first wave spreads the longest
+files one per machine, fastest single core first (the Lagrange probe's CPU sample); each worker's
+throughput speed is learned from its own runs (`~/.cache/lagrange-images/lab-speeds.json`) and used to
+predict finish times. Slots default to about a third of a worker's logical cores: a test file is two
+processes plus V8's compiler and GC threads, and a 12-core worker ran the whole ordinary lane in the
+same time at 4 slots as at 11 while its longest file ran 25% faster. The run ends with the same
+`# fail` and `EXIT=` lines a local run prints, each worker's predicted and actual finish, and a JSON
+receipt under `~/.cache/lagrange-images/lab-receipts/` naming the exact tree it tested and every
+file's measured time.
 
 Workers are the inventory's Linux nodes with the `runner` role that answer SSH at the start of the
 run. The controller's own machine is never used (a node whose probed boot id equals the
@@ -89,9 +96,10 @@ file as one empty entry.
 
 The lab is **evidence for iteration, not merge authority**: exact-head CI remains the gate. It does
 not run the real OpenSmalltalk/Cuis, Cargo/OCI, SBCL or Lagrange lanes (their tests skip there
-exactly as in the ordinary CI lanes). Measured on the first four workers (Sept 23 2026): both lanes in
-133 s wall, against 303 s on the fastest single worker and about 5 minutes per lane on the hosted
-runners.
+exactly as in the ordinary CI lanes). Measured on five workers (Sept 24 2026): both lanes in about
+90 s wall, against about 5 minutes per lane on the hosted runners. The floor is the longest single
+files: the Character recovery sweep and the M5 witness take 67 s and 49 s on a quiet worker and
+roughly 90 s and 80 s on a loaded one.
 
 ### CI splits the suite; `npm test` does not
 
