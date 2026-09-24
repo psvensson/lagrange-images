@@ -1,0 +1,39 @@
+{
+  "version": 2,
+  "task_id": "li/http-server-contract-coverage-completion",
+  "plan_revision": "plan-li-http-contract-1",
+  "expected_base_sha": "909df59b561d877704b59c8a71c757edccd7fa24",
+  "intent": "Complete the committed solve quest http-server-contract-coverage (its quest.json defines the acceptance). Add test/server-contract.test.js covering the public HTTP surface served by createImageHttpServer in src/server.js, on a local 127.0.0.1 ephemeral port with the runtime injected: GET /health (ok envelope with backend fields), POST /images 201, GET /images/:id with unknown-image failure shape (400 error envelope with error name and message), unknown routes 404 (error not found), GET /images/:id/records, GET /images/:id/shapes, PUT /images/:id/shapes/:shapeId 201, GET /images/:id/objects, PUT /images/:id/objects/:objectId with optimistic expectedVersion semantics, GET /images/:id/history, POST /images/:id/snapshots 201. Use the kinds/assertion style of neighboring tests in test/ and clean up via server.closeRuntime(). No changes to src/ are expected; if a genuine defect is found, fix it minimally and cover it. Quest authority step (only after the acceptance above passes): append EXACTLY ONE modern terminal line to solve/quests/http-server-contract-coverage/log.ndjson in the schema the quest authority uses: a single JSON object per line with type terminal and status solved plus a timestamp; never rewrite or append anything else. Do not make this file change the only change: the quest terminal is evidence of completed work, not the work itself; a change containing only the terminal entry must fail. Proof scope for this task: node --test test/server-contract.test.js passes.",
+  "dependencies": [],
+  "authority": [
+    {
+      "key": "li/http-server-contract-coverage",
+      "mode": "exclusive"
+    }
+  ],
+  "proof": {
+    "version": 1,
+    "steps": [
+      {
+        "id": "server-contract",
+        "argv": [
+          "node",
+          "--test",
+          "test/server-contract.test.js"
+        ],
+        "cwd": ".",
+        "timeout_seconds": 900
+      },
+      {
+        "id": "quest-terminal",
+        "argv": [
+          "node",
+          "-e",
+          "const fs=require('fs');const lines=fs.readFileSync('solve/quests/http-server-contract-coverage/log.ndjson','utf8').split(/\\r?\\n/).filter(Boolean);const t=lines.map((l)=>JSON.parse(l)).filter((e)=>e.type==='terminal');if(t.length!==1||t[0].status!=='solved')process.exit(9)"
+        ],
+        "cwd": ".",
+        "timeout_seconds": 120
+      }
+    ]
+  }
+}
