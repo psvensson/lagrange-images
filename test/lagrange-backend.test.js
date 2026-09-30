@@ -105,6 +105,13 @@ test('Lagrange backend transaction handles expire after callback settlement', as
 });
 
 
+test('non-owning Lagrange attachment requires a caller-supplied runtime', () => {
+  assert.throws(
+    () => new LagrangeBackend({createEmbeddedLagrange() {}, ownsRuntime: false}),
+    /ownsRuntime false requires an existing runtime/,
+  );
+});
+
 test('attached Lagrange backends do not own a caller-managed shared runtime', async () => {
   const runtime = createSqliteApplicationRuntime();
   await runtime.start();
