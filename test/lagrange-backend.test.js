@@ -103,3 +103,27 @@ test('Lagrange backend transaction handles expire after callback settlement', as
     await backend.stop();
   }
 });
+
+
+test('attached Lagrange backends do not own a caller-managed shared runtime', async () => {
+  const runtime = createSqliteApplicationRuntime();
+  await runtime.start();
+  const first = new LagrangeBackend({runtime, ownsRuntime: false, namespace: 'shared-images'});
+  const second = new LagrangeBackend({runtime, ownsRuntime: false, namespace: 'shared-images'});
+  await first.start();
+  await second.start();
+  try {
+    await first.put('things', 'one', {value: 'shared'}, {expectedVersion: 0});
+    assert.deepEqual(await second.get('things', 'one'), {value: 'shared', _version: 1});
+
+    await first.stop();
+    assert.deepEqual(
+      await second.get('things', 'one'),
+      {value: 'shared', _version: 1},
+      'stopping one attached backend leaves the caller-owned runtime and sibling session usable',
+    );
+  } finally {
+    await second.stop();
+    await runtime.stop();
+  }
+});
