@@ -197,12 +197,15 @@ function transactionView(database, isActive) {
 }
 
 class LagrangeBackend {
-  constructor({createEmbeddedLagrange, configuration = {}, namespace = 'lagrange-images', runtime = null} = {}) {
+  constructor({createEmbeddedLagrange, configuration = {}, namespace = 'lagrange-images', runtime = null, ownsRuntime = true} = {}) {
     if (!runtime && typeof createEmbeddedLagrange !== 'function') {
       throw new TypeError('createEmbeddedLagrange must be a function');
     }
     if (typeof namespace !== 'string' || namespace.length === 0) {
       throw new TypeError('namespace must be a non-empty string');
+    }
+    if (typeof ownsRuntime !== 'boolean') {
+      throw new TypeError('ownsRuntime must be a boolean');
     }
     this.kind = 'lagrange';
     this.durable = true;
@@ -211,6 +214,7 @@ class LagrangeBackend {
     this.configuration = structuredClone(configuration);
     this.namespace = namespace;
     this.runtime = runtime;
+    this.ownsRuntime = ownsRuntime;
     this.database = null;
     this.state = 'created';
   }
@@ -226,17 +230,19 @@ class LagrangeBackend {
     this.runtime ??= this.createEmbeddedLagrange({configuration: this.configuration});
     this.state = 'starting';
     try {
-      await this.runtime.start();
+      if (this.ownsRuntime) await this.runtime.start();
       this.database = this.runtime.openApplicationDatabase({applicationId: this.namespace});
       for (const statement of LAGRANGE_IMAGE_SCHEMA) await this.database.query(statement);
       this.state = 'started';
       return this;
     } catch (error) {
       this.state = 'failed';
-      try {
-        await this.runtime.stop();
-      } catch {
-        // Preserve the startup/schema failure as the primary failure.
+      if (this.ownsRuntime) {
+        try {
+          await this.runtime.stop();
+        } catch {
+          // Preserve the startup/schema failure as the primary failure.
+        }
       }
       throw error;
     }
@@ -249,7 +255,7 @@ class LagrangeBackend {
       return;
     }
     try {
-      await this.runtime?.stop();
+      if (this.ownsRuntime) await this.runtime?.stop();
     } finally {
       this.database = null;
       this.state = 'stopped';
