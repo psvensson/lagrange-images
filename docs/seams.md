@@ -475,6 +475,29 @@ Nothing rolls back; a corrected or repeated import converges (exact replay is wr
 the already-landed declarations as admitted again. Published by name from `src/runtime.js`, never
 through the language barrel.
 
+## Object residency and shared-server resolution
+
+ADR 0092's first distribution seam is intentionally generic and language-blind:
+
+```text
+ObjectRef (imageId, objectId)
+  -> ObjectLocator.locate(ref)
+       -> opaque whole-image residency { kind, imageId }
+  -> RemoteRecordResolver.resolveAt(ref, residency)
+       -> the locator-selected backend session
+```
+
+The residency token is transient runtime state, not a Value and not durable graph identity. It
+contains no backend, node, partition, replica or address. `ImageService.getRecord()` routes every
+record read through these owners; the importer, Symmetric Smalltalk personality and application
+never see them.
+
+M6.3's first real proof uses two independent Images runtimes with separate
+`LagrangeBackend` application-session adapters attached to one caller-owned real Lagrange server.
+That is the lowest ADR 0092 form: Lagrange still owns all database routing and Images adds no
+transport. It does **not** claim per-object placement or routed resolution across separately
+composed Lagrange backends; the M6.2 raw-relocation RED remains the falsifier for that later step.
+
 ## ABI and contract identifiers
 
 Not representations — these appear inside artifact content as an `abi` or contract tag.
@@ -508,6 +531,7 @@ src/wasm/            both WASM lanes: internal Value-handle ABI and foreign call
 src/foreign-runtime/ long-lived foreign runtimes, providers, definitions, callables
 src/toolchain/       external toolchain providers and deterministic reuse
 src/backend/         storage seam: mock and Lagrange backends
+src/graph/           object residency locator and cross-runtime record-resolution interaction
 src/runtime.js       composition root and the public export barrel
 ```
 
