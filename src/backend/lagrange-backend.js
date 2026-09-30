@@ -207,6 +207,9 @@ class LagrangeBackend {
     if (typeof ownsRuntime !== 'boolean') {
       throw new TypeError('ownsRuntime must be a boolean');
     }
+    if (!ownsRuntime && !runtime) {
+      throw new TypeError('ownsRuntime false requires an existing runtime');
+    }
     this.kind = 'lagrange';
     this.durable = true;
     this.integration = Object.freeze({namespace});
@@ -230,6 +233,9 @@ class LagrangeBackend {
     this.runtime ??= this.createEmbeddedLagrange({configuration: this.configuration});
     this.state = 'starting';
     try {
+      // One lifecycle owner. A normal backend owns the embedded handle it creates/receives.
+      // M6 shared-server composition instead attaches to an already-started caller-owned handle;
+      // each backend still owns its own application session, but never starts or stops the server.
       if (this.ownsRuntime) await this.runtime.start();
       this.database = this.runtime.openApplicationDatabase({applicationId: this.namespace});
       for (const statement of LAGRANGE_IMAGE_SCHEMA) await this.database.query(statement);
