@@ -15,12 +15,6 @@ import {
 const [dataDir] = process.argv.slice(2);
 if (!dataDir) throw new TypeError('usage: real-lagrange-m6-shared-server-process.js <data-dir>');
 
-const WRITE_READINESS = Object.freeze({
-  APPLICATION_ID: 'lagrange-images-m6-readiness',
-  BUDGET_MS: 120_000,
-  POLL_MS: 250,
-  TABLE: 'lagrange_images_m6_readiness',
-});
 
 async function freePort() {
   return await new Promise((resolve, reject) => {
@@ -65,50 +59,10 @@ function stage(label) {
   process.stderr.write(`[m6.3] ${label}\n`);
 }
 
-async function sleep(ms) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForApplicationWrites() {
-  const database = sharedServer.openApplicationDatabase({
-    applicationId: WRITE_READINESS.APPLICATION_ID,
-  });
-  const deadline = Date.now() + WRITE_READINESS.BUDGET_MS;
-  let attempts = 0;
-  let lastError = null;
-  while (Date.now() < deadline) {
-    attempts += 1;
-    try {
-      await database.query(
-        `CREATE TABLE IF NOT EXISTS ${WRITE_READINESS.TABLE} ` +
-          '(id TEXT PRIMARY KEY, observed_at INTEGER)',
-      );
-      await database.query(
-        `INSERT INTO ${WRITE_READINESS.TABLE} (id, observed_at) VALUES (?, ?)`,
-        [`ready:${attempts}:${Date.now()}`, Date.now()],
-      );
-      stage(`application writes served after ${attempts} readiness attempts`);
-      return;
-    } catch (error) {
-      lastError = error;
-      await sleep(WRITE_READINESS.POLL_MS);
-    }
-  }
-  const code = typeof lastError?.code === 'string' ? lastError.code : 'unknown';
-  const message = typeof lastError?.message === 'string' ? lastError.message : 'unknown';
-  throw new Error(
-    `application writes not served within ${WRITE_READINESS.BUDGET_MS} ms; ` +
-      `last=${code}: ${message}`,
-  );
-}
-
 stage('starting shared Lagrange server');
 await sharedServer.start();
 stage('shared Lagrange server started');
 try {
-  stage('waiting for public application-write readiness');
-  await waitForApplicationWrites();
-
   stage('attaching Images runtime A');
   runtimeA = await createRuntime({
     backend: {
