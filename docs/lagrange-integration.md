@@ -77,10 +77,12 @@ That acceptance is currently **BLOCKED by Lagrange**, not by adapter semantics:
 on the PR #66 product tree, implicit single-node fallback reaches
 target/minimum replica count 1, but application DDL/write can still be
 acknowledged while the new table partition later reports no candidate,
-routable or planned target and fails provisioning. An attempted public
-CREATE+INSERT "readiness" probe was acknowledged and later failed the same way,
-so it was removed; the adapter does not invent a second readiness/retry owner.
-The exact consumer reproducer and log facts are recorded on Lagrange PR #66.
+routable or planned target and fails provisioning. The earlier
+acknowledgement-only readiness probe was therefore rejected. The real fixture
+now performs one CREATE and one INSERT, then only polls a SELECT for that exact
+row for 20 seconds; failure is an acceptance prerequisite, not an Images
+readiness/retry policy. The exact consumer reproducer and log facts are
+recorded on Lagrange PR #66.
 
 A separate file-backed compatibility-runtime test proves the adapter mapping
 across restart. The M6.3 shared-server proof is intentionally **not** a
