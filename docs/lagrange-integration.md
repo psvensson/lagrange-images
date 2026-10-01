@@ -68,13 +68,15 @@ The mock implements rollback and transaction-local visibility with isolated in-m
 The PR-only integration lane installs the pinned public Lagrange package and
 proves the owned schema plus one atomic state/history round trip through its
 embedded session. M6.3 adds a second real-Lagrange proof using the same public
-`createEmbeddedLagrange()` handle: the caller starts ONE server, two
+`createEmbeddedLagrange()` handle. Embedded `start()` is not treated as a
+promise that application writes are already admitted: the acceptance fixture
+first polls one ordinary application session until a bounded CREATE+INSERT is
+served, matching Lagrange's own public-seam formation contract. Only then do two
 `LagrangeBackend({runtime, ownsRuntime: false})` adapters attach without taking
-server lifecycle authority, and each opens its own application session for an
+server lifecycle authority, each opening its own application session for an
 independent Images runtime. The unchanged M5 Life graph is installed by one
-runtime and executed by the other. Stopping one attached backend only closes
-that adapter's session state; the caller remains the single owner of server
-shutdown.
+runtime and executed by the other. Stopping one attached backend detaches that
+adapter; the caller remains the single owner of server shutdown.
 
 A separate file-backed compatibility-runtime test proves the adapter mapping
 across restart. The M6.3 shared-server proof is intentionally **not** a
