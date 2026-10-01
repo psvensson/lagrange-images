@@ -34,10 +34,19 @@ test('M6.3: two Images runtimes resolve and execute the unchanged Life graph thr
   const directory = await mkdtemp(join(tmpdir(), 'lagrange-images-m6-real-'));
   const environment = {...process.env, LAGRANGE_BACKEND: 'lagrange'};
   try {
-    await executeFile(process.execPath, [m6SharedServerFixture.pathname, directory], {
-      env: environment,
-      timeout: 340_000,
-    });
+    try {
+      await executeFile(process.execPath, [m6SharedServerFixture.pathname, directory], {
+        env: environment,
+        timeout: 340_000,
+      });
+    } catch (error) {
+      const stdout = typeof error?.stdout === 'string' ? error.stdout : '';
+      const stderr = typeof error?.stderr === 'string' ? error.stderr : '';
+      throw new Error(
+        `M6.3 child process failed; stdout:\n${stdout}\nstderr:\n${stderr}`,
+        {cause: error},
+      );
+    }
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
