@@ -15,6 +15,14 @@ import {
 const [dataDir] = process.argv.slice(2);
 if (!dataDir) throw new TypeError('usage: real-lagrange-m6-shared-server-process.js <data-dir>');
 
+const WRITE_ROUND_TRIP = Object.freeze({
+  APPLICATION_ID: 'lagrange-images-m6-round-trip',
+  ID: 'm6:write-round-trip',
+  POLL_MS: 100,
+  TABLE: 'lagrange_images_m6_round_trip',
+  VISIBILITY_MS: 20_000,
+});
+
 
 async function freePort() {
   return await new Promise((resolve, reject) => {
@@ -59,10 +67,60 @@ function stage(label) {
   process.stderr.write(`[m6.3] ${label}\n`);
 }
 
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function assertPublicWriteRoundTrip() {
+  const database = sharedServer.openApplicationDatabase({
+    applicationId: WRITE_ROUND_TRIP.APPLICATION_ID,
+  });
+  await database.query(
+    `CREATE TABLE ${WRITE_ROUND_TRIP.TABLE} (id TEXT PRIMARY KEY, marker TEXT)`,
+  );
+  await database.query(
+    `INSERT INTO ${WRITE_ROUND_TRIP.TABLE} (id, marker) VALUES (?, ?)`,
+    [WRITE_ROUND_TRIP.ID, 'visible'],
+  );
+
+  const deadline = Date.now() + WRITE_ROUND_TRIP.VISIBILITY_MS;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const result = await database.query(
+        `SELECT id, marker FROM ${WRITE_ROUND_TRIP.TABLE} WHERE id = ?`,
+        [WRITE_ROUND_TRIP.ID],
+      );
+      if (
+        Array.isArray(result?.rows) &&
+        result.rows.some((row) =>
+          row.id === WRITE_ROUND_TRIP.ID && row.marker === 'visible')
+      ) {
+        stage('public write round-trip is visible');
+        return;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(WRITE_ROUND_TRIP.POLL_MS);
+  }
+
+  const code = typeof lastError?.code === 'string' ? lastError.code : 'none';
+  const message =
+    typeof lastError?.message === 'string' ? lastError.message : 'no visible row';
+  throw new Error(
+    `public INSERT was acknowledged but not visible within ` +
+      `${WRITE_ROUND_TRIP.VISIBILITY_MS} ms; last=${code}: ${message}`,
+  );
+}
+
 stage('starting shared Lagrange server');
 await sharedServer.start();
 stage('shared Lagrange server started');
 try {
+  stage('proving one public write round-trip before Images schema');
+  await assertPublicWriteRoundTrip();
+
   stage('attaching Images runtime A');
   runtimeA = await createRuntime({
     backend: {
