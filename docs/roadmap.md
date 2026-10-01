@@ -364,14 +364,16 @@ receiver lookup (`Symmetric Smalltalk receiver not found`) while node A, holding
 fails at the Behavior lookup. The missing owners are generic (residency, placement, remote
 resolution); ADR 0092 decides where they live before M6.3 repairs the first one.
 
-M6.3 establishes the deliberately weaker first green allowed by ADR 0092: a whole-image object
-locator plus one remote-resolution interaction above the backend, with **two independent Images
-runtimes opening separate application sessions on one caller-owned real Lagrange server**. Runtime B
-installs the unchanged M5 Life release and creates S0; runtime A resolves the same durable ObjectRefs
-through its own session and executes unchanged `LifeModel>>nextState`; runtime B observes S1. No
-provider, importer, language personality or application code learns placement, and closing runtime A
-does not stop the shared server. This is the shared-durability baseline, not per-object placement:
-the M6.2 separately-composed-backend/raw-relocation RED stays active for the stronger routed case.
+M6.3 has a candidate whole-image locator + shared-server resolution implementation, but the
+real acceptance is **BLOCKED on Lagrange**, so it is not yet a green milestone. The intended first
+form is still two independent Images runtimes opening separate application sessions on one
+caller-owned real Lagrange server, with Runtime B installing the unchanged M5 Life release and
+Runtime A executing unchanged `LifeModel>>nextState`. The current Lagrange PR #66 product tree
+gets farther than the public-seam-only tree (implicit RF3 falls back to target/minimum 1), but its
+public CREATE+INSERT can be acknowledged while the table partition later reports zero admissible
+provisioning targets. The same failure hits the Images schema. That blocker is recorded on Lagrange
+PR #66; Images does not add a second readiness/retry owner to mask it. The M6.2 separately-composed-
+backend/raw-relocation RED remains active for the later stronger routed case.
 
 - [ ] run the same M5 application with application objects placed across Lagrange nodes;
 - [ ] keep placement/routing entirely out of the Cuis importer and application semantics;
@@ -438,7 +440,7 @@ them — the object locator (residency, whole-image first), a separate placement
 remote resolution as an interaction owner over Lagrange's routing — and fixes that Images never owns
 transport, membership, replication or consensus:
 
-- [x] whole-image object locator + shared-server record-resolution baseline (M6.3);
+- [ ] whole-image object locator + shared-server record-resolution baseline (M6.3 candidate; real Lagrange acceptance blocked);
 - [ ] placement policy and per-object residency;
 - [ ] routed local-vs-remote call semantics across separately composed Lagrange backends;
 - [ ] Lagrange WASM placement;
