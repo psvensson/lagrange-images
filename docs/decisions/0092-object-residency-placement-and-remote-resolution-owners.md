@@ -136,11 +136,14 @@ duplicates identity, or adds an Images transport is still a failed repair.
   per-object/routed-resolution decision owns that stronger shape.
 - The Lagrange backend adapter stays the sole translation between the backend contract and
   Lagrange sessions; the locator and remote resolution sit above it and consume it.
-- A public CREATE+INSERT probe is **not** an authoritative readiness oracle on the current Lagrange
-  PR #66 product tree: the probe can be acknowledged and its partition can still fail provisioning
-  later. The attempted Images-side readiness wait was therefore removed. This finding belongs to
-  Lagrange's application-write/provisioning owner and is recorded on PR #66; Images adds no
-  competing readiness or retry policy.
+- A public CREATE+INSERT acknowledgement is **not** an authoritative readiness oracle on the current
+  Lagrange PR #66 product tree: the operation can be acknowledged and its partition can still fail
+  provisioning later. The attempted acknowledgement-only wait was removed. The real M6 witness now
+  asserts a stronger, one-shot prerequisite instead: ONE public CREATE + ONE INSERT must make that
+  row readable within a bounded 20-second visibility window before Images schema work begins. It
+  never retries the write and owns no readiness policy; it simply fails the acceptance early if the
+  public write did not become observable. The underlying finding still belongs to Lagrange's
+  application-write/provisioning owner and is recorded on PR #66.
 - `docs/lagrange-integration.md` checklist items 7 to 10 remain unchecked until the real
   process-restart and multi-node proofs exist; this ADR does not claim them.
 - The roadmap's section 6 items keep their order: locator and placement first, call semantics
