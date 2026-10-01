@@ -1,6 +1,6 @@
 # ADR 0092: Object residency, placement and remote resolution are generic Images owners over Lagrange routing
 
-Status: accepted — M6.3 implements the whole-image/shared-server baseline; per-object residency, routed cross-backend resolution and placement remain deferred
+Status: accepted — M6.3 candidate code exists, but the real shared-server acceptance is BLOCKED on a Lagrange provisioning finding; no ownership row is promoted to current yet
 
 **Decides WHERE the generic owners M6 needs live and WHAT each may own, before any of them is
 built.** ADR 0085 M6 asks whether the exact M5 application runs unchanged when its ordinary objects
@@ -80,13 +80,14 @@ identity loss.
 ### 3. Remote resolution is an interaction owner over Lagrange routing, and Images never owns transport
 
 The arrow **Images runtime -> record resolution outside that execution instance** has one owner:
-**remote resolution**. M6.3 implements its lowest transport-free form in
+**remote resolution**. M6.3 contains a candidate lowest transport-free implementation in
 `src/graph/remote-resolution.js`: an ObjectRef plus an opaque locator-issued residency token is
-resolved through the backend session selected by the locator. With two Images runtimes attached
-to one real Lagrange server, each runtime has its own application-session adapter while Lagrange
-remains the only owner of database routing. When a later proof crosses separately composed
-Lagrange backends, this same interaction owner must also own classified transport/error mapping,
-read idempotency and the rule that authority is re-checked at the resolving node and never carried.
+resolved through the backend session selected by the locator. The unit owner contract is green,
+but the real two-runtime/one-Lagrange-server acceptance is still BLOCKED before Life installation
+can complete, so this implementation is not yet promoted to current. When a later proof crosses
+separately composed Lagrange backends, this same interaction owner must also own classified
+transport/error mapping, read idempotency and the rule that authority is re-checked at the
+resolving node and never carried.
 
 Images does **not** implement transport, membership, replication or consensus. Those are Lagrange's
 (ADR 0033's placement of the durable backend below Images stands). An Images-side RPC, gossip or
@@ -105,34 +106,41 @@ placement.
 
 ### 5. Ownership map and proof discipline
 
-`docs/ownership.md` keeps three distinct rows. M6.3 promotes the object locator and the
-shared-server remote-resolution interaction to **current**, each with a proof list; placement
-policy remains **planned**. A row may not become current without a falsifier.
+`docs/ownership.md` keeps three distinct rows. The M6.3 branch contains candidate object-locator
+and shared-server remote-resolution implementations with green unit proofs, while placement policy
+remains planned. **No row becomes current until the real shared-server acceptance is green.**
 
 The original M6.2 witness remains the falsifier for the **next** distribution step: it uses two
-separately composed durable backends and raw evidence relocation of one `cells` record. M6.3
-does not flip that witness, because doing so would require per-object residency plus a request
-route across those separate backends — both are explicitly deferred above. Instead the first green
-vertical reuses the exact unchanged M5 Life workload in
-`fixtures/real-lagrange-m6-shared-server-process.js`: runtime B installs and creates S0, runtime A
-opens a separate application session on the same caller-owned real Lagrange server, resolves the
-same ObjectRefs and executes unchanged `nextState`, and runtime B observes S1. Both runtimes stay
-provider-free. A repair that teaches Life, the importer or the language personality about
-placement/routing, duplicates identity, or adds an Images transport is still a failed repair.
+separately composed durable backends and raw evidence relocation of one `cells` record. M6.3 does
+not flip that witness, because doing so would require per-object residency plus a request route
+across those separate backends — both are explicitly deferred above.
+
+The first shared-server vertical is
+`fixtures/real-lagrange-m6-shared-server-process.js`. Its owner/unit layers are green, but the real
+Lagrange execution remains BLOCKED before the recovered Life installation completes. On the PR #66
+product tree, Lagrange correctly reduces implicit RF3 to target/minimum 1 on a one-node shape, yet
+the public CREATE+INSERT operation can return success while the table's partition later reports
+`candidateTargetNodeIds: []`, `existingRoutableNodeIds: []`, and
+`plannedTargetNodeIds: []` and fails provisioning. The exact consumer reproducer is recorded on
+Lagrange PR #66. Images must not add its own readiness/retry owner to reinterpret that result.
+
+A repair that teaches Life, the importer or the language personality about placement/routing,
+duplicates identity, or adds an Images transport is still a failed repair.
 
 ## Consequences
 
-- M6.3 establishes the fixed baseline: whole-image residency in the locator, the shared-server
-  form of remote resolution, the unchanged Life workload green across two Images runtimes, and
-  ownership rows promoted or kept planned honestly. The separately composed-backend M6.2 RED stays
-  red until a later per-object/routed-resolution decision owns that stronger shape.
+- M6.3 has **not** established the fixed baseline yet. The whole-image locator and shared-server
+  resolver are candidates with green unit proofs; the real unchanged-Life acceptance remains
+  blocked on the Lagrange provisioning finding above. Ownership rows therefore remain candidate or
+  planned. The separately composed-backend M6.2 RED stays red until a later
+  per-object/routed-resolution decision owns that stronger shape.
 - The Lagrange backend adapter stays the sole translation between the backend contract and
   Lagrange sessions; the locator and remote resolution sit above it and consume it.
-- The real shared-server witness treats `createEmbeddedLagrange().start()` and application-write
-  readiness as distinct public states. It waits, through an ordinary application database session,
-  until one bounded CREATE+INSERT probe is served **before** either Images adapter creates its
-  schema. That is acceptance-harness shaping, not an Images readiness owner or retry policy; the
-  Lagrange public write path remains authoritative.
+- A public CREATE+INSERT probe is **not** an authoritative readiness oracle on the current Lagrange
+  PR #66 product tree: the probe can be acknowledged and its partition can still fail provisioning
+  later. The attempted Images-side readiness wait was therefore removed. This finding belongs to
+  Lagrange's application-write/provisioning owner and is recorded on PR #66; Images adds no
+  competing readiness or retry policy.
 - `docs/lagrange-integration.md` checklist items 7 to 10 remain unchecked until the real
   process-restart and multi-node proofs exist; this ADR does not claim them.
 - The roadmap's section 6 items keep their order: locator and placement first, call semantics
