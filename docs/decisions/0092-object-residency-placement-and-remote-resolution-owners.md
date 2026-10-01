@@ -128,6 +128,11 @@ placement/routing, duplicates identity, or adds an Images transport is still a f
   red until a later per-object/routed-resolution decision owns that stronger shape.
 - The Lagrange backend adapter stays the sole translation between the backend contract and
   Lagrange sessions; the locator and remote resolution sit above it and consume it.
+- The real shared-server witness treats `createEmbeddedLagrange().start()` and application-write
+  readiness as distinct public states. It waits, through an ordinary application database session,
+  until one bounded CREATE+INSERT probe is served **before** either Images adapter creates its
+  schema. That is acceptance-harness shaping, not an Images readiness owner or retry policy; the
+  Lagrange public write path remains authoritative.
 - `docs/lagrange-integration.md` checklist items 7 to 10 remain unchecked until the real
   process-restart and multi-node proofs exist; this ADR does not claim them.
 - The roadmap's section 6 items keep their order: locator and placement first, call semantics
