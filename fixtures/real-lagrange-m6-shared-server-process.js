@@ -33,7 +33,11 @@ async function freePort() {
   });
 }
 
-const [restApiPort, wsPort, websocketPort] = [await freePort(), await freePort(), await freePort()];
+const [restApiPort, wsPort, websocketPort] = [
+  await freePort(),
+  await freePort(),
+  await freePort(),
+];
 const sharedServer = createEmbeddedLagrange({
   configuration: {
     admin: {websocketPort},
@@ -76,7 +80,8 @@ async function waitForApplicationWrites() {
     attempts += 1;
     try {
       await database.query(
-        `CREATE TABLE IF NOT EXISTS ${WRITE_READINESS.TABLE} (id TEXT PRIMARY KEY, observed_at INTEGER)`,
+        `CREATE TABLE IF NOT EXISTS ${WRITE_READINESS.TABLE} ` +
+          '(id TEXT PRIMARY KEY, observed_at INTEGER)',
       );
       await database.query(
         `INSERT INTO ${WRITE_READINESS.TABLE} (id, observed_at) VALUES (?, ?)`,
@@ -92,16 +97,18 @@ async function waitForApplicationWrites() {
   const code = typeof lastError?.code === 'string' ? lastError.code : 'unknown';
   const message = typeof lastError?.message === 'string' ? lastError.message : 'unknown';
   throw new Error(
-    `application writes not served within ${WRITE_READINESS.BUDGET_MS} ms; last=${code}: ${message}`,
+    `application writes not served within ${WRITE_READINESS.BUDGET_MS} ms; ` +
+      `last=${code}: ${message}`,
   );
 }
 
 stage('starting shared Lagrange server');
 await sharedServer.start();
 stage('shared Lagrange server started');
-stage('waiting for public application-write readiness');
-await waitForApplicationWrites();
 try {
+  stage('waiting for public application-write readiness');
+  await waitForApplicationWrites();
+
   stage('attaching Images runtime A');
   runtimeA = await createRuntime({
     backend: {
@@ -125,13 +132,25 @@ try {
   });
 
   stage('Images runtime B attached');
-  assert.notEqual(runtimeA.images, runtimeB.images, 'the proof uses two independent Images runtimes');
-  assert.notEqual(runtimeA.backend, runtimeB.backend, 'each Images runtime owns a distinct application session adapter');
+  assert.notEqual(
+    runtimeA.images,
+    runtimeB.images,
+    'the proof uses two independent Images runtimes',
+  );
+  assert.notEqual(
+    runtimeA.backend,
+    runtimeB.backend,
+    'each Images runtime owns a distinct application session adapter',
+  );
   assertProviderAbsence(runtimeA, 'M6 runtime A');
   assertProviderAbsence(runtimeB, 'M6 runtime B');
 
   stage('installing recovered Life on runtime B');
-  const {lifeModelClass} = await installRecoveredLife({runtime: runtimeB, imageId, fixture});
+  const {lifeModelClass} = await installRecoveredLife({
+    runtime: runtimeB,
+    imageId,
+    fixture,
+  });
   stage('recovered Life installed on runtime B');
   const sendB = senderFor(runtimeB, imageId);
   const sendA = senderFor(runtimeA, imageId);
@@ -140,11 +159,19 @@ try {
   const {model, stateString} = await buildBlinkerModel(sendB, lifeModelClass, nativeGlobals);
   stage('frozen blinker model built');
 
-  assert.equal(await stateString(), FROZEN_STATES[0], 'runtime B creates the unchanged M5 S0 state');
+  assert.equal(
+    await stateString(),
+    FROZEN_STATES[0],
+    'runtime B creates the unchanged M5 S0 state',
+  );
   stage('resolving same model from runtime A');
   const cellsB = await sendB(model, 'cells');
   const cellsA = await sendA(model, 'cells');
-  assert.deepEqual(cellsA, cellsB, 'runtime A resolves the same durable ObjectRef through its own session');
+  assert.deepEqual(
+    cellsA,
+    cellsB,
+    'runtime A resolves the same durable ObjectRef through its own session',
+  );
 
   stage('executing unchanged nextState from runtime A');
   await sendA(model, 'nextState');
