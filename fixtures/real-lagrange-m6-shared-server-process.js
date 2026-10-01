@@ -50,8 +50,15 @@ const imageId = 'life-native-m6';
 let runtimeA = null;
 let runtimeB = null;
 
+function stage(label) {
+  process.stderr.write(`[m6.3] ${label}\n`);
+}
+
+stage('starting shared Lagrange server');
 await sharedServer.start();
+stage('shared Lagrange server started');
 try {
+  stage('attaching Images runtime A');
   runtimeA = await createRuntime({
     backend: {
       instance: new LagrangeBackend({
@@ -61,6 +68,8 @@ try {
       }),
     },
   });
+  stage('Images runtime A attached');
+  stage('attaching Images runtime B');
   runtimeB = await createRuntime({
     backend: {
       instance: new LagrangeBackend({
@@ -71,32 +80,43 @@ try {
     },
   });
 
+  stage('Images runtime B attached');
   assert.notEqual(runtimeA.images, runtimeB.images, 'the proof uses two independent Images runtimes');
   assert.notEqual(runtimeA.backend, runtimeB.backend, 'each Images runtime owns a distinct application session adapter');
   assertProviderAbsence(runtimeA, 'M6 runtime A');
   assertProviderAbsence(runtimeB, 'M6 runtime B');
 
+  stage('installing recovered Life on runtime B');
   const {lifeModelClass} = await installRecoveredLife({runtime: runtimeB, imageId, fixture});
+  stage('recovered Life installed on runtime B');
   const sendB = senderFor(runtimeB, imageId);
   const sendA = senderFor(runtimeA, imageId);
   const nativeGlobals = await nativeGlobalsFor(runtimeB.images, imageId);
+  stage('building frozen blinker model on runtime B');
   const {model, stateString} = await buildBlinkerModel(sendB, lifeModelClass, nativeGlobals);
+  stage('frozen blinker model built');
 
   assert.equal(await stateString(), FROZEN_STATES[0], 'runtime B creates the unchanged M5 S0 state');
+  stage('resolving same model from runtime A');
   const cellsB = await sendB(model, 'cells');
   const cellsA = await sendA(model, 'cells');
   assert.deepEqual(cellsA, cellsB, 'runtime A resolves the same durable ObjectRef through its own session');
 
+  stage('executing unchanged nextState from runtime A');
   await sendA(model, 'nextState');
+  stage('runtime A nextState completed');
   assert.equal(
     await stateString(),
     FROZEN_STATES[1],
     'unchanged Life nextState executed by runtime A mutates the graph runtime B observes',
   );
 
+  stage('closing runtime A');
   await runtimeA.close();
   runtimeA = null;
+  stage('executing second nextState from runtime B');
   await sendB(model, 'nextState');
+  stage('runtime B second nextState completed');
   assert.equal(
     await stateString(),
     FROZEN_STATES[2],
@@ -104,6 +124,7 @@ try {
   );
 
   assertProviderAbsence(runtimeB, 'M6 runtime B after cross-runtime execution');
+  stage('M6.3 shared-server witness complete');
 } finally {
   if (runtimeA) await runtimeA.close();
   if (runtimeB) await runtimeB.close();
