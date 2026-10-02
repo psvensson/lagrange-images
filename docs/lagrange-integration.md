@@ -73,16 +73,20 @@ embedded session. M6.3 contains a candidate second real-Lagrange proof using the
 own application session for an independent Images runtime without taking server
 lifecycle authority.
 
-That acceptance is currently **BLOCKED by Lagrange**, not by adapter semantics:
-on the PR #66 product tree, implicit single-node fallback reaches
-target/minimum replica count 1, but application DDL/write can still be
-acknowledged while the new table partition later reports no candidate,
-routable or planned target and fails provisioning. The earlier
-acknowledgement-only readiness probe was therefore rejected. The real fixture
-now performs one CREATE and one INSERT, then only polls a SELECT for that exact
-row for 20 seconds; failure is an acceptance prerequisite, not an Images
-readiness/retry policy. The exact consumer reproducer and log facts are
-recorded on Lagrange PR #66.
+That acceptance is currently **BLOCKED by Lagrange**, not by adapter semantics.
+Against the exact landed Lagrange merge `edf20e39b0014d5d2a63a2ecea990712f0349153`
+(merged PR #65), implicit single-node fallback reaches target/minimum replica
+count 1 and the one-shot public CREATE+INSERT round trip becomes visible, but
+table partition provisioning then keeps refusing the single admissible node:
+`required=1, provisionable=0, target=1` with `readiness_planning_identity_unavailable`
+and `readiness_planning_identity_changed` rejections, at times with
+`candidateTargetNodeIds: []` overall. A direct 25-minute run never converged, so
+the recovered Life install never completes. The earlier acknowledgement-only
+readiness probe was rejected for exactly this reason. The real fixture performs
+one CREATE and one INSERT, then only polls a SELECT for that exact row for 20
+seconds; failure is an acceptance prerequisite, not an Images readiness/retry
+policy. The consumer reproducer is
+`fixtures/real-lagrange-m6-shared-server-process.js` pinned to that SHA.
 
 A separate file-backed compatibility-runtime test proves the adapter mapping
 across restart. The M6.3 shared-server proof is intentionally **not** a

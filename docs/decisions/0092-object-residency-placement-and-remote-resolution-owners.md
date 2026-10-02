@@ -117,12 +117,18 @@ across those separate backends — both are explicitly deferred above.
 
 The first shared-server vertical is
 `fixtures/real-lagrange-m6-shared-server-process.js`. Its owner/unit layers are green, but the real
-Lagrange execution remains BLOCKED before the recovered Life installation completes. On the PR #66
-product tree, Lagrange correctly reduces implicit RF3 to target/minimum 1 on a one-node shape, yet
-the public CREATE+INSERT operation can return success while the table's partition later reports
-`candidateTargetNodeIds: []`, `existingRoutableNodeIds: []`, and
-`plannedTargetNodeIds: []` and fails provisioning. The exact consumer reproducer is recorded on
-Lagrange PR #66. Images must not add its own readiness/retry owner to reinterpret that result.
+Lagrange execution remains BLOCKED before the recovered Life installation completes. Measured
+against the exact landed Lagrange support merge `edf20e39b0014d5d2a63a2ecea990712f0349153`
+(merged PR #65, the same SHA the merged Images baseline pins), Lagrange reduces implicit RF3 to
+target/minimum 1 on a one-node shape and the public round-trip probe does complete, yet table
+partition provisioning keeps refusing the single admissible node: `required=1, provisionable=0,
+target=1` with `readiness_planning_identity_unavailable` and
+`readiness_planning_identity_changed` rejections, at times with `candidateTargetNodeIds: []`
+overall. The one-shot public CREATE+INSERT does become visible, but the formation loop re-plans
+and denies the same table partitions repeatedly — a direct 25-minute run never converged, so the
+recovered Life install simply never completes. The consumer reproducer is
+`fixtures/real-lagrange-m6-shared-server-process.js` against that exact SHA. Images must not add
+its own readiness/retry owner to reinterpret that result.
 
 A repair that teaches Life, the importer or the language personality about placement/routing,
 duplicates identity, or adds an Images transport is still a failed repair.
@@ -136,14 +142,15 @@ duplicates identity, or adds an Images transport is still a failed repair.
   per-object/routed-resolution decision owns that stronger shape.
 - The Lagrange backend adapter stays the sole translation between the backend contract and
   Lagrange sessions; the locator and remote resolution sit above it and consume it.
-- A public CREATE+INSERT acknowledgement is **not** an authoritative readiness oracle on the current
-  Lagrange PR #66 product tree: the operation can be acknowledged and its partition can still fail
-  provisioning later. The attempted acknowledgement-only wait was removed. The real M6 witness now
-  asserts a stronger, one-shot prerequisite instead: ONE public CREATE + ONE INSERT must make that
-  row readable within a bounded 20-second visibility window before Images schema work begins. It
-  never retries the write and owns no readiness policy; it simply fails the acceptance early if the
-  public write did not become observable. The underlying finding still belongs to Lagrange's
-  application-write/provisioning owner and is recorded on PR #66.
+- A public CREATE+INSERT acknowledgement is **not** an authoritative readiness oracle on the landed
+  Lagrange support tree (`edf20e39…`): the row did become visible, but the same table partitions
+  kept failing provisioning re-plans afterwards and never reached a routable cohort. The attempted
+  acknowledgement-only wait was removed. The real M6 witness asserts a stronger, one-shot
+  prerequisite instead: ONE public CREATE + ONE INSERT must make that row readable within a bounded
+  20-second visibility window before Images schema work begins. It never retries the write and owns
+  no readiness policy; it simply fails the acceptance early if the public write did not become
+  observable. The underlying finding still belongs to Lagrange's application-write/provisioning
+  owner, with the exact reproducer named above.
 - `docs/lagrange-integration.md` checklist items 7 to 10 remain unchecked until the real
   process-restart and multi-node proofs exist; this ADR does not claim them.
 - The roadmap's section 6 items keep their order: locator and placement first, call semantics
