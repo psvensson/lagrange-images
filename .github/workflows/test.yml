@@ -101,15 +101,14 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
-      # The pinned public Lagrange: the v0.2.5 release commit (2026-09-13), the first 0.2 release that
-      # shipped. The previous pin (cd6f6d5, 2026-08-15, the commit that added embedded application
-      # database sessions) was 641 commits behind it; the adapter still uses only the public
-      # `createEmbeddedLagrange` -> `start` -> `openApplicationDatabase` -> `query`/`transaction`
-      # path, which this lane proves against the pin.
+      # Integration proof pin for the current Lagrange Images support branch.
+      # The adapter still uses only the public `createEmbeddedLagrange` -> `start` ->
+      # `openApplicationDatabase` -> `query`/`transaction` path. Keep this pin exact so
+      # consumer evidence always names the Lagrange tree it proved.
       - uses: actions/checkout@v7
         with:
           repository: psvensson/lagrange
-          ref: 0d66b0cb67e7778500e33e65dcd9155163070458
+          ref: edf20e39b0014d5d2a63a2ecea990712f0349153
           path: .integration/lagrange
       - uses: actions/setup-node@v7
         with:
