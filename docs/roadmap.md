@@ -364,6 +364,21 @@ receiver lookup (`Symmetric Smalltalk receiver not found`) while node A, holding
 fails at the Behavior lookup. The missing owners are generic (residency, placement, remote
 resolution); ADR 0092 decides where they live before M6.3 repairs the first one.
 
+M6.3 has a candidate whole-image locator + shared-server resolution implementation, but the
+real acceptance is **BLOCKED on Lagrange**, so it is not yet a green milestone. The intended first
+form is still two independent Images runtimes opening separate application sessions on one
+caller-owned real Lagrange server, with Runtime B installing the unchanged M5 Life release and
+Runtime A executing unchanged `LifeModel>>nextState`. Against the landed Lagrange merge
+`edf20e39…` (PR #65), table partition provisioning kept refusing the single admissible node
+(`readiness_planning_identity_unavailable`/`_changed`) and never converged in a 25-minute direct
+run. Against the landed readiness repair `ec63fbb0…` (now pinned), the public round trip is visible
+and no readiness-identity rejection is logged, but two Images table partitions still fail initial
+provisioning (`required=1, provisionable=0, target=1, rejected=none`, `candidateTargetNodeIds: []`)
+and the recovered Life install fails after ~18 minutes with `DISTRIBUTED_PARTICIPANT_FAILURE`. That blocker belongs to
+Lagrange's provisioning/readiness owner; Images does not add a second readiness/retry owner to
+mask it. The M6.2 separately-composed-backend/raw-relocation RED remains active for the later
+stronger routed case.
+
 - [ ] run the same M5 application with application objects placed across Lagrange nodes;
 - [ ] keep placement/routing entirely out of the Cuis importer and application semantics;
 - [ ] prove generic Lagrange owners decide object location and execution placement;
@@ -429,8 +444,9 @@ them — the object locator (residency, whole-image first), a separate placement
 remote resolution as an interaction owner over Lagrange's routing — and fixes that Images never owns
 transport, membership, replication or consensus:
 
-- [ ] object locator and placement policy;
-- [ ] local vs remote call semantics;
+- [ ] whole-image object locator + shared-server record-resolution baseline (M6.3 candidate; real Lagrange acceptance blocked);
+- [ ] placement policy and per-object residency;
+- [ ] routed local-vs-remote call semantics across separately composed Lagrange backends;
 - [ ] Lagrange WASM placement;
 - [ ] distributed routing for native Blocks and explicitly retained foreign/component boundaries;
 - [ ] explicit failure/retry/idempotency semantics;
