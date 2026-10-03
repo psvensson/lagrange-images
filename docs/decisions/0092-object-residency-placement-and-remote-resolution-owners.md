@@ -126,7 +126,14 @@ target=1` with `readiness_planning_identity_unavailable` and
 `readiness_planning_identity_changed` rejections, at times with `candidateTargetNodeIds: []`
 overall. The one-shot public CREATE+INSERT does become visible, but the formation loop re-plans
 and denies the same table partitions repeatedly — a direct 25-minute run never converged, so the
-recovered Life install simply never completes. The consumer reproducer is
+recovered Life install simply never completes. Re-measured against the landed Lagrange support
+`ec63fbb0016bf1ca6d81372e2a0721851363ea80` (readiness repair, now the pinned SHA), no
+`readiness_planning_identity_*` rejection is logged, but initial provisioning still fails once for
+the `lagrange_images_snapshots` and `lagrange_images_stream_heads` partitions (`required=1,
+provisionable=0, target=1, rejected=none`, `candidateTargetNodeIds: []`), their schema-job leaders
+are reported `leader_durability_unfit_transaction_hold`, and the recovered Life install fails after
+~18 minutes with `DISTRIBUTED_PARTICIPANT_FAILURE` (the CI-bounded witness times out at 340 s in
+the same stage). The consumer reproducer is
 `fixtures/real-lagrange-m6-shared-server-process.js` against that exact SHA. Images must not add
 its own readiness/retry owner to reinterpret that result.
 
@@ -144,7 +151,9 @@ duplicates identity, or adds an Images transport is still a failed repair.
   Lagrange sessions; the locator and remote resolution sit above it and consume it.
 - A public CREATE+INSERT acknowledgement is **not** an authoritative readiness oracle on the landed
   Lagrange support tree (`edf20e39…`): the row did become visible, but the same table partitions
-  kept failing provisioning re-plans afterwards and never reached a routable cohort. The attempted
+  kept failing provisioning re-plans afterwards and never reached a routable cohort. On
+  `ec63fbb0…` the row is again visible while two Images table partitions still fail initial
+  provisioning and the Life install fails with `DISTRIBUTED_PARTICIPANT_FAILURE`. The attempted
   acknowledgement-only wait was removed. The real M6 witness asserts a stronger, one-shot
   prerequisite instead: ONE public CREATE + ONE INSERT must make that row readable within a bounded
   20-second visibility window before Images schema work begins. It never retries the write and owns

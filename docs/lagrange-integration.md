@@ -74,14 +74,20 @@ own application session for an independent Images runtime without taking server
 lifecycle authority.
 
 That acceptance is currently **BLOCKED by Lagrange**, not by adapter semantics.
-Against the exact landed Lagrange merge `edf20e39b0014d5d2a63a2ecea990712f0349153`
-(merged PR #65), implicit single-node fallback reaches target/minimum replica
-count 1 and the one-shot public CREATE+INSERT round trip becomes visible, but
-table partition provisioning then keeps refusing the single admissible node:
-`required=1, provisionable=0, target=1` with `readiness_planning_identity_unavailable`
-and `readiness_planning_identity_changed` rejections, at times with
-`candidateTargetNodeIds: []` overall. A direct 25-minute run never converged, so
-the recovered Life install never completes. The earlier acknowledgement-only
+Against the earlier landed Lagrange merge `edf20e39b0014d5d2a63a2ecea990712f0349153`
+(merged PR #65), table partition provisioning kept refusing the single admissible
+node with `readiness_planning_identity_unavailable`/`_changed` rejections and a
+direct 25-minute run never converged. Re-measured against the exact landed
+Lagrange support `ec63fbb0016bf1ca6d81372e2a0721851363ea80` (readiness repair),
+implicit single-node fallback reaches target/minimum replica count 1, the one-shot
+public CREATE+INSERT round trip becomes visible and no `readiness_planning_identity_*`
+rejection is logged, but initial provisioning still fails once for the
+`lagrange_images_snapshots` and `lagrange_images_stream_heads` partitions
+(`required=1, provisionable=0, target=1, rejected=none`, `candidateTargetNodeIds: []`),
+schema-job leaders are then reported `leader_durability_unfit_transaction_hold`, and
+the recovered Life install fails after ~18 minutes with
+`DISTRIBUTED_PARTICIPANT_FAILURE` (the CI-bounded witness times out at 340 s in
+the same stage). The earlier acknowledgement-only
 readiness probe was rejected for exactly this reason. The real fixture performs
 one CREATE and one INSERT, then only polls a SELECT for that exact row for 20
 seconds; failure is an acceptance prerequisite, not an Images readiness/retry

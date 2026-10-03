@@ -108,7 +108,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: psvensson/lagrange
-          ref: edf20e39b0014d5d2a63a2ecea990712f0349153
+          ref: ec63fbb0016bf1ca6d81372e2a0721851363ea80
           path: .integration/lagrange
       - uses: actions/setup-node@v7
         with:

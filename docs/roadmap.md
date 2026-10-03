@@ -369,10 +369,12 @@ real acceptance is **BLOCKED on Lagrange**, so it is not yet a green milestone. 
 form is still two independent Images runtimes opening separate application sessions on one
 caller-owned real Lagrange server, with Runtime B installing the unchanged M5 Life release and
 Runtime A executing unchanged `LifeModel>>nextState`. Against the landed Lagrange merge
-`edf20e39…` (PR #65), the one-shot public CREATE+INSERT round trip becomes visible, but table
-partition provisioning keeps refusing the single admissible node (`required=1, provisionable=0,
-target=1`, `readiness_planning_identity_unavailable`/`_changed`) and never converges even in a
-25-minute direct run, so the recovered Life install never completes. That blocker belongs to
+`edf20e39…` (PR #65), table partition provisioning kept refusing the single admissible node
+(`readiness_planning_identity_unavailable`/`_changed`) and never converged in a 25-minute direct
+run. Against the landed readiness repair `ec63fbb0…` (now pinned), the public round trip is visible
+and no readiness-identity rejection is logged, but two Images table partitions still fail initial
+provisioning (`required=1, provisionable=0, target=1, rejected=none`, `candidateTargetNodeIds: []`)
+and the recovered Life install fails after ~18 minutes with `DISTRIBUTED_PARTICIPANT_FAILURE`. That blocker belongs to
 Lagrange's provisioning/readiness owner; Images does not add a second readiness/retry owner to
 mask it. The M6.2 separately-composed-backend/raw-relocation RED remains active for the later
 stronger routed case.
