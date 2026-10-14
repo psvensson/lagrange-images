@@ -437,6 +437,20 @@ transport, membership, replication or consensus:
 - [ ] durable deployment/reconciliation contract for intentionally foreign runtime definitions;
 - [ ] measured `ctx.call()` / compute-near-object wins using the imported application as a realistic workload.
 
+**Cross-project convergence boundary (design direction, not implemented):**
+M6 must consume Lagrange's existing distributed invocation and host-capability
+owners when it crosses node boundaries. The Images object locator, logical
+placement intent, method dispatch, activation and Project graph installation
+remain Images concerns under ADR 0092; neither that ADR nor M6 authorizes
+another cluster router, service manager, scheduler or retry owner. A future
+Images application package may depend on a reusable Images engine rather
+than including a full VM for every installed application. Lagrange's
+WASM host API and native OCI SDK projections must expose the same supported
+capabilities and semantics for equivalent invocation worlds; Images should
+consume that contract instead of inventing a third distributed execution
+protocol. This does not make remote message sends or managed application
+upgrades supported today.
+
 OCI/JVM foreign-runtime lifecycle/placement is not a prerequisite for Cuis M1-M5.
 
 Authority remains transient execution context. Project structure must not imply transitive authority accidentally.
