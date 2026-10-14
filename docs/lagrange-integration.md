@@ -79,6 +79,46 @@ Start with boring durable storage. After access patterns are measured, move loca
 
 That is where `ctx.call()` and Lagrange placement become useful; not every object send should become distributed execution.
 
+## Shared execution capabilities and application delivery (target)
+
+Images is the owner of image graph semantics, local message resolution,
+Blocks, language dispatch, activation and graph/Project materialization.
+It is **not** a third Lagrange cluster execution provider or a second
+service-deployment controller. Images must continue to use public Lagrange
+facilities for physical partition routing, replication, Cell placement and
+cross-node invocation. ADR 0092's Images-owned object locator and generic
+placement intent are **semantic object-residency concerns**, not authority to
+choose Lagrange Raft replicas or schedule Cells.
+
+A future Images application can publish an immutable selected Project
+release and have a Lagrange deployment consume that material. The existing
+`installManagedProjectRelease()` persists imported graph and managed target
+mapping **inside an Image**; it neither declares nor activates Lagrange
+Bindings, and is not a competing cluster installer. Installed applications
+that depend on Images semantics still need a compatible Images execution
+engine; installing one must not imply embedding a complete independent VM
+or daemon in every application's package. Engine provisioning/reuse,
+deployment upgrade and rollback require separate Lagrange-owned contracts
+and are **not implemented by this paragraph**.
+
+The convergence target is one Lagrange host-capability contract:
+WASM Components use the canonical host imports, and native OCI language
+SDKs project those **same** supported capabilities 1:1 for the same admitted
+Binding/world. Images can consume those facilities, while preserving its
+own higher-level local message/Block semantics. Native OCI execution remains
+a first-class customer-adoption path for existing languages and native
+libraries, not a fallback after an obligatory WASM port. An Images method
+send is not automatically a distributed invocation, and Images must not
+introduce an alternate broker, fanout coordinator, authorization source or
+retry classifier.
+
+See Lagrange's
+[Native OCI Call Cells](https://github.com/psvensson/lagrange/blob/main/architecture/native-oci-call-cells.md)
+for the planned native SDK parity and the existing
+[distributed public seam](https://github.com/psvensson/lagrange/blob/main/architecture/images-distributed-public-seam.md).
+Neither document changes this repository's current backend guarantees or
+ADR 0092's pending distribution proofs.
+
 ## No private imports
 
 Never import `lagrange-server/src/...`. If integration requires a private class, expose the missing public seam deliberately.
