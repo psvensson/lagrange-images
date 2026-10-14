@@ -346,6 +346,27 @@ A future call may route to local image-native activation, distributed Lagrange W
 
 Location, failure/retry policy and authority remain explicit concerns. A compiler-generated resumption after a local host effect is **not** a retry, RPC protocol, capability or deployment object.
 
+The platform boundary for future distributed execution should not introduce
+`images` as a third Lagrange runtime kind beside WASM and OCI. Images owns
+language dispatch, object history, Block execution semantics and graph-level
+residency; Lagrange owns physical routing, cluster placement, runtime
+admission and distributed operation coordination. The existing Images
+`InvocationService`/`ActivationExecutor` are local semantic owners, not
+replacements for Lagrange's Call Cell coordinator. Native OCI SDKs and
+WASM components should consume the same versioned Lagrange host capabilities,
+with equivalent semantics and authorization, while Images remains free to
+offer higher-level object and language behavior.
+
+Portable Project releases and `installManagedProjectRelease()` describe
+graph materialization into a target Image. They are not themselves a
+cluster-wide service installation lifecycle. Delivering a Project as an
+application through the Lagrange installer must use that installer's
+authoritative lifecycle, and a required Images VM should be a compatible
+shared dependency where feasible rather than a compulsory per-package
+container payload. Such deployment integration and remote Images activation
+remain future work; see [Lagrange integration](lagrange-integration.md) and
+[ADR 0092](decisions/0092-object-residency-placement-and-remote-resolution-owners.md).
+
 ## 15. Current frontier
 
 The substrate has now been pressured by:
