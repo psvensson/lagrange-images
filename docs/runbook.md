@@ -4,6 +4,126 @@ AGENTS.md says what must stay true. This says how to run and debug the thing. If
 a visiting agent, read the "Traps" section before you start; every entry in it cost
 somebody real time.
 
+## Consumer delivery and resource workflow
+
+Start with one observable Images acceptance scenario. Name its owner, interaction owner,
+dependency revision and completion proof in the Bead. Keep implementation, diagnostics,
+consumer acceptance, upstream acceptance and release qualification separate.
+
+Lagrange owns verification of Lagrange changes. For a dependency already verified at an exact
+revision, retain the applicable upstream receipts and run the Images interaction proof. An
+upstream defect needs its own owner, minimal public reproducer, source identities and handoff;
+it does not silently turn a consumer task into an upstream repair campaign. Separately
+authorized core work still follows the core repository's required workflow. Neither repository
+may claim that old evidence proves a newly changed dependency.
+
+Use this proof order:
+
+1. A focused owner proof or counterfactual that can reject the hypothesis cheaply.
+2. A bounded real public-operation diagnostic with a declared time, operation and output budget.
+3. The complete unchanged consumer witness after the relevant cause has been addressed.
+4. Every required job on the final PR head, followed by mergeability and final-diff review.
+
+For M6.3, the completion witness remains the canonical shared-server Life fixture on its
+candidate revision. A partial installation, row census, mock result or short profile does not
+prove cross-runtime execution. Do not recreate its runtime setup in another diagnostic, lower
+its replication targets or remove its assertions. The compiler cache's whole-image lookup is
+a source-reachable cost hypothesis; measure its time alongside transaction work before changing
+cache semantics. Do not multiply a small SQL workload's metadata counts by the whole graph and
+present that estimate as a measurement.
+
+Reuse proofs only when the existing proof owner establishes matching source/dependency inputs,
+configuration, environment and scope. `scripts/ci-proof.mjs` owns native/recovery CI reuse;
+real integration lanes still execute on the current head. An installed npm artifact and a
+source checkout are different inputs. Pin the diagnosis candidate, then reconcile relevant
+upstream changes once before final integration.
+
+### Capacity before execution
+
+Heavy work includes preflight: duplication analysis, large inventories, compilation and
+dependency setup belong on an approved worker along with the tests. Before submission, verify
+the actual workload is supported, toolchain and effective Node heap fit the reservation,
+storage is sufficient, the machine lock/holder protocol is available, and idle/lease policies
+will allow the declared run. A shared CI VM with an idle-stop policy is not automatically a
+generic long-job worker. Do not disable another owner's lifecycle policy to make it one.
+
+Cap the entire process tree, not merely Node test concurrency. Docker-created scopes must
+share the cap too. Record observed CPU quota, memory limit and temperature admission; preserve
+the existing thermal owner and its unavailable-sensor result on cloud hosts. Use one heavy
+workload per machine under its shared lock. Parallelize independent work on separate approved
+machines and overlap reviews or upstream CI while a consumer diagnostic runs.
+
+Keep the interactive controller free of heavy work. On the reference Linux workstation, all
+lightweight orchestration can share one transient user slice:
+
+```sh
+systemd-run --user --scope --slice=m63-orchestration.slice --quiet true
+systemctl --user set-property --runtime m63-orchestration.slice CPUQuota=50% CPUWeight=10 IOWeight=10
+systemd-run --user --scope --slice=m63-orchestration.slice --quiet node --version
+```
+
+Replace `node --version` with the lightweight orchestration command. This is a shared half-core
+ceiling, not half the workstation, and it does not authorize heavy
+local work. The slice is specific to these jobs; do not change limits or stop processes owned
+by other work. On other hosts use their executor's equivalent observed limits.
+
+### Run facts and retries
+
+Record the immutable input identities, command, host, reservation, output location and
+continuation owner before launch. Then distinguish prepared, admitted, running, terminal and
+collected using actual request IDs, process identities and timestamps. A queued agent message
+is not an active job. Verify the receiving executor started and identify who observes its result.
+Report preflight as preflight rather than saying its tests are running.
+
+A diagnostic receipt is evidence, not a second task graph; Beads retains task state and
+dependencies. Partial, timed-out and infrastructure-interrupted runs stay explicitly below
+consumer acceptance. Preserve original logs and source/copy hashes before a retry. Correct the
+identified cause first, keep resource changes within the authorized reservation, and reuse
+successful setup instead of starting it again. Do not repeat an unchanged long run or expand
+acceptance deadlines to conceal non-completion.
+
+### Bounded M6 diagnostic
+
+`scripts/m6-profile.mjs` observes the canonical shared-server fixture from an explicit Images
+checkout. It does not contain another Life installer or server setup. Its default is a plan:
+
+```sh
+node scripts/m6-profile.mjs \
+  --images-root /worker/images-candidate \
+  --fixture /worker/images-candidate/fixtures/real-lagrange-m6-shared-server-process.js \
+  --fixture-sha256 REVIEWED_FIXTURE_SHA256 \
+  --data-dir /worker/fresh-life-data \
+  --output-dir /worker/fresh-profile-evidence \
+  --worker OBSERVED_WORKER_HOSTNAME \
+  --controller-boot-id BOOT_ID_CAPTURED_ON_CONTROLLER \
+  --thermal-owner /worker/lagrange/scripts/checks/wait-for-thermal-headroom.js \
+  --max-ms 180000 --max-operations 40 --max-log-bytes 16777216
+```
+
+Review the plan and retain the executor's full source archive, dependency and environment
+identities. The runner's selected file hashes do not replace that provenance. Add `--execute`
+only inside the existing worker executor, with its machine lock and live ancestor holder
+(`project: lagrange-images`), observed cgroup v2 caps of at most two CPUs and 12 GiB, and a lease
+long enough to collect the evidence. The worker boot identity must differ from the controller's.
+Output and data paths must be fresh. Execution refuses missing caps, a missing lock, a mismatched
+fixture hash or a thermal refusal; it records unavailable cloud thermal telemetry as unavailable.
+The external executor remains responsible for placement, Docker containment and lease cleanup.
+
+The preload observes Images calls in the fixture's main thread. Metrics count logical backend
+calls and returned scan rows; transaction spans measure time before, within and after the callback.
+Inclusive compiler, image and backend timings overlap. They are not physical SQL counts or
+independent costs to add together, and a scan's returned rows do not establish how many records
+the database examined. Scoped transaction objects retain their original identity.
+
+The runner writes `plan.json`, `started.json`, bounded `canonical.log`, `observation.json` and
+`terminal.json` when their phases are reached. An operation limit requests a stop after an outer
+backend operation completes so the original fixture can run its cleanup. Wall, log, thermal and
+cancellation stops terminate and reap the owned child process group within finite grace periods.
+A failed cleanup remains a failure. A normal diagnostic completion exits zero; a partial or
+failed diagnostic exits nonzero. Every result retains `diagnosticOnly: true` and `acceptance:
+false`, even when the original fixture finishes. Complete consumer acceptance still requires its
+ordinary unchanged witness and exact-head CI.
+
 ## Running the suite
 
 ```sh
@@ -15,28 +135,19 @@ npm run test:integration  # the real proofs; needs scripts/integration-setup.sh 
 npm run test:cargo-oci    # the real Cargo/rustc OCI proof; needs scripts/cargo-oci-setup.sh first
 ```
 
-### Local runs are paced; some files are CI-only on some hosts
+### Heavy checks run on workers
 
 Prefer [the lab](#running-the-suite-on-the-lab) for a full-suite receipt; it runs nothing on this
-machine. Local suite runs are a convenience, not the gate: `.github/workflows/test.yml` is the merge
-authority, and targeted tests plus the relevant real lane plus exact-head CI are sufficient merge
-evidence. `node --test` defaults to `availableParallelism() - 1` workers, which on a 20-core
-workstation starts nineteen CPU-bound files at once. Pace every local run:
-
-```sh
-nice -n 19 npm run test:fast -- --test-concurrency=1       # npm forwards the flag
-nice -n 19 node --test --test-concurrency=1 <files>        # targeted iteration
-```
-
-Run nothing else heavy at the same time (check `pgrep -af "node --test"` and `uptime` — another
-session may already be running one), start only when the CPU package is comfortably low, watch the
-temperature *during* the run rather than only before it, and stop well short of the package's
-`high` threshold rather than at it, because sampling and termination latency overshoot.
+machine. `.github/workflows/test.yml` is the merge authority, and targeted tests plus the relevant
+real lane plus exact-head CI are sufficient merge evidence. `node --test` defaults to
+`availableParallelism() - 1` workers, which on a 20-core workstation starts nineteen CPU-bound
+files at once. `nice` and `--test-concurrency=1` are insufficient substitutes for a process-tree
+CPU quota, temperature admission and a shared machine lock. Use the worker workflow above.
 
 **`test/cuis-native-import.test.js` is CI-only on a thermally constrained host.** It performs 26
 standard-image installs; three controlled local attempts on the reference workstation reached
-76/76/81 °C, above its 80 °C package `high`. On such a host, exercise it locally as small targeted
-cases or equivalent single-image proofs, and let CI's `node-test` lane run the complete file.
+76/76/81 °C, above its 80 °C package `high`. Use small targeted cases on an approved worker and
+let CI's `node-test` lane run the complete file.
 
 This is a HOST policy, not a property of the test. The file carries no skip, its semantics are
 unchanged, and **product code and test semantics are never altered to accommodate workstation
