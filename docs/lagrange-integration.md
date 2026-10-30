@@ -70,9 +70,38 @@ proves the owned schema plus one atomic state/history round trip through its
 embedded session. A separate kernel case uses that same public composition to install
 the metaclass and class phases (22 records each), verify all 52 kernel records and their history, and
 prove that reinstalling writes nothing. Its bounded child budget is separate from
-the unchanged ordinary round-trip budget. A separate file-backed compatibility-runtime test proves the
-adapter mapping across restart. Real Lagrange process restart and multi-node
-failure/recovery remain separate proofs.
+the unchanged ordinary round-trip budget.
+
+M6.3 contains a candidate shared-server real-Lagrange proof using the same public
+`createEmbeddedLagrange()` handle and two
+`LagrangeBackend({runtime, ownsRuntime: false})` adapters. Each adapter opens its
+own application session for an independent Images runtime without taking server
+lifecycle authority.
+
+The complete shared-server acceptance remains **unproven**. The candidate now pins
+Lagrange `a43ce6a9fe3c2ffd17fcb084e596a0c709ba88c9`, matching the frozen diagnostic
+source. The ordinary real state/history round trip and public write/readback passed
+on that source; the complete Life run was interrupted by its host's idle policy.
+The historical 40-operation prefix stopped before compiler work. The newer
+600-second run on Images `b652f20…` and that same Lagrange source reached compiler-reuse
+lookups, while backend transactions dominated its measured time; Life remained incomplete.
+[ADR 0092](decisions/0092-object-residency-placement-and-remote-resolution-owners.md#5-ownership-map-and-proof-discipline)
+and Bead `lagrange-images-0pxf.4` retain the exact measurements and source identities.
+
+The kernel repair is now merged as PR #320 at main `b61c05d…`, with focused,
+native and all six CI proofs. Its fresh kernel publication uses 10 transactions
+instead of 52; that separately verified improvement justifies a new unchanged
+consumer witness, but does not establish Life acceptance (Bead `lagrange-images-bi0i`).
+
+The fixture performs one CREATE and one INSERT, then only polls a SELECT for that
+exact row for 20 seconds. Failure is an acceptance prerequisite, not an Images
+readiness/retry policy; passing it does not prove later installation succeeds.
+The consumer witness remains `fixtures/real-lagrange-m6-shared-server-process.js`.
+
+A separate file-backed compatibility-runtime test proves the adapter mapping
+across restart. The M6.3 shared-server proof is intentionally **not** a
+multi-node durability/failure-recovery claim, so checklist items 7-10 remain
+unchanged until those stronger proofs exist.
 
 Snapshots currently write one snapshot record and do not append an event. Logical revision-frontier semantics remain later work.
 
