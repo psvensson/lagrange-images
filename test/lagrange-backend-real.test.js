@@ -28,3 +28,24 @@ test('real public Lagrange package commits atomic state and history', {
     await rm(directory, {recursive: true, force: true});
   }
 });
+
+test('real public Lagrange package installs and reuses the kernel Behavior phases', {
+  skip: enabled ? false : 'set LAGRANGE_IMAGES_REAL_LAGRANGE=1 with lagrange-server installed',
+  timeout: 360_000,
+}, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lagrange-images-kernel-'));
+  try {
+    await executeFile(process.execPath, [processFixture.pathname, directory, 'kernel'], {
+      env: {...process.env, LAGRANGE_BACKEND: 'lagrange'},
+      maxBuffer: PROCESS_OUTPUT_LIMIT,
+      timeout: 340_000,
+    });
+  } catch (error) {
+    throw new Error(
+      `Kernel child failed (${error.code ?? error.name}: ${error.message}); stdout:\n${error.stdout ?? ''}\nstderr:\n${error.stderr ?? ''}`,
+      {cause: error},
+    );
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});

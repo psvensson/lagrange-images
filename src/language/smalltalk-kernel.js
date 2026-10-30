@@ -1,5 +1,5 @@
 import {base64urlEncode, utf8Encode} from '../support/portable-bytes.js';
-import {ensureObject as ensureRecordObject, ensureShape as ensureRecordShape} from '../graph/ensure-records.js';
+import {ensureObject as ensureRecordObject, ensureObjects, ensureShape as ensureRecordShape} from '../graph/ensure-records.js';
 import {VALUE_KIND, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {
   METHOD_DICTIONARY_SHAPE_ID,
@@ -216,11 +216,11 @@ async function isLegacyMethodDictionary(service, imageId, record) {
   return true;
 }
 
-async function ensureEmptyMethodDictionary(service, imageId, id, metadata, nilRef) {
+async function emptyMethodDictionaryRequest(service, imageId, id, metadata, nilRef) {
   const existing = await service.getObject(imageId, id);
-  if (await isLegacyMethodDictionary(service, imageId, existing)) return existing;
+  if (await isLegacyMethodDictionary(service, imageId, existing)) return {existing};
   const {buckets} = buildMethodBuckets([]);
-  return await ensureObject(service, imageId, {
+  return {desired: {
     id,
     ...methodDictionaryRecordFields({
       buckets,
@@ -228,12 +228,21 @@ async function ensureEmptyMethodDictionary(service, imageId, id, metadata, nilRe
       nilRef,
       metadata,
     }),
-  });
+  }};
+}
+
+// The class builder also uses this exported single-dictionary admission seam.
+async function ensureEmptyMethodDictionary(service, imageId, id, metadata, nilRef) {
+  const {existing, desired} = await emptyMethodDictionaryRequest(service, imageId, id, metadata, nilRef);
+  return existing ?? await ensureObject(service, imageId, desired);
 }
 
 async function installSmalltalkKernel({images, imageId} = {}) {
   const service = assertImages(images);
   requiredText(imageId, 'kernel image id');
+  for (const method of ['getRecord', 'createRecords']) {
+    if (typeof service[method] !== 'function') throw new TypeError(`kernel installer requires images.${method}`);
+  }
   const ref = (objectId) => objectRef(imageId, objectId);
 
   await ensureMethodDictionaryShape(service, imageId);
@@ -242,18 +251,22 @@ async function installSmalltalkKernel({images, imageId} = {}) {
     kernel: await ensureShape(service, imageId, {id: KERNEL_SHAPE_ID, slots: [...KERNEL_SLOTS]}),
     empty: await ensureShape(service, imageId, {id: EMPTY_SHAPE_ID, slots: []}),
   };
-  // Every kernel method dictionary starts empty; methods arrive with the classes that need them.
-  const emptyMethodsShapeId = `${EMPTY_SHAPE_ID}`;
-
-  // A Behavior object. `behavior` and `superclass` are passed as refs rather than derived, because
-  // the metaclass knot needs edges pointing at objects that do not exist yet — which `putObject`
-  // permits, since it validates the shape but neither `behavior` nor ref-valued slots.
-  const putBehavior = async ({id, name, superclassRef, behaviorRef, instanceShapeRef}) => {
-    await ensureEmptyMethodDictionary(
+  // Assemble each existing metaclass/class phase in historical dictionary/Behavior order. The
+  // kernel alone recognizes valid legacy dictionaries; the generic ensure owner sees only exact
+  // object requests, and atomically admits each phase's missing subset after a partial install.
+  const behaviorGraph = [];
+  const admitBehaviorPhase = async () => {
+    await ensureObjects(service, imageId, behaviorGraph, {
+      conflict: (kind, image, id) => new SmalltalkKernelConflictError(kind, image, id),
+    });
+    behaviorGraph.length = 0;
+  };
+  const describeBehavior = async ({id, name, superclassRef, behaviorRef, instanceShapeRef}) => {
+    const {desired: dictionary} = await emptyMethodDictionaryRequest(
       service, imageId, methodsId(id), {owner: id}, ref('smalltalk/nil'),
     );
-    void emptyMethodsShapeId;
-    return await ensureObject(service, imageId, {
+    if (dictionary) behaviorGraph.push(dictionary);
+    behaviorGraph.push({
       id,
       shape: ref(BEHAVIOR_SHAPE_ID),
       behavior: behaviorRef,
@@ -292,7 +305,7 @@ async function installSmalltalkKernel({images, imageId} = {}) {
   // metaclass hierarchies cannot drift apart: `C class superclass == S class`, with `Object class
   // superclass == Class` as the root case.
   for (const {name, super: superName} of KERNEL_CLASSES) {
-    await putBehavior({
+    await describeBehavior({
       id: metaclassId(name),
       name: `${name} class`,
       superclassRef: superName === null ? ref(classId('Class')) : ref(metaclassId(superName)),
@@ -300,10 +313,11 @@ async function installSmalltalkKernel({images, imageId} = {}) {
       instanceShapeRef: nilRef,
     });
   }
+  await admitBehaviorPhase();
 
   // Classes. `behavior(aClass) == that class's metaclass`, and `nil` stands for "no superclass".
   for (const {name, super: superName} of KERNEL_CLASSES) {
-    await putBehavior({
+    await describeBehavior({
       id: classId(name),
       name,
       superclassRef: superName === null ? nilRef : ref(classId(superName)),
@@ -311,6 +325,7 @@ async function installSmalltalkKernel({images, imageId} = {}) {
       instanceShapeRef: nilRef,
     });
   }
+  await admitBehaviorPhase();
 
   const kernel = await ensureObject(service, imageId, {
     id: SMALLTALK_KERNEL_OBJECT_ID,
