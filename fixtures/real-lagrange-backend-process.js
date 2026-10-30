@@ -9,6 +9,9 @@ if (!dataDir) {
   throw new TypeError('usage: real-lagrange-backend-process.js <data-dir>');
 }
 if (!['transaction', 'kernel'].includes(proof)) throw new TypeError('unknown real Lagrange proof');
+const mark = (stage, detail = {}) => {
+  if (proof === 'kernel') console.error(JSON.stringify({proof, stage, at: new Date().toISOString(), ...detail}));
+};
 
 // The embedded Lagrange node listens on three ports. They used to be fixed (45180-45182), which
 // made this lane fail with EADDRINUSE whenever anything else on the host held one of them — a
@@ -46,12 +49,23 @@ const backend = await createBackend({
   },
 });
 
+mark('backend-starting');
 await backend.start();
+mark('backend-ready');
 try {
   if (proof === 'kernel') {
     const images = new ImageService({backend});
+    const createRecords = images.createRecords.bind(images);
+    images.createRecords = async (imageId, inputs) => {
+      mark('object-batch-starting', {count: inputs.length});
+      const stored = await createRecords(imageId, inputs);
+      mark('object-batch-committed', {count: stored.length});
+      return stored;
+    };
     await images.createImage({id: 'real-kernel'});
+    mark('kernel-installing');
     await installSmalltalkKernel({images, imageId: 'real-kernel'});
+    mark('kernel-installed');
     const records = await images.listRecords('real-kernel');
     const events = await images.history('real-kernel');
     assert.equal(records.length, 52);
@@ -60,6 +74,7 @@ try {
     await installSmalltalkKernel({images, imageId: 'real-kernel'});
     assert.deepEqual(await images.listRecords('real-kernel'), records);
     assert.deepEqual(await images.history('real-kernel'), events);
+    mark('kernel-reused');
   } else {
     await backend.transaction(async (transaction) => {
       const stored = await transaction.put(
@@ -83,5 +98,7 @@ try {
     );
   }
 } finally {
+  mark('backend-stopping');
   await backend.stop();
+  mark('backend-stopped');
 }
