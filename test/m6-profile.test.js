@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter, once} from 'node:events';
 import {Worker} from 'node:worker_threads';
+import {mkdtemp, mkdir, writeFile, symlink, readFile, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {execFileSync} from 'node:child_process';
 import {parseOptions, assertWorkerFacts, classifyOutcome, assertFixtureLocation} from '../scripts/m6-profile/contract.mjs';
 import {createObserver, ProfilePrefixStop} from '../scripts/m6-profile/observation.mjs';
 import {runOwnedChild} from '../scripts/m6-profile/lifecycle.mjs';
@@ -223,4 +228,34 @@ test('handled fixture failure and recovered telemetry cannot report zero-exit co
     reaped: true, groupGone: true});
   assert.equal(result.status, 'telemetry-failed');
   assert.equal(result.acceptance, false);
+});
+
+test('main-thread preload binds real Images module exports before the fixture body', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'm6-preload-bindings-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  await mkdir(join(root, 'fixtures'));
+  await symlink(fileURLToPath(new URL('../src/', import.meta.url)), join(root, 'src'), 'dir');
+  await writeFile(join(root, 'package.json'), JSON.stringify({type: 'module'}));
+  const fixture = join(root, 'fixtures/real-lagrange-m6-shared-server-process.js');
+  await writeFile(fixture, [
+    "import {ImageService} from '../src/image/graph-image-service.js';",
+    "const rows = await ImageService.prototype.listCodeArtifacts.call({listRecords: async () => []}, 'unit-only');",
+    "if (rows.length !== 0) throw new Error('Unexpected unit result');",
+    "process.stdout.write('real module preload reached fixture body\\n');",
+  ].join('\n'));
+  const metricsFile = join(root, 'observation.json');
+  const stdout = execFileSync(process.execPath, ['--import',
+    new URL('../scripts/m6-profile/preload.mjs', import.meta.url).href, fixture], {
+    encoding: 'utf8', timeout: 5000, maxBuffer: 65536,
+    env: {...process.env, M6_PROFILE_CONFIG: JSON.stringify({
+      imagesRoot: root, fixture, metricsFile, maxOperations: 1,
+    })},
+  });
+  assert.equal(stdout, 'real module preload reached fixture body\n');
+  const metrics = JSON.parse(await readFile(metricsFile, 'utf8'));
+  assert.equal(metrics.uncaught, null);
+  assert.equal(metrics.exitCode, 0);
+  assert.equal(metrics.calls['images.listCodeArtifacts'].count, 1);
+  assert.equal(metrics.topLevelCompleted, 0, 'no backend or application runtime was constructed');
+  assert.equal(metrics.acceptance, false);
 });
