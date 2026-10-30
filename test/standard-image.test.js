@@ -128,7 +128,7 @@ for (const lane of ['neutral', 'wasm']) {
   });
 }
 
-const WRITE_METHODS = new Set(['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment']);
+const WRITE_METHODS = new Set(['putCodeArtifact', 'putBlock', 'putShape', 'putObject', 'putLexicalEnvironment', 'createRecords']);
 
 function faultOnRecordId(images, {targetId, commitThenThrow}) {
   let fired = false;
@@ -139,7 +139,10 @@ function faultOnRecordId(images, {targetId, commitThenThrow}) {
       if (!WRITE_METHODS.has(property)) return value.bind(target);
       return async (...args) => {
         const input = args[1];
-        const hit = !fired && input?.id === targetId;
+        // A target inside createRecords faults the whole atomic API call, never one member.
+        const hit = !fired && (property === 'createRecords'
+          ? Array.isArray(input) && input.some((record) => record?.id === targetId)
+          : input?.id === targetId);
         if (hit && !commitThenThrow) {
           fired = true;
           throw new Error(`injected pre-commit failure at ${targetId}`);
