@@ -48,8 +48,7 @@ import {
   SmalltalkKernelConflictError,
   assertUniqueSelectorShape,
   canonicalJson,
-  ensureEmptyMethodDictionary,
-  ensureObject,
+  ensureEmptyMethodDictionaryAndBehavior,
   ensureShape,
   findSmalltalkKernel,
   methodDictionarySlots,
@@ -1431,6 +1430,9 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
   if (new Set(classVariables).size !== classVariables.length) {
     throw new TypeError('classVariables must not contain duplicate names');
   }
+  for (const method of ['getRecord', 'createRecords']) {
+    if (typeof images?.[method] !== 'function') throw new TypeError(`defineClass requires images.${method}`);
+  }
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const ref = (objectId) => objectRef(imageId, objectId);
@@ -1475,20 +1477,22 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
     [metaclassObjectId, `${name} class`, superMetaclass, kernel.metaclassClass, metaclassInstanceShape, false],
     [classObjectId, name, superclass, ref(metaclassObjectId), instanceShape, true],
   ]) {
-    await ensureEmptyMethodDictionary(images, imageId, methodsId(id), {owner: id}, kernel.nil);
-    await ensureObject(images, imageId, {
-      id,
-      shape: ref(BEHAVIOR_SHAPE_ID),
-      behavior: behaviorRef,
-      slots: {
-        'behavior-name': textValue(behaviorName),
-        'behavior-superclass': superRef,
-        'behavior-methods': ref(methodsId(id)),
-        'behavior-instance-shape': shapeRef,
+    await ensureEmptyMethodDictionaryAndBehavior(images, imageId, {
+      nilRef: kernel.nil,
+      behavior: {
+        id,
+        shape: ref(BEHAVIOR_SHAPE_ID),
+        behavior: behaviorRef,
+        slots: {
+          'behavior-name': textValue(behaviorName),
+          'behavior-superclass': superRef,
+          'behavior-methods': ref(methodsId(id)),
+          'behavior-instance-shape': shapeRef,
+        },
+        metadata: isClass && classVariables.length > 0
+          ? {smalltalk: 'behavior', name: behaviorName, classVariables: [...classVariables]}
+          : {smalltalk: 'behavior', name: behaviorName},
       },
-      metadata: isClass && classVariables.length > 0
-        ? {smalltalk: 'behavior', name: behaviorName, classVariables: [...classVariables]}
-        : {smalltalk: 'behavior', name: behaviorName},
     });
   }
 
