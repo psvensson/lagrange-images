@@ -29,13 +29,13 @@ if (isMainThread && process.env.M6_PROFILE_CONFIG) {
   });
   process.on('exit', (code) => { observer.state.exitCode = code; persistWithoutMaskingFailure(); });
   const load = (relative) => import(pathToFileURL(join(root, relative)).href);
-  const [{LagrangeBackend}, {GraphImageService}, {CompilationService}] = await Promise.all([
+  const [{LagrangeBackend}, {ImageService}, {CompilationService}] = await Promise.all([
     load('src/backend/lagrange-backend.js'), load('src/image/graph-image-service.js'),
     load('src/compilation/compilation-service.js'),
   ]);
   for (const name of ['get', 'put', 'scan', 'append', 'readStream', 'streamHead']) observer.patch(LagrangeBackend.prototype, name, 'backend.' + name, true);
   observer.patchTransaction(LagrangeBackend.prototype);
-  observer.patch(GraphImageService.prototype, 'listCodeArtifacts', 'images.listCodeArtifacts');
+  observer.patch(ImageService.prototype, 'listCodeArtifacts', 'images.listCodeArtifacts');
   for (const name of ['compileArtifact', 'compileGroup', 'findReusableArtifact']) observer.patch(CompilationService.prototype, name, 'compilation.' + name);
   persist(observer.state);
 }
