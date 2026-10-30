@@ -113,7 +113,7 @@ test('both public roots publish the identical owner function', async () => {
   }
 });
 
-test('the bounded public seam does not broaden the portable static closure', () => {
+test('the bounded public seam contains only reviewed portable owners', () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const repo = resolve(here, '..');
   const {modules, violations} = collectStaticModuleClosure({
@@ -186,7 +186,12 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // 139 after the authorized Cuis native import seam (src/language/smalltalk-authorized-import.js,
   // ADR 0094) — ONE module composing the adapter, class builder, namespace and authority owners the
   // closure already carried; no new dependency and no node:*.
-  assert.equal(modules.length, 139, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), and the authorized Cuis native import seam');
+  // 142 after M6.3's three deliberately portable graph/storage owners (ADR 0092):
+  // src/image/storage-layout.js owns the neutral collection names, src/graph/locator.js owns
+  // whole-image residency, and src/graph/remote-resolution.js owns the ObjectRef+residency ->
+  // backend-read interaction. They are reached from ImageService in BOTH composition roots, import
+  // only the backend contract / Value model / each other, and add no node:* or transport owner.
+  assert.equal(modules.length, 142, 'the reviewed owner modules include the three M6.3 portable residency/resolution owners and no unreviewed dependency');
   assert.ok(paths.includes('src/language/smalltalk-string-equality.js'));
   assert.ok(paths.includes('src/wasm/function-executor.js'));
   assert.ok(paths.includes('src/language/cuis-native-import.js'));
@@ -210,6 +215,9 @@ test('the bounded public seam does not broaden the portable static closure', () 
   assert.ok(paths.includes('src/language/smalltalk-array2d.js'));
   assert.ok(paths.includes('src/language/smalltalk-interval.js'));
   assert.ok(paths.includes('src/language/smalltalk-active-model.js'));
+  assert.ok(paths.includes('src/image/storage-layout.js'));
+  assert.ok(paths.includes('src/graph/locator.js'));
+  assert.ok(paths.includes('src/graph/remote-resolution.js'));
   // The Project modules the seam carries are exactly the working-state and model owners plus the
   // managed release install/recovery owners (installation-state, managed-installation and the
   // graph release materializer they compose, bead lagrange-images-hygu). The broad Project barrel,
