@@ -40,6 +40,11 @@ test('real public Lagrange package installs and reuses the atomic kernel Behavio
       maxBuffer: PROCESS_OUTPUT_LIMIT,
       timeout: 340_000,
     });
+  } catch (error) {
+    throw new Error(
+      `Kernel child failed (${error.code ?? error.name}: ${error.message}); stdout:\n${error.stdout ?? ''}\nstderr:\n${error.stderr ?? ''}`,
+      {cause: error},
+    );
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
