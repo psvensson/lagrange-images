@@ -94,6 +94,31 @@ For architectural work, prefer a falsifiable proof over an assertion. If changin
 - Do not create a second implementation path to avoid an awkward existing seam; either use the owner or explicitly change ownership first.
 - Read the resulting diff after every high-risk structural edit. The guard-dense installer warning in the domain rules remains in force.
 
+## Consumer scope and upstream verification
+
+- State the Images acceptance scenario before adding prerequisites. A discovered upstream defect becomes a separate task with a source-bound reproducer, owner and dependency; it does not silently expand the Images task into upstream release qualification.
+- Lagrange owns verification of Lagrange changes. Consume an exact dependency revision and its applicable upstream evidence, then prove the Images interaction. Separately authorized upstream implementation must follow that repository's workflow; an Images result cannot replace it.
+- Reuse evidence only through its existing owner and applicability rules: source/dependency identities, configuration, environment and proof scope must match. Old main verification does not prove a new patch. Source-checkout proof, installed-package proof, single-server proof and distributed recovery proof remain distinct.
+- Pin the candidate during diagnosis. Reconcile relevant upstream changes before final integration instead of repeatedly restarting against a moving main. Record adjacent work with `discovered-from` and keep its owner explicit.
+- Do not add a second verifier, runtime composition or orchestration service to avoid an existing seam. Improvements to an upstream verification workflow belong to that owner.
+
+## Resource and execution gate
+
+- Keep CPU-intensive analysis, compilation, full suites and long integration runs off the interactive controller. This includes duplication scans and heavyweight inventory generation in preflight. Lightweight orchestration must share a bounded CPU/I/O budget across agents.
+- Before heavy work, record the host, whole-process CPU/memory limits, toolchain and effective Node heap, machine lock/holder, temperature policy, lease/idle-stop policy and cleanup owner. Verify the observed limits, including child processes and Docker scopes. `nice` and worker-count limits alone are not hard CPU caps.
+- Use the existing executor and thermal owner. Never skip a thermal gate. Record unavailable cloud sensor telemetry honestly. When execution does not reach the claimed boundary, report a capacity refusal or infrastructure interruption as inconclusive; never relabel an observed product failure to hide it.
+- Run one heavy workload per machine under its shared lock. Parallelize independent reviews and workloads on separate approved machines; sequence dependent source changes and final integration.
+- A queued message or prepared command is not a running job. Verify an accepted request or actual process identity and start time. Each active run needs a result location, an observer/continuation owner and the next condition that resumes work.
+- Preserve outputs before retrying. Retry only after a recorded change addresses the observed cause. A resource adjustment must stay within the authorized reservation; it must not weaken semantic guards or proof coverage.
+
+## Proof ladder and diagnostic ceilings
+
+Use the smallest discriminating owner proof first, then a bounded real public-operation diagnostic, then the complete consumer witness and required exact-head CI. Do not use repeated hour-long witness runs as the inner diagnosis loop.
+
+Choose diagnostic wall-time, operation and output limits before execution. Label every partial, timed-out or interrupted result as diagnostic evidence. It cannot by itself satisfy a criterion requiring the complete consumer scenario, promote a consumer ownership claim or satisfy a real integration lane. A diagnostic tool or bounded repair can complete its own explicit proofs while the consumer milestone remains open. Never remove assertions, lower replication targets, disable cache policy or extend acceptance deadlines merely to conceal non-completion.
+
+Report the command, source revision, host and actual phase: preparation, admission, running, terminal or collected. Distinguish preflight from tests. Keep task state and dependencies in Beads; per-run receipts are evidence, not a second work tracker. See the [delivery and resource workflow](docs/runbook.md#consumer-delivery-and-resource-workflow).
+
 ## Verification gate
 
 Before calling a task complete:
