@@ -6,6 +6,9 @@ import {join} from 'node:path';
 import {promisify} from 'node:util';
 
 const executeFile = promisify(execFile);
+// Provisioning diagnostics can exceed execFile's implicit 1 MiB capture limit.
+// Keep a finite bound while preserving the child's actual outcome and deadline.
+const PROCESS_OUTPUT_LIMIT = 16 * 1024 * 1024;
 const enabled = process.env.LAGRANGE_IMAGES_REAL_LAGRANGE === '1';
 const processFixture = new URL('../fixtures/real-lagrange-backend-process.js', import.meta.url);
 
@@ -18,6 +21,7 @@ test('real public Lagrange package commits atomic state and history', {
   try {
     await executeFile(process.execPath, [processFixture.pathname, directory], {
       env: environment,
+      maxBuffer: PROCESS_OUTPUT_LIMIT,
       timeout: 160_000,
     });
   } finally {
