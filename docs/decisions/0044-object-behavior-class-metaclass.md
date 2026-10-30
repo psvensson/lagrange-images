@@ -1,7 +1,7 @@
 # ADR 0044: Object, Behavior, Class and Metaclass bootstrap
 
 Status: implemented — the object model, with immediate Values dispatching by kind under a transient dispatch image (the `boolean` kind since superseded by ADR 0045), `+` as ordinary lookup over a primitive-backed method, and `nil`-initialized temporaries in bootstrapped images.
-Proven by: test/smalltalk-kernel.test.js, test/smalltalk-dispatch.test.js, test/smalltalk-builder-recovery.test.js, test/nil-temporary-initialization.test.js
+Proven by: test/smalltalk-kernel.test.js, test/kernel-behavior-batch.test.js, test/smalltalk-dispatch.test.js, test/smalltalk-builder-recovery.test.js, test/nil-temporary-initialization.test.js
 
 ## Problem
 
@@ -325,6 +325,16 @@ bootstrap a one-shot decision taken at image creation, offers no migration path,
 recognizes the two shapes and reads each as what it is, which leaves a later explicit migration free
 to rewrite legacy behaviors into Behaviors on purpose, as a change to the records rather than to
 their meaning.
+
+Kernel publication keeps the four Shapes and three singletons first, then admits the fixed
+22-dictionary/22-Behavior graph through the generic ensure owner's exact-object batch, and
+publishes the discoverable kernel marker last. A fresh kernel still has 52 records and 52
+history events, in the same order, but uses nine transactions. The batch owns only the missing
+subset: identical records from older partial installations are reused without new history;
+wrong-kind or divergent occupants are refused. Valid legacy dictionaries remain recognized by
+the kernel and excluded from the exact-object batch. This does not make the whole installer
+atomic. A failed batch does not publish the kernel marker; a commit followed by a lost acknowledgment
+propagates its error, and an explicit retry adopts the committed records without rewriting them.
 
 ### 11. Blocks keep their existing special case
 
