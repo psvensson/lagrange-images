@@ -270,10 +270,9 @@ test('installation resumes after a partial failure', async () => {
       putShape: (...args) => runtime.images.putShape(...args),
       getShape: (...args) => runtime.images.getShape(...args),
       getObject: (...args) => runtime.images.getObject(...args),
-      putObject: async (imageId, input, options) => {
-        if (String(input.id).startsWith('smalltalk/metaclass/')) throw new Error('backend went away');
-        return await runtime.images.putObject(imageId, input, options);
-      },
+      getRecord: (...args) => runtime.images.getRecord(...args),
+      putObject: (...args) => runtime.images.putObject(...args),
+      createRecords: async () => { throw new Error('backend went away'); },
     };
     await assert.rejects(
       installSmalltalkKernel({images: failing, imageId: 'boot'}),
