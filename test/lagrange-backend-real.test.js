@@ -29,7 +29,7 @@ test('real public Lagrange package commits atomic state and history', {
   }
 });
 
-test('real public Lagrange package installs and reuses the atomic kernel Behavior graph', {
+test('real public Lagrange package installs and reuses the kernel Behavior phases', {
   skip: enabled ? false : 'set LAGRANGE_IMAGES_REAL_LAGRANGE=1 with lagrange-server installed',
   timeout: 360_000,
 }, async () => {
