@@ -56,22 +56,27 @@ try {
   if (proof === 'kernel') {
     const images = new ImageService({backend});
     const createRecords = images.createRecords.bind(images);
+    const batches = [];
     images.createRecords = async (imageId, inputs) => {
-      mark('object-batch-starting', {count: inputs.length});
+      const phase = batches.length + 1;
+      mark('object-batch-starting', {phase, count: inputs.length});
       const stored = await createRecords(imageId, inputs);
-      mark('object-batch-committed', {count: stored.length});
+      batches.push(stored.length);
+      mark('object-batch-committed', {phase, count: stored.length});
       return stored;
     };
     await images.createImage({id: 'real-kernel'});
     mark('kernel-installing');
     await installSmalltalkKernel({images, imageId: 'real-kernel'});
     mark('kernel-installed');
+    assert.deepEqual(batches, [22, 22]);
     const records = await images.listRecords('real-kernel');
     const events = await images.history('real-kernel');
     assert.equal(records.length, 52);
     assert.equal(events.length, 53, 'image.created plus 52 kernel record events');
     assert.ok(await findSmalltalkKernel({images, imageId: 'real-kernel'}));
     await installSmalltalkKernel({images, imageId: 'real-kernel'});
+    assert.deepEqual(batches, [22, 22], 'reinstall publishes no batch');
     assert.deepEqual(await images.listRecords('real-kernel'), records);
     assert.deepEqual(await images.history('real-kernel'), events);
     mark('kernel-reused');
