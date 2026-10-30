@@ -28,3 +28,19 @@ test('real public Lagrange package commits atomic state and history', {
     await rm(directory, {recursive: true, force: true});
   }
 });
+
+test('real public Lagrange package installs and reuses the atomic kernel Behavior graph', {
+  skip: enabled ? false : 'set LAGRANGE_IMAGES_REAL_LAGRANGE=1 with lagrange-server installed',
+  timeout: 360_000,
+}, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lagrange-images-kernel-'));
+  try {
+    await executeFile(process.execPath, [processFixture.pathname, directory, 'kernel'], {
+      env: {...process.env, LAGRANGE_BACKEND: 'lagrange'},
+      maxBuffer: PROCESS_OUTPUT_LIMIT,
+      timeout: 340_000,
+    });
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
