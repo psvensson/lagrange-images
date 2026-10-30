@@ -101,14 +101,14 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
-      # Integration proof pin for the current Lagrange Images support branch.
+      # Integration proof pin for the Lagrange 0.3.2 source checkout.
       # The adapter still uses only the public `createEmbeddedLagrange` -> `start` ->
       # `openApplicationDatabase` -> `query`/`transaction` path. Keep this pin exact so
       # consumer evidence always names the Lagrange tree it proved.
       - uses: actions/checkout@v7
         with:
           repository: psvensson/lagrange
-          ref: a43ce6a9fe3c2ffd17fcb084e596a0c709ba88c9
+          ref: c8e778e0d2109b10f0469da38ce0868f6526614a
           path: .integration/lagrange
       - uses: actions/setup-node@v7
         with:
