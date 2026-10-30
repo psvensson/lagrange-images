@@ -210,6 +210,57 @@ async function ensureObject(images, imageId, desired, {conflict = defaultConflic
   });
 }
 
+// Exact objects may have been admitted individually by an older installer. Preserve those
+// records and atomically create only the missing subset through the existing graph owner.
+// A concurrent creator is progress only when its identical winners strictly reduce that subset;
+// unrelated CAS failures and all other errors remain the caller's failure, never an open retry.
+async function ensureObjects(images, imageId, desiredList, {conflict = defaultConflict} = {}) {
+  if (!Array.isArray(desiredList) || desiredList.length === 0) {
+    throw new TypeError('ensureObjects requires a non-empty list');
+  }
+  for (const method of ['getRecord', 'createRecords']) {
+    if (typeof images?.[method] !== 'function') throw new TypeError(`ensureObjects requires images.${method}`);
+  }
+  const ids = new Set();
+  for (const desired of desiredList) {
+    if (!desired || typeof desired !== 'object' || Array.isArray(desired)
+      || typeof desired.id !== 'string' || !desired.id || ids.has(desired.id)) {
+      throw new TypeError('ensureObjects requires unique non-empty object ids');
+    }
+    ids.add(desired.id);
+  }
+  const readAll = async () => {
+    const existing = new Map();
+    const missing = [];
+    for (const desired of desiredList) {
+      const record = await images.getRecord(imageId, desired.id);
+      if (!record) missing.push(desired);
+      else {
+        if (record.kind !== 'object' || objectProjection(desired) !== objectProjection(record)) {
+          throw conflict('object', imageId, desired.id);
+        }
+        existing.set(desired.id, record);
+      }
+    }
+    return {existing, missing};
+  };
+  let state = await readAll();
+  while (state.missing.length) {
+    try {
+      const created = await images.createRecords(imageId, state.missing.map((desired) => ({...desired, kind: 'object'})));
+      for (const record of created) state.existing.set(record.id, record);
+      return desiredList.map(({id}) => state.existing.get(id));
+    } catch (error) {
+      if (error?.name !== 'VersionConflictError') throw error;
+      const previous = new Set(state.missing.map(({id}) => id));
+      const next = await readAll();
+      if (next.missing.length >= previous.size || next.missing.some(({id}) => !previous.has(id))) throw error;
+      state = next;
+    }
+  }
+  return desiredList.map(({id}) => state.existing.get(id));
+}
+
 export {
   RecordConflictError,
   blockProjection,
@@ -220,6 +271,7 @@ export {
   ensureCodeArtifacts,
   ensureLexicalEnvironment,
   ensureObject,
+  ensureObjects,
   ensureShape,
   lexicalEnvironmentProjection,
   objectProjection,
