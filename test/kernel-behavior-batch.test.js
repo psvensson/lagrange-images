@@ -240,8 +240,8 @@ test('class-phase divergent occupant preserves the committed metaclass phase and
       const result = await images.createRecords(imageId, inputs);
       metaclasses = await records(images);
       assert.equal(metaclasses.length, 29);
-      const {_version, id, ...definition} = await images.getObject(imageId, 'smalltalk/metaclass/Object');
-      await images.putObject(imageId, {...definition, id: 'smalltalk/class/Object', metadata: {intruder: true}}, {expectedVersion: 0});
+      const {shape, behavior, slots} = await images.getObject(imageId, 'smalltalk/metaclass/Object');
+      await images.putObject(imageId, {shape, behavior, slots, id: 'smalltalk/class/Object', metadata: {intruder: true}}, {expectedVersion: 0});
       history = await images.history(imageId);
       return result;
     }});
