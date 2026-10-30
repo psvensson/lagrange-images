@@ -20,7 +20,7 @@ test('plan is default; fixture/root and finite caps are explicit', () => {
   assert.throws(() => parseOptions(args.concat('--max-ms', 'Infinity')), /finite|integer/);
   assert.throws(() => parseOptions(args.concat('--max-operations', '0')), /integer/);
   assert.throws(() => assertFixtureLocation('/other/fixture.js', '/candidate'), /canonical/);
-  assert.throws(() => parseOptions(['--execute']), /required/);
+  assert.throws(() => parseOptions(['--execute']), /Required option: imagesRoot/);
 });
 
 test('worker guard refuses controller, unlimited caps and unowned locks', () => {
