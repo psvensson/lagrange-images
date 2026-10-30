@@ -326,15 +326,17 @@ recognizes the two shapes and reads each as what it is, which leaves a later exp
 to rewrite legacy behaviors into Behaviors on purpose, as a change to the records rather than to
 their meaning.
 
-Kernel publication keeps the four Shapes and three singletons first, then admits the fixed
-22-dictionary/22-Behavior graph through the generic ensure owner's exact-object batch, and
-publishes the discoverable kernel marker last. A fresh kernel still has 52 records and 52
-history events, in the same order, but uses nine transactions. The batch owns only the missing
-subset: identical records from older partial installations are reused without new history;
-wrong-kind or divergent occupants are refused. Valid legacy dictionaries remain recognized by
-the kernel and excluded from the exact-object batch. This does not make the whole installer
-atomic. A failed batch does not publish the kernel marker; a commit followed by a lost acknowledgment
-propagates its error, and an explicit retry adopts the committed records without rewriting them.
+Kernel publication keeps the four Shapes and three singletons first, then admits the existing
+metaclass phase and class phase through the generic ensure owner's exact-object batch, and
+publishes the discoverable kernel marker last. Each fresh phase contains 11 dictionaries and
+11 Behaviors. A fresh kernel still has 52 records and 52 history events, in the same order,
+but uses ten transactions. Each phase admits only its missing subset: identical records from
+older partial installations are reused without new history; wrong-kind or divergent occupants
+are refused. Valid legacy dictionaries remain recognized by the kernel and excluded from the
+exact-object batch. Atomicity applies to each phase, not the whole installer. A failed class
+phase preserves the committed metaclass phase and does not publish the kernel marker. A commit
+followed by a lost acknowledgment propagates its error, and an explicit retry adopts committed
+records without rewriting them.
 
 ### 11. Blocks keep their existing special case
 
