@@ -333,7 +333,7 @@ failed transfer therefore leaves nothing behind for the next run to mistake for 
 If a download fails persistently, curl's own message is the diagnostic.
 
 The Lagrange backend proof pins the Lagrange 0.3.2 source checkout at
-`c8e778e0d2109b10f0469da38ce0868f6526614a` from `psvensson/lagrange`. The existing
+`7c9f35d980a82936a64435d0d366438d7a77c4fc` from `psvensson/lagrange`. The existing
 `lagrange-backend-integration` job in `.github/workflows/test.yml` runs
 `npm ci --omit=dev` in that checkout and links it as `node_modules/lagrange-server`.
 This is source-checkout verification; an installed npm artifact is a separate input.
