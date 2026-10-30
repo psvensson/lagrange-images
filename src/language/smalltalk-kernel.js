@@ -251,10 +251,16 @@ async function installSmalltalkKernel({images, imageId} = {}) {
     kernel: await ensureShape(service, imageId, {id: KERNEL_SHAPE_ID, slots: [...KERNEL_SLOTS]}),
     empty: await ensureShape(service, imageId, {id: EMPTY_SHAPE_ID, slots: []}),
   };
-  // Assemble the fixed Behavior graph in its historical dictionary/Behavior order. The kernel
-  // alone recognizes valid legacy dictionaries; the generic ensure owner sees only exact object
-  // requests, and atomically admits their missing subset after any older partial installation.
+  // Assemble each existing metaclass/class phase in historical dictionary/Behavior order. The
+  // kernel alone recognizes valid legacy dictionaries; the generic ensure owner sees only exact
+  // object requests, and atomically admits each phase's missing subset after a partial install.
   const behaviorGraph = [];
+  const admitBehaviorPhase = async () => {
+    await ensureObjects(service, imageId, behaviorGraph, {
+      conflict: (kind, image, id) => new SmalltalkKernelConflictError(kind, image, id),
+    });
+    behaviorGraph.length = 0;
+  };
   const describeBehavior = async ({id, name, superclassRef, behaviorRef, instanceShapeRef}) => {
     const {desired: dictionary} = await emptyMethodDictionaryRequest(
       service, imageId, methodsId(id), {owner: id}, ref('smalltalk/nil'),
@@ -307,6 +313,7 @@ async function installSmalltalkKernel({images, imageId} = {}) {
       instanceShapeRef: nilRef,
     });
   }
+  await admitBehaviorPhase();
 
   // Classes. `behavior(aClass) == that class's metaclass`, and `nil` stands for "no superclass".
   for (const {name, super: superName} of KERNEL_CLASSES) {
@@ -318,10 +325,7 @@ async function installSmalltalkKernel({images, imageId} = {}) {
       instanceShapeRef: nilRef,
     });
   }
-
-  await ensureObjects(service, imageId, behaviorGraph, {
-    conflict: (kind, image, id) => new SmalltalkKernelConflictError(kind, image, id),
-  });
+  await admitBehaviorPhase();
 
   const kernel = await ensureObject(service, imageId, {
     id: SMALLTALK_KERNEL_OBJECT_ID,
