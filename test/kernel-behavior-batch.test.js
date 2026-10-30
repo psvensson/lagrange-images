@@ -119,7 +119,7 @@ for (const occupant of ['wrong-kind', 'divergent']) {
       await assert.rejects(ensureObjects(images, 'boot', desired), RecordConflictError);
       assert.deepEqual(await records(images), before);
       assert.deepEqual(await images.history('boot'), history);
-      assert.equal(await images.getRecord('boot', 'a'), null);
+      assert.equal((await images.getRecord('boot', 'a')) ?? null, null);
     });
   });
 }
@@ -153,7 +153,7 @@ test('typed CAS without authoritative progress rethrows the original error witho
     const race = adapted(images, {createRecords: async () => { calls += 1; throw original; }});
     await assert.rejects(ensureObjects(race, 'boot', desired), (error) => error === original);
     assert.equal(calls, 1);
-    assert.equal(await images.getRecord('boot', 'a'), null);
+    assert.equal((await images.getRecord('boot', 'a')) ?? null, null);
   });
 });
 
@@ -169,7 +169,7 @@ test('typed CAS rereads a divergent winner and refuses it without writing anothe
     await assert.rejects(ensureObjects(race, 'boot', desired), RecordConflictError);
     assert.equal(calls, 1);
     assert.equal((await images.getObject('boot', 'a')).metadata.intruder, true);
-    assert.equal(await images.getRecord('boot', 'b'), null);
+    assert.equal((await images.getRecord('boot', 'b')) ?? null, null);
   });
 });
 
@@ -197,7 +197,7 @@ for (const committed of [false, true]) {
         finally { backend.transaction = transaction; }
       }});
       await assert.rejects(installSmalltalkKernel({images: fault, imageId: 'boot'}), (error) => error === original);
-      assert.equal(await images.getRecord('boot', SMALLTALK_KERNEL_OBJECT_ID), null);
+      assert.equal((await images.getRecord('boot', SMALLTALK_KERNEL_OBJECT_ID)) ?? null, null);
       assert.equal((await records(images)).length, committed ? 51 : 7);
       if (!committed) assert.deepEqual(await images.history('boot'), prefix, 'batch records and events roll back together');
       const before = await records(images);
