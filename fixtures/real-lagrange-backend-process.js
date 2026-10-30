@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import {createServer} from 'node:net';
 import {createBackend} from '../src/backend/index.js';
+import {ImageService} from '../src/image/graph-image-service.js';
+import {findSmalltalkKernel, installSmalltalkKernel} from '../src/language/smalltalk-kernel.js';
 
-const [dataDir] = process.argv.slice(2);
+const [dataDir, proof = 'transaction'] = process.argv.slice(2);
 if (!dataDir) {
   throw new TypeError('usage: real-lagrange-backend-process.js <data-dir>');
 }
+if (!['transaction', 'kernel'].includes(proof)) throw new TypeError('unknown real Lagrange proof');
 
 // The embedded Lagrange node listens on three ports. They used to be fixed (45180-45182), which
 // made this lane fail with EADDRINUSE whenever anything else on the host held one of them — a
@@ -45,26 +48,40 @@ const backend = await createBackend({
 
 await backend.start();
 try {
-  await backend.transaction(async (transaction) => {
-    const stored = await transaction.put(
-      'things',
-      'one',
-      {value: 'committed'},
-      {expectedVersion: 0},
-    );
-    await transaction.append('events', {
-      type: 'thing.created',
-      version: stored._version,
+  if (proof === 'kernel') {
+    const images = new ImageService({backend});
+    await images.createImage({id: 'real-kernel'});
+    await installSmalltalkKernel({images, imageId: 'real-kernel'});
+    const records = await images.listRecords('real-kernel');
+    const events = await images.history('real-kernel');
+    assert.equal(records.length, 52);
+    assert.equal(events.length, 53, 'image.created plus 52 kernel record events');
+    assert.ok(await findSmalltalkKernel({images, imageId: 'real-kernel'}));
+    await installSmalltalkKernel({images, imageId: 'real-kernel'});
+    assert.deepEqual(await images.listRecords('real-kernel'), records);
+    assert.deepEqual(await images.history('real-kernel'), events);
+  } else {
+    await backend.transaction(async (transaction) => {
+      const stored = await transaction.put(
+        'things',
+        'one',
+        {value: 'committed'},
+        {expectedVersion: 0},
+      );
+      await transaction.append('events', {
+        type: 'thing.created',
+        version: stored._version,
+      });
     });
-  });
-  assert.deepEqual(
-    await backend.get('things', 'one'),
-    {value: 'committed', _version: 1},
-  );
-  assert.deepEqual(
-    await backend.readStream('events'),
-    [{type: 'thing.created', version: 1, revision: 1}],
-  );
+    assert.deepEqual(
+      await backend.get('things', 'one'),
+      {value: 'committed', _version: 1},
+    );
+    assert.deepEqual(
+      await backend.readStream('events'),
+      [{type: 'thing.created', version: 1, revision: 1}],
+    );
+  }
 } finally {
   await backend.stop();
 }
