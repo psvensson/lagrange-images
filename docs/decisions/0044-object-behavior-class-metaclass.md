@@ -338,6 +338,15 @@ phase preserves the committed metaclass phase and does not publish the kernel ma
 followed by a lost acknowledgment propagates its error, and an explicit retry adopts committed
 records without rewriting them.
 
+Named class creation keeps the same dictionary-then-Behavior history order for the metaclass,
+then the class. `ensureEmptyMethodDictionaryAndBehavior` shares the kernel's one private
+empty-dictionary/legacy request owner and delegates each fixed object pair to `ensureObjects`.
+Only missing records share a transaction; an existing or adopted legacy dictionary is unchanged
+and is not made newly atomic with its Behavior. The fresh four-record segment uses two
+transactions instead of four, with identical record identities and ordered events. This does not
+batch mutable method publication, companion state or subclass-registry maintenance. The old
+five-argument dictionary helper retains its existing contract.
+
 ### 11. Blocks keep their existing special case
 
 `resolveMessage` checks for a Block record before it consults generic object behavior, so `value`
