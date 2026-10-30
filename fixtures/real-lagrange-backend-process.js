@@ -3,6 +3,7 @@ import {createServer} from 'node:net';
 import {createBackend} from '../src/backend/index.js';
 import {ImageService} from '../src/image/graph-image-service.js';
 import {findSmalltalkKernel, installSmalltalkKernel} from '../src/language/smalltalk-kernel.js';
+import {defineClass, ensureNamedClass} from '../src/language/smalltalk-class-builder.js';
 
 const [dataDir, proof = 'transaction'] = process.argv.slice(2);
 if (!dataDir) {
@@ -80,6 +81,28 @@ try {
     assert.deepEqual(await images.listRecords('real-kernel'), records);
     assert.deepEqual(await images.history('real-kernel'), events);
     mark('kernel-reused');
+    mark('class-installing');
+    const namedClass = await defineClass({images, imageId: 'real-kernel', name: 'RealPair'});
+    assert.deepEqual(batches, [22, 22, 2, 2]);
+    const classIds = [
+      'smalltalk/metaclass/RealPair/methods', 'smalltalk/metaclass/RealPair',
+      'smalltalk/class/RealPair/methods', 'smalltalk/class/RealPair',
+    ];
+    const classRecords = await images.listRecords('real-kernel');
+    const classEvents = await images.history('real-kernel');
+    assert.deepEqual(
+      classEvents.filter((event) => classIds.includes(event.object?.id)).map((event) => event.object.id),
+      classIds,
+    );
+    for (const id of classIds) assert.equal((await images.getObject('real-kernel', id))._version, 1);
+    mark('class-installed');
+    assert.deepEqual(
+      await ensureNamedClass({images, imageId: 'real-kernel', name: 'RealPair'}), namedClass,
+    );
+    assert.deepEqual(batches, [22, 22, 2, 2], 'class rediscovery publishes no pair');
+    assert.deepEqual(await images.listRecords('real-kernel'), classRecords);
+    assert.deepEqual(await images.history('real-kernel'), classEvents);
+    mark('class-reused');
   } else {
     await backend.transaction(async (transaction) => {
       const stored = await transaction.put(

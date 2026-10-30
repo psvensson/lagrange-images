@@ -237,6 +237,29 @@ async function ensureEmptyMethodDictionary(service, imageId, id, metadata, nilRe
   return existing ?? await ensureObject(service, imageId, desired);
 }
 
+// The fixed language-owned pair, in durable history order. Legacy recognition stays in the
+// same private request owner as the five-argument helper; exact admission stays in ensureObjects.
+// Only newly missing records share a transaction. An adopted dictionary is never rewritten.
+async function ensureEmptyMethodDictionaryAndBehavior(service, imageId, {behavior, nilRef} = {}) {
+  requiredText(imageId, 'image id');
+  requiredText(behavior?.id, 'Behavior id');
+  const dictionaryId = methodsId(behavior.id);
+  if (!isLocalRef(behavior.shape, imageId, BEHAVIOR_SHAPE_ID)
+    || !isLocalRef(behavior.slots?.['behavior-methods'], imageId, dictionaryId)) {
+    throw new TypeError('dictionary/Behavior pair requires the local Behavior shape and matching methods edge');
+  }
+  for (const method of ['getObject', 'getRecord', 'createRecords']) {
+    if (typeof service?.[method] !== 'function') throw new TypeError(`dictionary/Behavior pair requires images.${method}`);
+  }
+  const {existing, desired} = await emptyMethodDictionaryRequest(
+    service, imageId, dictionaryId, {owner: behavior.id}, nilRef,
+  );
+  const stored = await ensureObjects(service, imageId, desired ? [desired, behavior] : [behavior], {
+    conflict: (kind, image, id) => new SmalltalkKernelConflictError(kind, image, id),
+  });
+  return Object.freeze({dictionary: existing ?? stored[0], behavior: stored[stored.length - 1]});
+}
+
 async function installSmalltalkKernel({images, imageId} = {}) {
   const service = assertImages(images);
   requiredText(imageId, 'kernel image id');
@@ -438,6 +461,7 @@ export {
   BEHAVIOR_SHAPE_ID,
   KERNEL_CLASSES,
   ensureEmptyMethodDictionary,
+  ensureEmptyMethodDictionaryAndBehavior,
   isLegacyMethodDictionary,
   createSmalltalkTemporaryInitializer,
   SmalltalkKernelConflictError,

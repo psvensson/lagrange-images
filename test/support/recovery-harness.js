@@ -9,7 +9,9 @@ import {createRuntime} from '../../src/runtime.js';
 //
 // The superset of ImageService write methods any installer uses today. Counting a method a given
 // installer never calls is harmless — the sweep enumerates whatever writes actually happen — so
-// sharing one list is strictly more exhaustive than the per-file subsets it replaces. A sweep with
+// createRecords counts once per atomic API call, not once per member; focused pair proofs cover
+// failures inside a batch. Sharing one list is strictly more exhaustive than the per-file subsets
+// it replaces. A sweep with
 // a genuinely different surface can pass its own `writeMethods`.
 const WRITE_METHODS = Object.freeze([
   'putCodeArtifact',
@@ -17,6 +19,7 @@ const WRITE_METHODS = Object.freeze([
   'putShape',
   'putObject',
   'putLexicalEnvironment',
+  'createRecords',
 ]);
 
 // Wraps an images service so the failAt-th write either throws before committing, or commits and

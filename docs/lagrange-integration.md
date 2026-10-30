@@ -69,7 +69,9 @@ The PR-only integration lane installs the pinned public Lagrange package and
 proves the owned schema plus one atomic state/history round trip through its
 embedded session. A separate kernel case uses that same public composition to install
 the metaclass and class phases (22 records each), verify all 52 kernel records and their history, and
-prove that reinstalling writes nothing. Its bounded child budget is separate from
+prove that reinstalling writes nothing. It then creates and rediscovers a fresh named class
+through two dictionary/Behavior pairs, checking ordered history and write-free replay in the
+same public backend session. Its bounded child budget is separate from
 the unchanged ordinary round-trip budget. A separate file-backed compatibility-runtime test proves the
 adapter mapping across restart. Real Lagrange process restart and multi-node
 failure/recovery remain separate proofs.
