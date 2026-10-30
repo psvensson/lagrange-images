@@ -332,9 +332,13 @@ assets are fetched repeatedly, and land through a temporary file renamed only on
 failed transfer therefore leaves nothing behind for the next run to mistake for a cached asset.
 If a download fails persistently, curl's own message is the diagnostic.
 
-The Lagrange backend proof needs a checkout of `psvensson/lagrange` linked as
-`node_modules/lagrange-server`; see the `lagrange-backend-integration` job in
-`.github/workflows/test.yml`.
+The Lagrange backend proof pins the Lagrange 0.3.2 source checkout at
+`7c9f35d980a82936a64435d0d366438d7a77c4fc` from `psvensson/lagrange`. The existing
+`lagrange-backend-integration` job in `.github/workflows/test.yml` runs
+`npm ci --omit=dev` in that checkout and links it as `node_modules/lagrange-server`.
+This is source-checkout verification; an installed npm artifact is a separate input.
+The historical kernel proof used Lagrange `a43ce6a9fe3c2ffd17fcb084e596a0c709ba88c9`;
+it does not establish consumer verification of the new 0.3.2 source pin.
 
 ### Setting up the Cargo/rustc toolchain image
 
