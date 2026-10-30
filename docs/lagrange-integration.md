@@ -67,9 +67,30 @@ The mock implements rollback and transaction-local visibility with isolated in-m
 
 The PR-only integration lane installs the pinned public Lagrange package and
 proves the owned schema plus one atomic state/history round trip through its
-embedded session. A separate file-backed compatibility-runtime test proves the
-adapter mapping across restart. Real Lagrange process restart and multi-node
-failure/recovery remain separate proofs.
+embedded session. M6.3 contains a candidate second real-Lagrange proof using the same public
+`createEmbeddedLagrange()` handle and two
+`LagrangeBackend({runtime, ownsRuntime: false})` adapters. Each adapter opens its
+own application session for an independent Images runtime without taking server
+lifecycle authority.
+
+The complete shared-server acceptance remains **unproven**. The candidate now pins
+Lagrange `a43ce6a9fe3c2ffd17fcb084e596a0c709ba88c9`, matching the frozen diagnostic
+source. The ordinary real state/history round trip and public write/readback passed
+on that source; the complete Life run was interrupted by its host's idle policy.
+A later bounded diagnostic stopped during early installation, before any compiler
+or artifact scan. Neither result proves complete Life acceptance or identifies
+compiler reuse as the bottleneck. ADR 0092 and Bead `lagrange-images-0pxf.4` retain
+the source-bound evidence and historical provisioning findings.
+
+The fixture performs one CREATE and one INSERT, then only polls a SELECT for that
+exact row for 20 seconds. Failure is an acceptance prerequisite, not an Images
+readiness/retry policy; passing it does not prove later installation succeeds.
+The consumer witness remains `fixtures/real-lagrange-m6-shared-server-process.js`.
+
+A separate file-backed compatibility-runtime test proves the adapter mapping
+across restart. The M6.3 shared-server proof is intentionally **not** a
+multi-node durability/failure-recovery claim, so checklist items 7-10 remain
+unchanged until those stronger proofs exist.
 
 Snapshots currently write one snapshot record and do not append an event. Logical revision-frontier semantics remain later work.
 
