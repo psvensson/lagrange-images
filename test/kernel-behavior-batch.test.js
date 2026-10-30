@@ -4,7 +4,7 @@ import {MockBackend} from '../src/backend/mock-backend.js';
 import {VersionConflictError} from '../src/backend/backend-contract.js';
 import {ImageService} from '../src/image/graph-image-service.js';
 import {ensureObjects, RecordConflictError} from '../src/graph/ensure-records.js';
-import {installSmalltalkKernel, findSmalltalkKernel, SMALLTALK_KERNEL_OBJECT_ID} from '../src/language/smalltalk-kernel.js';
+import {installSmalltalkKernel, findSmalltalkKernel, SMALLTALK_KERNEL_OBJECT_ID, SmalltalkKernelConflictError} from '../src/language/smalltalk-kernel.js';
 import {objectRef} from '../src/value/index.js';
 
 // Mock storage proves API atomicity/convergence, not native crash durability.
@@ -35,13 +35,21 @@ async function pair(images) {
   return ['a', 'b'].map((id) => ({id, shape: objectRef('boot', 's'), slots: {}, metadata: {owner: 'test'}}));
 }
 
-test('fresh kernel batches 44 records: same graph/history as sequential object publication, nine transactions', async () => {
+test('fresh kernel uses two 22-record phases: same graph/history as sequential publication, ten transactions', async () => {
   await withImage(async (images, backend) => {
     let transactions = 0;
     const transaction = backend.transaction.bind(backend);
     backend.transaction = async (...args) => { transactions += 1; return await transaction(...args); };
-    await installSmalltalkKernel({images, imageId: 'boot'});
-    assert.equal(transactions, 9);
+    const batches = [];
+    const observed = adapted(images, {createRecords: async (imageId, inputs) => {
+      batches.push(inputs.map(({id}) => id));
+      return await images.createRecords(imageId, inputs);
+    }});
+    await installSmalltalkKernel({images: observed, imageId: 'boot'});
+    assert.equal(transactions, 10);
+    assert.deepEqual(batches.map((ids) => ids.length), [22, 22]);
+    assert.ok(batches[0].every((id) => id.startsWith('smalltalk/metaclass/')));
+    assert.ok(batches[1].every((id) => id.startsWith('smalltalk/class/')));
     const actual = await records(images);
     assert.equal(actual.length, 52);
     assert.ok(actual.every((record) => record._version === 1));
@@ -173,41 +181,80 @@ test('typed CAS rereads a divergent winner and refuses it without writing anothe
   });
 });
 
-for (const committed of [false, true]) {
-  test(`kernel batch ${committed ? 'lost acknowledgment' : 'rollback'} preserves original error and recovers on explicit retry`, async () => {
-    await withImage(async (images, backend) => {
-      const original = new Error(committed ? 'lost acknowledgment' : 'failed scoped append');
-      let prefix;
-      const fault = adapted(images, {createRecords: async (imageId, inputs) => {
-        prefix = await images.history(imageId);
-        if (committed) {
-          await images.createRecords(imageId, inputs);
-          throw original;
-        }
-        const transaction = backend.transaction.bind(backend);
-        backend.transaction = async (work) => await transaction(async (tx) => {
-          let appends = 0;
-          const scoped = {...tx, append: async (...args) => {
-            if (++appends === 2) throw original;
-            return await tx.append(...args);
-          }};
-          return await work(scoped);
-        });
-        try { return await images.createRecords(imageId, inputs); }
-        finally { backend.transaction = transaction; }
-      }});
-      await assert.rejects(installSmalltalkKernel({images: fault, imageId: 'boot'}), (error) => error === original);
-      assert.equal((await images.getRecord('boot', SMALLTALK_KERNEL_OBJECT_ID)) ?? null, null);
-      assert.equal((await records(images)).length, committed ? 51 : 7);
-      if (!committed) assert.deepEqual(await images.history('boot'), prefix, 'batch records and events roll back together');
-      const before = await records(images);
-      await installSmalltalkKernel({images, imageId: 'boot'});
-      assert.equal((await records(images)).length, 52);
-      for (const record of before) assert.deepEqual(await images.getRecord('boot', record.id), record);
-      assert.ok(await findSmalltalkKernel({images, imageId: 'boot'}));
+for (const phase of [1, 2]) {
+  for (const committed of [false, true]) {
+    test(`kernel phase ${phase} ${committed ? 'lost acknowledgment' : 'rollback'} preserves original error and recovers on explicit retry`, async () => {
+      await withImage(async (images, backend) => {
+        const original = new Error(committed ? 'lost acknowledgment' : 'failed scoped append');
+        let prefix;
+        let calls = 0;
+        const fault = adapted(images, {createRecords: async (imageId, inputs) => {
+          assert.equal(inputs.length, 22);
+          if (++calls !== phase) return await images.createRecords(imageId, inputs);
+          prefix = await images.history(imageId);
+          if (committed) {
+            await images.createRecords(imageId, inputs);
+            throw original;
+          }
+          const transaction = backend.transaction.bind(backend);
+          backend.transaction = async (work) => await transaction(async (tx) => {
+            let appends = 0;
+            const scoped = {...tx, append: async (...args) => {
+              if (++appends === 2) throw original;
+              return await tx.append(...args);
+            }};
+            return await work(scoped);
+          });
+          try { return await images.createRecords(imageId, inputs); }
+          finally { backend.transaction = transaction; }
+        }});
+        await assert.rejects(installSmalltalkKernel({images: fault, imageId: 'boot'}), (error) => error === original);
+        assert.equal(calls, phase);
+        assert.equal((await images.getRecord('boot', SMALLTALK_KERNEL_OBJECT_ID)) ?? null, null);
+        const expectedRecords = 7 + 22 * (phase - 1 + Number(committed));
+        assert.equal((await records(images)).length, expectedRecords);
+        if (!committed) assert.deepEqual(await images.history('boot'), prefix, 'failed phase records and events roll back together');
+        const before = await records(images);
+        const beforeHistory = await images.history('boot');
+        assert.equal(beforeHistory.length, expectedRecords + 1);
+        await installSmalltalkKernel({images, imageId: 'boot'});
+        assert.equal((await records(images)).length, 52);
+        for (const record of before) assert.deepEqual(await images.getRecord('boot', record.id), record);
+        const afterHistory = await images.history('boot');
+        assert.deepEqual(afterHistory.slice(0, beforeHistory.length), beforeHistory, 'all committed phase history is preserved');
+        assert.equal(afterHistory.length, 53);
+        assert.ok(await findSmalltalkKernel({images, imageId: 'boot'}));
+      });
     });
-  });
+  }
 }
+
+test('class-phase divergent occupant preserves the committed metaclass phase and refuses remaining class writes', async () => {
+  await withImage(async (images) => {
+    let batches = 0;
+    let metaclasses;
+    let history;
+    const race = adapted(images, {createRecords: async (imageId, inputs) => {
+      batches += 1;
+      assert.equal(batches, 1, 'class preflight must refuse before a second batch');
+      const result = await images.createRecords(imageId, inputs);
+      metaclasses = await records(images);
+      assert.equal(metaclasses.length, 29);
+      const {_version, id, ...definition} = await images.getObject(imageId, 'smalltalk/metaclass/Object');
+      await images.putObject(imageId, {...definition, id: 'smalltalk/class/Object', metadata: {intruder: true}}, {expectedVersion: 0});
+      history = await images.history(imageId);
+      return result;
+    }});
+    await assert.rejects(installSmalltalkKernel({images: race, imageId: 'boot'}), SmalltalkKernelConflictError);
+    assert.equal(batches, 1);
+    for (const record of metaclasses) assert.deepEqual(await images.getRecord('boot', record.id), record);
+    assert.deepEqual(await images.history('boot'), history);
+    assert.equal((await records(images)).length, 30);
+    assert.equal((await images.getObject('boot', 'smalltalk/class/Object')).metadata.intruder, true);
+    assert.equal((await images.getRecord('boot', 'smalltalk/class/Object/methods')) ?? null, null);
+    assert.equal((await images.getRecord('boot', SMALLTALK_KERNEL_OBJECT_ID)) ?? null, null);
+  });
+});
 
 for (const missing of ['getRecord', 'createRecords']) {
   test(`kernel requires ${missing} before its first write`, async () => {
