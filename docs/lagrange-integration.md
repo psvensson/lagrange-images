@@ -66,7 +66,7 @@ The mock implements rollback and transaction-local visibility with isolated in-m
 `test/support/backend-conformance.js` is the reusable acceptance suite. It runs against both backends for ordinary operations, atomic commit, callback rollback and version-conflict rollback. Adapter-specific tests cover key encoding, range scans, graph/history round trips and scoped-handle expiry.
 
 The PR-only integration lane consumes the Lagrange 0.3.2 source checkout at
-`c8e778e0d2109b10f0469da38ce0868f6526614a`, runs `npm ci --omit=dev` there and links
+`7c9f35d980a82936a64435d0d366438d7a77c4fc`, runs `npm ci --omit=dev` there and links
 it as `node_modules/lagrange-server`. The lane tests the public API from that exact
 source: the owned schema and one atomic state/history round trip through its
 embedded session. Installed npm artifact verification is separate. A kernel case uses that same public composition to install
