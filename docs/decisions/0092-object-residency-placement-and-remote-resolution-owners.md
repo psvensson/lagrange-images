@@ -1,6 +1,6 @@
 # ADR 0092: Object residency, placement and remote resolution are generic Images owners over Lagrange routing
 
-Status: accepted — decision-only; the M6.2 measurement is the evidence, and M6.3 implements the first owner with its own proof list
+Status: accepted — M6.3 candidate code exists, but the complete real shared-server acceptance is unproven; no ownership row is promoted to current yet
 
 **Decides WHERE the generic owners M6 needs live and WHAT each may own, before any of them is
 built.** ADR 0085 M6 asks whether the exact M5 application runs unchanged when its ordinary objects
@@ -79,12 +79,15 @@ identity loss.
 
 ### 3. Remote resolution is an interaction owner over Lagrange routing, and Images never owns transport
 
-The arrow **Images runtime -> a record resident on another node** has one owner: **remote
-resolution** (planned). It translates a read or a dispatch of a ref that the local composed backend
-does not hold into a request that Lagrange routes to the node holding it, and it owns the error
-mapping (the M6.2 refusals become classified remote errors that name the ref and the missing
-residency, never a raw transport failure), read idempotency, and the rule that authority is
-re-checked at the resolving node and never carried.
+The arrow **Images runtime -> record resolution outside that execution instance** has one owner:
+**remote resolution**. M6.3 contains a candidate lowest transport-free implementation in
+`src/graph/remote-resolution.js`: an ObjectRef plus an opaque locator-issued residency token is
+resolved through the backend session selected by the locator. The unit owner contract is green,
+but the real two-runtime/one-Lagrange-server acceptance has not completed, so this implementation
+is not yet promoted to current. When a later proof crosses
+separately composed Lagrange backends, this same interaction owner must also own classified
+transport/error mapping, read idempotency and the rule that authority is re-checked at the
+resolving node and never carried.
 
 Images does **not** implement transport, membership, replication or consensus. Those are Lagrange's
 (ADR 0033's placement of the durable backend below Images stands). An Images-side RPC, gossip or
@@ -103,24 +106,52 @@ placement.
 
 ### 5. Ownership map and proof discipline
 
-`docs/ownership.md` gains three **planned** rows (residency: object locator; placement policy;
-the remote-resolution interaction). A planned row reserves the responsibility and names no
-implementation. M6.3 turns the first of them into a current row with its proof list; a row may not
-become current without one.
+`docs/ownership.md` keeps three distinct rows. The M6.3 branch contains candidate object-locator
+and shared-server remote-resolution implementations with green unit proofs, while placement policy
+remains planned. **No row becomes current until the real shared-server acceptance is green.**
 
-The M6.2 witness is the falsifier of every repair: it stays exactly as written and flips to the
-distributed-green oracle only when the unchanged `nextState` on node B resolves the relocated
-`cells` record through the locator and remote resolution, with both nodes still provider-free and
-the M5 acceptance still green on one node. A repair that makes the witness pass by keeping the
-record on node B, by copying it, or by teaching Life or the importer anything is a failed repair.
+The original M6.2 witness remains the falsifier for the **next** distribution step: it uses two
+separately composed durable backends and raw evidence relocation of one `cells` record. M6.3 does
+not flip that witness, because doing so would require per-object residency plus a request route
+across those separate backends — both are explicitly deferred above.
+
+The first shared-server vertical is
+`fixtures/real-lagrange-m6-shared-server-process.js`. Its owner/unit layers are green on the
+original candidate; the complete unchanged-Life witness remains unproven. Diagnosis and the
+candidate CI pin now use Lagrange `a43ce6a9fe3c2ffd17fcb084e596a0c709ba88c9`.
+The ordinary real state/history round trip and public write/readback have passed on that source.
+A longer Life run ended when its host's idle policy stopped the VM, without a terminal result.
+The subsequent bounded diagnostic stopped after 40 top-level backend operations during release
+installation: it did not reach a compiler, artifact scan or `listCodeArtifacts` call. That prefix
+measures startup, attachment and early installation; it establishes neither compiler reuse cost
+nor complete consumer acceptance. The active plan and source-bound receipts are recorded in
+Bead `lagrange-images-0pxf.4`.
+
+Earlier runs against `edf20e39b0014d5d2a63a2ecea990712f0349153` observed repeated readiness
+identity/provisioning refusals; `ec63fbb0016bf1ca6d81372e2a0721851363ea80` removed those
+identity rejections but its Life installation failed with `DISTRIBUTED_PARTICIPANT_FAILURE`.
+Those historical findings remain in the Bead evidence. They do not establish the cause of
+non-completion on the newer frozen source. Images must not add its own readiness/retry owner
+or change the application's semantics to reinterpret a failure.
+
+A repair that teaches Life, the importer or the language personality about placement/routing,
+duplicates identity, or adds an Images transport is still a failed repair.
 
 ## Consequences
 
-- M6.3 opens against this ADR with a fixed shape: whole-image residency in the locator, the
-  shared-server form of remote resolution, the witness flipped to green, and three ownership rows
-  promoted or kept planned honestly.
+- M6.3 has **not** established the fixed baseline yet. The whole-image locator and shared-server
+  resolver are candidates with green unit proofs; the real unchanged-Life acceptance remains
+  unproven. Ownership rows therefore remain candidate or
+  planned. The separately composed-backend M6.2 RED stays red until a later
+  per-object/routed-resolution decision owns that stronger shape.
 - The Lagrange backend adapter stays the sole translation between the backend contract and
   Lagrange sessions; the locator and remote resolution sit above it and consume it.
+- A public CREATE+INSERT acknowledgement alone is not the witness's prerequisite. ONE public
+  CREATE + ONE INSERT must make that row readable within a bounded 20-second visibility window
+  before Images schema work begins. The fixture never retries the write and owns no readiness
+  policy; it fails early if the public write did not become observable. This prerequisite does
+  not prove that installation or the complete Life scenario will succeed. Application-write and
+  provisioning behavior remain owned by Lagrange.
 - `docs/lagrange-integration.md` checklist items 7 to 10 remain unchecked until the real
   process-restart and multi-node proofs exist; this ADR does not claim them.
 - The roadmap's section 6 items keep their order: locator and placement first, call semantics
