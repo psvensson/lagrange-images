@@ -68,7 +68,7 @@ The mock implements rollback and transaction-local visibility with isolated in-m
 The PR-only integration lane installs the pinned public Lagrange package and
 proves the owned schema plus one atomic state/history round trip through its
 embedded session. A separate kernel case uses that same public composition to install
-the 44-record Behavior batch, verify all 52 kernel records and their history, and
+the metaclass and class phases (22 records each), verify all 52 kernel records and their history, and
 prove that reinstalling writes nothing. Its bounded child budget is separate from
 the unchanged ordinary round-trip budget. A separate file-backed compatibility-runtime test proves the
 adapter mapping across restart. Real Lagrange process restart and multi-node
