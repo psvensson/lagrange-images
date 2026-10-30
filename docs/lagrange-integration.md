@@ -65,14 +65,21 @@ The mock implements rollback and transaction-local visibility with isolated in-m
 
 `test/support/backend-conformance.js` is the reusable acceptance suite. It runs against both backends for ordinary operations, atomic commit, callback rollback and version-conflict rollback. Adapter-specific tests cover key encoding, range scans, graph/history round trips and scoped-handle expiry.
 
-The PR-only integration lane installs the pinned public Lagrange package and
-proves the owned schema plus one atomic state/history round trip through its
-embedded session. A separate kernel case uses that same public composition to install
+The PR-only integration lane consumes the Lagrange 0.3.2 source checkout at
+`c8e778e0d2109b10f0469da38ce0868f6526614a`, runs `npm ci --omit=dev` there and links
+it as `node_modules/lagrange-server`. The lane tests the public API from that exact
+source: the owned schema and one atomic state/history round trip through its
+embedded session. Installed npm artifact verification is separate. A kernel case uses that same public composition to install
 the metaclass and class phases (22 records each), verify all 52 kernel records and their history, and
 prove that reinstalling writes nothing. Its bounded child budget is separate from
 the unchanged ordinary round-trip budget. A separate file-backed compatibility-runtime test proves the
 adapter mapping across restart. Real Lagrange process restart and multi-node
 failure/recovery remain separate proofs.
+
+The historical kernel proof passed on Lagrange
+`a43ce6a9fe3c2ffd17fcb084e596a0c709ba88c9`. That evidence remains scoped to its
+original dependency; evidence for the 0.3.2 pin must identify its own exact source
+and configuration.
 
 Snapshots currently write one snapshot record and do not append an event. Logical revision-frontier semantics remain later work.
 
