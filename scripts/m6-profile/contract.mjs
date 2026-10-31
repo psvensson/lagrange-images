@@ -1,11 +1,12 @@
-import {readFileSync, realpathSync, statSync} from 'node:fs';
+import {readFileSync, realpathSync, statSync, existsSync} from 'node:fs';
 import {hostname, homedir, platform} from 'node:os';
 import {resolve, join, dirname} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 
 export const MARKERS = Object.freeze({diagnosticOnly: true, acceptance: false});
-const FIXTURE = 'fixtures/real-lagrange-m6-shared-server-process.js';
+const FIXTURES = Object.freeze(['fixtures/real-lagrange-m6-shared-server-process.js',
+  'fixtures/real-lagrange-backend-process.js']);
 const REQUIRED = ['imagesRoot', 'fixture', 'dataDir', 'outputDir', 'worker', 'controllerBootId', 'thermalOwner'];
 const FLAGS = Object.freeze({'images-root': 'imagesRoot', fixture: 'fixture', 'data-dir': 'dataDir',
   'output-dir': 'outputDir', worker: 'worker', 'controller-boot-id': 'controllerBootId',
@@ -31,7 +32,12 @@ export function parseOptions(args) {
   return result;
 }
 export function assertFixtureLocation(fixture, imagesRoot) {
-  if (resolve(fixture) !== join(resolve(imagesRoot), FIXTURE)) throw new Error('Explicit canonical fixture must belong to images root');
+  if (!FIXTURES.some((relative) => resolve(fixture) === join(resolve(imagesRoot), relative))) throw new Error('Explicit canonical fixture must belong to images root');
+}
+export function fixtureArguments(fixture, imagesRoot, dataDir) {
+  assertFixtureLocation(fixture, imagesRoot);
+  return resolve(fixture) === join(resolve(imagesRoot), FIXTURES[1]) ?
+    [resolve(fixture), dataDir, 'warm'] : [resolve(fixture), dataDir];
 }
 export function assertWorkerFacts(facts, options) {
   if (facts.platform !== 'linux' || facts.hostname !== options.worker || !facts.bootId ||
@@ -77,24 +83,35 @@ export function fingerprintSources(options) {
   const imagesRoot = realpathSync(options.imagesRoot);
   const fixture = realpathSync(options.fixture);
   assertFixtureLocation(fixture, imagesRoot);
-  const paths = [fixture, ...['src/runtime.js', 'src/backend/lagrange-backend.js',
+  const scenarioPath = join(imagesRoot, 'fixtures/real-lagrange-m6-scenario.js');
+  const extractedScenario = existsSync(scenarioPath);
+  const warm = fixture === join(imagesRoot, FIXTURES[1]);
+  if (!extractedScenario && (warm || createHash('sha256').update(readFileSync(fixture)).digest('hex') !==
+      'aa6113b648af4e765d6439957838d625a339f4c4f285b7678c071ccb8fb5c68d')) {
+    throw new Error('Missing extracted Life scenario; only the frozen original monolithic cold fixture is supported without it');
+  }
+  const fixtureInputs = [...(extractedScenario ? ['fixtures/real-lagrange-m6-scenario.js'] : []),
+    ...(warm ? ['fixtures/real-lagrange-suite.js', 'fixtures/real-lagrange-backend-scenarios.js',
+      'fixtures/real-lagrange-m6-shared-server-process.js'] : [])];
+  const paths = [fixture, ...[...fixtureInputs, 'src/runtime.js', 'src/backend/lagrange-backend.js',
     'src/backend/lagrange-schema.js', 'src/image/graph-image-service.js',
     'src/compilation/compilation-service.js', 'test/support/life-m5-witness.js',
-    'test/fixtures/life-m5-release.json', 'package.json', 'package-lock.json'].map((p) => join(imagesRoot, p)),
+    'test/fixtures/life-m5-release.json', 'test/support/sqlite-application-runtime.js', 'package.json', 'package-lock.json'].map((p) => join(imagesRoot, p)),
   realpathSync(options.thermalOwner)];
   const files = paths.map((path) => ({path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex')}));
   return {imagesRoot, fixture, files, fixtureSha256: files[0].sha256,
+    lifeScenarioBinding: extractedScenario ? 'extracted-module' : 'frozen-aa6113-monolithic-no-scenario-file',
     scope: 'Selected fixture/instrumentation input bytes; external executor retains full source archive/dependency identity. Root path or git HEAD alone asserts no clean commit provenance'};
 }
 export function classifyOutcome({code, signal, reason = null, metrics, reaped, groupGone}) {
   let status;
   if (!reaped || !groupGone) status = 'cleanup-failed';
   else if (metrics?.uncaught && !metrics.uncaught.ownedPrefixStop) status = 'runtime-failed';
-  else if (metrics?.telemetryFailure) status = 'telemetry-failed';
+  else if (metrics?.telemetryFailure || metrics?.overflow?.pending || metrics?.overflow?.stages) status = 'telemetry-failed';
   else if (reason) status = 'diagnostic-interrupted';
   else if (code !== 0 && !signal && metrics?.stopRequested && metrics?.uncaught?.ownedPrefixStop) status = 'diagnostic-prefix';
   else if (code === 0 && !signal && metrics?.exitCode === 0 && metrics?.schema === 'm6-profile-observation/1' &&
-      !metrics.stopRequested && !metrics.uncaught) status = 'diagnostic-completed';
+      !metrics.stopRequested && !metrics.uncaught && !metrics.pending?.length) status = 'diagnostic-completed';
   else status = 'child-failed';
   return {...MARKERS, status, partial: status !== 'diagnostic-completed', reason};
 }

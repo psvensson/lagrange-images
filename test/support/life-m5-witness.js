@@ -1,3 +1,4 @@
+import {channel} from 'node:diagnostics_channel';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {
@@ -110,23 +111,33 @@ async function readRecoveredClosure(images, imageId, projectId) {
 // native import of the sealed Life scope. Answers the imported LifeModel class.
 async function installRecoveredLife({runtime, imageId, fixture}) {
   const images = runtime.images;
+  channel('lagrange-images.m6-stage/1').publish({stage: 'life.create-image'});
   await images.createImage({id: imageId});
+  channel('lagrange-images.m6-stage/1').publish({stage: 'life.create-image', state: 'passed'});
+  channel('lagrange-images.m6-stage/1').publish({stage: 'life.install-managed-release'});
   const installed = await installManagedProjectRelease({
     images, targetImageId: imageId, release: fixture.release, material: fixture.material,
   });
+  channel('lagrange-images.m6-stage/1').publish({stage: 'life.install-managed-release', state: 'passed'});
+  channel('lagrange-images.m6-stage/1').publish({stage: 'life.read-recovered-closure'});
   const recovered = await readRecoveredClosure(images, imageId, fixture.release.projectId);
+  channel('lagrange-images.m6-stage/1').publish({stage: 'life.read-recovered-closure', state: 'passed'});
   assert.equal(recovered.installation.releaseId, installed.releaseId);
   assert.deepEqual(recovered.installation.members.map(({key}) => key), ['life/export', 'life/package']);
 
   // Provider absence is EXPLICIT before any native import.
   assertProviderAbsence(runtime, 'before native import');
 
+  channel('lagrange-images.m6-stage/1').publish({stage: 'life.install-standard-image'});
   await installSymmetricSmalltalkStandardImage({images, compilation: runtime.compilation, imageId, lane: 'wasm'});
+  channel('lagrange-images.m6-stage/1').publish({stage: 'life.install-standard-image', state: 'passed'});
+  channel('lagrange-images.m6-stage/1').publish({stage: 'life.import-native-package'});
   const imported = await importCuisNativePackage({
     images, compilation: runtime.compilation, imageId,
     manifest: recovered.manifest,
     scope: {classes: [...LIFE_SCOPE], methods: [...LIFE_METHOD_SCOPE]},
   });
+  channel('lagrange-images.m6-stage/1').publish({stage: 'life.import-native-package', state: 'passed'});
   const lifeModelClass = imported.classes.find(({identity}) => identity === 'cuis-class/Life/LifeModel').classRef;
   return {releaseId: installed.releaseId, recovered, imported, lifeModelClass};
 }

@@ -1,3 +1,4 @@
+import {channel} from 'node:diagnostics_channel';
 import {isMainThread} from 'node:worker_threads';
 import {getHeapStatistics} from 'node:v8';
 import {realpathSync, writeFileSync, renameSync} from 'node:fs';
@@ -13,11 +14,19 @@ if (isMainThread && process.env.M6_PROFILE_CONFIG) {
   const fixture = realpathSync(process.argv[1]);
   assertFixtureLocation(fixture, root);
   if (fixture !== config.fixture) throw new Error('Profiler preload/fixture root mismatch');
+  if (JSON.stringify(process.argv.slice(1)) !== JSON.stringify(config.fixtureArgv ?? [config.fixture])) {
+    throw new Error('Profiler preload/literal fixture argv mismatch');
+  }
   const persist = (state) => {
     writeFileSync(config.metricsFile + '.tmp', JSON.stringify(state) + '\n');
     renameSync(config.metricsFile + '.tmp', config.metricsFile);
   };
   const observer = createObserver({maxOperations: config.maxOperations, persist});
+  const stages = channel('lagrange-images.m6-stage/1');
+  const onStage = (record) => observer.stage(record);
+  stages.subscribe(onStage);
+  const heartbeat = setInterval(() => observer.snapshot(), 1000);
+  heartbeat.unref();
   observer.state.runtimeFacts = {nodeVersion: process.version, arch: process.arch, execPath: process.execPath, heapSizeLimit: getHeapStatistics().heap_size_limit};
   const persistWithoutMaskingFailure = () => {
     try { persist(observer.state); } catch (failure) { observer.state.telemetryFailure ||= {name: failure.name, code: failure.code ?? null}; }
@@ -27,7 +36,10 @@ if (isMainThread && process.env.M6_PROFILE_CONFIG) {
       ownedPrefixStop: error instanceof ProfilePrefixStop};
     persistWithoutMaskingFailure();
   });
-  process.on('exit', (code) => { observer.state.exitCode = code; persistWithoutMaskingFailure(); });
+  process.on('exit', (code) => {
+    clearInterval(heartbeat); stages.unsubscribe(onStage);
+    observer.state.exitCode = code; observer.snapshot(); persistWithoutMaskingFailure();
+  });
   const load = (relative) => import(pathToFileURL(join(root, relative)).href);
   const [{LagrangeBackend}, {ImageService}, {CompilationService}] = await Promise.all([
     load('src/backend/lagrange-backend.js'), load('src/image/graph-image-service.js'),
