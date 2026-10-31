@@ -7,12 +7,11 @@ import {
   createCodeArtifactRecord,
   createLexicalEnvironmentRecord,
 } from '../execution/model.js';
+import {ObjectLocator} from '../graph/locator.js';
+import {RemoteRecordResolver} from '../graph/remote-resolution.js';
+import {objectRef} from '../value/scalars.js';
 import {findTransientRefs, isTransientObjectId} from '../value/transient-ref.js';
-
-const IMAGE_COLLECTION = 'images';
-const records = (id) => `image:${id}:objects`;
-const snapshots = (id) => `image:${id}:snapshots`;
-const history = (id) => `image:${id}:history`;
+import {IMAGE_COLLECTION, history, records, snapshots} from './storage-layout.js';
 
 function assertAllowedFields(input, allowed, label) {
   const extra = Object.keys(input).filter((key) => !allowed.has(key));
@@ -238,9 +237,17 @@ async function validateCandidateRecord(candidate, {resolve, resolveKind, existin
 }
 
 class ImageService {
-  constructor({backend, clock = () => new Date()} = {}) {
+  constructor({backend, clock = () => new Date(), locator = null, remoteResolution = null} = {}) {
     this.backend = assertBackend(backend);
     this.clock = clock;
+    this.locator = locator ?? new ObjectLocator({backend: this.backend});
+    this.remoteResolution = remoteResolution ?? new RemoteRecordResolver();
+    if (typeof this.locator?.locate !== 'function') {
+      throw new TypeError('locator must provide locate(ref)');
+    }
+    if (typeof this.remoteResolution?.resolveAt !== 'function') {
+      throw new TypeError('remoteResolution must provide resolveAt(ref, residency)');
+    }
   }
 
   now() { return this.clock().toISOString(); }
@@ -293,8 +300,10 @@ class ImageService {
   }
 
   async getRecord(imageId, recordId) {
-    await this.getImage(imageId);
-    return await this.backend.get(records(imageId), recordId);
+    const ref = objectRef(imageId, recordId);
+    const residency = await this.locator.locate(ref);
+    if (!residency) throw new TypeError(`image not found: ${imageId}`);
+    return await this.remoteResolution.resolveAt(ref, residency);
   }
 
   async requireRecordKind(ref, kind, label) {

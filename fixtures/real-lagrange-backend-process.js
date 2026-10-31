@@ -1,6 +1,7 @@
 import {createServer} from 'node:net';
 import {createBackend} from '../src/backend/index.js';
-import {assertTransactionResult, proveKernel, proveTransaction} from './real-lagrange-backend-scenarios.js';
+import {assertKernelResult, assertTransactionResult, proveKernel, proveTransaction} from './real-lagrange-backend-scenarios.js';
+import {loadSharedLifeFixture, proveSharedLife} from './real-lagrange-m6-scenario.js';
 import {
   REAL_LAGRANGE_BUDGETS,
   REAL_LAGRANGE_REPORT_PREFIX,
@@ -57,17 +58,24 @@ async function startBackend() {
 
 // Cold modes retain the original first-write/admission reproductions. The CI
 // warm mode shares only the running backend, never installed image contents.
+const lifeFixture = proof === 'warm' ? await loadSharedLifeFixture() : null;
+let kernelResult = null;
 const cases = {
   transaction: {name: 'transaction', timeoutMs: REAL_LAGRANGE_BUDGETS.transaction, run: proveTransaction},
   kernel: {name: 'kernel', timeoutMs: REAL_LAGRANGE_BUDGETS.kernel, run: async (backend) => {
-    await proveKernel(backend, mark);
+    kernelResult = await proveKernel(backend, mark);
     if (proof === 'warm') await assertTransactionResult(backend);
+  }},
+  life: {name: 'life', timeoutMs: REAL_LAGRANGE_BUDGETS.life, run: async (backend) => {
+    await proveSharedLife(backend.runtime, lifeFixture);
+    await assertTransactionResult(backend);
+    await assertKernelResult(backend, kernelResult);
   }},
 };
 const report = await runRealLagrangeSuite({
   start: startBackend,
   stop: (backend) => backend.stop(),
-  scenarios: (proof === 'warm' ? ['transaction', 'kernel'] : [proof]).map((name) => cases[name]),
+  scenarios: (proof === 'warm' ? ['transaction', 'kernel', 'life'] : [proof]).map((name) => cases[name]),
   observe: (record) => mark('phase', record),
 });
 console.log(REAL_LAGRANGE_REPORT_PREFIX + JSON.stringify(report));

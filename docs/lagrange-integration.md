@@ -66,28 +66,71 @@ The mock implements rollback and transaction-local visibility with isolated in-m
 `test/support/backend-conformance.js` is the reusable acceptance suite. It runs against both backends for ordinary operations, atomic commit, callback rollback and version-conflict rollback. Adapter-specific tests cover key encoding, range scans, graph/history round trips and scoped-handle expiry.
 
 The PR-only integration lane installs the pinned public Lagrange package and starts
-one embedded backend per isolated worker. Its transaction and kernel scenarios run
+one embedded backend per isolated worker. Its transaction, kernel and Life scenarios run
 sequentially against that warm session. The transaction scenario proves one atomic
 state/history round trip; the kernel scenario installs
 the metaclass and class phases (22 records each), verify all 52 kernel records and their history, and
 prove that reinstalling writes nothing. It then creates and rediscovers a fresh named class
 through two dictionary/Behavior pairs, checking ordered history and write-free replay in the
 same public backend session. The transaction records are checked again after the kernel
-scenario. Isolation comes from distinct collection/stream and image identities, not
-the application namespace (which is session identity only). Installed image contents
-are never reused as fixture setup.
+and Life scenarios, and Life must leave the kernel image/history unchanged. Isolation
+comes from distinct collection/stream and image identities, not the application
+namespace (which is session identity only). Installed image contents are never
+reused as fixture setup.
 
-The fixture reports setup, each scenario and cleanup separately. The transaction and
-kernel allowances remain 160 and 340 seconds. Setup has a 160-second bound and cleanup
-20 seconds, all within one 500-second child envelope (the sum of the former child
-limits). That shared ceiling can preempt a phase before its individual allowance;
-resource exhaustion is inconclusive, never a functional pass. The parent requires a
-complete ordered report and successful cleanup. Cold `transaction` and `kernel`
-CLI modes use the same assertions for fresh-start/first-write reproduction; see the
-runbook. This fixture change supplies no cold-start performance or admission-fix claim.
-A separate file-backed compatibility-runtime test proves the
-adapter mapping across restart. Real Lagrange process restart and multi-node
-failure/recovery remain separate proofs.
+The fixture reports setup, transaction, kernel, Life and cleanup separately. Case
+allowances remain 160, 340 and 340 seconds. Setup has a 160-second bound and cleanup
+20 seconds, all within one 840-second child envelope (the sum of the former child
+limits), with an 860-second parent. The shared ceiling can preempt an individual
+allowance; a phase cannot publish success after either deadline. Resource exhaustion
+is inconclusive and fails the lane. The parent requires a complete ordered report
+and successful cleanup. Cold transaction, kernel and M6 Life CLI entries remain
+available with the same assertion functions. This change makes no cold-start
+performance, native admission repair or M6 acceptance claim.
+
+M6.3 contains a candidate shared-server real-Lagrange proof using the same public
+`createEmbeddedLagrange()` handle and two
+`LagrangeBackend({runtime, ownsRuntime: false})` adapters. Each adapter opens its
+own application session for an independent Images runtime without taking server
+lifecycle authority.
+
+The complete shared-server acceptance remains **unproven**. The candidate now pins
+Lagrange `a43ce6a9fe3c2ffd17fcb084e596a0c709ba88c9`, matching the frozen diagnostic
+source. The ordinary real state/history round trip and public write/readback passed
+on that source; the complete Life run was interrupted by its host's idle policy.
+The historical 40-operation prefix stopped before compiler work. The newer
+600-second run on Images `b652f20…` and that same Lagrange source reached compiler-reuse
+lookups, while backend transactions dominated its measured time; Life remained incomplete.
+[ADR 0092](decisions/0092-object-residency-placement-and-remote-resolution-owners.md#5-ownership-map-and-proof-discipline)
+and Bead `lagrange-images-0pxf.4` retain the exact measurements and source identities.
+
+The kernel repair is now merged as PR #320 at main `b61c05d…`, with focused,
+native and all six CI proofs. Its fresh kernel publication uses 10 transactions
+instead of 52. The subsequent unchanged M6 witness on Images `8e14cbc…` and
+Lagrange `a43ce6a9…` reached its original 340-second child deadline during Life
+installation, after public write/readback and both runtime attachments passed.
+PR #322 subsequently merged at main `ddff93c…`, preserving ordered history while
+reducing each class's dictionary/Behavior segment from four transactions to two;
+its native kernel/class proof and all six CI checks passed. Neither owner proof
+establishes Life acceptance. Beads `lagrange-images-bi0i`, `lagrange-images-pqzm`
+and `lagrange-images-0pxf.4` retain these separate results; `lagrange-images-f5kd`
+tracks separate native admission failures. The warm M6 consumer proof proceeds independently
+on unchanged Lagrange `a43ce6a9…`; it does not discharge core admission or the 0.3.2
+upgrade work, and remains unproven until required CI passes.
+
+The fixture performs one CREATE and one INSERT, then only polls a SELECT for that
+exact row for 20 seconds. Failure is an acceptance prerequisite, not an Images
+readiness/retry policy; passing it does not prove later installation succeeds.
+The callable witness is `fixtures/real-lagrange-m6-scenario.js`; its original cold
+entry remains `fixtures/real-lagrange-m6-shared-server-process.js` with the same
+data-directory argument and public server configuration. The real lane calls that
+same assertion body on the backend-owned warm server, then verifies that transaction
+data and the kernel image/history are unchanged.
+
+A separate file-backed compatibility-runtime test proves the adapter mapping
+across restart. The M6.3 shared-server proof is intentionally **not** a
+multi-node durability/failure-recovery claim, so checklist items 7-10 remain
+unchanged until those stronger proofs exist.
 
 Snapshots currently write one snapshot record and do not append an event. Logical revision-frontier semantics remain later work.
 

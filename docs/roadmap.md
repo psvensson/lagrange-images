@@ -364,6 +364,27 @@ receiver lookup (`Symmetric Smalltalk receiver not found`) while node A, holding
 fails at the Behavior lookup. The missing owners are generic (residency, placement, remote
 resolution); ADR 0092 decides where they live before M6.3 repairs the first one.
 
+M6.3 has a candidate whole-image locator + shared-server resolution implementation,
+but the complete real acceptance remains unproven. The first form is two independent
+Images runtimes opening separate application sessions on one caller-owned real Lagrange
+server: Runtime B installs the unchanged M5 Life release, then A and B execute unchanged
+`LifeModel>>nextState`. Ordinary real integration and public write/readback passed on
+frozen Lagrange `a43ce6a9fe3c2ffd17fcb084e596a0c709ba88c9`; a full Life run was interrupted
+by host shutdown. The historical 40-operation prefix stopped before compiler work;
+a newer 600-second run on Images `b652f20…` reached compiler reuse but remained incomplete,
+with backend transactions dominating its measured time. The separately proven kernel repair
+(PR #320, main `b61c05d…`) reduces fresh kernel publication from 52 transactions to 10;
+it is not Life acceptance. The subsequent unchanged Images `8e14cbc…` witness reached
+its original 340-second child deadline during Life installation. PR #322/main `ddff93c…`
+then reduced each class's ordered dictionary/Behavior segment from four transactions to two,
+with separate native and six-job CI proof. ADR 0092 and Beads `lagrange-images-0pxf.4`,
+`lagrange-images-bi0i` and `lagrange-images-pqzm` retain the separate evidence; native
+admission investigation `lagrange-images-f5kd` and the 0.3.2 upgrade remain separate. The
+warm M6 proof proceeds independently on unchanged Lagrange `a43ce6a9…`, without
+discharging those core obligations or claiming acceptance before required CI.
+The M6.2 separately-composed-backend/raw-relocation RED remains active for the later
+stronger routed case.
+
 - [ ] run the same M5 application with application objects placed across Lagrange nodes;
 - [ ] keep placement/routing entirely out of the Cuis importer and application semantics;
 - [ ] prove generic Lagrange owners decide object location and execution placement;
@@ -429,8 +450,9 @@ them — the object locator (residency, whole-image first), a separate placement
 remote resolution as an interaction owner over Lagrange's routing — and fixes that Images never owns
 transport, membership, replication or consensus:
 
-- [ ] object locator and placement policy;
-- [ ] local vs remote call semantics;
+- [ ] whole-image object locator + shared-server record-resolution baseline (M6.3 candidate; complete real Lagrange acceptance unproven);
+- [ ] placement policy and per-object residency;
+- [ ] routed local-vs-remote call semantics across separately composed Lagrange backends;
 - [ ] Lagrange WASM placement;
 - [ ] distributed routing for native Blocks and explicitly retained foreign/component boundaries;
 - [ ] explicit failure/retry/idempotency semantics;

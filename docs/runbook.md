@@ -337,15 +337,16 @@ The Lagrange backend proof needs a checkout of `psvensson/lagrange` linked as
 `.github/workflows/test.yml`.
 
 The real lane uses one fresh child/data directory and one backend startup for its
-transaction and kernel scenarios. Their data identities are distinct; the kernel
-scenario rechecks the transaction's records and history. There is no readiness
-sleep, retry or preinstalled image. Successful output includes an
-`images-real-lagrange/v1` report with separate setup, transaction, kernel and cleanup
+transaction, kernel and Life scenarios. Their data identities are distinct; later
+scenarios recheck transaction data and Life also rechecks the kernel image/history. This adds no
+new readiness or write-retry policy and preinstalls no image; the preserved Life prerequisite
+polls SELECT visibility with its existing 100 ms sleep. Successful output includes an
+`images-real-lagrange/v1` report with separate setup, transaction, kernel, life and cleanup
 durations. These distinguish cold infrastructure setup from warm image work.
 
-The 500-second child ceiling is the sum of the old 160/340-second child limits;
-the 520-second parent also allows process close and directory removal. Phase bounds
-are 160 seconds for setup/transaction, 340 for kernel and 20 for cleanup, within that
+The 840-second child ceiling is the sum of the old 160/340/340-second child limits;
+the 860-second parent also allows process close and directory removal. Phase bounds
+are 160 seconds for setup/transaction, 340 for kernel/Life and 20 for cleanup, within that
 shared ceiling, not additive guaranteed allowances. A phase watchdog writes a typed
 timeout and exits the owned child; the parent hard-kills a child that exhausts its
 outer bound and waits for close. A timeout is inconclusive and fails the lane.
@@ -357,10 +358,14 @@ CPU/thermal limits:
 ```sh
 node fixtures/real-lagrange-backend-process.js /path/to/fresh-transaction-data transaction
 node fixtures/real-lagrange-backend-process.js /path/to/fresh-kernel-data kernel
+node fixtures/real-lagrange-m6-shared-server-process.js /path/to/fresh-life-data
 ```
 
-The CLI default remains `transaction`; `warm` selects both cases. The direct CLI has
-the phase bounds above; the CI parent supplies the shared outer bound. Warm success
+The CLI default remains `transaction`; `warm` selects all three cases. The backend CLI has
+the phase bounds above; the CI parent supplies the shared outer bound. The standalone
+M6 CLI retains its original direct server-start order and caller-owned process
+deadline; invoke it through the existing bounded diagnostic runner or an external
+finite process limit. Warm success
 does not certify cold-start latency, restart/recovery or repair of a retained native
 admission failure. Those remain separate core/consumer proofs.
 

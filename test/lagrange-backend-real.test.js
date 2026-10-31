@@ -11,7 +11,7 @@ const PROCESS_OUTPUT_LIMIT = 16 * 1024 * 1024;
 const enabled = process.env.LAGRANGE_IMAGES_REAL_LAGRANGE === '1';
 const processFixture = new URL('../fixtures/real-lagrange-backend-process.js', import.meta.url);
 
-test('warm real Lagrange commits atomic state/history and installs/reuses kernel and class pairs', {
+test('warm real Lagrange commits state/history, reuses kernel/class pairs and executes unchanged Life across two runtimes (M6.3)', {
   skip: enabled ? false : 'set LAGRANGE_IMAGES_REAL_LAGRANGE=1 with lagrange-server installed',
   timeout: REAL_LAGRANGE_BUDGETS.parent,
 }, async (t) => {
@@ -23,7 +23,7 @@ test('warm real Lagrange commits atomic state/history and installs/reuses kernel
       timeout: REAL_LAGRANGE_BUDGETS.child,
       killSignal: 'SIGKILL',
     });
-    t.diagnostic(JSON.stringify(readRealLagrangeReport(stdout, ['transaction', 'kernel'])));
+    t.diagnostic(JSON.stringify(readRealLagrangeReport(stdout, ['transaction', 'kernel', 'life'])));
   } catch (error) {
     const disposition = error.killed || error.code === 124 ? 'resource bound exhausted (inconclusive)' : 'proof failed';
     throw new Error(
