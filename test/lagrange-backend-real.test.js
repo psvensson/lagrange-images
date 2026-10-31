@@ -4,48 +4,35 @@ import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {promisify} from 'node:util';
+import {REAL_LAGRANGE_BUDGETS, readRealLagrangeReport} from '../fixtures/real-lagrange-suite.js';
 
 const executeFile = promisify(execFile);
-// Provisioning diagnostics can exceed execFile's implicit 1 MiB capture limit.
-// Keep a finite bound while preserving the child's actual outcome and deadline.
 const PROCESS_OUTPUT_LIMIT = 16 * 1024 * 1024;
 const enabled = process.env.LAGRANGE_IMAGES_REAL_LAGRANGE === '1';
 const processFixture = new URL('../fixtures/real-lagrange-backend-process.js', import.meta.url);
 
-test('real public Lagrange package commits atomic state and history', {
+test('warm real Lagrange commits atomic state/history and installs/reuses kernel and class pairs', {
   skip: enabled ? false : 'set LAGRANGE_IMAGES_REAL_LAGRANGE=1 with lagrange-server installed',
-  timeout: 180_000,
-}, async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'lagrange-images-real-'));
-  const environment = {...process.env, LAGRANGE_BACKEND: 'lagrange'};
+  timeout: REAL_LAGRANGE_BUDGETS.parent,
+}, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lagrange-images-warm-'));
   try {
-    await executeFile(process.execPath, [processFixture.pathname, directory], {
-      env: environment,
-      maxBuffer: PROCESS_OUTPUT_LIMIT,
-      timeout: 160_000,
-    });
-  } finally {
-    await rm(directory, {recursive: true, force: true});
-  }
-});
-
-test('real public Lagrange package installs and reuses kernel phases and class Behavior pairs', {
-  skip: enabled ? false : 'set LAGRANGE_IMAGES_REAL_LAGRANGE=1 with lagrange-server installed',
-  timeout: 360_000,
-}, async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'lagrange-images-kernel-'));
-  try {
-    await executeFile(process.execPath, [processFixture.pathname, directory, 'kernel'], {
+    const {stdout} = await executeFile(process.execPath, [processFixture.pathname, directory, 'warm'], {
       env: {...process.env, LAGRANGE_BACKEND: 'lagrange'},
       maxBuffer: PROCESS_OUTPUT_LIMIT,
-      timeout: 340_000,
+      timeout: REAL_LAGRANGE_BUDGETS.child,
+      killSignal: 'SIGKILL',
     });
+    t.diagnostic(JSON.stringify(readRealLagrangeReport(stdout, ['transaction', 'kernel'])));
   } catch (error) {
+    const disposition = error.killed || error.code === 124 ? 'resource bound exhausted (inconclusive)' : 'proof failed';
     throw new Error(
-      `Kernel child failed (${error.code ?? error.name}: ${error.message}); stdout:\n${error.stdout ?? ''}\nstderr:\n${error.stderr ?? ''}`,
+      `Warm Lagrange child failed (${error.code ?? error.name}: ${error.message}); ` +
+      `${disposition}; stdout:\n${error.stdout ?? ''}\nstderr:\n${error.stderr ?? ''}`,
       {cause: error},
     );
   } finally {
+    // execFile settles only after the owned child's streams close.
     await rm(directory, {recursive: true, force: true});
   }
 });
