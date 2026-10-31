@@ -6,11 +6,12 @@ export const REAL_LAGRANGE_BUDGETS = Object.freeze({
   setup: 160_000,
   transaction: 160_000,
   kernel: 340_000,
+  life: 340_000,
   cleanup: 20_000,
-  // The sum of the two former child envelopes. This shared ceiling can
+  // The sum of the three former child envelopes. This shared ceiling can
   // preempt a phase before its individual allowance is exhausted.
-  child: 500_000,
-  parent: 520_000,
+  child: 840_000,
+  parent: 860_000,
 });
 export const REAL_LAGRANGE_REPORT_PREFIX = 'IMAGES_REAL_LAGRANGE_REPORT ';
 
