@@ -3,7 +3,7 @@ import {mkdirSync, readFileSync, writeFileSync, openSync, closeSync, lstatSync, 
 import {createHash} from 'node:crypto';
 import {dirname, join} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-import {MARKERS, parseOptions, fingerprintSources, observeWorkerFacts, assertWorkerFacts, classifyOutcome} from './m6-profile/contract.mjs';
+import {MARKERS, fixtureArguments, parseOptions, fingerprintSources, observeWorkerFacts, assertWorkerFacts, classifyOutcome} from './m6-profile/contract.mjs';
 import {runOwnedChild} from './m6-profile/lifecycle.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -17,7 +17,8 @@ export async function main(args) {
   const sources = fingerprintSources(options);
   const plan = {schema: 'm6-profile-plan/1', ...MARKERS, mode: options.execute ? 'execute' : 'plan',
     createdAt: new Date().toISOString(), options, sources, driver: driverFacts(),
-    observations: 'Logical backend calls only; frozen transaction-scoped methods are not individually instrumented. Inclusive spans overlap.',
+    fixtureArgv: fixtureArguments(sources.fixture, sources.imagesRoot, options.dataDir),
+    observations: 'Logical backend calls, source-owned installation stages and pending observed ages; frozen scoped methods are not individually instrumented. Completed costs group by start stage; inclusive spans overlap.',
     resourceOwner: 'External executor owns placement, machine lock, cgroup caps and lease cleanup'};
   if (!options.execute) return plan;
   if (!/^[a-f0-9]{64}$/.test(options.fixtureSha256 || '') ||
@@ -48,10 +49,11 @@ export async function main(args) {
   let child;
   try {
     child = await runOwnedChild({
-      argv: ['--import', pathToFileURL(join(HERE, 'm6-profile/preload.mjs')).href, sources.fixture, options.dataDir],
+      argv: ['--import', pathToFileURL(join(HERE, 'm6-profile/preload.mjs')).href,
+        ...plan.fixtureArgv],
       cwd: sources.imagesRoot,
       env: {...process.env, M6_PROFILE_CONFIG: JSON.stringify({imagesRoot: sources.imagesRoot,
-        fixture: sources.fixture, metricsFile, maxOperations: options.maxOperations})},
+        fixture: sources.fixture, fixtureArgv: plan.fixtureArgv, metricsFile, maxOperations: options.maxOperations})},
       maxMs: options.maxMs, maxLogBytes: options.maxLogBytes, signal: controller.signal,
       onChunk: (chunk) => writeFileSync(log, chunk),
       onStarted: (value) => save('started.json', {...MARKERS, ...value}),
