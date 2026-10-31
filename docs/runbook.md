@@ -336,6 +336,34 @@ The Lagrange backend proof needs a checkout of `psvensson/lagrange` linked as
 `node_modules/lagrange-server`; see the `lagrange-backend-integration` job in
 `.github/workflows/test.yml`.
 
+The real lane uses one fresh child/data directory and one backend startup for its
+transaction and kernel scenarios. Their data identities are distinct; the kernel
+scenario rechecks the transaction's records and history. There is no readiness
+sleep, retry or preinstalled image. Successful output includes an
+`images-real-lagrange/v1` report with separate setup, transaction, kernel and cleanup
+durations. These distinguish cold infrastructure setup from warm image work.
+
+The 500-second child ceiling is the sum of the old 160/340-second child limits;
+the 520-second parent also allows process close and directory removal. Phase bounds
+are 160 seconds for setup/transaction, 340 for kernel and 20 for cleanup, within that
+shared ceiling, not additive guaranteed allowances. A phase watchdog writes a typed
+timeout and exits the owned child; the parent hard-kills a child that exhausts its
+outer bound and waits for close. A timeout is inconclusive and fails the lane.
+
+Fresh-start/first-write reproductions remain available using the exact same scenario
+functions. Give each invocation a new empty directory, and use the normal machine
+CPU/thermal limits:
+
+```sh
+node fixtures/real-lagrange-backend-process.js /path/to/fresh-transaction-data transaction
+node fixtures/real-lagrange-backend-process.js /path/to/fresh-kernel-data kernel
+```
+
+The CLI default remains `transaction`; `warm` selects both cases. The direct CLI has
+the phase bounds above; the CI parent supplies the shared outer bound. Warm success
+does not certify cold-start latency, restart/recovery or repair of a retained native
+admission failure. Those remain separate core/consumer proofs.
+
 ### Setting up the Cargo/rustc toolchain image
 
 ```sh
