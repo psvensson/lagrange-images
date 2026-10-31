@@ -85,7 +85,12 @@ acceptance deadlines to conceal non-completion.
 ### Bounded M6 diagnostic
 
 `scripts/m6-profile.mjs` observes the canonical shared-server fixture from an explicit Images
-checkout. It does not contain another Life installer or server setup. Its default is a plan:
+checkout. It does not contain another Life installer or server setup. The only allowed entrypoints
+are the original cold M6 fixture (literal arguments: data directory) and
+`fixtures/real-lagrange-backend-process.js` (literal arguments: data directory, `warm`).
+No arbitrary fixture mode or extra argument is accepted. Warm mode requires the reviewed
+M6 consumer composition; the diagnostic branch does not supply that production candidate.
+Its default is a plan:
 
 ```sh
 node scripts/m6-profile.mjs \
@@ -114,6 +119,22 @@ calls and returned scan rows; transaction spans measure time before, within and 
 Inclusive compiler, image and backend timings overlap. They are not physical SQL counts or
 independent costs to add together, and a scan's returned rows do not establish how many records
 the database examined. Scoped transaction objects retain their original identity.
+
+The existing suite phase observer and shared Life helper emit five installation boundaries:
+image creation, managed release, recovered closure, standard image and native import. Start and
+successful return are separate events; a completed installation stage is not left active during
+later model work. The preload records bounded pending operations with parent/depth, start stage
+and transaction callback phase. Completed call and transaction costs are grouped by their START
+stage; pending observed age never increments those costs. One unref 1 Hz telemetry snapshot
+updates pending ages, not application readiness. A stale snapshot is only true as of its recorded
+time, and a long pending interval is not proof of a native deadlock. Telemetry write failures are
+sticky and nonthrowing; incomplete/overflow observations cannot become completed diagnostics.
+The warm source binding includes the suite, both scenario owners, cold entry, shared Life/support
+helpers and frozen release JSON before and after execution, alongside existing production inputs.
+Cold extracted fixtures bind the same delegated Life module. A source without that module is
+supported only for the frozen original `aa6113…` monolithic cold fixture, with its absence
+recorded; creating or removing that module changes the binding. External full-source/dependency
+custody is still required.
 
 The runner writes `plan.json`, `started.json`, bounded `canonical.log`, `observation.json` and
 `terminal.json` when their phases are reached. An operation limit requests a stop after an outer
