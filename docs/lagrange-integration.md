@@ -65,14 +65,27 @@ The mock implements rollback and transaction-local visibility with isolated in-m
 
 `test/support/backend-conformance.js` is the reusable acceptance suite. It runs against both backends for ordinary operations, atomic commit, callback rollback and version-conflict rollback. Adapter-specific tests cover key encoding, range scans, graph/history round trips and scoped-handle expiry.
 
-The PR-only integration lane installs the pinned public Lagrange package and
-proves the owned schema plus one atomic state/history round trip through its
-embedded session. A separate kernel case uses that same public composition to install
+The PR-only integration lane installs the pinned public Lagrange package and starts
+one embedded backend per isolated worker. Its transaction and kernel scenarios run
+sequentially against that warm session. The transaction scenario proves one atomic
+state/history round trip; the kernel scenario installs
 the metaclass and class phases (22 records each), verify all 52 kernel records and their history, and
 prove that reinstalling writes nothing. It then creates and rediscovers a fresh named class
 through two dictionary/Behavior pairs, checking ordered history and write-free replay in the
-same public backend session. Its bounded child budget is separate from
-the unchanged ordinary round-trip budget. A separate file-backed compatibility-runtime test proves the
+same public backend session. The transaction records are checked again after the kernel
+scenario. Isolation comes from distinct collection/stream and image identities, not
+the application namespace (which is session identity only). Installed image contents
+are never reused as fixture setup.
+
+The fixture reports setup, each scenario and cleanup separately. The transaction and
+kernel allowances remain 160 and 340 seconds. Setup has a 160-second bound and cleanup
+20 seconds, all within one 500-second child envelope (the sum of the former child
+limits). That shared ceiling can preempt a phase before its individual allowance;
+resource exhaustion is inconclusive, never a functional pass. The parent requires a
+complete ordered report and successful cleanup. Cold `transaction` and `kernel`
+CLI modes use the same assertions for fresh-start/first-write reproduction; see the
+runbook. This fixture change supplies no cold-start performance or admission-fix claim.
+A separate file-backed compatibility-runtime test proves the
 adapter mapping across restart. Real Lagrange process restart and multi-node
 failure/recovery remain separate proofs.
 
