@@ -1,3 +1,4 @@
+import {channel} from 'node:diagnostics_channel';
 import {createServer} from 'node:net';
 import {createBackend} from '../src/backend/index.js';
 import {assertTransactionResult, proveKernel, proveTransaction} from './real-lagrange-backend-scenarios.js';
@@ -12,6 +13,9 @@ if (!dataDir) throw new TypeError('usage: real-lagrange-backend-process.js <data
 if (!['warm', 'transaction', 'kernel'].includes(proof)) throw new TypeError('unknown real Lagrange proof');
 const mark = (stage, detail = {}) => {
   console.error(JSON.stringify({proof, stage, at: new Date().toISOString(), ...detail}));
+  if (stage === 'phase') channel('lagrange-images.m6-stage/1').publish({
+    stage: detail.phase, state: detail.state,
+  });
 };
 
 // The embedded Lagrange node listens on three ports. They used to be fixed (45180-45182), which
