@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {LagrangeBackend} from '../src/backend/lagrange-backend.js';
+import {ImageService} from '../src/image/graph-image-service.js';
 import {createSqliteApplicationRuntime} from './support/sqlite-application-runtime.js';
-import {assertTransactionResult, proveKernel, proveTransaction} from '../fixtures/real-lagrange-backend-scenarios.js';
+import {assertKernelResult, assertTransactionResult, proveKernel, proveTransaction} from '../fixtures/real-lagrange-backend-scenarios.js';
 import {
   REAL_LAGRANGE_REPORT_PREFIX,
   readRealLagrangeReport,
@@ -15,20 +16,20 @@ const executeFile = promisify(execFile);
 const suiteURL = new URL('../fixtures/real-lagrange-suite.js', import.meta.url).href;
 const scenario = (name, run) => ({name, run, timeoutMs: 1000});
 
-test('warm fixture acquires one resource, sequences both cases and awaits one cleanup', async () => {
+test('warm fixture acquires one resource, sequences all three cases and awaits one cleanup', async () => {
   const resource = {};
   const calls = [];
   const report = await runRealLagrangeSuite({
     start: async () => { calls.push('start'); return resource; },
     stop: async (actual) => { assert.equal(actual, resource); calls.push('stop'); },
-    scenarios: ['transaction', 'kernel'].map((name) => scenario(name, async (actual) => {
+    scenarios: ['transaction', 'kernel', 'life'].map((name) => scenario(name, async (actual) => {
       assert.equal(actual, resource);
       calls.push(name);
     })),
   });
-  assert.deepEqual(calls, ['start', 'transaction', 'kernel', 'stop']);
+  assert.deepEqual(calls, ['start', 'transaction', 'kernel', 'life', 'stop']);
   assert.deepEqual(readRealLagrangeReport(REAL_LAGRANGE_REPORT_PREFIX + JSON.stringify(report),
-    ['transaction', 'kernel']), report);
+    ['transaction', 'kernel', 'life']), report);
 });
 
 test('a failed case prevents later cases and preserves failure after cleanup', async () => {
@@ -82,14 +83,14 @@ test('live diagnostic failure cannot strand an acquired resource', async () => {
 
 test('completion report refuses absent, duplicate, omitted and unordered cases or cleanup', () => {
   const report = {schema: 'images-real-lagrange/v1', phases:
-    ['setup', 'transaction', 'kernel', 'cleanup'].map((phase) => ({phase, state: 'passed', elapsedMs: 1}))};
+    ['setup', 'transaction', 'kernel', 'life', 'cleanup'].map((phase) => ({phase, state: 'passed', elapsedMs: 1}))};
   const encode = (value) => REAL_LAGRANGE_REPORT_PREFIX + JSON.stringify(value);
-  const read = (stdout) => readRealLagrangeReport(stdout, ['transaction', 'kernel']);
+  const read = (stdout) => readRealLagrangeReport(stdout, ['transaction', 'kernel', 'life']);
   assert.throws(() => read(''));
   assert.throws(() => read(`${encode(report)}\n${encode(report)}`));
   for (const phases of [report.phases.slice(0, -1), report.phases.slice(1),
     [report.phases[0], report.phases[2], report.phases[1], report.phases[3]],
-    report.phases.map((row, i) => i === 3 ? {...row, state: 'failed'} : row),
+    report.phases.map((row, i) => i === 4 ? {...row, state: 'failed'} : row),
     report.phases.map((row, i) => i === 1 ? {...row, elapsedMs: -1} : row)]) {
     assert.throws(() => read(encode({...report, phases})));
   }
@@ -161,9 +162,46 @@ test('existing scenario assertions coexist in one SQL compatibility session', as
   await backend.start();
   try {
     await proveTransaction(backend);
-    await proveKernel(backend);
+    const kernel = await proveKernel(backend);
     await assertTransactionResult(backend);
+    await assertKernelResult(backend, kernel);
   } finally {
     await backend.stop();
   }
+});
+
+test('attached Life image sessions neither isolate by namespace nor own the warm server', async () => {
+  // SQL compatibility proves fixture isolation/lifetime only, not native semantics.
+  const server = createSqliteApplicationRuntime();
+  const start = server.start.bind(server);
+  const stop = server.stop.bind(server);
+  let starts = 0;
+  let stops = 0;
+  server.start = async () => { starts++; await start(); };
+  server.stop = async () => { stops++; await stop(); };
+  const owner = new LagrangeBackend({runtime: server});
+  const sessionA = new LagrangeBackend({runtime: server, ownsRuntime: false, namespace: 'm6-a'});
+  const sessionB = new LagrangeBackend({runtime: server, ownsRuntime: false, namespace: 'm6-b'});
+  await owner.start();
+  try {
+    await proveTransaction(owner);
+    const kernel = await proveKernel(owner);
+    await sessionA.start();
+    await sessionB.start();
+    const imagesA = new ImageService({backend: sessionA});
+    const imagesB = new ImageService({backend: sessionB});
+    const life = await imagesB.createImage({id: 'life-native-m6'});
+    assert.deepEqual(await imagesA.getImage(life.id), life);
+    await sessionA.stop();
+    assert.deepEqual(await imagesB.getImage(life.id), life);
+    assert.equal(starts, 1);
+    assert.equal(stops, 0);
+    await assertTransactionResult(owner);
+    await assertKernelResult(owner, kernel);
+  } finally {
+    await sessionA.stop();
+    await sessionB.stop();
+    await owner.stop();
+  }
+  assert.equal(stops, 1);
 });
