@@ -1654,17 +1654,15 @@ function polyglotMethodBridgeDescriptor({selector, callableBlockRef, passSelf = 
   }));
   const methodArgs = Array.from({length: arity}, (_, index) => ({op: 'argument', index}));
   const forwardedArgs = passSelf ? [{op: 'receiver'}, ...methodArgs] : methodArgs;
-  const valueSelector = forwardedArgs.length === 0 ? 'value' : 'value:'.repeat(forwardedArgs.length);
   return Object.freeze({
     selector,
     program: Object.freeze({
       parameters,
-      captures: [{id: POLYGLOT_CALLABLE_CAPTURE_ID, name: POLYGLOT_CALLABLE_CAPTURE_NAME}],
+      captures: [{id: POLYGLOT_CALLABLE_CAPTURE_ID, name: POLYGLOT_CALLABLE_CAPTURE_NAME, mode: 'snapshot'}],
+      temporaries: [],
       body: Object.freeze({
-        op: 'send',
-        languageId: SYMMETRIC_SMALLTALK_ID,
-        receiver: {op: 'binding', id: POLYGLOT_CALLABLE_CAPTURE_ID},
-        message: textValue(valueSelector),
+        op: 'apply',
+        callee: {op: 'binding', id: POLYGLOT_CALLABLE_CAPTURE_ID},
         arguments: forwardedArgs,
       }),
     }),

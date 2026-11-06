@@ -104,7 +104,9 @@ class Parser {
     const messages = [first];
     while (this.match(';')) {
       if (this.current().type === 'identifier') {
-        messages.push({selector: this.advance().value, arguments: Object.freeze([])});
+        const token = this.advance();
+        assertNotReserved(token, 'send unary message');
+        messages.push({selector: token.value, arguments: Object.freeze([])});
         continue;
       }
       if (this.current().type === 'binary') {
@@ -211,10 +213,11 @@ class Parser {
   parseUnaryMessage() {
     let receiver = this.parsePrimary();
     while (this.current().type === 'identifier') {
-      const selector = this.advance().value;
+      const token = this.advance();
+      assertNotReserved(token, 'send unary message');
       receiver = node('send', {
         receiver,
-        selector,
+        selector: token.value,
         arguments: Object.freeze([]),
       });
     }

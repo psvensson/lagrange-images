@@ -31,5 +31,5 @@ Per ADR 0035 and ADR 0043, named semantic and executable representations are clo
 
 ## Consequences
 
-- Functional and polyglot guest compilers targeting `lagrange-code/v2` can apply closures, WASM callables, foreign-runtime callables, and image bindings directly by Block reference without routing through a language message dispatcher or selector string.
+- Functional and polyglot guest compilers targeting `lagrange-code/v2`—as well as `polyglotMethodBridgeDescriptor` / `definePolyglotMethodBridge` in `src/language/smalltalk-class-builder.js` (ADR 0095)—apply closures, WASM callables, foreign-runtime callables, and image bindings directly by Block reference via `op: 'apply'` without routing through a language message dispatcher or `value:` selector string.
 - Both the neutral interpreter (`neutral-expression/v2`) and the WASM lane (`wasm-module/v2`) execute `apply` with identical left-to-right evaluation, frame isolation, authority propagation, and failure conformance when `callee` is not an unpinned Block reference.

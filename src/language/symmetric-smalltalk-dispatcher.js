@@ -10,6 +10,15 @@ import {findSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
 import {findSmalltalkBlockUnwindProtocol} from './smalltalk-conditions.js';
 import {SMALLTALK_KERNEL_PRIMITIVE_V1} from './smalltalk-primitives.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
+import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
+import {NEUTRAL_EXPRESSION_V1, NEUTRAL_EXPRESSION_V2} from '../execution/neutral-expression-v1.js';
+import {
+  WASM_FUNCTION_V1,
+  WASM_FUNCTION_V2,
+  functionModuleRef,
+  readFunctionSelection,
+} from '../wasm/function-contract.js';
+import {moduleFunctionOf, readModuleDescriptor} from '../wasm/module-contract.js';
 
 function assertImages(images) {
   if (!images || typeof images !== 'object') throw new TypeError('images service is required');
@@ -38,6 +47,37 @@ const UNWIND_SELECTOR = Object.freeze({
 function blockValueSelector(argumentCount) {
   if (!Number.isInteger(argumentCount) || argumentCount < 0) throw new TypeError('argument count must be a non-negative integer');
   return argumentCount === 0 ? 'value' : Array.from({length: argumentCount}, () => 'value:').join('');
+}
+
+// Block-evaluation owner arity introspection for `BlockClosure>>valueWithPossibleArgument:` (bead
+// lagrange-images-4j9). Reads the parameter count from the Block's compiled executable contract
+// (neutral-expression or WASM function/module) so `valueWithPossibleArgument:` evaluates `[self value]`
+// when `numArgs = 0` and `[self value: anArg]` otherwise, matching the pinned Cuis oracle.
+async function blockParameterCount(images, code) {
+  if (
+    code?.representation === NEUTRAL_EXPRESSION_V0
+    || code?.representation === NEUTRAL_EXPRESSION_V1
+    || code?.representation === NEUTRAL_EXPRESSION_V2
+  ) {
+    let parsed;
+    try {
+      parsed = JSON.parse(code.content?.value);
+    } catch (error) {
+      throw new TypeError(`${code.representation} content must be valid JSON`, {cause: error});
+    }
+    if (!Number.isInteger(parsed?.parameters) || parsed.parameters < 0) {
+      throw new TypeError(`${code.representation} parameters must be a non-negative integer`);
+    }
+    return parsed.parameters;
+  }
+  if (code?.representation === WASM_FUNCTION_V1 || code?.representation === WASM_FUNCTION_V2) {
+    const selection = readFunctionSelection(code);
+    const moduleRef = functionModuleRef(code);
+    const moduleArtifact = await images.getCodeArtifact(moduleRef.imageId, moduleRef.objectId);
+    if (!moduleArtifact) throw new TypeError(`WASM module not found: ${moduleRef.imageId}/${moduleRef.objectId}`);
+    return moduleFunctionOf(readModuleDescriptor(moduleArtifact), {entry: selection.entry}).parameters;
+  }
+  return null;
 }
 
 // The pre-ADR-0044 convention, unchanged: a behavior object whose *shape slot names* are selectors.
@@ -74,11 +114,15 @@ function resolution(block, effectiveReceiver, frame = null) {
   });
 }
 
-function createSymmetricSmalltalkDispatcher() {
-  // Per dispatcher, so it lives and dies with the runtime that owns it rather than leaking between
-  // images or across tests. Transient runtime state: never durable, never a Value, and correct to
-  // drop at any moment (ADR 0049 decision 5a).
-  const validationCache = new MethodDictionaryValidationCache();
+function createSymmetricSmalltalkDispatcher({
+  // Per dispatcher/runtime, so it lives and dies with the runtime that owns it rather than leaking
+  // between images or across tests. Transient runtime state: never durable, never a Value, and
+  // correct to drop at any moment (ADR 0049 decision 5a).
+  validationCache = new MethodDictionaryValidationCache(),
+} = {}) {
+  if (validationCache !== null && typeof validationCache?.read !== 'function') {
+    throw new TypeError('validationCache must implement read(record, ref, nilRef) or be null');
+  }
   return Object.freeze({
     languageId: SYMMETRIC_SMALLTALK_ID,
 
@@ -123,13 +167,24 @@ function createSymmetricSmalltalkDispatcher() {
             // Blocks are invoked in their own right and inherit nothing.
             if (protocol) return Object.freeze({block: protocol[unwind.slot], inheritsFrame: true});
           }
+          const code = await images.getCodeArtifact(blockReceiver.code.imageId, blockReceiver.code.objectId);
+          if (selector === 'valueWithPossibleArgument:' && request.arguments.length === 1) {
+            const parameterCount = await blockParameterCount(images, code);
+            if (parameterCount !== null) {
+              // Pinned Cuis BlockClosure>>valueWithPossibleArgument: anArg —
+              //   numArgs = 0 ifTrue: [self value] ifFalse: [self value: anArg]
+              const effectiveArguments = parameterCount === 0 ? [] : request.arguments;
+              return code?.representation === SMALLTALK_KERNEL_PRIMITIVE_V1
+                ? Object.freeze({block: request.receiver, effectiveArguments, inheritsFrame: true})
+                : Object.freeze({block: request.receiver, effectiveArguments});
+            }
+          }
           const expected = blockValueSelector(request.arguments.length);
           if (selector !== expected) throw new TypeError(`Symmetric Smalltalk Block does not understand: ${selector}`);
           // ADR 0050 decision 5a. A kernel-primitive Block is how a method reaches a host operation,
           // so it inherits the invoking method's frame — that is the only way the slot primitives
           // can see whose `self` they are acting on. Every *other* Block send inherits nothing: a
           // method must not lend its identity to a Block it merely happens to invoke.
-          const code = await images.getCodeArtifact(blockReceiver.code.imageId, blockReceiver.code.objectId);
           return code?.representation === SMALLTALK_KERNEL_PRIMITIVE_V1
             ? Object.freeze({block: request.receiver, inheritsFrame: true})
             : Object.freeze({block: request.receiver});

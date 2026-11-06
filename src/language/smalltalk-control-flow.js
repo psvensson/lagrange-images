@@ -160,14 +160,10 @@ async function installSmalltalkControlFlow({images, compilation, imageId, lane =
   // UndefinedObject (nil): ifNil: evaluates the block; ifNotNil: answers nil.
   // Object (everything else): ifNil: answers self; ifNotNil: evaluates the block.
   //
-  // The pinned Cuis oracle phrases the Object guard arms as
-  // `valueWithPossibleArgument:` — cull semantics where a ONE-argument block would
-  // additionally receive the receiver. The native Block personality has no arity
-  // introspection, and this installer has always evaluated the guard block by plain
-  // `value` (the single-keyword rows below do the same), so the two-keyword rows match
-  // that family rather than inventing a cull primitive on this slice. Zero-argument
-  // blocks — the only form any consumer has forced — observe exactly the pinned
-  // answers; the one-argument divergence is recorded discovered work, not silent.
+  // The pinned Cuis oracle phrases the Object guard arms (`ProtoObject>>ifNotNil:` and
+  // `ProtoObject>>ifNil:ifNotNil:`) as `valueWithPossibleArgument: self` — cull semantics where a
+  // zero-argument block is evaluated with no arguments and a one-argument block receives `self`
+  // (`BlockClosure>>valueWithPossibleArgument: = numArgs = 0 ifTrue: [self value] ifFalse: [self value: anArg]`).
   const undefinedObjectClass = await classOfSingleton(images, kernel.nil, 'nil');
   await defineMethodsFromSource({
     images,
@@ -189,8 +185,8 @@ async function installSmalltalkControlFlow({images, compilation, imageId, lane =
     classRef: kernel.objectClass,
     methods: [
       {selector: 'ifNil:', source: '[ :aBlock | ^ self ]'},
-      {selector: 'ifNotNil:', source: '[ :aBlock | ^ aBlock value ]'},
-      {selector: 'ifNil:ifNotNil:', source: '[ :nilBlock :ifNotNilBlock | ^ ifNotNilBlock value ]'},
+      {selector: 'ifNotNil:', source: '[ :aBlock | ^ aBlock valueWithPossibleArgument: self ]'},
+      {selector: 'ifNil:ifNotNil:', source: '[ :nilBlock :ifNotNilBlock | ^ ifNotNilBlock valueWithPossibleArgument: self ]'},
     ],
   });
 

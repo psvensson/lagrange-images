@@ -149,3 +149,24 @@ test('direct native source with the legacy arrow is an explicit syntax refusal a
   const syntax = parseSymmetricSmalltalk('[ | _foo a_b foo_ | _foo := 1. a_b := _foo. foo_ := a_b. foo_ ]');
   assert.equal(syntax.body.kind, 'sequence');
 });
+
+test('reserved words are refused in unary-selector and cascaded unary-selector position', () => {
+  for (const reserved of ['self', 'super', 'true', 'false', 'nil']) {
+    const pattern = new RegExp(`cannot send unary message ${reserved}: it is a reserved word`);
+    assert.throws(
+      () => parseSymmetricSmalltalk(`a ${reserved}`),
+      (error) => error instanceof SymmetricSmalltalkSyntaxError && pattern.test(error.message),
+      `a ${reserved}`,
+    );
+    assert.throws(
+      () => parseSymmetricSmalltalk(`[ a ${reserved} ]`),
+      (error) => error instanceof SymmetricSmalltalkSyntaxError && pattern.test(error.message),
+      `[ a ${reserved} ]`,
+    );
+    assert.throws(
+      () => parseSymmetricSmalltalk(`a foo; ${reserved}`),
+      (error) => error instanceof SymmetricSmalltalkSyntaxError && pattern.test(error.message),
+      `a foo; ${reserved}`,
+    );
+  }
+});

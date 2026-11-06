@@ -563,9 +563,9 @@ test('a stale position is refused BEFORE the compiler is invoked', async () => {
     const before = await recordFingerprint(runtime);
     const {compilation, compiled} = countingCompilation(runtime.compilation);
 
-    // The source is deliberately UNCOMPILABLE. An implementation that compiles first cannot answer
-    // staleness here — it answers a syntax error — so the two orderings are distinguishable by the
-    // verdict alone, which no assertion about final state could separate.
+    // Arm 1: the source is deliberately UNCOMPILABLE. An implementation that compiles first cannot
+    // answer staleness here — it answers a syntax error — so the two orderings are distinguishable
+    // by the verdict alone, which no assertion about final state could separate.
     const error = await failure(authorizedReplaceSmalltalkMethod({
       images: runtime.images,
       compilation,
@@ -579,20 +579,48 @@ test('a stale position is refused BEFORE the compiler is invoked', async () => {
 
     assert.ok(error instanceof SmalltalkStaleMethodPositionError,
       `an overtaken observation is stale even when the source is also bad; got ${error?.name}: ${error?.message}`);
-    assert.deepEqual(compiled, [], 'the compiler owner was never invoked');
+    assert.deepEqual(compiled, [], 'no replacement code artifact was produced for a doomed call');
+
+    // Arm 2: a VALID source (`[ ^ state + 7 ]`). `reconcileMethodsFromSource` lowers Smalltalk text
+    // to a semantic program (`compileSymmetricSmalltalkMethod`) BEFORE C1's plan-time expectation
+    // check, and that lowering reads the class's declared instance Shape (`images.getShape`) and
+    // global scope (`smalltalk/globals`). Spying on `images.getShape` therefore separates the real
+    // pre-compilation admission from a pre-check-less implementation even when the source is valid
+    // and both implementations answer `SmalltalkStaleMethodPositionError`.
+    let shapeReads = 0;
+    const originalGetShape = runtime.images.getShape.bind(runtime.images);
+    runtime.images.getShape = async (imageId, shapeId) => {
+      shapeReads += 1;
+      return await originalGetShape(imageId, shapeId);
+    };
+    const validSourceError = await failure(authorizedReplaceSmalltalkMethod({
+      images: runtime.images,
+      compilation,
+      imageId: 'app',
+      classRef: options.classRef,
+      selector: GUARDED,
+      source: '[ ^ state + 7 ]',
+      expectedVersionToken: token,
+      require: writerFor(runtime, options),
+    }));
+    runtime.images.getShape = originalGetShape;
+
+    assert.ok(validSourceError instanceof SmalltalkStaleMethodPositionError,
+      `an overtaken observation with valid source is stale; got ${validSourceError?.name}: ${validSourceError?.message}`);
+    assert.equal(shapeReads, 0, 'the from-source compiler never inspected the class layout on a stale call');
+    assert.deepEqual(compiled, [], 'and no replacement code artifact was produced for the valid-source arm either');
     assert.deepEqual(await recordFingerprint(runtime), before, 'and nothing was published');
     assert.deepEqual(await methodBlockRef({...options, selector: GUARDED}), winner, 'B is still current');
     await answers(runtime, GUARDED, 2, 'and B is still what a send resolves to');
   });
 });
 
-// WRONG IMPLEMENTATION THIS TEST MUST KILL: parsing the caller's token, then performing a fresh
-// read and passing THAT as the expectation. Such a seam makes a stale conflict impossible to
-// observe — every replacement succeeds, because the expectation is always whatever was just read —
-// which is exactly the failure #218 point 2 asks this operation to prove it cannot have. It is
-// invisible to any assertion about the final value, because the final value is what the caller
-// asked for; only the VERDICT separates the two implementations.
-test('the caller token remains the assumption: no hidden fresh read is substituted for it', async () => {
+// WRONG IMPLEMENTATION THIS TEST MUST KILL: an implementation that drops the pre-check AND
+// substitutes the freshly read binding for the caller's token, making a stale conflict impossible to
+// observe on a valid source. Paired with the structural assertion at line 830 (`expectedCurrent:
+// observed`), which pins that the caller's original observation (not `current`) is also what C1
+// receives when the pre-check admits the call.
+test('an overtaken token with valid source is rejected as stale rather than succeeded by substituting a fresh read', async () => {
   await withFixture(async (runtime, options) => {
     const token = await tokenFor(runtime, options);
     await reconcileMethodsFromSource({...options, methods: [{selector: GUARDED, source: '[ ^ 2 ]'}]});

@@ -361,5 +361,36 @@ test('readBehavior rejects a malformed fixed-shape record before dispatch relies
       readBehavior(runtime.images, objectRef('boot', 'bent-behavior')),
       /name must be a text Value/,
     );
+
+    await runtime.images.putObject('boot', {
+      id: 'missing-behavior-edge',
+      shape: objectRef('boot', BEHAVIOR_SHAPE_ID),
+      slots: {
+        'behavior-name': textValue('NoMetaclass'),
+        'behavior-superclass': objectRef('boot', 'smalltalk/nil'),
+        'behavior-methods': objectRef('boot', 'smalltalk/nil'),
+        'behavior-instance-shape': objectRef('boot', 'smalltalk/nil'),
+      },
+    });
+    await assert.rejects(
+      readBehavior(runtime.images, objectRef('boot', 'missing-behavior-edge')),
+      /behavior missing-behavior-edge behavior must be an unpinned ref in boot/,
+    );
+
+    await runtime.images.putObject('boot', {
+      id: 'foreign-behavior-edge',
+      shape: objectRef('boot', BEHAVIOR_SHAPE_ID),
+      behavior: objectRef('other', 'smalltalk/class/Metaclass'),
+      slots: {
+        'behavior-name': textValue('ForeignMetaclass'),
+        'behavior-superclass': objectRef('boot', 'smalltalk/nil'),
+        'behavior-methods': objectRef('boot', 'smalltalk/nil'),
+        'behavior-instance-shape': objectRef('boot', 'smalltalk/nil'),
+      },
+    });
+    await assert.rejects(
+      readBehavior(runtime.images, objectRef('boot', 'foreign-behavior-edge')),
+      /behavior foreign-behavior-edge behavior must be an unpinned ref in boot/,
+    );
   });
 });

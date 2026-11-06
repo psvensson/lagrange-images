@@ -9,6 +9,7 @@ import {
   defineMethods,
   findSmalltalkKernel,
   installSmalltalkControlFlow,
+  installSmalltalkInstanceVariableProtocol,
   installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
   installWasmBlockTree,
@@ -768,5 +769,71 @@ for (const lane of ['neutral', 'wasm']) {
     } finally {
       await base.close();
     }
+  });
+}
+
+// --- lagrange-images-4j9: valueWithPossibleArgument: cull semantics on ifNotNil: / ifNil:ifNotNil: ---
+
+for (const lane of ['neutral', 'wasm']) {
+  test(`ifNotNil:, ifNil:ifNotNil: and valueWithPossibleArgument: match the pinned Cuis cull oracle in the ${lane} lane`, async () => {
+    await withRuntime(async (runtime) => {
+      const kernel = await seed(runtime, 'app', {lane});
+      await installSmalltalkInstanceVariableProtocol({images: runtime.images, imageId: 'app'});
+      await defineMethods({
+        images: runtime.images, compilation: runtime.compilation, imageId: 'app', lane,
+        classRef: kernel.integerClass, methods: [PLUS],
+      });
+
+      const run = lane === 'wasm'
+        ? (id, source, args = []) => evaluateThroughWasm(runtime, 'app', `${id}-wasm`, source, args)
+        : (id, source, args = []) => evaluate(runtime, 'app', `${id}-neutral`, source, args);
+
+      // 1. Zero-argument guard blocks evaluate with 0 arguments on both single-keyword and two-keyword forms.
+      assert.deepEqual(await run('ifnotnil-0arg', '[ 7 ifNotNil: [ 99 ] ]'), integerValue(99));
+      assert.deepEqual(
+        await run('ifnil-ifnotnil-0arg', '[ 7 ifNil: [ 42 ] ifNotNil: [ 99 ] ]'),
+        integerValue(99),
+      );
+
+      // 2. One-argument guard blocks receive the non-nil receiver (`self`) on BOTH `ifNotNil:` and `ifNil:ifNotNil:`.
+      assert.deepEqual(
+        await run('ifnotnil-1arg', '[ 7 ifNotNil: [ :v | v + 10 ] ]'),
+        integerValue(17),
+      );
+      assert.deepEqual(
+        await run('ifnil-ifnotnil-1arg', '[ 7 ifNil: [ 42 ] ifNotNil: [ :v | v + 10 ] ]'),
+        integerValue(17),
+      );
+
+      // 3. Direct `valueWithPossibleArgument:` on 0-arg and 1-arg Blocks.
+      assert.deepEqual(
+        await run('vwpa-0arg', '[ [ 55 ] valueWithPossibleArgument: 7 ]'),
+        integerValue(55),
+      );
+      assert.deepEqual(
+        await run('vwpa-1arg', '[ [ :v | v + 5 ] valueWithPossibleArgument: 7 ]'),
+        integerValue(12),
+      );
+
+      // 4. Nil receiver still answers nil on `ifNotNil:` and evaluates the 0-arg `nilBlock` on `ifNil:` / `ifNil:ifNotNil:`.
+      assert.deepEqual(
+        await run('nil-ifnotnil-1arg', '[ :n | n ifNotNil: [ :v | v + 10 ] ]', [kernel.nil]),
+        kernel.nil,
+      );
+      assert.deepEqual(
+        await run('nil-ifnil-ifnotnil-1arg', '[ :n | n ifNil: [ 42 ] ifNotNil: [ :v | v + 10 ] ]', [kernel.nil]),
+        integerValue(42),
+      );
+
+      // 5. Two-argument guard blocks fail with an arity error rather than silently dropping or padding arguments.
+      await assert.rejects(
+        run('ifnotnil-2arg', '[ 7 ifNotNil: [ :a :b | a + b ] ]'),
+        /expected 2 arguments, received 1/,
+      );
+      await assert.rejects(
+        run('ifnil-ifnotnil-2arg', '[ 7 ifNil: [ 0 ] ifNotNil: [ :a :b | a + b ] ]'),
+        /expected 2 arguments, received 1/,
+      );
+    });
   });
 }

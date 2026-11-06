@@ -425,6 +425,9 @@ async function readBehavior(images, ref) {
   // trusted there.
   const name = record.slots['behavior-name'];
   if (name?.kind !== VALUE_KIND.TEXT) throw new TypeError(`behavior ${ref.objectId} name must be a text Value`);
+  if (!isLocalRef(record.behavior, record.imageId)) {
+    throw new TypeError(`behavior ${ref.objectId} behavior must be an unpinned ref in ${record.imageId}`);
+  }
   const refSlots = {};
   for (const [slotId, label] of [
     ['behavior-superclass', 'superclass'],
@@ -437,7 +440,7 @@ async function readBehavior(images, ref) {
     }
     refSlots[label] = value;
   }
-  return Object.freeze({record, name, ...refSlots});
+  return Object.freeze({record, name, behavior: record.behavior, ...refSlots});
 }
 
 // ADR 0044 decision 8's policy half, scoped exactly as the ADR scopes it: ADR 0043 decision 9 is
