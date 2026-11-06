@@ -40,6 +40,13 @@ test('cacheable compilers reuse immutable derived artifacts by declared identity
     content: textValue('meaning'),
   });
 
+  let listCalls = 0;
+  const origListCodeArtifacts = runtime.images.listCodeArtifacts.bind(runtime.images);
+  runtime.images.listCodeArtifacts = async (...args) => {
+    listCalls += 1;
+    return await origListCodeArtifacts(...args);
+  };
+
   const first = await runtime.compilation.compileArtifact(objectRef('demo', source.id), {
     id: 'first',
     targetRepresentation: 'test-target/v0',
@@ -51,6 +58,7 @@ test('cacheable compilers reuse immutable derived artifacts by declared identity
     options: {mode: 'fast'},
   });
   assert.equal(compileCount, 1);
+  assert.equal(listCalls, 1, 'reusable artifact lookup scans the image once to seed the derivation index');
   assert.equal(reused.id, first.id);
   assert.equal(first.metadata.compilerIdentity, 'test-compiler/v1');
   assert.match(first.metadata.derivationKey, /^[0-9a-f]{64}$/);
@@ -81,6 +89,7 @@ test('cacheable compilers reuse immutable derived artifacts by declared identity
     reuse: false,
   });
   assert.equal(compileCount, 4);
+  assert.equal(listCalls, 1, 'subsequent compilations update and consult the derivation index without rescanning');
   assert.equal(forced.id, 'forced');
   assert.equal(forced.metadata.derivationKey, first.metadata.derivationKey);
   await runtime.close();

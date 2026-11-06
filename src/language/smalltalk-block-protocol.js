@@ -149,6 +149,8 @@ async function validateLoopTarget({images, imageId, slot, ref}) {
 
 async function findSmalltalkBlockProtocol({images, imageId} = {}) {
   requiredText(imageId, 'block protocol image id');
+  const cached = images?.cachedProtocol?.(SMALLTALK_BLOCK_PROTOCOL_V1, imageId);
+  if (cached) return cached;
   const record = await images.getObject(imageId, BLOCK_PROTOCOL_OBJECT_ID);
   // Absent: this image's Blocks do not loop. Every other outcome below is corrupt.
   if (!record) return null;
@@ -166,7 +168,8 @@ async function findSmalltalkBlockProtocol({images, imageId} = {}) {
     }
     refs[slot.name] = await validateLoopTarget({images, imageId, slot, ref: value});
   }
-  return Object.freeze({protocol: SMALLTALK_BLOCK_PROTOCOL_V1, ref: objectRef(imageId, record.id), record, ...refs});
+  const protocol = Object.freeze({protocol: SMALLTALK_BLOCK_PROTOCOL_V1, ref: objectRef(imageId, record.id), record, ...refs});
+  return images?.cacheProtocol ? images.cacheProtocol(SMALLTALK_BLOCK_PROTOCOL_V1, imageId, protocol) : protocol;
 }
 
 export {

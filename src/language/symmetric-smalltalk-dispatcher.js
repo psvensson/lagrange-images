@@ -204,7 +204,7 @@ function createSymmetricSmalltalkDispatcher({
 
       // ADR 0045 decision 2: for a boolean receiver this answers the dispatch image's `true`/`false`
       // singleton, which then behaves exactly like an ordinary object receiver.
-      const {behavior, effectiveReceiver} = await behaviorRefFor({
+      const {behavior, effectiveReceiver, kernel: receiverKernel} = await behaviorRefFor({
         images,
         receiver: request.receiver,
         dispatchImage,
@@ -235,7 +235,9 @@ function createSymmetricSmalltalkDispatcher({
         return resolution(await legacyLookup(images, behaviorRecord, selector), effectiveReceiver);
       }
 
-      const kernel = await findSmalltalkKernel({images, imageId: behavior.imageId});
+      const kernel = (receiverKernel && behavior.imageId === dispatchImage)
+        ? receiverKernel
+        : await findSmalltalkKernel({images, imageId: behavior.imageId});
       if (!kernel) {
         throw new TypeError(
           `image ${behavior.imageId} holds a fixed-shape Behavior but no Smalltalk kernel to terminate lookup`,
@@ -244,6 +246,7 @@ function createSymmetricSmalltalkDispatcher({
       const {method: blockRef, definingBehavior} = await lookupSelector({
         images,
         behaviorRef: behavior,
+        behaviorRecord,
         selector,
         nilRef: kernel.nil,
         receiverDescription,

@@ -382,6 +382,8 @@ async function installSmalltalkKernel({images, imageId} = {}) {
 async function findSmalltalkKernel({images, imageId} = {}) {
   const service = assertImages(images);
   requiredText(imageId, 'kernel image id');
+  const cached = service.cachedProtocol?.(SMALLTALK_KERNEL_PROTOCOL_V1, imageId);
+  if (cached) return cached;
   const record = await service.getObject(imageId, SMALLTALK_KERNEL_OBJECT_ID);
   if (!record) return null;
   if (record.metadata?.protocol !== SMALLTALK_KERNEL_PROTOCOL_V1) {
@@ -403,7 +405,8 @@ async function findSmalltalkKernel({images, imageId} = {}) {
     }
     slots[name] = value;
   }
-  return Object.freeze({protocol: SMALLTALK_KERNEL_PROTOCOL_V1, ref: objectRef(imageId, record.id), record, ...slots});
+  const kernel = Object.freeze({protocol: SMALLTALK_KERNEL_PROTOCOL_V1, ref: objectRef(imageId, record.id), record, ...slots});
+  return service.cacheProtocol ? service.cacheProtocol(SMALLTALK_KERNEL_PROTOCOL_V1, imageId, kernel) : kernel;
 }
 
 // ADR 0044 decision 10: a behavior record means what its own shape says it means. A fixed-shape
@@ -415,8 +418,9 @@ function isBehaviorObject(record) {
     && isLocalRef(record.shape, record.imageId, BEHAVIOR_SHAPE_ID);
 }
 
-async function readBehavior(images, ref) {
-  const record = await assertImages(images).getObject(ref.imageId, ref.objectId);
+async function readBehavior(images, ref, {record: preloaded = null} = {}) {
+  const service = assertImages(images);
+  const record = preloaded ?? await service.getObject(ref.imageId, ref.objectId);
   if (!record) throw new TypeError(`behavior not found: ${ref.imageId}/${ref.objectId}`);
   if (!isBehaviorObject(record)) throw new TypeError(`not a ${BEHAVIOR_SHAPE_ID} behavior: ${ref.objectId}`);
   // The next change makes this part of dispatch, so the slot types are checked here rather than

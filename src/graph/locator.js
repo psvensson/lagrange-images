@@ -21,15 +21,21 @@ function backendForResidency(residency) {
 }
 
 class ObjectLocator {
+  #residencies = new Map();
+
   constructor({backend} = {}) {
     this.backend = assertBackend(backend);
   }
 
   async locate(ref) {
     if (!isObjectRef(ref)) throw new TypeError('object locator requires an ObjectRef');
+    const cached = this.#residencies.get(ref.imageId);
+    if (cached) return cached;
     const image = await this.backend.get(IMAGE_COLLECTION, ref.imageId);
     if (!image) return null;
-    return new ObjectResidency({backend: this.backend, imageId: ref.imageId});
+    const residency = new ObjectResidency({backend: this.backend, imageId: ref.imageId});
+    this.#residencies.set(ref.imageId, residency);
+    return residency;
   }
 }
 

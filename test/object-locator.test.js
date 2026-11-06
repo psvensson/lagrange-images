@@ -31,6 +31,25 @@ test('whole-image residency is an opaque runtime fact and record resolution cons
     assert.deepEqual(await resolver.resolveAt(ref, residency), shape);
     assert.equal(await locator.locate(objectRef('missing', 'shape')), null);
 
+    let imageReads = 0;
+    const origGet = backend.get.bind(backend);
+    backend.get = async (collection, key) => {
+      if (collection === 'images') imageReads += 1;
+      return await origGet(collection, key);
+    };
+    assert.equal(await locator.locate(objectRef('app', 'another')), residency);
+    assert.equal(imageReads, 0, 'confirmed whole-image residency is reused without re-reading the image collection');
+    assert.equal(await locator.locate(objectRef('late', 'shape')), null);
+    assert.equal(imageReads, 1, 'absent image residency is checked against the backend');
+    await images.createImage({id: 'late'});
+    imageReads = 0;
+    const lateResidency = await locator.locate(objectRef('late', 'shape'));
+    assert.equal(lateResidency?.imageId, 'late');
+    assert.equal(imageReads, 1, 'absent residency is never cached, so a newly created image resolves immediately');
+    assert.equal(await locator.locate(objectRef('late', 'other')), lateResidency);
+    assert.equal(imageReads, 1, 'newly confirmed residency is cached Thereafter');
+    backend.get = origGet;
+
     await assert.rejects(
       resolver.resolveAt(objectRef('other', 'shape'), residency),
       /residency does not match the ObjectRef image/,

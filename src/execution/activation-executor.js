@@ -170,7 +170,8 @@ class ActivationExecutor {
   async createClosure({prototype, captures}, cells = null, arena = null, frame = null) {
     const prototypeRef = normalizeObjectRef(prototype, 'closure prototype');
     if (!Array.isArray(captures)) throw new TypeError('closure captures must be an array');
-    const prototypeBlock = await this.images.getBlock(prototypeRef.imageId, prototypeRef.objectId);
+    const resolver = arena ? arenaImagesView(this.images, arena) : this.images;
+    const prototypeBlock = await resolver.getBlock(prototypeRef.imageId, prototypeRef.objectId);
     if (!prototypeBlock) {
       throw new TypeError(`closure prototype Block not found: ${prototypeRef.imageId}/${prototypeRef.objectId}`);
     }
@@ -334,15 +335,23 @@ class ActivationExecutor {
     // Resolved once per activation, before any executor runs, so both lanes see one answer.
     let initialTemporaryContents = UNBOUND;
     if (this.temporaryInitializer) {
-      // The artifact's language identity travels with the request, because initialization policy
-      // belongs to a language rather than to an image. The execution layer still knows nothing
-      // about any particular language — only that an artifact has one.
-      const initial = await this.temporaryInitializer({
-        images: view,
-        dispatchImage: activeDispatchImage,
-        languageId: code.languageId ?? null,
-      });
-      if (initial !== null && initial !== undefined) initialTemporaryContents = canonicalizeValue(initial);
+      const cachedInitial = arena.temporaryContents?.(activeDispatchImage, code.languageId ?? null);
+      if (cachedInitial !== undefined) {
+        initialTemporaryContents = cachedInitial;
+      } else {
+        // The artifact's language identity travels with the request, because initialization policy
+        // belongs to a language rather than to an image. The execution layer still knows nothing
+        // about any particular language — only that an artifact has one.
+        const initial = await this.temporaryInitializer({
+          images: view,
+          dispatchImage: activeDispatchImage,
+          languageId: code.languageId ?? null,
+        });
+        if (initial !== null && initial !== undefined) {
+          initialTemporaryContents = canonicalizeValue(initial);
+          arena.cacheTemporaryContents?.(activeDispatchImage, code.languageId ?? null, initialTemporaryContents);
+        }
+      }
     }
 
     // A mutable record rather than mere stack scoping, so that "active" can later mean "the

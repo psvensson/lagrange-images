@@ -1,5 +1,6 @@
 import {ensureCodeArtifact, ensureCodeArtifacts} from '../graph/ensure-records.js';
 import {uuid as randomUUID} from '../support/default-crypto.js';
+import {TupleMap} from '../support/tuple-map.js';
 import {normalizeArtifactDependencies} from '../execution/model.js';
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
 import {normalizeMetadata} from '../object/model.js';
@@ -128,6 +129,8 @@ function commonLanguageId(artifacts) {
 }
 
 class CompilationService {
+  #reusableByImage = new Map();
+
   constructor({
     images,
     compilers = new CodeCompilerRegistry(),
@@ -144,16 +147,34 @@ class CompilationService {
     this.groupCompilers = groupCompilers;
   }
 
+  #indexReusableArtifact(imageId, artifact) {
+    const byKey = this.#reusableByImage.get(imageId);
+    if (!byKey) return;
+    const compilerIdentity = artifact?.metadata?.compilerIdentity;
+    const derivationKey = artifact?.metadata?.derivationKey;
+    if (typeof artifact?.representation !== 'string'
+      || typeof compilerIdentity !== 'string'
+      || typeof derivationKey !== 'string') {
+      return;
+    }
+    const key = [artifact.representation, compilerIdentity, derivationKey];
+    if (!byKey.has(key)) byKey.set(key, artifact);
+  }
+
   async findReusableArtifact(imageId, targetRepresentation, descriptor) {
     if (!descriptor) return null;
     if (typeof this.images.listCodeArtifacts !== 'function') {
       throw new TypeError('reusable compilation requires images.listCodeArtifacts');
     }
-    const artifacts = await this.images.listCodeArtifacts(imageId);
-    return artifacts.find((artifact) =>
-      artifact.representation === targetRepresentation
-      && artifact.metadata?.compilerIdentity === descriptor.compilerIdentity
-      && artifact.metadata?.derivationKey === descriptor.derivationKey) ?? null;
+    let byKey = this.#reusableByImage.get(imageId);
+    if (!byKey) {
+      byKey = new TupleMap(3);
+      this.#reusableByImage.set(imageId, byKey);
+      for (const artifact of await this.images.listCodeArtifacts(imageId)) {
+        this.#indexReusableArtifact(imageId, artifact);
+      }
+    }
+    return byKey.get([targetRepresentation, descriptor.compilerIdentity, descriptor.derivationKey]) ?? null;
   }
 
   async compileArtifact(sourceRef, {
@@ -185,10 +206,12 @@ class CompilationService {
       ? {compilerIdentity: descriptor.compilerIdentity, derivationKey: descriptor.derivationKey}
       : {};
 
-    return await persistCompilerResult(this.images, ref.imageId, {
+    const persisted = await persistCompilerResult(this.images, ref.imageId, {
       id, target, result, callerMetadata, cacheMetadata,
       derivedFrom: [objectRef(ref.imageId, ref.objectId)],
     });
+    this.#indexReusableArtifact(ref.imageId, persisted);
+    return persisted;
   }
 
   async compileGroup(group, {
@@ -239,10 +262,12 @@ class CompilationService {
       ? {compilerIdentity: descriptor.compilerIdentity, derivationKey: descriptor.derivationKey}
       : {};
 
-    return await persistCompilerResult(this.images, imageId, {
+    const persisted = await persistCompilerResult(this.images, imageId, {
       id, target, result, callerMetadata, cacheMetadata,
       derivedFrom: refs.map((ref) => objectRef(ref.imageId, ref.objectId)),
     });
+    this.#indexReusableArtifact(imageId, persisted);
+    return persisted;
   }
 }
 
