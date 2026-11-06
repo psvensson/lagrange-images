@@ -41,7 +41,7 @@ function normalizeDispatchResolution(resolution) {
   if (!resolution || typeof resolution !== 'object' || Array.isArray(resolution)) {
     throw new TypeError('message dispatcher must return a resolution object');
   }
-  const optional = ['effectiveReceiver', 'frame', 'inheritsFrame'];
+  const optional = ['effectiveReceiver', 'effectiveArguments', 'frame', 'inheritsFrame'];
   const extra = Object.keys(resolution).filter((key) => key !== 'block' && !optional.includes(key));
   if (!Object.hasOwn(resolution, 'block') || extra.length > 0) {
     throw new TypeError(
@@ -50,22 +50,32 @@ function normalizeDispatchResolution(resolution) {
   }
   const block = normalizeObjectRef(resolution.block, 'message dispatcher block');
   const frame = normalizeInvocationFrame(resolution);
-  if (!Object.hasOwn(resolution, 'effectiveReceiver')) {
-    return Object.freeze({block, effectiveReceiver: null, ...frame});
-  }
-  // Present but empty is a caller mistake, not a second way to spell the default: absence is the
-  // only way to say "the original receiver".
-  if (resolution.effectiveReceiver === null || resolution.effectiveReceiver === undefined) {
-    throw new TypeError(
-      'message dispatcher effectiveReceiver must be an unpinned object ref; '
-      + 'omit the key to keep the original receiver',
+  let effectiveReceiver = null;
+  if (Object.hasOwn(resolution, 'effectiveReceiver')) {
+    // Present but empty is a caller mistake, not a second way to spell the default: absence is the
+    // only way to say "the original receiver".
+    if (resolution.effectiveReceiver === null || resolution.effectiveReceiver === undefined) {
+      throw new TypeError(
+        'message dispatcher effectiveReceiver must be an unpinned object ref; '
+        + 'omit the key to keep the original receiver',
+      );
+    }
+    effectiveReceiver = normalizeObjectRef(
+      resolution.effectiveReceiver,
+      'message dispatcher effectiveReceiver',
     );
   }
-  return Object.freeze({
-    block,
-    effectiveReceiver: normalizeObjectRef(resolution.effectiveReceiver, 'message dispatcher effectiveReceiver'),
-    ...frame,
-  });
+  const normalized = {block, effectiveReceiver, ...frame};
+  if (Object.hasOwn(resolution, 'effectiveArguments')) {
+    if (!Array.isArray(resolution.effectiveArguments)) {
+      throw new TypeError(
+        'message dispatcher effectiveArguments must be an array; '
+        + 'omit the key to keep the original arguments',
+      );
+    }
+    normalized.effectiveArguments = normalizeArguments(resolution.effectiveArguments);
+  }
+  return Object.freeze(normalized);
 }
 
 function normalizeFrameMetadata(metadata) {
@@ -211,7 +221,7 @@ class InvocationService {
     const activation = await this.prepareActivation({
       images,
       block: resolution.block,
-      arguments: request.arguments,
+      arguments: resolution.effectiveArguments ?? request.arguments,
       // The effective receiver is what the method's `self` is. It is transient in exactly the way
       // the dispatch image is: it reaches the activation and nothing else — no request field, no
       // Value, no durable record.
