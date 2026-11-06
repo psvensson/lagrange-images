@@ -227,6 +227,60 @@ test('repeated unrelated races rebase onto the LATEST state, keeping the origina
   });
 });
 
+// Bead lagrange-images-qax.1: ADR 0049 makes both hashed and legacy MethodDictionary representations
+// legal at once, and `methodDictionaryInput`'s legacy branch derives a canonical selector-set Shape on
+// each attempt inside the rebase loop. Prove that a guarded replacement on a legacy MethodDictionary
+// racing both an unrelated replacement AND a brand-new selector addition rebases cleanly, derives the
+// expanded legacy Shape on the rebase pass, and preserves all three bindings.
+test('a guarded write against a legacy MethodDictionary rebases across an unrelated replacement and a selector-set expansion', async () => {
+  await withFixture(async (runtime, _kernel, options) => {
+    const behavior = await readBehavior(runtime.images, options.classRef);
+    const dictionaryRef = behavior.methods;
+    const current = await runtime.images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
+    const guardedBlock = await methodBlockRef({...options, selector: GUARDED});
+    const unrelatedBlock = await methodBlockRef({...options, selector: UNRELATED});
+    const initialSelectors = [GUARDED, UNRELATED].sort();
+    const initialSlots = initialSelectors.map((selector) => ({
+      id: `selector:${Buffer.from(selector, 'utf8').toString('base64url')}`,
+      name: selector,
+    }));
+    const initialShape = await runtime.images.putShape('app', {
+      id: `${dictionaryRef.objectId}/legacy-initial-shape`,
+      slots: initialSlots,
+    });
+    const initialByName = new Map([[GUARDED, guardedBlock], [UNRELATED, unrelatedBlock]]);
+    await runtime.images.putObject('app', {
+      id: dictionaryRef.objectId,
+      shape: objectRef('app', initialShape.id),
+      slots: Object.fromEntries(initialSlots.map(({id, name}) => [id, initialByName.get(name)])),
+      metadata: {smalltalk: 'method-dictionary', owner: options.classRef.objectId},
+    }, {expectedVersion: current._version});
+
+    const ADDED = 'addedDuringRebase';
+    const observed = await methodBlockRef({...options, selector: GUARDED});
+    const race = interleaveAtDictionaryCas(runtime, options.classRef.objectId, [
+      () => reconcileMethods({...options, methods: [method(UNRELATED, 20)]}),
+      () => defineMethods({...options, methods: [method(ADDED, 99)]}),
+    ]);
+
+    await reconcileMethods({...options, methods: [guarded(3, observed)]});
+    race.restore();
+
+    assert.equal(race.attempts(), 3, 'two lost CASes against the legacy dictionary, two rebases, one winning write');
+    const finalDictionary = await dictionaryRecord(runtime, options.classRef);
+    assert.equal(Object.hasOwn(finalDictionary, 'indexed'), false, 'dictionary remains in the legacy representation');
+    const finalShape = await runtime.images.getShape(finalDictionary.shape.imageId, finalDictionary.shape.objectId);
+    assert.deepEqual(
+      finalShape.slots.map(({name}) => name),
+      [ADDED, GUARDED, UNRELATED].sort(),
+      'legacy shape derivation on the rebase pass includes the newly added selector',
+    );
+    await answers(runtime, GUARDED, 3, 'the guarded position reached C');
+    await answers(runtime, UNRELATED, 20, 'the unrelated replacement survived');
+    await answers(runtime, ADDED, 99, 'the newly added selector survived the rebase shape derivation');
+  });
+});
+
 // ---------------------------------------------------------------------------------------------
 // Case 2 — the GUARDED selector moved
 // ---------------------------------------------------------------------------------------------
