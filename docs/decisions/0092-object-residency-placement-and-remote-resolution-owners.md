@@ -137,18 +137,22 @@ Two proofs exist today, and one remains open:
      `commitCandidateRecords` issues 3 SQL write statements (`records`, `stream_heads`, `events`),
      and each SQL write statement in Lagrange's `SqlQueryEngine` opens an internal
      `writeTransaction` performing 41 system-table metadata writes (~1.28 s/record, ~1.56 s/tx).
-   - **Read and scan amplification (reduced by `91.8%` for point reads and `99.5%` for full scans)**:
+   - **Read and scan amplification (reduced by `97.6%` for point reads, `99.5%` for full scans, and `97.2%` for total SQL queries)**:
      Before owner-scoped memoization, `proveSharedLife` issued `1,091,137` `backend.get` calls and
-     `193` full-collection `backend.scan` calls (`174,190` scanned rows) because every
-     `ImageService.getRecord` re-read `images/<imageId>` via `ObjectLocator.locate(ref)` (`546,568`
-     reads), every `CompilationService` compilation rescanned all image records via
-     `listCodeArtifacts` (`187` scans), and every nested activation re-read immutable
-     `Block`/`CodeArtifact`/`Shape`/`LexicalEnvironment` records, Smalltalk protocol objects, and
-     duplicate Behavior/kernel records. Caching confirmed `ObjectResidency` per `imageId` in
-     `ObjectLocator`, indexing reusable derivations per `imageId` in `CompilationService`,
-     memoizing immutable record and protocol reads within a single `LexicalCellArena` execution
-     view, and eliminating duplicate in-call Behavior/kernel reads reduces `proveSharedLife` to
-     `89,197` `backend.get` calls (`-91.8%`) and `1` `backend.scan` call (`67` rows, `-99.96%`).
+     `193` full-collection `backend.scan` calls (`174,190` scanned rows, ~`1,280,000` total SQL
+     queries) because every `ImageService.getRecord` re-read `images/<imageId>` via
+     `ObjectLocator.locate(ref)` (`546,568` reads), every `CompilationService` compilation rescanned
+     all image records via `listCodeArtifacts` (`187` scans), and every nested activation re-read
+     immutable `Block`/`CodeArtifact`/`Shape`/`LexicalEnvironment` records, Smalltalk protocol
+     objects, durable `Object` records (`Class`, `MethodDictionary`, receiver/slots), and duplicate
+     Behavior/kernel records. Caching confirmed `ObjectResidency` per `imageId` in `ObjectLocator`,
+     indexing reusable derivations per `imageId` in `CompilationService`, memoizing immutable
+     records, protocol objects, and durable `Object` reads (invalidated/updated on in-execution
+     `putObject` and promotion) within a single `LexicalCellArena` execution view, and eliminating
+     duplicate in-call Behavior/kernel reads reduces `proveSharedLife` to `25,722` `backend.get`
+     calls (`-97.6%`), `1` `backend.scan` call (`67` rows, `-99.96%`), and `36,181` total SQL
+     queries (`-97.2%`, including a reduction in post-install `buildBlinkerModel` / `nextState` SQL
+     queries from `78,440` to `14,965`, `-80.9%`).
 
 The M6.2 witness (`test/cuis-life-m6-two-node-red.test.js`) remains the separate two-backend
 per-object relocation falsifier: it stays RED until per-object residency and cross-backend routing

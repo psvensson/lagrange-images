@@ -4,7 +4,9 @@ import {MockBackend} from '../src/backend/mock-backend.js';
 import {ObjectLocator, WHOLE_IMAGE_RESIDENCY} from '../src/graph/locator.js';
 import {RemoteRecordResolver} from '../src/graph/remote-resolution.js';
 import {ImageService} from '../src/image/graph-image-service.js';
-import {objectRef} from '../src/value/scalars.js';
+import {records} from '../src/image/storage-layout.js';
+import {LexicalCellArena, arenaImagesView} from '../src/execution/lexical-cells.js';
+import {integerValue, objectRef} from '../src/value/scalars.js';
 import {createSqliteApplicationRuntime} from './support/sqlite-application-runtime.js';
 import {loadSharedLifeFixture, proveSharedLife} from '../fixtures/real-lagrange-m6-scenario.js';
 
@@ -93,6 +95,68 @@ test('ImageService record reads route through the locator and remote-resolution 
     );
     assert.equal(located, 2);
     assert.equal(resolved, 1, 'missing residency never reaches record resolution');
+  } finally {
+    await backend.stop();
+  }
+});
+
+test('execution-scoped arenaImagesView memoizes durable object reads and invalidates on write or new execution', async () => {
+  const backend = new MockBackend();
+  await backend.start();
+  try {
+    const images = new ImageService({backend});
+    await images.createImage({id: 'app'});
+    const shape = await images.putShape('app', {
+      id: 'counter-shape',
+      slots: [{id: 'count', name: 'count'}],
+    });
+    await images.putObject('app', {
+      id: 'counter',
+      shape: objectRef('app', shape.id),
+      slots: {count: integerValue(1)},
+    });
+
+    let objectReads = 0;
+    const origGet = backend.get.bind(backend);
+    backend.get = async (collection, key) => {
+      if (collection === records('app') && key === 'counter') objectReads += 1;
+      return await origGet(collection, key);
+    };
+
+    const arena1 = new LexicalCellArena();
+    const view1 = arenaImagesView(images, arena1);
+    const first = await view1.getObject('app', 'counter');
+    const second = await view1.getObject('app', 'counter');
+    assert.equal(first.slots.count.value, '1');
+    assert.equal(second.slots.count.value, '1');
+    assert.equal(objectReads, 1, 'repeated durable object reads within one execution reuse the arena memo');
+
+    await view1.putObject('app', {
+      id: 'counter',
+      shape: objectRef('app', shape.id),
+      slots: {count: integerValue(2)},
+    }, {expectedVersion: first._version});
+    const afterInArenaWrite = await view1.getObject('app', 'counter');
+    assert.equal(afterInArenaWrite.slots.count.value, '2', 'in-execution putObject immediately updates the arena memo');
+    assert.equal(objectReads, 1, 'reading after in-execution putObject uses the saved record without an extra backend get');
+
+    view1.invalidateObject('app', 'counter');
+    const afterInvalidate = await view1.getObject('app', 'counter');
+    assert.equal(afterInvalidate.slots.count.value, '2');
+    assert.equal(objectReads, 2, 'invalidateObject forces the next read in the same execution to re-read from the backend');
+
+    // Simulate an external update (e.g. from another runtime or outside the arena) before the next execution.
+    await images.putObject('app', {
+      id: 'counter',
+      shape: objectRef('app', shape.id),
+      slots: {count: integerValue(3)},
+    }, {expectedVersion: afterInArenaWrite._version});
+
+    const arena2 = new LexicalCellArena();
+    const view2 = arenaImagesView(images, arena2);
+    const freshInNextExecution = await view2.getObject('app', 'counter');
+    assert.equal(freshInNextExecution.slots.count.value, '3', 'a new execution arena reads fresh durable state from the backend');
+    assert.equal(objectReads, 3);
   } finally {
     await backend.stop();
   }
