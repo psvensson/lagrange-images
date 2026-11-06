@@ -90,13 +90,14 @@ async function installNestedPrototypes({
   parentSemanticRef,
   program,
   representation,
+  languageId = SYMMETRIC_SMALLTALK_ID,
 }) {
   const prototypes = {};
   for (const nested of directNestedBlocks(program.body)) {
     const ids = nestedIds(rootId, nested.blockId);
     const semanticArtifact = await ensureCodeArtifact(images, imageId, {
       id: ids.semanticId,
-      languageId: SYMMETRIC_SMALLTALK_ID,
+      languageId,
       representation,
       content: textValue(JSON.stringify(nested.program)),
       derivedFrom: [parentSemanticRef],
@@ -111,6 +112,7 @@ async function installNestedPrototypes({
       parentSemanticRef: objectRef(imageId, semanticArtifact.id),
       program: nested.program,
       representation,
+      languageId,
     });
     const codeArtifact = await compilation.compileArtifact(
       objectRef(imageId, semanticArtifact.id),

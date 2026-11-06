@@ -1,14 +1,17 @@
 import {LanguagePlatform} from './language-platform.js';
 import {SYMMETRIC_SMALLTALK} from './symmetric-smalltalk.js';
+import {COMMON_LISP} from './common-lisp.js';
 
 function createDefaultLanguagePlatform() {
   const platform = new LanguagePlatform();
   platform.register(SYMMETRIC_SMALLTALK);
+  platform.register(COMMON_LISP);
   return platform;
 }
 
 export * from './language-platform.js';
 export * from './symmetric-smalltalk.js';
+export * from './common-lisp.js';
 export * from './symmetric-smalltalk-compiler.js';
 export * from './symmetric-smalltalk-dispatcher.js';
 export * from './symmetric-smalltalk-parser.js';

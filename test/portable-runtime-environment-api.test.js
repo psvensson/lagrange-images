@@ -186,7 +186,11 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // 139 after the authorized Cuis native import seam (src/language/smalltalk-authorized-import.js,
   // ADR 0094) — ONE module composing the adapter, class builder, namespace and authority owners the
   // closure already carried; no new dependency and no node:*.
-  assert.equal(modules.length, 139, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), and the authorized Cuis native import seam');
+  // 140 after the in-image Common Lisp personality (src/language/common-lisp.js, ADR 0099) — ONE
+  // module registered on createDefaultLanguagePlatform() and composed only from existing portable
+  // language, code, value, object and ensure owners; no new host/foreign dependency and no node:*.
+  assert.equal(modules.length, 140, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), the authorized Cuis native import seam, and the in-image Common Lisp personality');
+  assert.ok(paths.includes('src/language/common-lisp.js'));
   assert.ok(paths.includes('src/language/smalltalk-string-equality.js'));
   assert.ok(paths.includes('src/wasm/function-executor.js'));
   assert.ok(paths.includes('src/language/cuis-native-import.js'));
