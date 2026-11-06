@@ -78,6 +78,17 @@ async function classOf({images, primitiveImage, value}) {
   if (isObjectRef(value) && value.imageId !== primitiveImage) {
     throw new SmalltalkPrimitiveLocalityError(SMALLTALK_PRIMITIVE.CLASS_OF, primitiveImage, value);
   }
+  if (isObjectRef(value) && !(await images.getObject(value.imageId, value.objectId))) {
+    const block = typeof images.getBlock === 'function'
+      ? await images.getBlock(value.imageId, value.objectId)
+      : null;
+    if (block) {
+      const blockClassRef = objectRef(primitiveImage, 'smalltalk/class/BlockClosure');
+      if (await images.getObject(primitiveImage, blockClassRef.objectId)) {
+        return blockClassRef;
+      }
+    }
+  }
   const {behavior} = await behaviorRefFor({images, receiver: value, dispatchImage: primitiveImage});
   if (!isObjectRef(behavior)) {
     throw new SmalltalkPrimitiveReceiverError(

@@ -314,21 +314,17 @@ A future WASM-hosted language VM would still be a foreign-runtime implementation
 
 ## 12. Common Lisp
 
-ADR 0084 proves real SBCL as an ordinary foreign runtime through unchanged generic source/definition/callable/Project/release contracts. That proof closes the current neutrality question.
+Common Lisp is supported at two complementary levels:
 
-Common Lisp native import is deliberately sequenced behind the Cuis forcing path. When it resumes, the Lisp personality owns genuinely Lisp semantics such as:
+1. **External SBCL foreign runtime (ADR 0084)**: proves real SBCL as an ordinary foreign runtime through unchanged generic source/definition/callable/Project/release contracts (`common-lisp/sbcl-runtime-definition-v1`).
+2. **In-image Common Lisp personality (`src/language/common-lisp.js`, ADR 0099)**: compiles Common Lisp S-expressions (`common-lisp/source-v0`) directly to `lagrange-code/v2` for execution in both the `neutral` (`neutral-expression/v2`) and `wasm` (`wasm-module/v2` / `wasm-function/v2`) lanes. It provides:
+   - Generalized boolean truthiness (`NIL` / `()` is canonical `smalltalk/nil` and falsy; `T` and all other values are truthy via `{op: 'equals', left: expr, right: $nil}`).
+   - Lexical `let`/`let*`/`lambda`/`flet`/`labels` bindings with snapshot capture for unmutated variables (allowing escaping closures to promote to durable image Blocks) and `mode: 'cell'` capture for `setq`-mutated variables and recursive `labels`.
+   - Durable `Cons` cells (`smalltalk/class/Cons`, shape `smalltalk/cons-instance-shape/v1`), shared `Symbol` interning, and top-level `defun`/`defparameter`/`defvar` publication into `common-lisp/namespace/v1` (`src/language/smalltalk-globals.js`).
+   - Shared dynamic condition handling (`unwind-protect`, `handler-case`, `handler-bind`, `ignore-errors`, `signal`, `error`, `use-value`) over `src/language/smalltalk-primitives-control.js` and `src/execution/conditions.js`.
+   - Bidirectional Symmetric Smalltalk interop (`(send receiver 'selector arg ...)` from Common Lisp, and `attachCommonLispMethod` / `definePolyglotMethodBridge` from Smalltalk).
 
-```text
-reader / macroexpansion
-packages / symbols / function namespace
-CLOS / generic functions
-dynamic bindings
-multiple values
-conditions / handlers / restarts
-compiler integration
-```
-
-Do not pre-generalize the Cuis importer for Lisp. Reuse a common owner only after Lisp pressure proves that the concern is actually common.
+Broader Common Lisp features (full package system, CLOS generic functions, arbitrary reader macros, multiple return values) remain owned by the Lisp personality as pressure demands. Do not pre-generalize the Cuis importer for Lisp; reuse a common owner only after Lisp pressure proves that the concern is actually common.
 
 ## 13. Java and additional ecosystems
 

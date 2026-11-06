@@ -86,6 +86,8 @@ an interface or definition artifact.
 | --- | --- |
 | `symmetric-smalltalk/source-v0` | language source text |
 | `symmetric-smalltalk/syntax-v0` | parsed syntax |
+| `common-lisp/source-v0` | in-image Common Lisp source text (ADR 0099) |
+| `common-lisp/syntax-v0` | parsed Common Lisp S-expression AST (ADR 0099) |
 | `lagrange-code/v0` | language-neutral semantic code; **frozen** — a closed grammar, so new semantics get a new version |
 | `lagrange-code/v1` | adds temporaries, statement sequences, assignment, and captures carrying a `snapshot`/`cell` mode; **frozen** |
 | `lagrange-code/v2` | adds direct callable Block application (`{op: 'apply', callee, arguments}`, ADR 0098) |
