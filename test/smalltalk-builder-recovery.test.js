@@ -9,6 +9,8 @@ import {
   installSmalltalkKernel,
   installSymmetricSmalltalkBlock,
   integerValue,
+  methodBlockRef,
+  methodSource,
   objectRef,
   reconcileMethods,
 } from '../src/runtime.js';
@@ -112,6 +114,25 @@ const RECOVERY_CASES = [
       return result;
     },
     expected: null,
+  },
+  {
+    label: 'source-retaining',
+    methods: () => [{...PLUS, source: '+ aNumber\n\t^ self + aNumber'}],
+    call: async (runtime, imageId, id) => {
+      const kernel = await findSmalltalkKernel({images: runtime.images, imageId});
+      const blockRef = await methodBlockRef({
+        images: runtime.images,
+        imageId,
+        classRef: kernel.integerClass,
+        selector: '+',
+      });
+      assert.equal(
+        await methodSource({images: runtime.images, imageId, blockRef}),
+        '+ aNumber\n\t^ self + aNumber',
+      );
+      return await callPlus(runtime, imageId, id);
+    },
+    expected: integerValue(7),
   },
 ];
 

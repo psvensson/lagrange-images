@@ -10,8 +10,10 @@ import {
   SMALLTALK_METHOD_READ_OPERATION,
   SMALLTALK_CLASS_DESCRIPTION_V1,
   SMALLTALK_METHOD_DESCRIPTION_V1,
+  SYMMETRIC_SMALLTALK_SOURCE_V0,
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
+  authorizedReadSmalltalkMethodForUpdate,
   createRuntime,
   defineMethodsFromSource,
   ensureClassFromDeclaration,
@@ -21,6 +23,7 @@ import {
   methodBindings,
   objectRef,
   objectResource,
+  reconcileMethodsFromSource,
   smalltalkMethodPositionResource,
 } from '../src/runtime.js';
 import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
@@ -553,4 +556,125 @@ test('the browsing seam has no Cuis, toolchain, foreign-runtime or Project modul
   // is not a browsing input.
   assert.deepEqual(paths.filter((path) => path.startsWith('src/project/')), []);
   assert.deepEqual(violations, [], 'the seam stays portable: no node:* import on the browsing lane');
+});
+
+test('retained native and Cuis-imported methods answer durable source through both browse seams and never leak stale source across revisions', async () => {
+  await withImage(async (runtime) => {
+    const declared = await ensureClassFromDeclaration({
+      images: runtime.images, imageId: 'app', name: 'BrowseRetained', instanceVariables: ['baseValue'],
+    });
+    await defineMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef: declared.classRef,
+      retainSource: true,
+      methods: [{selector: 'baseValue', source: '[ ^baseValue ]'}],
+    });
+
+    const grants = [
+      readGrant('app', declared.classRef.objectId),
+      methodPositionGrant('app', declared.classRef, 'baseValue'),
+    ];
+    const described = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: declared.classRef,
+      selector: 'baseValue',
+      require: requireFor(runtime, grants),
+    });
+    assert.equal(described.source, '[ ^baseValue ]');
+
+    const forUpdate = await authorizedReadSmalltalkMethodForUpdate({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: declared.classRef,
+      selector: 'baseValue',
+      require: requireFor(runtime, grants),
+    });
+    assert.equal(forUpdate.descriptor.source, '[ ^baseValue ]');
+
+    const sourceArtifact = await runtime.images.getCodeArtifact('app', `${described.method.objectId}:source`);
+    const semanticArtifact = await runtime.images.getCodeArtifact('app', `${described.method.objectId}:semantic`);
+    assert.equal(sourceArtifact.representation, SYMMETRIC_SMALLTALK_SOURCE_V0);
+    assert.deepEqual(semanticArtifact.derivedFrom, [objectRef('app', `${described.method.objectId}:source`)]);
+
+    // Denied method-position read never touches the durable source artifact.
+    const seenArtifacts = [];
+    const originalGetCodeArtifact = runtime.images.getCodeArtifact.bind(runtime.images);
+    runtime.images.getCodeArtifact = async (imageId, artifactId) => {
+      seenArtifacts.push(artifactId);
+      return await originalGetCodeArtifact(imageId, artifactId);
+    };
+    await assert.rejects(
+      async () => await authorizedDescribeSmalltalkMethod({
+        images: runtime.images,
+        imageId: 'app',
+        classRef: declared.classRef,
+        selector: 'baseValue',
+        require: requireFor(runtime, [readGrant('app', declared.classRef.objectId)]),
+      }),
+      {name: 'AuthorityError'},
+    );
+    assert.deepEqual(seenArtifacts, []);
+    runtime.images.getCodeArtifact = originalGetCodeArtifact;
+
+    // Replacing with retainSource: true advances the revision and updates the durable source.
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef: declared.classRef,
+      retainSource: true,
+      methods: [{selector: 'baseValue', source: '[ ^42 ]', expectedCurrent: described.method}],
+    });
+    const updated = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: declared.classRef,
+      selector: 'baseValue',
+      require: requireFor(runtime, grants),
+    });
+    assert.notDeepEqual(updated.method, described.method);
+    assert.equal(updated.source, '[ ^42 ]');
+
+    // Replacing WITHOUT retainSource creates a fresh unretained revision and resets source to null (no stale source).
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef: declared.classRef,
+      methods: [{selector: 'baseValue', source: '[ ^99 ]', expectedCurrent: updated.method}],
+    });
+    const unretained = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: declared.classRef,
+      selector: 'baseValue',
+      require: requireFor(runtime, grants),
+    });
+    assert.notDeepEqual(unretained.method, updated.method);
+    assert.equal(unretained.source, null);
+
+    // Imported Cuis package with retainSource: true also persists durable source on its imported methods.
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      manifest: CUIS_MANIFEST,
+      retainSource: true,
+    });
+    const importedClassRef = imported.classes[0].classRef;
+    const importedMethod = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: importedClassRef,
+      selector: 'baseValue',
+      require: requireFor(runtime, [
+        readGrant('app', importedClassRef.objectId),
+        methodPositionGrant('app', importedClassRef, 'baseValue'),
+      ]),
+    });
+    assert.equal(importedMethod.source, '[\n^ baseValue.\nself\n]');
+  });
 });

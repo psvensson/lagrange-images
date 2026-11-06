@@ -32,20 +32,43 @@ function normalizeProjectionFields(values, label) {
   }
   const names = new Set();
   const slots = new Set();
+  let indexedField = null;
   const fields = values.map((entry, index) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
       throw new TypeError(`${label} field ${index} must be an object`);
     }
     const keys = Object.keys(entry).sort();
-    if (keys.length !== 2 || keys[0] !== 'name' || keys[1] !== 'slot') {
-      throw new TypeError(`${label} field ${index} must contain exactly name, slot`);
+    const hasIndexedKey = Object.hasOwn(entry, 'indexed');
+    if (!hasIndexedKey) {
+      if (keys.length !== 2 || keys[0] !== 'name' || keys[1] !== 'slot') {
+        throw new TypeError(`${label} field ${index} must contain exactly name, slot`);
+      }
+    } else if (!keys.includes('name') || keys.some((key) => key !== 'name' && key !== 'slot' && key !== 'indexed')) {
+      throw new TypeError(`${label} field ${index} must contain name, and either slot or indexed`);
     }
     const name = requiredText(entry.name, `${label} field ${index} name`);
+    if (hasIndexedKey && typeof entry.indexed !== 'boolean') {
+      throw new TypeError(`${label} field ${index} indexed must be a boolean when present`);
+    }
+    const indexed = entry.indexed === true;
+    if (names.has(name)) throw new TypeError(`${label} maps field ${name} twice`);
+    names.add(name);
+    if (indexed) {
+      if (Object.hasOwn(entry, 'slot')) {
+        throw new TypeError(`${label} indexed field ${name} must not name a slot`);
+      }
+      if (indexedField !== null) {
+        throw new TypeError(`${label} declares a second indexed field ${name}; at most one is allowed`);
+      }
+      indexedField = name;
+      return Object.freeze({name, indexed: true});
+    }
+    if (!Object.hasOwn(entry, 'slot')) {
+      throw new TypeError(`${label} field ${index} must contain exactly name, slot`);
+    }
     // Stable slot IDs, not slot names: a rename must not change what a projection reads.
     const slot = requiredText(entry.slot, `${label} field ${index} slot`);
-    if (names.has(name)) throw new TypeError(`${label} maps field ${name} twice`);
     if (slots.has(slot)) throw new TypeError(`${label} maps slot ${slot} twice`);
-    names.add(name);
     slots.add(slot);
     return Object.freeze({name, slot});
   });
@@ -78,21 +101,45 @@ function parseImageProjectionBindingArtifact(artifact) {
   });
 }
 
+function assertProjectedIndexedFieldType(field, types, label) {
+  const resolved = resolveDeclaredType(field.type, types);
+  if (!resolved || resolved.kind !== 'list') {
+    throw new TypeError(`${label} must be a {kind:'list', element:<leaf>} type`);
+  }
+  const element = resolveDeclaredType(resolved.element, types);
+  if (typeof element !== 'string' || !CALLABLE_TYPES.includes(element) || element === 'list<u8>') {
+    throw new TypeError(
+      `${label} element must be a leaf scalar (bool/s32/s64/f32/f64/string); nested composites are not projected`,
+    );
+  }
+}
+
 // v1 is deliberately narrow: one object-id parameter in, one named record out, and every
-// record field a type that corresponds directly to a canonical leaf Value. No nesting, and
-// therefore no way for a projection to reach a second object.
-function assertProjectionInterface(descriptor) {
+// named-slot record field a type that corresponds directly to a canonical leaf Value. At most
+// one field marked `indexed: true` in the binding may have a `list<leaf>` type to project the
+// object's ordered indexed part (completing the ADR 0064/0065 triad); refs are never followed.
+function assertProjectionInterface(descriptor, fields = []) {
   if (descriptor.parameters.length !== 1 || descriptor.parameters[0] !== 'string') {
     throw new TypeError(`${IMAGE_PROJECTION_BINDING_V1} requires exactly one string parameter naming the object id`);
   }
   if (typeof descriptor.result !== 'string') {
     throw new TypeError(`${IMAGE_PROJECTION_BINDING_V1} result must be a declared record type`);
   }
-  const record = resolveDeclaredType(descriptor.result, descriptor.types ?? {});
+  const types = descriptor.types ?? {};
+  const record = resolveDeclaredType(descriptor.result, types);
   if (!record || record.kind !== 'record') {
     throw new TypeError(`${IMAGE_PROJECTION_BINDING_V1} result must be a declared record type`);
   }
+  const indexedFieldNames = new Set(fields.filter((f) => f.indexed === true).map((f) => f.name));
   for (const field of record.fields) {
+    if (indexedFieldNames.has(field.name)) {
+      assertProjectedIndexedFieldType(
+        field,
+        types,
+        `${IMAGE_PROJECTION_BINDING_V1} indexed field ${field.name}`,
+      );
+      continue;
+    }
     if (!CALLABLE_TYPES.includes(field.type)) {
       throw new TypeError(
         `${IMAGE_PROJECTION_BINDING_V1} field ${field.name} must be a leaf type; v1 does not project nested values`,
@@ -103,7 +150,9 @@ function assertProjectionInterface(descriptor) {
 }
 
 function assertFieldMappingCovers(record, fields, label) {
-  const mapped = new Map(fields.map(({name, slot}) => [name, slot]));
+  const mapped = new Map(
+    fields.map((entry) => [entry.name, entry.indexed === true ? Object.freeze({indexed: true}) : entry.slot]),
+  );
   for (const field of record.fields) {
     if (!mapped.has(field.name)) throw new TypeError(`${label} does not map record field ${field.name}`);
   }
@@ -117,18 +166,45 @@ function assertFieldMappingCovers(record, fields, label) {
 
 // Shared by the projection executor and the resource provider, so the two cannot diverge on
 // ref rejection, missing slots or leaf typing.
-function projectObjectSlots({object, record, mapped, imageId, objectId}) {
-  // v1 has no indexed mapping syntax. Returning only named fields for such an object would make a
-  // partial object look complete to foreign code, so indexed objects fail explicitly until a later
-  // interface contract says how an indexed part is represented.
-  if (Object.hasOwn(object, 'indexed')) {
+function projectObjectSlots({object, record, mapped, types = {}, imageId, objectId}) {
+  const hasIndexedMapping = [...mapped.values()].some(
+    (entry) => entry && typeof entry === 'object' && entry.indexed === true,
+  );
+  // Returning only named fields for an indexed object when the binding did not map the indexed part
+  // would make a partial object look complete to foreign code, so named-slot-only projections still
+  // refuse indexed objects.
+  if (!hasIndexedMapping && Object.hasOwn(object, 'indexed')) {
     throw new TypeError(
       `${IMAGE_PROJECTION_BINDING_V1} cannot project indexed object ${imageId}/${objectId}; v1 maps named slots only`,
     );
   }
   const projected = {};
   for (const field of record.fields) {
-    const slot = mapped.get(field.name);
+    const mapping = mapped.get(field.name);
+    if (mapping && typeof mapping === 'object' && mapping.indexed === true) {
+      if (!Object.hasOwn(object, 'indexed') || !Array.isArray(object.indexed)) {
+        throw new TypeError(
+          `${IMAGE_PROJECTION_BINDING_V1} maps indexed field ${field.name}, but object ${imageId}/${objectId} is not indexed`,
+        );
+      }
+      const resolvedList = resolveDeclaredType(field.type, types);
+      const elementType = resolveDeclaredType(resolvedList.element, types);
+      projected[field.name] = object.indexed.map((rawElement, index) => {
+        const elementValue = canonicalizeValue(rawElement);
+        if (isReference(elementValue)) {
+          throw new TypeError(
+            `indexed element ${index} holds a reference; ${IMAGE_PROJECTION_BINDING_V1} never follows refs`,
+          );
+        }
+        return canonicalToHostLeaf(
+          elementValue,
+          elementType,
+          `projected indexed field ${field.name}[${index}]`,
+        );
+      });
+      continue;
+    }
+    const slot = mapping;
     if (!Object.hasOwn(object.slots ?? {}, slot)) {
       throw new TypeError(`projected object ${imageId}/${objectId} has no slot ${slot} for field ${field.name}`);
     }
@@ -168,7 +244,7 @@ async function installImageProjectionBinding({
     {dependencies: [{role: CALLABLE_INTERFACE_DEPENDENCY_ROLE, artifact: interfaceRef}]},
     IMAGE_PROJECTION_BINDING_V1,
   );
-  const record = assertProjectionInterface(descriptor);
+  const record = assertProjectionInterface(descriptor, normalizedFields);
   assertFieldMappingCovers(record, normalizedFields, IMAGE_PROJECTION_BINDING_V1);
 
   const bindingArtifact = await imageService.putCodeArtifact(targetImageId, {
@@ -176,7 +252,9 @@ async function installImageProjectionBinding({
     representation: IMAGE_PROJECTION_BINDING_V1,
     content: textValue(JSON.stringify({
       abi: IMAGE_PROJECTION_BINDING_V1,
-      fields: normalizedFields.map(({name, slot}) => ({name, slot})),
+      fields: normalizedFields.map((entry) => (
+        entry.indexed === true ? {name: entry.name, indexed: true} : {name: entry.name, slot: entry.slot}
+      )),
     })),
     dependencies: [{role: CALLABLE_INTERFACE_DEPENDENCY_ROLE, artifact: interfaceRef}],
     metadata: bindingMetadata,
@@ -202,7 +280,7 @@ function createImageProjectionBindingV1Executor() {
       }
       const binding = parseImageProjectionBindingArtifact(code);
       const {descriptor} = await resolveCallableInterface(images, code, IMAGE_PROJECTION_BINDING_V1);
-      const record = assertProjectionInterface(descriptor);
+      const record = assertProjectionInterface(descriptor, binding.fields);
       const mapped = assertFieldMappingCovers(record, binding.fields, IMAGE_PROJECTION_BINDING_V1);
 
       const args = assertCallableInterfaceArguments(descriptor, activation.arguments, descriptor.function);
@@ -218,7 +296,14 @@ function createImageProjectionBindingV1Executor() {
       const object = await images.getObject(imageId, objectId);
       if (!object) throw new TypeError(`projected object not found: ${imageId}/${objectId}`);
 
-      const projected = projectObjectSlots({object, record, mapped, imageId, objectId});
+      const projected = projectObjectSlots({
+        object,
+        record,
+        mapped,
+        types: descriptor.types ?? {},
+        imageId,
+        objectId,
+      });
 
       return packCompositeValue(
         projected, descriptor.result, descriptor.types ?? {}, `${descriptor.function} result`,
@@ -230,6 +315,7 @@ function createImageProjectionBindingV1Executor() {
 export {
   IMAGE_PROJECTION_BINDING_V1,
   assertFieldMappingCovers,
+  assertProjectedIndexedFieldType,
   assertProjectionInterface,
   normalizeProjectionFields,
   projectObjectSlots,

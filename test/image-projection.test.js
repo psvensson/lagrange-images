@@ -378,3 +378,83 @@ test('v1 rejects an interface shape it cannot project', async () => {
     await runtime.close();
   }
 });
+
+test('indexed: true field projects ordered leaf elements and rejects indexed references', async () => {
+  const authority = createAuthorityService();
+  const runtime = await createRuntime({backend: {mode: 'mock'}, authority});
+  try {
+    await runtime.images.createImage({id: 'demo'});
+    const shape = await runtime.images.putShape('demo', {
+      id: 'playlist-shape',
+      slots: [{id: 'slot-title', name: 'title'}],
+      indexed: 'values',
+    });
+    await runtime.images.putObject('demo', {
+      id: 'playlist-1',
+      shape: objectRef('demo', shape.id),
+      slots: {'slot-title': textValue('Morning')},
+      indexed: [integerValue(10), integerValue(20), integerValue(30)],
+    });
+    await runtime.images.putObject('demo', {
+      id: 'playlist-with-ref',
+      shape: objectRef('demo', shape.id),
+      slots: {'slot-title': textValue('Leaking')},
+      indexed: [integerValue(10), objectRef('demo', 'secret-track')],
+    });
+
+    const playlistTypes = normalizeTypeDeclarations({
+      playlist: {
+        kind: 'record',
+        fields: [
+          {name: 'title', type: 'string'},
+          {name: 'durations', type: {kind: 'list', element: 's64'}},
+        ],
+      },
+    });
+    const callableInterface = await installCallableInterfaceV2({
+      images: runtime.images,
+      imageId: 'demo',
+      interfaceId: 'read-playlist',
+      functionName: 'read-playlist',
+      parameters: ['string'],
+      result: 'playlist',
+      types: playlistTypes,
+    });
+    await installImageProjectionBinding({
+      images: runtime.images,
+      callableInterface: objectRef('demo', callableInterface.id),
+      fields: [
+        {name: 'title', slot: 'slot-title'},
+        {name: 'durations', indexed: true},
+      ],
+      bindingId: 'read-playlist-binding',
+      blockId: 'read-playlist-block',
+    });
+
+    const context = authority.issue({
+      principal: 'alice',
+      grants: [readGrant('playlist-1'), readGrant('playlist-with-ref')],
+    });
+    const activation = await runtime.invocations.invokeBlock(
+      objectRef('demo', 'read-playlist-block'),
+      [textValue('playlist-1')],
+    );
+    const packed = await runtime.executor.execute(activation, {authority: context});
+    assert.deepEqual(unpackCompositeValue(packed, 'playlist', playlistTypes), {
+      title: 'Morning',
+      durations: [10n, 20n, 30n],
+    });
+
+    // Falsification proof: an indexed element holding a reference is rejected, never followed.
+    const refActivation = await runtime.invocations.invokeBlock(
+      objectRef('demo', 'read-playlist-block'),
+      [textValue('playlist-with-ref')],
+    );
+    await assert.rejects(
+      runtime.executor.execute(refActivation, {authority: context}),
+      /indexed element 1 holds a reference; image-projection-binding\/v1 never follows refs/,
+    );
+  } finally {
+    await runtime.close();
+  }
+});

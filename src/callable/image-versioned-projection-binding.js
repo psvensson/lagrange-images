@@ -15,6 +15,7 @@ import {packCompositeValue} from './composite-codec.js';
 import {resolveDeclaredType} from './type-grammar.js';
 import {
   assertFieldMappingCovers,
+  assertProjectedIndexedFieldType,
   normalizeProjectionFields,
   projectObjectSlots,
 } from './image-projection-binding.js';
@@ -66,7 +67,7 @@ function parseVersionedProjectionBindingArtifact(artifact) {
 }
 
 // read-versioned-item(id: string) -> record { version-token: string, value: <leaf record> }
-function assertVersionedProjectionInterface(descriptor) {
+function assertVersionedProjectionInterface(descriptor, fields = []) {
   const {parameters, result, types = {}} = descriptor;
   if (parameters.length !== 1 || parameters[0] !== 'string') {
     throw new TypeError(
@@ -91,7 +92,16 @@ function assertVersionedProjectionInterface(descriptor) {
   if (!inner || inner.kind !== 'record') {
     throw new TypeError(`${IMAGE_VERSIONED_PROJECTION_BINDING_V1} ${VALUE_FIELD} must be a declared record type`);
   }
+  const indexedFieldNames = new Set(fields.filter((f) => f.indexed === true).map((f) => f.name));
   for (const field of inner.fields) {
+    if (indexedFieldNames.has(field.name)) {
+      assertProjectedIndexedFieldType(
+        field,
+        types,
+        `${IMAGE_VERSIONED_PROJECTION_BINDING_V1} indexed field ${field.name}`,
+      );
+      continue;
+    }
     if (!CALLABLE_TYPES.includes(field.type)) {
       throw new TypeError(
         `${IMAGE_VERSIONED_PROJECTION_BINDING_V1} field ${field.name} must be a leaf type; v1 does not project nested values`,
@@ -125,7 +135,7 @@ async function installImageVersionedProjectionBinding({
     {dependencies: [{role: CALLABLE_INTERFACE_DEPENDENCY_ROLE, artifact: interfaceRef}]},
     IMAGE_VERSIONED_PROJECTION_BINDING_V1,
   );
-  const {inner} = assertVersionedProjectionInterface(descriptor);
+  const {inner} = assertVersionedProjectionInterface(descriptor, normalizedFields);
   assertFieldMappingCovers(inner, normalizedFields, IMAGE_VERSIONED_PROJECTION_BINDING_V1);
 
   const bindingArtifact = await imageService.putCodeArtifact(targetImageId, {
@@ -133,7 +143,9 @@ async function installImageVersionedProjectionBinding({
     representation: IMAGE_VERSIONED_PROJECTION_BINDING_V1,
     content: textValue(JSON.stringify({
       abi: IMAGE_VERSIONED_PROJECTION_BINDING_V1,
-      fields: normalizedFields.map(({name, slot}) => ({name, slot})),
+      fields: normalizedFields.map((entry) => (
+        entry.indexed === true ? {name: entry.name, indexed: true} : {name: entry.name, slot: entry.slot}
+      )),
     })),
     dependencies: [{role: CALLABLE_INTERFACE_DEPENDENCY_ROLE, artifact: interfaceRef}],
     metadata: bindingMetadata,
@@ -159,7 +171,7 @@ function createImageVersionedProjectionBindingV1Executor() {
       }
       const binding = parseVersionedProjectionBindingArtifact(code);
       const {descriptor} = await resolveCallableInterface(images, code, IMAGE_VERSIONED_PROJECTION_BINDING_V1);
-      const {inner} = assertVersionedProjectionInterface(descriptor);
+      const {inner} = assertVersionedProjectionInterface(descriptor, binding.fields);
       const mapped = assertFieldMappingCovers(inner, binding.fields, IMAGE_VERSIONED_PROJECTION_BINDING_V1);
 
       const args = assertCallableInterfaceArguments(descriptor, activation.arguments, descriptor.function);
@@ -174,7 +186,14 @@ function createImageVersionedProjectionBindingV1Executor() {
       const object = await images.getObject(imageId, objectId);
       if (!object) throw new TypeError(`projected object not found: ${imageId}/${objectId}`);
 
-      const value = projectObjectSlots({object, record: inner, mapped, imageId, objectId});
+      const value = projectObjectSlots({
+        object,
+        record: inner,
+        mapped,
+        types: descriptor.types ?? {},
+        imageId,
+        objectId,
+      });
       // The same object-scoped codec the mutation lane accepts: no second encoding, and no
       // projection-specific token identity.
       const token = objectVersionToken(imageId, objectId, object._version);

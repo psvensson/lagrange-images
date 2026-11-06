@@ -1,9 +1,11 @@
 import {
-  ConditionTransfer,
-  NonLocalReturnHomeError,
-  NonLocalReturnTransfer,
-  SmalltalkNoActiveOccurrenceError,
-  SmalltalkUnhandledConditionError,
+  NoActiveOccurrenceError,
+  UnhandledConditionError,
+  performNonLocalReturn,
+  runConditionHandler,
+  runUnwindProtection,
+  signalConditionOccurrence,
+  transferConditionOccurrence,
 } from '../execution/conditions.js';
 import {sameRefIdentity} from './smalltalk-equality.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
@@ -27,6 +29,20 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 // protocol (ADR 0054), and non-local return (ADR 0055). Everything here manipulates activations and
 // scopes rather than durable object state.
 
+class SmalltalkUnhandledConditionError extends UnhandledConditionError {
+  constructor(description) {
+    super(description, `unhandled Smalltalk condition: ${description}`);
+    this.name = 'SmalltalkUnhandledConditionError';
+  }
+}
+
+class SmalltalkNoActiveOccurrenceError extends NoActiveOccurrenceError {
+  constructor(operation) {
+    super(operation);
+    this.name = 'SmalltalkNoActiveOccurrenceError';
+  }
+}
+
 // ADR 0055. `^ expr` lowers to `$nonLocalReturn value: expr`, so this primitive runs with the home
 // method's frame already in hand: a kernel-primitive send INHERITS the caller's frame (ADR 0050 rule
 // 2), and a closure activation RESTORES the frame it was created in (rule 3). Chained, those two
@@ -35,34 +51,11 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 // It never catches its own transfer, because it only *borrows* that frame — decision 3a makes
 // stopping the transfer the owner's job.
 function nonLocalReturn({activation, context, primitive}) {
-  const frame = context?.invocationFrame ?? null;
-  if (!frame) {
-    // No frame at all: the Block outlived the execution that created it, so its home is
-    // unreachable — the same fail-closed shape ADR 0050 decision 10a gives an escaped
-    // ivar-dependent closure, and for the same reason.
-    throw new NonLocalReturnHomeError(
-      'the Block has no home frame; it outlived the execution that created it',
-    );
-  }
-  if (typeof context.conditions?.homeActivationState !== 'function') {
-    throw new TypeError(`Symmetric Smalltalk ${primitive} primitive requires a condition runtime`);
-  }
-  const state = context.conditions.homeActivationState(frame);
-  if (state === 'dead') {
-    // The frame is still reachable, so its identity is known — and it is known to be finished.
-    // Saying so beats the vaguer "no home", which is why the registry retains dead entries.
-    const selector = context.conditions.homeActivationSelector?.(frame) ?? null;
-    const behavior = frame.definingBehavior?.objectId ?? 'unknown';
-    throw new NonLocalReturnHomeError(
-      `the home method activation has already returned: ${behavior}${selector ? ` >> ${selector}` : ''}`,
-    );
-  }
-  if (state !== 'live') {
-    // A frame this executor never ran as a home: distinct from one that ran and returned, and the
-    // reason the registry has three states rather than two.
-    throw new NonLocalReturnHomeError('the frame in force is not a home method activation');
-  }
-  throw new NonLocalReturnTransfer(frame, canonicalizeValue(activation.arguments[0]));
+  return performNonLocalReturn({
+    context,
+    value: activation.arguments[0],
+    requireConditionRuntimeMessage: `Symmetric Smalltalk ${primitive} primitive requires a condition runtime`,
+  });
 }
 
 // ADR 0054. The unwind operations and the transfer protocol.
@@ -112,23 +105,12 @@ async function blockOnDo({images, activation, context, primitive}) {
   const facade = requireConditions(context, primitive);
   // Captured here, at establishment: the handler runs with the rights in force where `on:do:` was
   // written, never with the signaller's.
-  const authorityToken = facade.captureAuthority();
-
-  const scopeId = facade.runtime.enterHandler({
-    conditionClass: canonicalizeValue(conditionClass), block: handler, authorityToken,
+  return await runConditionHandler({
+    facade,
+    conditionClass,
+    handlerBlock: handler,
+    protectedBlock,
   });
-  try {
-    return await facade.invoke(authorityToken, protectedBlock, []);
-  } catch (error) {
-    // `return:` — including a handler's ordinary value, which means `return:` implicitly — lands
-    // here, and only for *this* scope. Anything aimed at an outer scope keeps travelling.
-    if (error instanceof ConditionTransfer && error.kind === 'return' && error.scopeId === scopeId) {
-      return canonicalizeValue(error.value);
-    }
-    throw error;
-  } finally {
-    facade.runtime.leave(scopeId);
-  }
 }
 
 async function blockEnsure({images, activation, context, primitive, onlyWhenCurtailed}) {
@@ -139,38 +121,16 @@ async function blockEnsure({images, activation, context, primitive, onlyWhenCurt
     images, value: activation.arguments[0], primitive, role: 'cleanup block',
   });
   const facade = requireConditions(context, primitive);
-  const authorityToken = facade.captureAuthority();
-  const scopeId = facade.runtime.enterProtection({kind: primitive, block: cleanupBlock, authorityToken});
-
-  let result = null;
-  let primary = null;
-  try {
-    result = await facade.invoke(authorityToken, protectedBlock, []);
-  } catch (error) {
-    primary = error;
-  } finally {
-    facade.runtime.leave(scopeId);
-  }
-
   // Every non-normal exit, not only a catchable condition: a host trap crossing this scope travels
   // as an ordinary throw and must run the cleanup too. Protection that only fired for catchable
   // failures would stop working exactly when something unexpected happened.
-  if (primary !== null || !onlyWhenCurtailed) {
-    try {
-      // The cleanup Block's own value is discarded — cleanup runs for its effect, and letting it
-      // replace the answer would make adding a logging line change what the expression evaluates to.
-      await facade.invoke(authorityToken, cleanupBlock, []);
-    } catch (secondary) {
-      // A cleanup failure is a real failure and stays catchable. It becomes the failure travelling
-      // outward, retaining the one that was already unwinding so neither is lost.
-      if (primary !== null && secondary && typeof secondary === 'object' && !secondary.duringUnwind) {
-        secondary.duringUnwind = primary;
-      }
-      throw secondary;
-    }
-  }
-  if (primary !== null) throw primary;
-  return result;
+  return await runUnwindProtection({
+    facade,
+    kind: primitive,
+    protectedBlock,
+    cleanupBlock,
+    onlyWhenCurtailed,
+  });
 }
 
 async function conditionSignal({images, primitiveImage, activation, context, primitive}) {
@@ -182,49 +142,33 @@ async function conditionSignal({images, primitiveImage, activation, context, pri
   const conditionClass = await classOfCondition({images, primitiveImage, condition});
 
   // A handler for class H catches a condition of class C when C is H or a subclass of it.
-  const scope = await facade.runtime.findHandler(async (handled) =>
-    await conditionIsKindOf({images, conditionClass: handled, candidateClass: conditionClass}));
-  if (!scope) {
-    // Name the condition's CLASS, not only the instance. An unhandled condition is a diagnostic
-    // that has to survive into a stack trace and a test assertion, and an object id alone says
-    // nothing about what was signalled; the class is what a reader greps for.
-    // A record may legitimately carry a null behavior, so this never assumes one; an unhandled
-    // condition must not turn into a TypeError about the diagnostic itself.
-    const named = conditionClass ? `${conditionClass.imageId}/${conditionClass.objectId}` : 'an unknown class';
-    throw new SmalltalkUnhandledConditionError(`${named} (${condition.imageId}/${condition.objectId})`);
-  }
-
-  const occurrence = facade.runtime.beginOccurrence(condition, scope.scopeId);
-  try {
-    // Disabled while it runs, so a re-signal from inside the handler delegates to an *outer*
-    // handler rather than recursing into itself.
-    const answer = await facade.runtime.withDisabled(
-      scope,
-      async () => await facade.invoke(scope.authorityToken, scope.block, [condition]),
-    );
-    // A handler's ordinary value means `return:`.
-    throw new ConditionTransfer('return', scope.scopeId, canonicalizeValue(answer));
-  } catch (error) {
-    if (error instanceof ConditionTransfer && error.kind === 'resume' && error.occurrenceId === occurrence) {
-      // The signalling send answers, and computation continues — which in the WASM lane is the
-      // guest resuming at its effect site, with no ABI involvement at all.
-      return canonicalizeValue(error.value);
-    }
-    throw error;
-  } finally {
-    facade.runtime.endOccurrence(occurrence);
-  }
+  return await signalConditionOccurrence({
+    facade,
+    condition,
+    matches: async (handled) =>
+      await conditionIsKindOf({images, conditionClass: handled, candidateClass: conditionClass}),
+    describeCondition: () => {
+      // Name the condition's CLASS, not only the instance. An unhandled condition is a diagnostic
+      // that has to survive into a stack trace and a test assertion, and an object id alone says
+      // nothing about what was signalled; the class is what a reader greps for.
+      // A record may legitimately carry a null behavior, so this never assumes one; an unhandled
+      // condition must not turn into a TypeError about the diagnostic itself.
+      const named = conditionClass ? `${conditionClass.imageId}/${conditionClass.objectId}` : 'an unknown class';
+      return `${named} (${condition.imageId}/${condition.objectId})`;
+    },
+    createUnhandledError: (description) => new SmalltalkUnhandledConditionError(description),
+  });
 }
 
 function conditionTransferOut({facade, condition, value, kind, primitive}) {
-  const occurrence = facade.runtime.activeOccurrenceFor(
-    (candidate) => sameRefIdentity(candidate, condition),
-  );
-  if (!occurrence) throw new SmalltalkNoActiveOccurrenceError(primitive);
-  if (kind === 'resume') {
-    throw new ConditionTransfer('resume', null, value, occurrence.occurrenceId);
-  }
-  throw new ConditionTransfer('return', occurrence.handlerScopeId, value);
+  return transferConditionOccurrence({
+    facade,
+    sameCondition: (candidate) => sameRefIdentity(candidate, condition),
+    value,
+    kind,
+    operation: primitive,
+    createNoActiveOccurrenceError: (operation) => new SmalltalkNoActiveOccurrenceError(operation),
+  });
 }
 
 // The loop itself. Every evaluation is an ordinary nested `value` send through the execution
@@ -280,6 +224,8 @@ async function blockWhile({images, activation, context, primitive, wanted}) {
 }
 
 export {
+  SmalltalkNoActiveOccurrenceError,
+  SmalltalkUnhandledConditionError,
   blockEnsure,
   blockOnDo,
   blockWhile,

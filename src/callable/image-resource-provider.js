@@ -46,9 +46,9 @@ async function resolvePrebinding(images, projectionRef) {
   }
   const binding = parseImageProjectionBindingArtifact(artifact);
   const {descriptor} = await resolveCallableInterface(images, artifact, 'image resource provider');
-  const record = assertProjectionInterface(descriptor);
+  const record = assertProjectionInterface(descriptor, binding.fields);
   const mapped = assertFieldMappingCovers(record, binding.fields, 'image resource provider');
-  return {record, mapped, imageId: artifact.imageId};
+  return {record, mapped, types: descriptor.types ?? {}, imageId: artifact.imageId};
 }
 
 // Returns a host import provider suitable for ComponentHostImportRegistry. The runtime, not the
@@ -63,7 +63,7 @@ function createPreboundImageResourceProvider({images, projection, objectId} = {}
 
   return async ({require}) => {
     if (typeof require !== 'function') throw new TypeError('image resource provider requires a require(demand) function');
-    const {record, mapped, imageId} = await resolvePrebinding(images, projectionRef);
+    const {record, mapped, types, imageId} = await resolvePrebinding(images, projectionRef);
     const demand = {operation: OBJECT_READ_OPERATION, resource: objectResource(imageId, boundObjectId)};
     const object = await images.getObject(imageId, boundObjectId);
 
@@ -77,7 +77,7 @@ function createPreboundImageResourceProvider({images, projection, objectId} = {}
         // Live per call: this is where revocation, and activation expiry, both surface.
         require(demand);
         if (!object) throw new TypeError(`projected object not found: ${imageId}/${boundObjectId}`);
-        return projectObjectSlots({object, record, mapped, imageId, objectId: boundObjectId});
+        return projectObjectSlots({object, record, mapped, types, imageId, objectId: boundObjectId});
       }
 
       // Releases this handle and nothing else. Never deletes the object, revokes authority or

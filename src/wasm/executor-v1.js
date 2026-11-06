@@ -56,6 +56,13 @@ function assertNonReferenceMessage(message, index) {
 function normalizeSendSites(value) {
   if (!Array.isArray(value)) throw new TypeError('WASM module contract sendSites must be an array');
   return Object.freeze(value.map((site, index) => {
+    if (site && typeof site === 'object' && !Array.isArray(site) && site.kind === 'apply') {
+      exactKeys(site, ['kind', 'arity'], `WASM apply site ${index}`);
+      return Object.freeze({
+        kind: 'apply',
+        arity: requireNonNegativeInteger(site.arity, `WASM apply site ${index} arity`),
+      });
+    }
     exactKeys(site, ['languageId', 'message', 'arity'], `WASM send site ${index}`);
     return Object.freeze({
       languageId: requiredText(site.languageId, `WASM send site ${index} languageId`),
@@ -193,6 +200,16 @@ function createRebindableHostEnvironment(literals, sendSites, closureSites) {
       if (!state.activeSendSites.has(siteIndex)) throw new TypeError(`inactive WASM send site invoked: ${siteIndex}`);
       if (handles.length !== 1 + site.arity) {
         throw new TypeError(`WASM send site ${siteIndex} expected ${1 + site.arity} handles, received ${handles.length}`);
+      }
+      if (site.kind === 'apply') {
+        return recordPending(state.pending, {
+          kind: 'apply',
+          request: Object.freeze({
+            callee: state.arena.get(handles[0], `WASM apply site ${siteIndex} callee handle`),
+            arguments: Object.freeze(handles.slice(1).map((handle, argumentIndex) =>
+              state.arena.get(handle, `WASM apply site ${siteIndex} argument ${argumentIndex} handle`))),
+          }),
+        });
       }
       return recordPending(state.pending, {
         kind: 'send',
@@ -418,6 +435,10 @@ function createWasmFunctionV1CellExecutor({
         if (tailEffect.kind === 'send') {
           if (typeof context.sendMessage !== 'function') throw new TypeError('WASM message send requires a message runtime');
           return canonicalizeValue(await context.sendMessage(tailEffect.request));
+        }
+        if (tailEffect.kind === 'apply') {
+          if (typeof context.invokeBlock !== 'function') throw new TypeError('WASM callable application requires a Block invocation runtime');
+          return canonicalizeValue(await context.invokeBlock(tailEffect.request.callee, tailEffect.request.arguments));
         }
         if (tailEffect.kind === 'closure') {
           if (typeof context.createClosure !== 'function') throw new TypeError('WASM closure creation requires a closure runtime');

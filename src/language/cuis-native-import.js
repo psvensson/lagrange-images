@@ -1,9 +1,22 @@
+import {textValue} from '../value/index.js';
 import {ensureClassFromDeclaration} from './smalltalk-class-builder.js';
 import {ensureClassVariableBindings} from './smalltalk-class-variables.js';
-import {GLOBAL_BINDING_VALUE_SLOT, findSmalltalkGlobalNamespace, publishSmalltalkClassGlobals, resolveGlobal} from './smalltalk-globals.js';
+import {
+  GLOBAL_BINDING_VALUE_SLOT,
+  NAMESPACE_OBJECT_ID,
+  findSmalltalkGlobalNamespace,
+  publishSmalltalkClassGlobals,
+  reexportGlobals,
+  resolveGlobal,
+} from './smalltalk-globals.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {reconcileMethodsFromSource} from './smalltalk-instance-variables.js';
-import {isAssignmentToken, tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
+import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
+import {
+  formatSymmetricSmalltalkMethodBlock,
+  parseSymmetricSmalltalkDialect,
+} from './symmetric-smalltalk-parser.js';
+import {tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
 
 // ADR 0085 M1/M2: this adapter owns translation only. The canonical representation remains owned
 // by the OpenSmalltalk/Cuis toolchain provider; native builders/compilers remain the sole owners of
@@ -280,150 +293,154 @@ function canonicalMethodIdentity(packageName, classIdentity, side, selector) {
 // take contents. Those semantics stay native and direct native source can call them with no Cuis
 // material present. This remains no claim that UnicodeString is generally Text and publishes no
 // UnicodeString global.
-const CUIS_DIALECT_IDIOMS = Object.freeze([Object.freeze({
-  tokens: Object.freeze([
-    Object.freeze({type: 'identifier', value: 'String'}),
-    Object.freeze({type: 'identifier', value: 'new'}),
-  ]),
-  native: "''",
-}), Object.freeze({
-  tokens: Object.freeze([
-    Object.freeze({type: 'identifier', value: 'UnicodeString'}),
-    Object.freeze({type: 'identifier', value: 'writeStream'}),
-  ]),
-  native: "(WriteStream on: '')",
-}), Object.freeze({
-  // Include the opening block token in the MATCH so the adaptation cannot capture a different
-  // `streamContents:` argument form. `replaceTokens` leaves that block untouched: only receiver +
-  // selector are the foreign semantic locator being normalized.
-  tokens: Object.freeze([
-    Object.freeze({type: 'identifier', value: 'UnicodeString'}),
-    Object.freeze({type: 'keyword', value: 'streamContents:'}),
-    Object.freeze({type: '[', value: '['}),
-  ]),
-  replaceTokens: 2,
-  exactBlockArgument: true,
-  native: 'Text streamContents:',
-})]);
+const CUIS_DIALECT_IDIOMS = Object.freeze([
+  Object.freeze({
+    receiverName: 'String',
+    selector: 'new',
+    arity: 0,
+    lower() {
+      return Object.freeze({kind: 'string', value: ''});
+    },
+  }),
+  Object.freeze({
+    receiverName: 'UnicodeString',
+    selector: 'writeStream',
+    arity: 0,
+    lower() {
+      return Object.freeze({
+        kind: 'send',
+        receiver: Object.freeze({kind: 'name', name: 'WriteStream'}),
+        selector: 'on:',
+        arguments: Object.freeze([Object.freeze({kind: 'string', value: ''})]),
+      });
+    },
+  }),
+  Object.freeze({
+    receiverName: 'UnicodeString',
+    selector: 'streamContents:',
+    arity: 1,
+    exactBlockArgument: true,
+    lower([blockArg]) {
+      return Object.freeze({
+        kind: 'send',
+        receiver: Object.freeze({kind: 'name', name: 'Text'}),
+        selector: 'streamContents:',
+        arguments: Object.freeze([blockArg]),
+      });
+    },
+  }),
+]);
 
 // A dialect idiom is about a GLOBAL name. If the method binds that name itself — as a parameter,
-// a temporary or a block parameter — then the source means something else entirely and needs no
-// translation at all, so the idiom must not fire. Temporary bars need their lexical position:
-// blindly toggling on every `|` mistakes a block-parameter CLOSING bar for a temporary opener and
-// can suppress a later, unrelated idiom. A temporary opener is only the method body's first token,
-// the first token after `[`, or the second bar in `[:parameter | | temporary | ...]`.
-function boundNames(tokens, bodyTokenIndex, parameters) {
+// a temporary, a block parameter or an assignment target — then the source means something else
+// entirely and needs no translation at all, so the idiom must not fire. Walking the parsed AST
+// directly (ADR 0097) collects every declared temporary, block parameter and assignment target
+// structurally without token-level bar heuristics.
+function collectAstBoundNames(ast, parameters) {
   const bound = new Set(parameters);
-
-  const collectTemporaries = (openAt) => {
-    for (let at = openAt + 1; at < tokens.length && tokens[at].type !== '|'; at += 1) {
-      if (tokens[at].type === 'identifier') bound.add(tokens[at].value);
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return;
+    switch (node.kind) {
+      case 'sequence':
+        for (const temp of node.temporaries) bound.add(temp);
+        for (const statement of node.statements) visit(statement);
+        break;
+      case 'block':
+        for (const param of node.parameters) bound.add(param);
+        visit(node.body);
+        break;
+      case 'assign':
+        bound.add(node.name);
+        visit(node.value);
+        break;
+      case 'return':
+        visit(node.value);
+        break;
+      case 'send':
+        visit(node.receiver);
+        for (const arg of node.arguments) visit(arg);
+        break;
+      case 'cascade':
+        visit(node.receiver);
+        for (const msg of node.messages) {
+          for (const arg of msg.arguments) visit(arg);
+        }
+        break;
+      default:
+        break;
     }
   };
-
-  for (let at = bodyTokenIndex; at < tokens.length; at += 1) {
-    const token = tokens[at];
-    if (token.type === '|' && (
-      at === bodyTokenIndex || tokens[at - 1]?.type === '[' || tokens[at - 1]?.type === '|'
-    )) {
-      collectTemporaries(at);
-    }
-    if (token.type !== 'identifier') continue;
-    // `[ :each | ... ]` block parameters and assignment targets — under EITHER assignment spelling
-    // the dialect token stream can carry, through the tokenizer owner's one shared predicate — join
-    // the explicit temporary declarations above in this one definition of a bound name.
-    if (tokens[at - 1]?.type === ':' || isAssignmentToken(tokens[at + 1])) {
-      bound.add(token.value);
-    }
-  }
+  visit(ast);
   return bound;
 }
 
-const IDIOM_EXPRESSION_PREFIXES = new Set([
-  'assign', 'legacyAssign', 'caret', '.', '(', '[', '|', 'binary', 'keyword',
-]);
-
-function matchesIdiom(tokens, at, pattern, bodyTokenIndex) {
-  // The first name must be a primary expression, not a unary selector in a longer chain. In
-  // `self UnicodeString writeStream`, for example, `UnicodeString` is a message to `self`; treating
-  // the two following identifiers as the global construction would rewrite the receiver. The
-  // prefix set names precisely the token positions where the parser can begin a new expression or
-  // operand. `;` is deliberately absent because a cascade continues on its earlier receiver.
-  if (at !== bodyTokenIndex && !IDIOM_EXPRESSION_PREFIXES.has(tokens[at - 1]?.type)) return false;
-  if (!pattern.every((expected, offset) => {
-    const token = tokens[at + offset];
-    return token !== undefined && token.type === expected.type && token.value === expected.value;
-  })) return false;
-  // A cascade continues to the RECEIVER of the last message, so in `String new; yourself` the
-  // later messages go to the class, not to what `new` answered. Substituting a literal there would
-  // silently change which object the rest of the cascade talks to, so the idiom does not fire.
-  return tokens[at + pattern.length]?.type !== ';';
-}
-
-// `UnicodeString streamContents:` is deliberately the complete one-keyword call with one literal
-// Block argument, not a prefix of another selector chain. Find the matching closing bracket in the
-// ORIGINAL tokens (nested Blocks included) and allow only an expression boundary afterwards. A
-// later unary/keyword/cascade chain remains unsupported rather than silently widening the idiom.
-const EXACT_IDIOM_END = new Set(['eof', '.', ']', ')']);
-function hasExactBlockArgument(tokens, openAt) {
-  let depth = 0;
-  for (let at = openAt; at < tokens.length; at += 1) {
-    if (tokens[at].type === '[') depth += 1;
-    if (tokens[at].type !== ']') continue;
-    depth -= 1;
-    if (depth === 0) return EXACT_IDIOM_END.has(tokens[at + 1]?.type);
-  }
-  return false;
-}
-
-// ONE immutable replacement plan, collected against the SAME original token stream and applied
-// right-to-left in a single pass. Two translation kinds share the plan:
-//
-//   * the measured legacy assignment arrow — the tokenizer's distinct `legacyAssign` token,
-//     translated to canonical native `:=`. This is dialect SYNTAX, not a name, so none of the
-//     idiom exclusions apply: every arrow token in the body translates. The adapter translates the
-//     token and NOTHING more — whether the assignment is then legal (a bindable target, a
-//     resolvable right-hand side, an ordinary refusal such as an unbound name) is decided by the
-//     ordinary native parser and compiler after translation, never here. In particular a masked
-//     name such as `driver _ SAXDriver on: aStream` becomes `driver := SAXDriver on: aStream` and
-//     then undergoes ordinary native name resolution, which is the refusal the un-translated
-//     arrow hid (bead lagrange-images-xxm.3).
-//   * the closed dialect-idiom table above (`String new`, `UnicodeString writeStream`, and exact
-//     `UnicodeString streamContents: [block]`), with its bound/declared exclusions.
-//
-// Collecting both against the same token stream and splicing in start-descending order is what
-// makes offset drift impossible by construction: no splice is ever applied at offsets an earlier
-// splice invalidated. The two kinds cannot overlap (an arrow token is never part of an idiom
-// match), so one pass over the tokens suffices.
-function adaptDialect(bodySource, tokens, bodyTokenIndex, bodyStart, parameters, declaredNames) {
-  const bound = boundNames(tokens, bodyTokenIndex, parameters);
-  const replacements = [];
-  for (let at = bodyTokenIndex; at < tokens.length; at += 1) {
-    const token = tokens[at];
-    if (token.type === 'legacyAssign') {
-      replacements.push({start: token.start - bodyStart, end: token.end - bodyStart, native: ':='});
-      continue;
+// Structured AST-to-AST lowering of the closed three-entry `CUIS_DIALECT_IDIOMS` table (ADR 0097).
+// Because matching operates on parsed `send` nodes:
+//   * a cascade (`String new; yourself`) is a `cascade` node, never a `send`, so it is untouched;
+//   * a unary chain (`self UnicodeString writeStream`) has a `send` receiver rather than `{kind: 'name'}`;
+//   * `UnicodeString streamContents: [ ... ] yourself` parses `yourself` onto the block argument,
+//     making `node.arguments[0]` a `send` node rather than `{kind: 'block'}`.
+function lowerCuisDialectAst(node, context) {
+  if (!node || typeof node !== 'object') return node;
+  switch (node.kind) {
+    case 'sequence':
+      return Object.freeze({
+        kind: 'sequence',
+        temporaries: node.temporaries,
+        statements: Object.freeze(node.statements.map((stmt) => lowerCuisDialectAst(stmt, context))),
+      });
+    case 'block':
+      return Object.freeze({
+        ...node,
+        body: lowerCuisDialectAst(node.body, context),
+      });
+    case 'assign':
+      return Object.freeze({
+        kind: 'assign',
+        name: node.name,
+        value: lowerCuisDialectAst(node.value, context),
+      });
+    case 'return':
+      return Object.freeze({
+        ...node,
+        value: lowerCuisDialectAst(node.value, context),
+      });
+    case 'cascade':
+      return Object.freeze({
+        kind: 'cascade',
+        receiver: lowerCuisDialectAst(node.receiver, context),
+        messages: Object.freeze(node.messages.map((msg) => Object.freeze({
+          selector: msg.selector,
+          arguments: Object.freeze(msg.arguments.map((arg) => lowerCuisDialectAst(arg, context))),
+        }))),
+      });
+    case 'send': {
+      const loweredArgs = Object.freeze(node.arguments.map((arg) => lowerCuisDialectAst(arg, context)));
+      if (node.receiver.kind === 'name') {
+        const receiverName = node.receiver.name;
+        if (!context.bound.has(receiverName) && !context.declaredNames.has(receiverName)) {
+          for (const idiom of CUIS_DIALECT_IDIOMS) {
+            if (idiom.receiverName !== receiverName) continue;
+            if (idiom.selector !== node.selector) continue;
+            if (idiom.arity !== node.arguments.length) continue;
+            if (idiom.exactBlockArgument && node.arguments[0]?.kind !== 'block') continue;
+            return idiom.lower(loweredArgs);
+          }
+        }
+      }
+      return Object.freeze({
+        kind: 'send',
+        receiver: lowerCuisDialectAst(node.receiver, context),
+        selector: node.selector,
+        arguments: loweredArgs,
+      });
     }
-    for (const idiom of CUIS_DIALECT_IDIOMS) {
-      if (!matchesIdiom(tokens, at, idiom.tokens, bodyTokenIndex)) continue;
-      if (idiom.exactBlockArgument && !hasExactBlockArgument(tokens, at + idiom.tokens.length - 1)) continue;
-      // The method binds the name itself, or the package declares a class of that name, so the
-      // source means its own thing and this is not the dialect idiom at all.
-      if (bound.has(token.value) || declaredNames.has(token.value)) continue;
-      const replacedTokenCount = idiom.replaceTokens ?? idiom.tokens.length;
-      const last = tokens[at + replacedTokenCount - 1];
-      replacements.push({start: token.start - bodyStart, end: last.end - bodyStart, native: idiom.native});
-      break;
-    }
+    default:
+      return node;
   }
-  let adapted = bodySource;
-  for (const {start, end, native} of [...replacements].sort((a, b) => b.start - a.start)) {
-    adapted = `${adapted.slice(0, start)}${native}${adapted.slice(end)}`;
-  }
-  return adapted;
 }
 
-function nativeMethodSource({identity, selector, source, declaredNames}) {
+function parseCuisMethodHeader({identity, selector, source}) {
   let tokens;
   try {
     tokens = tokenizeSymmetricSmalltalk(source);
@@ -461,15 +478,17 @@ function nativeMethodSource({identity, selector, source, declaredNames}) {
     fail(`method ${identity} source header declares ${parsedSelector}, not ${selector}`, identity);
   }
   const bodyStart = tokens[index - 1].end;
-  const body = adaptDialect(source.slice(bodyStart), tokens, index, bodyStart, parameters, declaredNames).trim();
-  // An empty method body is ordinary Smalltalk: an empty (or comment-only) hook such as the
-  // pinned YAXO `XMLNode>>contentsDo:` answers its receiver. The appended trailing `self` below
-  // is exactly that answer; an empty body needs no statement of its own. Refusing it would make
-  // a fine-grained package method unimportable for no semantic reason.
-  const parameterSource = parameters.length === 0 ? '' : ` ${parameters.map((name) => `:${name}`).join(' ')} |`;
-  const bodyTokens = tokens.slice(index, -1);
-  const statementSeparator = bodyTokens.length === 0 || bodyTokens.at(-1).type === '.' ? '' : '.';
-  return `[${parameterSource}\n${body}${statementSeparator}\nself\n]`;
+  return Object.freeze({
+    parameters: Object.freeze(parameters),
+    bodySource: source.slice(bodyStart),
+  });
+}
+
+function lowerCuisMethodToNativeSource({parameters, bodySource, declaredNames}) {
+  const dialectAst = parseSymmetricSmalltalkDialect(bodySource, {allowEmpty: true});
+  const bound = collectAstBoundNames(dialectAst, parameters);
+  const loweredAst = lowerCuisDialectAst(dialectAst, {bound, declaredNames});
+  return formatSymmetricSmalltalkMethodBlock(parameters, loweredAst);
 }
 
 // M3 (bead lagrange-images-nv1.2): a real package is imported progressively, so the caller names
@@ -493,14 +512,241 @@ function normalizeScope(scope) {
   return Object.freeze({classes: new Set(classes), methods: new Set(methods)});
 }
 
+const CLASS_DEFINITION_KEYWORD = new Set([
+  'subclass:',
+  'variableSubclass:',
+  'variableByteSubclass:',
+  'variableWordSubclass:',
+]);
+
+function splitCuisChunks(pckSource) {
+  const chunks = [];
+  let index = 0;
+  let inMethodSection = false;
+  let skipNextChunk = false;
+
+  while (index < pckSource.length) {
+    while (index < pckSource.length && /\s/.test(pckSource[index])) {
+      index += 1;
+    }
+    if (index >= pckSource.length) break;
+
+    let isDirective = false;
+    if (!inMethodSection && pckSource[index] === '!') {
+      isDirective = true;
+      index += 1;
+    } else if (inMethodSection && pckSource[index] === '!') {
+      inMethodSection = false;
+      index += 1;
+      continue;
+    }
+
+    let current = '';
+    let inString = false;
+    while (index < pckSource.length) {
+      const ch = pckSource[index];
+      if (ch === '\'') {
+        if (inString && pckSource[index + 1] === '\'') {
+          current += '\'\'';
+          index += 2;
+          continue;
+        }
+        inString = !inString;
+        current += ch;
+        index += 1;
+        continue;
+      }
+      if (!inString && ch === '!') {
+        if (pckSource[index + 1] === '!') {
+          current += '!';
+          index += 2;
+          continue;
+        }
+        index += 1;
+        break;
+      }
+      current += ch;
+      index += 1;
+    }
+
+    const trimmed = current.trim();
+    if (skipNextChunk) {
+      skipNextChunk = false;
+      continue;
+    }
+    if (isDirective) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*(\s+class)?\s+methodsFor:/m.test(trimmed)) {
+        inMethodSection = true;
+      } else if (/^commentStamp:/m.test(trimmed)) {
+        skipNextChunk = true;
+      }
+      continue;
+    }
+    if (!inMethodSection && trimmed.length > 0) {
+      chunks.push(trimmed);
+    }
+  }
+  return chunks;
+}
+
+function canonicalInitializerIdentity(packageName, className, selector = 'initialize') {
+  return `cuis-initializer/${packageName}/${className}/${selector}`;
+}
+
+// Parse top-level chunks of a Cuis .pck.st source string and extract explicit post-load
+// `<ClassName> initialize!` chunks into canonical initializer descriptors, while refusing
+// arbitrary top-level DoIt expressions (ADR 0096).
+function extractCuisPackagePostLoadInitializers(packageName, pckSource) {
+  const pkg = text(packageName, 'packageName');
+  const source = text(pckSource, 'pckSource');
+  const initializers = [];
+  const seen = new Set();
+  for (const trimmed of splitCuisChunks(source)) {
+    let tokens;
+    try {
+      tokens = tokenizeSymmetricSmalltalk(trimmed);
+    } catch (error) {
+      fail(`Cuis package ${pkg} contains unparseable top-level chunk: ${error.message}`);
+    }
+    const bodyTokens = tokens.filter((token) => token.type !== 'eof');
+    if (bodyTokens.length === 0) continue;
+    if (bodyTokens.length === 1 && bodyTokens[0].type === 'string') continue;
+    if (bodyTokens[0].type === 'identifier' && bodyTokens[1]?.type === 'keyword' && CLASS_DEFINITION_KEYWORD.has(bodyTokens[1].value)) {
+      continue;
+    }
+    if (
+      bodyTokens.length === 2
+      && bodyTokens[0].type === 'identifier'
+      && bodyTokens[1].type === 'identifier'
+      && bodyTokens[1].value === 'initialize'
+    ) {
+      const className = bodyTokens[0].value;
+      const classIdentity = canonicalClassIdentity(pkg, className);
+      if (!seen.has(classIdentity)) {
+        seen.add(classIdentity);
+        initializers.push(Object.freeze({
+          identity: canonicalInitializerIdentity(pkg, className, 'initialize'),
+          package: pkg,
+          class: classIdentity,
+          selector: 'initialize',
+        }));
+      }
+      continue;
+    }
+    fail(`unsupported Cuis post-load DoIt chunk in ${pkg}: ${trimmed}`);
+  }
+  return Object.freeze(initializers);
+}
+
+function normalizePostLoadInitializerEntry(entry, byIdentity, byClassName) {
+  if (typeof entry === 'string') {
+    const trimmed = text(entry, 'postLoadInitializers entry').trim();
+    if (trimmed.startsWith('cuis-class/')) {
+      const declaration = byIdentity.get(trimmed);
+      if (!declaration) {
+        fail(`postLoadInitializers names class ${trimmed}, which this manifest does not declare`, trimmed);
+      }
+      return Object.freeze({
+        identity: canonicalInitializerIdentity(declaration.package, declaration.name, 'initialize'),
+        package: declaration.package,
+        class: declaration.identity,
+        selector: 'initialize',
+      });
+    }
+    let tokens;
+    try {
+      tokens = tokenizeSymmetricSmalltalk(trimmed);
+    } catch (error) {
+      fail(`postLoadInitializers entry ${trimmed} is not a valid class initializer: ${error.message}`);
+    }
+    const bodyTokens = tokens.filter((token) => token.type !== 'eof');
+    if (
+      bodyTokens.length !== 2
+      || bodyTokens[0].type !== 'identifier'
+      || bodyTokens[1].type !== 'identifier'
+      || bodyTokens[1].value !== 'initialize'
+    ) {
+      fail(`postLoadInitializers only supports <ClassName> initialize, got: ${trimmed}`);
+    }
+    const declaration = byClassName.get(bodyTokens[0].value);
+    if (!declaration) {
+      fail(`postLoadInitializers names undeclared class ${bodyTokens[0].value}`);
+    }
+    return Object.freeze({
+      identity: canonicalInitializerIdentity(declaration.package, declaration.name, 'initialize'),
+      package: declaration.package,
+      class: declaration.identity,
+      selector: 'initialize',
+    });
+  }
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    fail('postLoadInitializers entry must be an object or string');
+  }
+  const keys = Object.keys(entry).sort().join(',');
+  if (keys !== 'class,selector' && keys !== 'class,identity,package,selector') {
+    fail('postLoadInitializers entry must have fields {class, selector} or {identity, package, class, selector}');
+  }
+  const classIdentity = text(entry.class, 'postLoadInitializers entry class');
+  const selector = text(entry.selector, 'postLoadInitializers entry selector');
+  if (selector !== 'initialize') {
+    fail(`postLoadInitializers selector must be initialize, got ${selector}`, classIdentity);
+  }
+  const declaration = byIdentity.get(classIdentity);
+  if (!declaration) {
+    fail(`postLoadInitializers names class ${classIdentity}, which this manifest does not declare`, classIdentity);
+  }
+  const expectedIdentity = canonicalInitializerIdentity(declaration.package, declaration.name, 'initialize');
+  if (entry.package !== undefined && text(entry.package, 'postLoadInitializers entry package') !== declaration.package) {
+    fail(`postLoadInitializers entry package ${entry.package} does not match ${declaration.package}`, classIdentity);
+  }
+  if (entry.identity !== undefined && text(entry.identity, 'postLoadInitializers entry identity') !== expectedIdentity) {
+    fail(`postLoadInitializers entry identity ${entry.identity} does not match ${expectedIdentity}`, classIdentity);
+  }
+  return Object.freeze({
+    identity: expectedIdentity,
+    package: declaration.package,
+    class: declaration.identity,
+    selector: 'initialize',
+  });
+}
+
+function orderPackagesByRequires(packages) {
+  const byName = new Map(packages.map((pkg) => [pkg.name, pkg]));
+  const rank = new Map();
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = (name) => {
+    if (visited.has(name)) return;
+    if (visiting.has(name)) fail(`package dependency cycle reaches ${name}`);
+    const pkg = byName.get(name);
+    if (!pkg) return;
+    visiting.add(name);
+    for (const req of pkg.requires) {
+      if (byName.has(req)) visit(req);
+    }
+    visiting.delete(name);
+    visited.add(name);
+    rank.set(name, rank.size);
+  };
+  for (const pkg of packages) visit(pkg.name);
+  return rank;
+}
+
 // Validate every adapter-owned schema, identity and dependency-graph rule before the first native
 // owner call. Native declaration semantics (for example inherited-name legality) stay exclusively
 // in the class builder; this adapter does not duplicate them to promise a batch transaction it does
 // not own. An owner rejection may therefore leave already-valid immutable ancestors, and an exact
 // retry converges through their ordinary admission rules.
-function importPlan(manifest, scope) {
+function importPlan(manifest, scope, {postLoadInitializers: optionInitializers = null} = {}) {
   const requested = normalizeScope(scope);
-  exactKeys(manifest, ['format', 'packages', 'classes', 'methods'], 'manifest');
+  const manifestRecord = record(manifest, 'manifest');
+  const expectedManifestKeys = Object.hasOwn(manifestRecord, 'postLoadInitializers')
+    ? ['format', 'packages', 'classes', 'methods', 'postLoadInitializers']
+    : ['format', 'packages', 'classes', 'methods'];
+  exactKeys(manifestRecord, expectedManifestKeys, 'manifest');
+  if (optionInitializers !== null && optionInitializers !== undefined && Object.hasOwn(manifestRecord, 'postLoadInitializers')) {
+    fail('postLoadInitializers may be supplied on manifest or options, not both');
+  }
   if (manifest.format !== CUIS_SEMANTIC_EXPORT_V2) {
     fail(`manifest format must be ${CUIS_SEMANTIC_EXPORT_V2}, got ${manifest.format ?? 'missing'}`);
   }
@@ -509,16 +755,20 @@ function importPlan(manifest, scope) {
   if (!Array.isArray(manifest.methods)) fail('manifest methods must be an array');
 
   const packageNames = new Set();
+  const normalizedPackages = [];
   for (const item of manifest.packages) {
     exactKeys(item, ['name', 'requires'], 'package declaration');
     const name = text(item.name, 'package name');
     if (packageNames.has(name)) fail(`package ${name} appears more than once`);
     packageNames.add(name);
-    textArray(item.requires, `package ${name} requirements`);
+    const requires = textArray(item.requires, `package ${name} requirements`);
+    normalizedPackages.push(Object.freeze({name, requires}));
   }
+  const packageRank = orderPackagesByRequires(normalizedPackages);
 
   const classes = [];
   const byIdentity = new Map();
+  const byClassName = new Map();
   const nativeNames = new Set();
   for (const item of manifest.classes) {
     exactKeys(
@@ -561,6 +811,7 @@ function importPlan(manifest, scope) {
     const normalized = Object.freeze({identity, package: packageName, name, superclass, instanceVariables, classVariables});
     classes.push(normalized);
     byIdentity.set(identity, normalized);
+    byClassName.set(name, normalized);
   }
   // Package attribution is a property of the manifest as a whole, so it is checked for every
   // declaration whether or not this import covers it.
@@ -664,12 +915,15 @@ function importPlan(manifest, scope) {
     } else if (requested && !requested.classes.has(classIdentity)) {
       fail(`method target ${classIdentity} is outside the requested import scope`, identity);
     }
+    const header = parseCuisMethodHeader({identity, selector, source});
     methods.push(Object.freeze({
       identity,
       classIdentity,
       side: item.side,
       selector,
-      source: nativeMethodSource({identity, selector, source, declaredNames: nativeNames}),
+      parameters: header.parameters,
+      bodySource: header.bodySource,
+      declaredNames: nativeNames,
     }));
   }
   if (requested) {
@@ -679,7 +933,55 @@ function importPlan(manifest, scope) {
       }
     }
   }
-  return {classes: scopedClasses, ordered, methods};
+
+  const rawInitializers = optionInitializers ?? manifestRecord.postLoadInitializers ?? null;
+  const postLoadInitializers = [];
+  if (rawInitializers !== null && rawInitializers !== undefined) {
+    if (!Array.isArray(rawInitializers)) fail('postLoadInitializers must be an array');
+    const scopedSet = new Set(scopedClasses.map((declaration) => declaration.identity));
+    const coveredClassInitSet = new Set(
+      methods
+        .filter((method) => method.side === 'class' && method.selector === 'initialize')
+        .map((method) => method.classIdentity),
+    );
+    const seenInitializers = new Set();
+    for (const entry of rawInitializers) {
+      const normalized = normalizePostLoadInitializerEntry(entry, byIdentity, byClassName);
+      const classIdentity = normalized.class;
+      if (seenInitializers.has(classIdentity)) {
+        fail(`postLoadInitializers must not contain duplicate class ${classIdentity}`, classIdentity);
+      }
+      seenInitializers.add(classIdentity);
+      if (!scopedSet.has(classIdentity)) {
+        fail(`postLoadInitializers target ${classIdentity} is outside the requested import scope`, classIdentity);
+      }
+      if (!coveredClassInitSet.has(classIdentity)) {
+        fail(
+          `postLoadInitializers target ${classIdentity} does not declare a covered class-side initialize method`,
+          classIdentity,
+        );
+      }
+      postLoadInitializers.push(normalized);
+    }
+    const orderedIndex = new Map(ordered.map((declaration, index) => [declaration.identity, index]));
+    const isAncestor = (candidateAncestor, candidateDescendant) => {
+      let current = byIdentity.get(candidateDescendant);
+      while (current) {
+        if (current.superclass === candidateAncestor) return true;
+        current = byIdentity.get(current.superclass);
+      }
+      return false;
+    };
+    postLoadInitializers.sort((left, right) => {
+      if (isAncestor(left.class, right.class)) return -1;
+      if (isAncestor(right.class, left.class)) return 1;
+      const pkgDiff = (packageRank.get(left.package) ?? 0) - (packageRank.get(right.package) ?? 0);
+      if (pkgDiff !== 0) return pkgDiff;
+      return (orderedIndex.get(left.class) ?? 0) - (orderedIndex.get(right.class) ?? 0);
+    });
+  }
+
+  return {classes: scopedClasses, ordered, methods, postLoadInitializers: Object.freeze(postLoadInitializers)};
 }
 
 // Cancellation between declarations. The adapter checks the caller's `signal` before each class
@@ -703,11 +1005,26 @@ function assertProgressOptions(signal, onProgress) {
   if (onProgress !== null && typeof onProgress !== 'function') fail('onProgress must be null or a function');
 }
 
-async function importCuisNativePackage({images, compilation, imageId, manifest, scope = null, signal = null, onProgress = null} = {}) {
+async function importCuisNativePackage({
+  images,
+  compilation,
+  invocations = null,
+  executor = null,
+  imageId,
+  manifest,
+  scope = null,
+  postLoadInitializers = null,
+  targetNamespaceId = null,
+  retainSource = false,
+  signal = null,
+  onProgress = null,
+} = {}) {
   text(imageId, 'image id');
   if (!images || typeof images !== 'object') fail('images must be an image service');
+  if (typeof retainSource !== 'boolean') fail('retainSource must be a boolean');
+  if (targetNamespaceId !== null) text(targetNamespaceId, 'targetNamespaceId');
   assertProgressOptions(signal, onProgress);
-  const plan = importPlan(manifest, scope);
+  const plan = importPlan(manifest, scope, {postLoadInitializers});
   const admitted = {classes: [], methods: []};
   const checkpoint = (reason) => {
     if (signal?.aborted) throw new CuisNativeImportAbortedError({admitted, reason: signal.reason ?? reason ?? null});
@@ -716,6 +1033,14 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
   const totals = Object.freeze({classes: plan.ordered.length, methods: plan.methods.length});
   if (plan.methods.length > 0 && (!compilation || typeof compilation.compileArtifact !== 'function')) {
     fail('compilation must be a compilation service when methods are present');
+  }
+  if (plan.postLoadInitializers.length > 0) {
+    if (!invocations || typeof invocations.sendMessage !== 'function') {
+      fail('invocations must be an invocation service when postLoadInitializers are present');
+    }
+    if (!executor || typeof executor.execute !== 'function') {
+      fail('executor must be an execution service when postLoadInitializers are present');
+    }
   }
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) fail(`image ${imageId} has no Smalltalk kernel`);
@@ -774,11 +1099,21 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
   const globalNamespace = await findSmalltalkGlobalNamespace({images, imageId});
   if (globalNamespace && plan.classes.length > 0) {
     progress({event: 'begin', phase: 'globals', identity: null, totals});
+    const classNames = plan.classes.map(({name}) => name);
     await publishSmalltalkClassGlobals({
       images,
       imageId,
-      names: plan.classes.map(({name}) => name),
+      names: classNames,
     });
+    if (targetNamespaceId !== null && targetNamespaceId !== NAMESPACE_OBJECT_ID) {
+      await reexportGlobals({
+        images,
+        imageId,
+        names: classNames,
+        fromNamespaceId: NAMESPACE_OBJECT_ID,
+        toNamespaceId: targetNamespaceId,
+      });
+    }
     progress({event: 'admitted', phase: 'globals', identity: null, totals});
   }
 
@@ -788,7 +1123,7 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
     const classRef = method.side === 'class' ? target.metaclassRef : target.classRef;
     const key = `${classRef.imageId}\u0000${classRef.objectId}`;
     const group = methodGroups.get(key) ?? {classRef, classIdentity: method.classIdentity, methods: [], identities: []};
-    group.methods.push({selector: method.selector, source: method.source});
+    group.methods.push(method);
     group.identities.push(method.identity);
     methodGroups.set(key, group);
   }
@@ -797,16 +1132,36 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
     // progress and of cancellation is the group: a group is admitted whole or not at all.
     checkpoint(`before the methods of ${classIdentity}`);
     progress({event: 'begin', phase: 'methods', identity: classIdentity, methods: Object.freeze([...identities]), totals});
+    const loweredMethods = methods.map((method) => ({
+      selector: method.selector,
+      source: lowerCuisMethodToNativeSource(method),
+    }));
     await reconcileMethodsFromSource({
       images,
       compilation,
       imageId,
       classRef,
-      methods,
+      methods: loweredMethods,
+      retainSource,
+      ...(targetNamespaceId !== null ? {namespaceId: targetNamespaceId} : {}),
       lane: 'wasm',
     });
     admitted.methods.push(...identities);
     progress({event: 'admitted', phase: 'methods', identity: classIdentity, methods: Object.freeze([...identities]), totals});
+  }
+
+  for (const initializer of plan.postLoadInitializers) {
+    checkpoint(`before post-load initializer ${initializer.identity}`);
+    progress({event: 'begin', phase: 'initializer', identity: initializer.identity, totals});
+    const target = resolved.get(initializer.class);
+    const activation = await invocations.sendMessage({
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: target.classRef,
+      message: textValue(initializer.selector),
+      arguments: [],
+    }, {dispatchImage: imageId});
+    await executor.execute(activation);
+    progress({event: 'admitted', phase: 'initializer', identity: initializer.identity, totals});
   }
 
   // Semantic identity is useful to the caller, but this is deliberately transient output: the
@@ -816,6 +1171,9 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
       identity: declaration.identity,
       ...resolved.get(declaration.identity),
     }))),
+    ...(plan.postLoadInitializers.length === 0
+      ? {}
+      : {initializers: plan.postLoadInitializers}),
   });
 }
 
@@ -829,6 +1187,7 @@ export {
   CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
   CuisNativeImportAbortedError,
   CuisNativeImportError,
+  extractCuisPackagePostLoadInitializers,
   importCuisNativePackage,
   isMappedCuisClass,
   mappedCuisClassName,

@@ -1,10 +1,6 @@
 import {uuid as randomUUID} from '../support/default-crypto.js';
 import {assertBlockApplicationReceiver} from '../execution/block-application.js';
 import {
-  SmalltalkNoActiveOccurrenceError,
-  SmalltalkUnhandledConditionError,
-} from '../execution/conditions.js';
-import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
   SMALLTALK_PRIMITIVE,
   SMALLTALK_PRIMITIVE_ARITY,
@@ -61,6 +57,8 @@ import {
   integerOperation,
 } from './smalltalk-primitives-integer.js';
 import {
+  SmalltalkNoActiveOccurrenceError,
+  SmalltalkUnhandledConditionError,
   blockEnsure,
   blockOnDo,
   blockWhile,

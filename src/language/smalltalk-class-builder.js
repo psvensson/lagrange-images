@@ -15,10 +15,13 @@ import {
 import {lowerLagrangeCodeV0, normalizeLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
 import {
   LAGRANGE_CODE_V1,
+  LAGRANGE_CODE_V2,
   lowerLagrangeCodeV1,
+  lowerLagrangeCodeV2,
   normalizeLagrangeCodeV1Program,
+  normalizeLagrangeCodeV2Program,
 } from '../code/lagrange-code-v1.js';
-import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
+import {NEUTRAL_EXPRESSION_V1, NEUTRAL_EXPRESSION_V2} from '../execution/neutral-expression-v1.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {
   codeArtifactProjection,
@@ -59,7 +62,7 @@ import {WASM_MODULE_V2, readModuleDescriptor, soleModuleEntry} from '../wasm/mod
 import {assembleWasmV1FunctionArtifact} from '../wasm/tree-installer-v1.js';
 import {ensureClassStateCompanion} from './smalltalk-class-state.js';
 import {maintainSubclassRegistries} from './smalltalk-subclasses.js';
-import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
+import {SYMMETRIC_SMALLTALK_ID, SYMMETRIC_SMALLTALK_SOURCE_V0} from './symmetric-smalltalk.js';
 
 // Installing methods onto a class, and defining new classes with their metaclasses.
 //
@@ -79,7 +82,40 @@ function requiredText(value, label) {
 // A method's semantic representation follows from what the program actually is, exactly as
 // `selectSemanticRepresentation` decides it for a Block. ADR 0043's v1 adds temporaries, statement
 // sequences and assignment; a method that needs none still lands on the v0 artifact it always did.
+function expressionUsesApply(expression) {
+  if (!expression || typeof expression !== 'object' || Array.isArray(expression)) return false;
+  switch (expression.op) {
+    case 'apply':
+      return true;
+    case 'binding-write':
+      return expressionUsesApply(expression.value);
+    case 'sequence':
+      return Array.isArray(expression.statements) && expression.statements.some(expressionUsesApply);
+    case 'send':
+      return expressionUsesApply(expression.receiver)
+        || (Array.isArray(expression.arguments) && expression.arguments.some(expressionUsesApply));
+    case 'integer-add':
+    case 'equals':
+      return expressionUsesApply(expression.left) || expressionUsesApply(expression.right);
+    case 'if':
+      return expressionUsesApply(expression.condition)
+        || expressionUsesApply(expression.then)
+        || expressionUsesApply(expression.else);
+    case 'block':
+      return (Array.isArray(expression.captures)
+        && expression.captures.some((capture) => capture?.mode === 'snapshot' && expressionUsesApply(capture.value)))
+        || programUsesApply(expression.program);
+    default:
+      return false;
+  }
+}
+
+function programUsesApply(program) {
+  return Boolean(program && typeof program === 'object' && expressionUsesApply(program.body));
+}
+
 function methodRepresentation(program) {
+  if (programUsesApply(program)) return LAGRANGE_CODE_V2;
   return Object.hasOwn(program ?? {}, 'temporaries') ? LAGRANGE_CODE_V1 : LAGRANGE_CODE_V0;
 }
 
@@ -240,12 +276,13 @@ async function installedMethodLane({images, classRef, selector, block}) {
 // bindings. It is deliberately NOT Cuis source and not a probabilistic digest. Canonical JSON plus
 // base64url is injective for these normalized Values, so concurrent equal revisions select the same
 // create-once records while different revisions cannot alias.
-function methodRevisionId(classObjectId, selector, program, captures, lane) {
+function methodRevisionId(classObjectId, selector, program, captures, lane, source = null) {
   const material = canonicalJson({
     captures,
     lane,
     representation: methodRepresentation(program),
     semanticContent: JSON.stringify(program),
+    ...(source === null || source === undefined ? {} : {source}),
   });
   return `${methodId(classObjectId, selector)}/revision/${base64urlEncode(utf8Encode(material))}`;
 }
@@ -382,7 +419,7 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
   // ADR 0043's v1 semantics reach the WASM lane through their own assembler. There is no `describe`
   // helper for it, so reuse compares against a freshly assembled probe — the same trick
   // `ensureNeutralCode` uses, and for the same reason: matching provenance is not matching output.
-  if (representation === LAGRANGE_CODE_V1) {
+  if (representation === LAGRANGE_CODE_V1 || representation === LAGRANGE_CODE_V2) {
     const moduleArtifact = await compilation.compileArtifact(semanticRef, {
       targetRepresentation: WASM_MODULE_V2,
       id: `${id}:wasm:module`,
@@ -446,17 +483,28 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
 // Both are native-owner identities, and the complete Block/semantic/environment contract must
 // still agree. Merely finding equal source or an arbitrary Block with equal-looking content is not
 // convergence.
-async function isSameInstalledMethod({images, imageId, classRef, selector, program, captures, lane, installed}) {
+async function isSameInstalledMethod({images, imageId, classRef, selector, program, captures, lane, source = null, installed}) {
   const baseId = methodId(classRef.objectId, selector);
-  const revisionId = methodRevisionId(classRef.objectId, selector, program, captures, lane);
+  const revisionId = methodRevisionId(classRef.objectId, selector, program, captures, lane, source);
   if (!isObjectRef(installed) || installed.imageId !== imageId
     || (installed.objectId !== baseId && installed.objectId !== revisionId)) return false;
   const id = installed.objectId;
   const block = await images.getBlock(imageId, id);
   if (!block || block.metadata?.lane !== lane) return false;
+  const existingSource = await images.getCodeArtifact(imageId, `${id}:source`);
+  if (source === null || source === undefined) {
+    if (existingSource) return false;
+  } else {
+    if (!existingSource || existingSource.representation !== SYMMETRIC_SMALLTALK_SOURCE_V0) return false;
+    if (existingSource.content?.value !== source) return false;
+  }
   const semantic = await images.getCodeArtifact(imageId, `${id}:semantic`);
   if (!semantic || semantic.representation !== methodRepresentation(program)) return false;
   if (semantic.content?.value !== JSON.stringify(program)) return false;
+  const expectedDerivedFrom = source === null || source === undefined ? [] : [objectRef(imageId, `${id}:source`)];
+  const actualDerivedFrom = semantic.derivedFrom ?? [];
+  if (actualDerivedFrom.length !== expectedDerivedFrom.length) return false;
+  if (expectedDerivedFrom.length === 1 && !sameOptionalRef(actualDerivedFrom[0], expectedDerivedFrom[0])) return false;
   // The semantic program names its captures but does not contain their values, so two definitions
   // differing only in what `nil` they capture would otherwise look identical here and the second
   // would be silently accepted as already installed.
@@ -477,16 +525,18 @@ async function isSameInstalledMethod({images, imageId, classRef, selector, progr
 // resolves a `block` op through a prototype map, so preflight supplies placeholders — the point is
 // to reject an unknown op or a malformed nested program before any create-once artifact claims a
 // deterministic id, not to produce executable output.
-function validateProgramTree(program, imageId) {
-  const v1 = methodRepresentation(program) === LAGRANGE_CODE_V1;
-  if (v1) normalizeLagrangeCodeV1Program(program); else normalizeLagrangeCodeProgram(program);
+function validateProgramTree(program, imageId, representation = methodRepresentation(program)) {
+  if (representation === LAGRANGE_CODE_V2) normalizeLagrangeCodeV2Program(program);
+  else if (representation === LAGRANGE_CODE_V1) normalizeLagrangeCodeV1Program(program);
+  else normalizeLagrangeCodeProgram(program);
   const nested = directNestedBlocks(program.body);
   const blockPrototypes = Object.fromEntries(
     nested.map(({blockId}) => [blockId, objectRef(imageId, 'preflight-placeholder')]),
   );
-  if (v1) lowerLagrangeCodeV1(program, {blockPrototypes});
+  if (representation === LAGRANGE_CODE_V2) lowerLagrangeCodeV2(program, {blockPrototypes});
+  else if (representation === LAGRANGE_CODE_V1) lowerLagrangeCodeV1(program, {blockPrototypes});
   else lowerLagrangeCodeV0(program, {blockPrototypes});
-  for (const child of nested) validateProgramTree(child.program, imageId);
+  for (const child of nested) validateProgramTree(child.program, imageId, representation);
 }
 
 // THE CURRENT BINDING. What Block is bound at `{Class, selector}` right now is ONE question, so it
@@ -693,7 +743,7 @@ function assertExpectedCurrentBindings({classRef, expected, bindings}) {
 // A write that supplied an expected current binding does NOT come here: it has a per-position
 // precondition rather than a whole-dictionary one, so it rebases instead (`commitMethodDictionary`).
 async function classifyLostMethodDictionaryCas({
-  images, imageId, classRef, methods, capturesBySelector, lane,
+  images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, lane,
 }) {
   const {dictionaryRef: currentRef, existing: current, merged} =
     await readMethodDictionaryForUpdate({images, imageId, classRef});
@@ -710,6 +760,7 @@ async function classifyLostMethodDictionaryCas({
       selector,
       program,
       captures: capturesBySelector.get(selector),
+      source: sourcesBySelector.get(selector),
       lane,
       installed,
     })) {
@@ -820,7 +871,7 @@ const MAX_UNRELATED_REBASE_ATTEMPTS = 4;
 // publication property and this slice adds no rollback or transaction to hide it. The load-bearing
 // invariant is narrower and exact: a failed or stale replacement never makes its revision CURRENT.
 async function commitMethodDictionary({
-  images, imageId, classRef, methods, capturesBySelector, lane, expected, installedRefs, read,
+  images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, lane, expected, installedRefs, read,
 }) {
   let attempt = read;
   for (let rebases = MAX_UNRELATED_REBASE_ATTEMPTS; ; rebases -= 1) {
@@ -833,7 +884,7 @@ async function commitMethodDictionary({
       if (error?.name !== 'VersionConflictError') throw error;
       if (expected.size === 0) {
         return await classifyLostMethodDictionaryCas({
-          images, imageId, classRef, methods, capturesBySelector, lane,
+          images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, lane,
         });
       }
       // EVERY boundary re-asserts the expectation, INCLUDING THE LAST one. Checking the budget
@@ -901,12 +952,17 @@ async function installMethods({
   const incoming = new Set();
   const alreadyInstalled = new Set();
   const capturesBySelector = new Map();
-  for (const {selector, program, captures = []} of methods) {
+  const sourcesBySelector = new Map();
+  for (const {selector, program, captures = [], source = null} of methods) {
     requiredText(selector, 'selector');
     if (incoming.has(selector)) {
       throw new TypeError(`${operation} declares ${selector} twice in one call`);
     }
     incoming.add(selector);
+    const normalizedSource = source === null || source === undefined
+      ? null
+      : requiredText(source, `method ${selector} source`);
+    sourcesBySelector.set(selector, normalizedSource);
     capturesBySelector.set(selector, normalizeMethodCaptures(selector, program, captures));
     // BEFORE the exact-replay branch below, deliberately. A guarded caller that observed A and asks
     // for C must be refused when someone else has already moved the position to B — INCLUDING when
@@ -923,7 +979,9 @@ async function installMethods({
       // or lane for an existing selector is replacement.
       if (await isSameInstalledMethod({
         images, imageId, classRef, selector, program,
-        captures: capturesBySelector.get(selector), lane, installed: merged.get(selector),
+        captures: capturesBySelector.get(selector),
+        source: normalizedSource,
+        lane, installed: merged.get(selector),
       })) {
         alreadyInstalled.add(selector);
         continue;
@@ -956,14 +1014,25 @@ async function installMethods({
   for (const {selector, program} of methods) {
     if (alreadyInstalled.has(selector)) continue;
     const captures = capturesBySelector.get(selector);
+    const source = sourcesBySelector.get(selector);
     const id = merged.has(selector)
-      ? methodRevisionId(classRef.objectId, selector, program, captures, lane)
+      ? methodRevisionId(classRef.objectId, selector, program, captures, lane, source)
       : methodId(classRef.objectId, selector);
+    const sourceArtifact = source === null
+      ? null
+      : await ensureCodeArtifact(images, imageId, {
+        id: `${id}:source`,
+        languageId: SYMMETRIC_SMALLTALK_ID,
+        representation: SYMMETRIC_SMALLTALK_SOURCE_V0,
+        content: textValue(source),
+        metadata: {smalltalk: 'method-source', selector},
+      });
     const semantic = await ensureCodeArtifact(images, imageId, {
       id: `${id}:semantic`,
       languageId: SYMMETRIC_SMALLTALK_ID,
       representation: methodRepresentation(program),
       content: textValue(JSON.stringify(program)),
+      ...(sourceArtifact ? {derivedFrom: [objectRef(imageId, sourceArtifact.id)]} : {}),
       metadata: {smalltalk: 'method', selector},
     });
     // ADR 0044 decision 6: one semantic method, an executable Block derived per lane. The WASM
@@ -1012,7 +1081,11 @@ async function installMethods({
           imageId,
           id,
           semanticRef,
-          target: representation === LAGRANGE_CODE_V1 ? NEUTRAL_EXPRESSION_V1 : NEUTRAL_EXPRESSION_V0,
+          target: representation === LAGRANGE_CODE_V2
+            ? NEUTRAL_EXPRESSION_V2
+            : representation === LAGRANGE_CODE_V1
+              ? NEUTRAL_EXPRESSION_V1
+              : NEUTRAL_EXPRESSION_V0,
           blockPrototypes,
         });
     }
@@ -1036,6 +1109,7 @@ async function installMethods({
     classRef,
     methods,
     capturesBySelector,
+    sourcesBySelector,
     lane,
     expected,
     installedRefs,
@@ -1541,6 +1615,104 @@ function smalltalkClassObjectId(name) {
   return `smalltalk/class/${name}`;
 }
 
+const POLYGLOT_CALLABLE_CAPTURE_ID = 'polyglot/callable-target';
+const POLYGLOT_CALLABLE_CAPTURE_NAME = 'callableTarget';
+
+function smalltalkSelectorArity(selector) {
+  requiredText(selector, 'selector');
+  if (selector.includes(':')) {
+    if (!selector.endsWith(':')) {
+      throw new TypeError(`invalid Smalltalk selector for polyglot method bridge: ${selector}`);
+    }
+    const keywords = selector.slice(0, -1).split(':');
+    if (keywords.length === 0 || keywords.some((part) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(part))) {
+      throw new TypeError(`invalid Smalltalk selector for polyglot method bridge: ${selector}`);
+    }
+    return keywords.length;
+  }
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(selector)) return 0;
+  if (/^[-+*/\\~<>=@%|&?,!]+$/.test(selector)) return 1;
+  throw new TypeError(`invalid Smalltalk selector for polyglot method bridge: ${selector}`);
+}
+
+// Synthesize a deterministic lagrange-code method descriptor that bridges a Smalltalk selector on a
+// class to an arbitrary callable Block (WASM Component binding, foreign-runtime callable, scalar WASM
+// callable, or image binding) without violating `assertBlockApplicationReceiver` (ADR 0046) or
+// lending the method's `self`/`definingBehavior` frame to the foreign callable (ADR 0050 rule 4).
+function polyglotMethodBridgeDescriptor({selector, callableBlockRef, passSelf = false} = {}) {
+  const arity = smalltalkSelectorArity(selector);
+  const targetRef = canonicalizeValue(callableBlockRef);
+  if (!isObjectRef(targetRef)) {
+    throw new TypeError('polyglotMethodBridgeDescriptor callableBlockRef must be an unpinned object ref');
+  }
+  if (typeof passSelf !== 'boolean') {
+    throw new TypeError('polyglotMethodBridgeDescriptor passSelf must be a boolean');
+  }
+  const parameters = Array.from({length: arity}, (_, index) => ({
+    id: `${selector}:arg:${index}`,
+    name: `arg${index}`,
+  }));
+  const methodArgs = Array.from({length: arity}, (_, index) => ({op: 'argument', index}));
+  const forwardedArgs = passSelf ? [{op: 'receiver'}, ...methodArgs] : methodArgs;
+  const valueSelector = forwardedArgs.length === 0 ? 'value' : 'value:'.repeat(forwardedArgs.length);
+  return Object.freeze({
+    selector,
+    program: Object.freeze({
+      parameters,
+      captures: [{id: POLYGLOT_CALLABLE_CAPTURE_ID, name: POLYGLOT_CALLABLE_CAPTURE_NAME}],
+      body: Object.freeze({
+        op: 'send',
+        languageId: SYMMETRIC_SMALLTALK_ID,
+        receiver: {op: 'binding', id: POLYGLOT_CALLABLE_CAPTURE_ID},
+        message: textValue(valueSelector),
+        arguments: forwardedArgs,
+      }),
+    }),
+    captures: Object.freeze([
+      Object.freeze({
+        id: POLYGLOT_CALLABLE_CAPTURE_ID,
+        name: POLYGLOT_CALLABLE_CAPTURE_NAME,
+        value: targetRef,
+      }),
+    ]),
+  });
+}
+
+async function definePolyglotMethodBridge({
+  images,
+  compilation,
+  imageId,
+  classRef,
+  selector,
+  callableBlockRef,
+  passSelf = false,
+  lane = 'neutral',
+} = {}) {
+  const descriptor = polyglotMethodBridgeDescriptor({selector, callableBlockRef, passSelf});
+  return await defineMethods({
+    images,
+    compilation,
+    imageId,
+    classRef,
+    lane,
+    methods: [descriptor],
+  });
+}
+
+async function methodSource({images, imageId, blockRef} = {}) {
+  requiredText(imageId, 'imageId');
+  if (!isObjectRef(blockRef) || blockRef.imageId !== imageId) {
+    throw new TypeError(`methodSource blockRef must be an unpinned object ref in ${imageId}`);
+  }
+  const block = await images.getBlock(imageId, blockRef.objectId);
+  if (!block || block.metadata?.smalltalk !== 'method') return null;
+  const artifact = await images.getCodeArtifact(imageId, `${blockRef.objectId}:source`);
+  if (!artifact || artifact.representation !== SYMMETRIC_SMALLTALK_SOURCE_V0 || artifact.content?.kind !== 'text') {
+    return null;
+  }
+  return artifact.content.value;
+}
+
 export {
   smalltalkClassObjectId,
   SmalltalkMethodDictionaryContentionError,
@@ -1550,6 +1722,8 @@ export {
   SmalltalkStaleMethodPositionError,
   defineClass,
   defineMethods,
+  definePolyglotMethodBridge,
+  polyglotMethodBridgeDescriptor,
   reconcileMethods,
   ensureBlock,
   ensureClassFromDeclaration,
@@ -1557,5 +1731,6 @@ export {
   ensureSmalltalkShape,
   methodBindings,
   methodBlockRef,
+  methodSource,
   ensureCodeArtifact,
 };

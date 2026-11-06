@@ -1,6 +1,7 @@
 import {
   SymmetricSmalltalkSyntaxError,
   tokenizeSymmetricSmalltalk,
+  isAssignmentToken,
   isReservedWord,
   isNegativeIntegerLiteralAt,
 } from './symmetric-smalltalk-tokenizer.js';
@@ -19,22 +20,27 @@ function node(kind, fields = {}) {
 }
 
 class Parser {
-  constructor(source) {
+  constructor(source, {allowLegacyAssign = false, allowEmpty = false} = {}) {
     this.source = source;
     this.tokens = tokenizeSymmetricSmalltalk(source);
     this.index = 0;
+    this.allowLegacyAssign = allowLegacyAssign === true;
+    this.allowEmpty = allowEmpty === true;
     // The Cuis legacy assignment arrow is dialect syntax, never native syntax. The tokenizer keeps
     // it a DISTINCT token precisely so that no grammar position can absorb it (before this, `a _ b`
     // parsed as the unary-send chain `((a _) b)` and compiled). The refusal lives here, once, for
     // every position the token could appear in — direct native source has only canonical `:=`.
-    // The Cuis import adapter translates the same token to `:=` at the import boundary; that is
-    // the one loud division between the two languages.
-    const legacyArrow = this.tokens.find((token) => token.type === 'legacyAssign');
-    if (legacyArrow) {
-      throw new SymmetricSmalltalkSyntaxError(
-        'the legacy assignment arrow `_` is Cuis dialect syntax, not native Symmetric Smalltalk; native assignment is `:=`',
-        legacyArrow.start,
-      );
+    // The Cuis import adapter parses dialect source with `allowLegacyAssign: true` so the arrow
+    // produces a canonical `assign` AST node at the import boundary; that is the one loud division
+    // between the two languages.
+    if (!this.allowLegacyAssign) {
+      const legacyArrow = this.tokens.find((token) => token.type === 'legacyAssign');
+      if (legacyArrow) {
+        throw new SymmetricSmalltalkSyntaxError(
+          'the legacy assignment arrow `_` is Cuis dialect syntax, not native Symmetric Smalltalk; native assignment is `:=`',
+          legacyArrow.start,
+        );
+      }
     }
   }
 
@@ -64,7 +70,7 @@ class Parser {
   }
 
   parseSource() {
-    const body = this.parseBody('eof');
+    const body = this.parseBody('eof', {allowEmpty: this.allowEmpty});
     this.expect('eof', 'unexpected trailing input');
     return body;
   }
@@ -72,7 +78,9 @@ class Parser {
   // Assignment binds loosest and is right-associative, so `a := b := 1` assigns both and
   // `x := a foo: b` assigns the whole message result.
   parseExpression() {
-    if (this.current().type === 'identifier' && this.peek().type === 'assign') {
+    const next = this.peek();
+    const isAssign = this.allowLegacyAssign ? isAssignmentToken(next) : next.type === 'assign';
+    if (this.current().type === 'identifier' && isAssign) {
       const target = this.advance();
       assertNotReserved(target, 'assign to');
       this.advance();
@@ -122,7 +130,7 @@ class Parser {
   // `| a b |` declarations followed by `.`-separated statements. A single statement with no
   // temporaries returns the bare expression, so programs that need none compile to exactly the
   // artifact they compile to today.
-  parseBody(terminator) {
+  parseBody(terminator, {allowEmpty = false} = {}) {
     const temporaries = this.parseTemporaries();
     const statements = [];
     for (;;) {
@@ -141,6 +149,12 @@ class Parser {
       if (!this.match('.')) break;
     }
     if (statements.length === 0) {
+      if (allowEmpty) {
+        return node('sequence', {
+          temporaries: Object.freeze(temporaries),
+          statements: Object.freeze([]),
+        });
+      }
       throw new SymmetricSmalltalkSyntaxError('expected at least one statement', this.current().start);
     }
     if (temporaries.length === 0 && statements.length === 1) return statements[0];
@@ -334,6 +348,10 @@ function parseSymmetricSmalltalk(source) {
   return new Parser(source).parseSource();
 }
 
+function parseSymmetricSmalltalkDialect(source, {allowEmpty = true} = {}) {
+  return new Parser(source, {allowLegacyAssign: true, allowEmpty}).parseSource();
+}
+
 function parseSymmetricSmalltalkBlock(source) {
   const syntax = parseSymmetricSmalltalk(source);
   if (syntax.kind !== 'block') {
@@ -342,7 +360,143 @@ function parseSymmetricSmalltalkBlock(source) {
   return syntax;
 }
 
+function formatArrayLiteralElement(element) {
+  switch (element.kind) {
+    case 'integer':
+      return element.value;
+    case 'string':
+      return `'${element.value.replaceAll("'", "''")}'`;
+    case 'character':
+      return `$${element.value}`;
+    case 'symbol':
+      return `#${element.value}`;
+    case 'true':
+    case 'false':
+    case 'nil':
+      return element.kind;
+    case 'arrayLiteral':
+      return `#(${element.elements.map(formatArrayLiteralElement).join(' ')})`;
+    default:
+      throw new TypeError(`unexpected array literal element kind: ${element.kind}`);
+  }
+}
+
+function parenthesizeIf(condition, text) {
+  return condition ? `(${text})` : text;
+}
+
+function formatMessageSendChain(selector, args) {
+  if (args.length === 0) return selector;
+  if (!selector.endsWith(':')) {
+    const arg = args[0];
+    const needsParens = arg.kind === 'assign'
+      || arg.kind === 'cascade'
+      || (arg.kind === 'send' && arg.arguments.length > 0);
+    return `${selector} ${parenthesizeIf(needsParens, formatAstExpression(arg))}`;
+  }
+  const parts = selector.match(/[^:]+:/g);
+  return parts.map((part, index) => {
+    const arg = args[index];
+    const needsParens = arg.kind === 'assign'
+      || arg.kind === 'cascade'
+      || (arg.kind === 'send' && arg.selector.endsWith(':'));
+    return `${part} ${parenthesizeIf(needsParens, formatAstExpression(arg))}`;
+  }).join(' ');
+}
+
+function formatSendExpression(receiver, selector, args) {
+  const receiverNeedsParens = args.length === 0
+    ? (receiver.kind === 'assign' || receiver.kind === 'cascade' || (receiver.kind === 'send' && receiver.arguments.length > 0))
+    : (receiver.kind === 'assign' || receiver.kind === 'cascade' || (receiver.kind === 'send' && receiver.selector.endsWith(':')));
+  const recvText = parenthesizeIf(receiverNeedsParens, formatAstExpression(receiver));
+  return `${recvText} ${formatMessageSendChain(selector, args)}`;
+}
+
+function formatInlineBody(bodyAst) {
+  const temporaries = bodyAst.kind === 'sequence' ? bodyAst.temporaries : [];
+  const statements = bodyAst.kind === 'sequence' ? bodyAst.statements : [bodyAst];
+  const parts = [];
+  if (temporaries.length > 0) parts.push(`| ${temporaries.join(' ')} |`);
+  if (statements.length > 0) {
+    parts.push(statements.map(formatAstStatement).join('. '));
+  }
+  return parts.join(' ');
+}
+
+function formatAstExpression(node) {
+  switch (node.kind) {
+    case 'integer':
+      return node.value;
+    case 'string':
+      return `'${node.value.replaceAll("'", "''")}'`;
+    case 'character':
+      return `$${node.value}`;
+    case 'symbol':
+      return `#${node.value}`;
+    case 'self':
+    case 'super':
+    case 'true':
+    case 'false':
+    case 'nil':
+      return node.kind;
+    case 'name':
+      return node.name;
+    case 'arrayLiteral':
+      return `#(${node.elements.map(formatArrayLiteralElement).join(' ')})`;
+    case 'block': {
+      if (node.parameters.length === 0 && node.body.kind === 'nil') return '[]';
+      const params = node.parameters.length === 0
+        ? ''
+        : ` ${node.parameters.map((param) => `:${param}`).join(' ')} |`;
+      return `[${params} ${formatInlineBody(node.body)} ]`;
+    }
+    case 'assign':
+      return `${node.name} := ${formatAstExpression(node.value)}`;
+    case 'send':
+      return formatSendExpression(node.receiver, node.selector, node.arguments);
+    case 'cascade': {
+      const first = formatSendExpression(
+        node.receiver,
+        node.messages[0].selector,
+        node.messages[0].arguments,
+      );
+      const rest = node.messages
+        .slice(1)
+        .map(({selector, arguments: args}) => formatMessageSendChain(selector, args));
+      return `${first}; ${rest.join('; ')}`;
+    }
+    default:
+      throw new TypeError(`unexpected AST expression kind: ${node.kind}`);
+  }
+}
+
+function formatAstStatement(statement) {
+  if (statement.kind === 'return') {
+    return `^ ${formatAstExpression(statement.value)}`;
+  }
+  return formatAstExpression(statement);
+}
+
+function formatSymmetricSmalltalkMethodBlock(parameters, bodyAst) {
+  const parameterSource = parameters.length === 0
+    ? ''
+    : ` ${parameters.map((name) => `:${name}`).join(' ')} |`;
+  const temporaries = bodyAst.kind === 'sequence' ? bodyAst.temporaries : [];
+  const statements = bodyAst.kind === 'sequence' ? bodyAst.statements : [bodyAst];
+  const lines = [];
+  if (temporaries.length > 0) {
+    lines.push(`| ${temporaries.join(' ')} |`);
+  }
+  for (const statement of statements) {
+    lines.push(`${formatAstStatement(statement)}.`);
+  }
+  lines.push('self');
+  return `[${parameterSource}\n${lines.join('\n')}\n]`;
+}
+
 export {
+  formatSymmetricSmalltalkMethodBlock,
   parseSymmetricSmalltalk,
   parseSymmetricSmalltalkBlock,
+  parseSymmetricSmalltalkDialect,
 };

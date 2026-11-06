@@ -16,6 +16,7 @@ import {
 // the narrow context operations below. That is what keeps a single lexical-state model shared with
 // the WASM lane instead of two lane-private ones.
 const NEUTRAL_EXPRESSION_V1 = 'neutral-expression/v1';
+const NEUTRAL_EXPRESSION_V2 = 'neutral-expression/v2';
 const MAX_EXPRESSION_DEPTH = 256;
 
 function exactKeys(value, expected, label) {
@@ -40,17 +41,17 @@ function requiredText(value, label) {
   return value;
 }
 
-function parseProgram(code) {
+function parseProgramForRepresentation(code, representation, label) {
   if (code.content?.kind !== VALUE_KIND.TEXT) {
-    throw new TypeError(`${NEUTRAL_EXPRESSION_V1} code content must be a text Value`);
+    throw new TypeError(`${representation} code content must be a text Value`);
   }
   let program;
   try {
     program = JSON.parse(code.content.value);
   } catch (error) {
-    throw new TypeError(`${NEUTRAL_EXPRESSION_V1} code content must contain valid JSON`, {cause: error});
+    throw new TypeError(`${representation} code content must contain valid JSON`, {cause: error});
   }
-  exactKeys(program, ['parameters', 'temporaries', 'body'], 'neutral expression v1 program');
+  exactKeys(program, ['parameters', 'temporaries', 'body'], label);
   nonNegativeInteger(program.parameters, 'neutral expression parameter count');
   if (!Array.isArray(program.temporaries)) throw new TypeError('neutral expression temporaries must be an array');
   for (const [index, temporary] of program.temporaries.entries()) {
@@ -59,6 +60,14 @@ function parseProgram(code) {
     requiredText(temporary.name, `temporary ${index} name`);
   }
   return program;
+}
+
+function parseProgram(code) {
+  return parseProgramForRepresentation(code, NEUTRAL_EXPRESSION_V1, 'neutral expression v1 program');
+}
+
+function parseNeutralExpressionV2Program(code) {
+  return parseProgramForRepresentation(code, NEUTRAL_EXPRESSION_V2, 'neutral expression v2 program');
 }
 
 function sameValue(left, right) {
@@ -72,7 +81,11 @@ function requireOperation(context, name, label) {
   return context[name];
 }
 
-async function evaluate(expression, frame, context, depth = 0) {
+async function evaluate(expression, frame, context, depth = 0, {
+  representation = NEUTRAL_EXPRESSION_V1,
+  allowApply = false,
+} = {}) {
+  const options = {representation, allowApply};
   if (depth > MAX_EXPRESSION_DEPTH) throw new TypeError('neutral expression depth limit exceeded');
   if (!expression || typeof expression !== 'object' || Array.isArray(expression)) {
     throw new TypeError('neutral expression must be an object');
@@ -103,7 +116,7 @@ async function evaluate(expression, frame, context, depth = 0) {
     case 'binding-write': {
       exactKeys(expression, ['op', 'id', 'value'], 'binding-write expression');
       const id = requiredText(expression.id, 'binding-write id');
-      const value = await evaluate(expression.value, frame, context, depth + 1);
+      const value = await evaluate(expression.value, frame, context, depth + 1, options);
       return await requireOperation(context, 'writeBinding', 'binding-write')(id, value);
     }
     case 'sequence': {
@@ -113,14 +126,14 @@ async function evaluate(expression, frame, context, depth = 0) {
       }
       let result = null;
       for (const statement of expression.statements) {
-        result = await evaluate(statement, frame, context, depth + 1);
+        result = await evaluate(statement, frame, context, depth + 1, options);
       }
       return result;
     }
     case 'integer-add': {
       exactKeys(expression, ['op', 'left', 'right'], 'integer-add expression');
-      const left = await evaluate(expression.left, frame, context, depth + 1);
-      const right = await evaluate(expression.right, frame, context, depth + 1);
+      const left = await evaluate(expression.left, frame, context, depth + 1, options);
+      const right = await evaluate(expression.right, frame, context, depth + 1, options);
       if (left.kind !== VALUE_KIND.INTEGER || right.kind !== VALUE_KIND.INTEGER) {
         throw new TypeError('integer-add operands must be integer Values');
       }
@@ -128,15 +141,15 @@ async function evaluate(expression, frame, context, depth = 0) {
     }
     case 'equals': {
       exactKeys(expression, ['op', 'left', 'right'], 'equals expression');
-      const left = await evaluate(expression.left, frame, context, depth + 1);
-      const right = await evaluate(expression.right, frame, context, depth + 1);
+      const left = await evaluate(expression.left, frame, context, depth + 1, options);
+      const right = await evaluate(expression.right, frame, context, depth + 1, options);
       return booleanValue(sameValue(left, right));
     }
     case 'if': {
       exactKeys(expression, ['op', 'condition', 'then', 'else'], 'if expression');
-      const condition = await evaluate(expression.condition, frame, context, depth + 1);
+      const condition = await evaluate(expression.condition, frame, context, depth + 1, options);
       if (condition.kind !== VALUE_KIND.BOOLEAN) throw new TypeError('if condition must be a boolean Value');
-      return await evaluate(condition.value ? expression.then : expression.else, frame, context, depth + 1);
+      return await evaluate(condition.value ? expression.then : expression.else, frame, context, depth + 1, options);
     }
     case 'send': {
       exactKeys(expression, ['op', 'languageId', 'receiver', 'message', 'arguments'], 'send expression');
@@ -144,12 +157,24 @@ async function evaluate(expression, frame, context, depth = 0) {
       const message = canonicalizeValue(expression.message);
       if (!Array.isArray(expression.arguments)) throw new TypeError('send arguments must be an array');
       const sendMessage = requireOperation(context, 'sendMessage', 'send');
-      const receiver = await evaluate(expression.receiver, frame, context, depth + 1);
+      const receiver = await evaluate(expression.receiver, frame, context, depth + 1, options);
       const args = [];
       for (const argument of expression.arguments) {
-        args.push(await evaluate(argument, frame, context, depth + 1));
+        args.push(await evaluate(argument, frame, context, depth + 1, options));
       }
       return await sendMessage({languageId, receiver, message, arguments: args});
+    }
+    case 'apply': {
+      if (!allowApply) throw new TypeError(`unknown ${representation} expression op: ${expression.op}`);
+      exactKeys(expression, ['op', 'callee', 'arguments'], 'apply expression');
+      if (!Array.isArray(expression.arguments)) throw new TypeError('apply arguments must be an array');
+      const invokeBlock = requireOperation(context, 'invokeBlock', 'apply');
+      const callee = await evaluate(expression.callee, frame, context, depth + 1, options);
+      const args = [];
+      for (const argument of expression.arguments) {
+        args.push(await evaluate(argument, frame, context, depth + 1, options));
+      }
+      return await invokeBlock(callee, args);
     }
     case 'make-block': {
       exactKeys(expression, ['op', 'prototype', 'captures'], 'make-block expression');
@@ -176,13 +201,13 @@ async function evaluate(expression, frame, context, depth = 0) {
           id: requiredText(capture.id, `${label} id`),
           name: requiredText(capture.name, `${label} name`),
           mode: 'snapshot',
-          value: await evaluate(capture.value, frame, context, depth + 1),
+          value: await evaluate(capture.value, frame, context, depth + 1, options),
         }));
       }
       return await createClosure({prototype: canonicalizeValue(expression.prototype), captures});
     }
     default:
-      throw new TypeError(`unknown ${NEUTRAL_EXPRESSION_V1} expression op: ${expression.op}`);
+      throw new TypeError(`unknown ${representation} expression op: ${expression.op}`);
   }
 }
 
@@ -207,8 +232,33 @@ const neutralExpressionV1Executor = Object.freeze({
   },
 });
 
+const neutralExpressionV2Executor = Object.freeze({
+  async execute({activation, code}, context) {
+    const program = parseNeutralExpressionV2Program(code);
+    if (activation.arguments.length !== program.parameters) {
+      throw new TypeError(
+        `activation expected ${program.parameters} arguments, received ${activation.arguments.length}`,
+      );
+    }
+    if (program.temporaries.length > 0) {
+      requireOperation(context, 'declareTemporaries', 'temporaries')(program.temporaries);
+    }
+    const frame = Object.freeze({
+      receiver: activation.receiver,
+      arguments: activation.arguments,
+    });
+    return await evaluate(program.body, frame, context, 0, {
+      representation: NEUTRAL_EXPRESSION_V2,
+      allowApply: true,
+    });
+  },
+});
+
 export {
   NEUTRAL_EXPRESSION_V1,
+  NEUTRAL_EXPRESSION_V2,
   neutralExpressionV1Executor,
+  neutralExpressionV2Executor,
   parseProgram as parseNeutralExpressionV1Program,
+  parseNeutralExpressionV2Program,
 };

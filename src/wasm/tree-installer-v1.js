@@ -3,8 +3,11 @@ import {uuid as randomUUID} from '../support/default-crypto.js';
 import {base64urlEncode, utf8Encode} from '../support/portable-bytes.js';
 import {
   LAGRANGE_CODE_V1,
+  LAGRANGE_CODE_V2,
   normalizeLagrangeCodeV1Program,
+  normalizeLagrangeCodeV2Program,
   parseLagrangeCodeV1Program,
+  parseLagrangeCodeV2Program,
 } from '../code/lagrange-code-v1.js';
 import {bindClosurePrototypes, describeWasmFunctionV2} from './function-contract.js';
 import {WASM_MODULE_V2, moduleFunctionOf, readModuleDescriptor} from './module-contract.js';
@@ -67,6 +70,10 @@ function directNestedBlocks(expression, result = []) {
       directNestedBlocks(expression.receiver, result);
       for (const argument of expression.arguments ?? []) directNestedBlocks(argument, result);
       return result;
+    case 'apply':
+      directNestedBlocks(expression.callee, result);
+      for (const argument of expression.arguments ?? []) directNestedBlocks(argument, result);
+      return result;
     case 'integer-add':
     case 'equals':
       directNestedBlocks(expression.left, result);
@@ -97,13 +104,15 @@ function preflightEntries(entries) {
   }
 }
 
-function validateTree(program, seen = new Set()) {
-  const normalized = normalizeLagrangeCodeV1Program(program);
+function validateTree(program, seen = new Set(), {representation = LAGRANGE_CODE_V1} = {}) {
+  const normalized = representation === LAGRANGE_CODE_V2
+    ? normalizeLagrangeCodeV2Program(program)
+    : normalizeLagrangeCodeV1Program(program);
   for (const nested of directNestedBlocks(normalized.body)) {
     const blockId = requiredText(nested.blockId, 'nested semantic block id');
     if (seen.has(blockId)) throw new TypeError(`duplicate semantic block id in WASM tree: ${blockId}`);
     seen.add(blockId);
-    validateTree(nested.program, seen);
+    validateTree(nested.program, seen, {representation});
   }
   return normalized;
 }
@@ -126,15 +135,17 @@ function nodeIds(rootId, semanticBlockId = null) {
   });
 }
 
-function planTree(program, rootId, semanticBlockId = null) {
+function planTree(program, rootId, semanticBlockId = null, {representation = LAGRANGE_CODE_V1} = {}) {
   const plan = {
     semanticBlockId,
-    program: normalizeLagrangeCodeV1Program(program),
+    program: representation === LAGRANGE_CODE_V2
+      ? normalizeLagrangeCodeV2Program(program)
+      : normalizeLagrangeCodeV1Program(program),
     ids: nodeIds(rootId, semanticBlockId),
     children: [],
   };
   for (const nested of directNestedBlocks(plan.program.body)) {
-    plan.children.push(planTree(nested.program, rootId, nested.blockId));
+    plan.children.push(planTree(nested.program, rootId, nested.blockId, {representation}));
   }
   return plan;
 }
@@ -162,7 +173,7 @@ async function persistSemanticTree({images, rootRef, rootArtifact, rootPlan, roo
       const childArtifact = await ensureCodeArtifact(images, parentPlan.semanticRef.imageId, {
         id: child.ids.semanticId,
         languageId: parentPlan.semanticArtifact.languageId,
-        representation: LAGRANGE_CODE_V1,
+        representation: rootArtifact.representation,
         content: textValue(JSON.stringify(child.program)),
         derivedFrom: [parentPlan.semanticRef],
         metadata: {semanticBlockId: child.semanticBlockId, wasmTreeRootId: rootId},
@@ -199,7 +210,7 @@ async function assembleWasmV1FunctionArtifact({
   blockPrototypes = {},
 } = {}) {
   const semantic = await images.getCodeArtifact(semanticRef.imageId, semanticRef.objectId);
-  if (!semantic || semantic.representation !== LAGRANGE_CODE_V1) {
+  if (!semantic || (semantic.representation !== LAGRANGE_CODE_V1 && semantic.representation !== LAGRANGE_CODE_V2)) {
     throw new TypeError(`semanticRef must reference ${LAGRANGE_CODE_V1}`);
   }
   const normalizedModuleRef = normalizeObjectRef(moduleRef, 'moduleRef');
@@ -306,18 +317,24 @@ async function installWasmV1BlockTree({
   const rootMetadata = normalizeMetadata(metadata, 'WASM Block tree metadata');
   const rootRef = normalizeObjectRef(semanticRef, 'root semantic code artifact');
   const semanticArtifact = await images.getCodeArtifact(rootRef.imageId, rootRef.objectId);
-  if (!semanticArtifact || semanticArtifact.representation !== LAGRANGE_CODE_V1) {
+  if (!semanticArtifact || (semanticArtifact.representation !== LAGRANGE_CODE_V1 && semanticArtifact.representation !== LAGRANGE_CODE_V2)) {
     throw new TypeError(`root semantic code artifact must be ${LAGRANGE_CODE_V1}`);
   }
 
-  const program = validateTree(parseLagrangeCodeV1Program(semanticArtifact));
-  const rootPlan = planTree(program, id);
+  const representation = semanticArtifact.representation;
+  const isV2 = representation === LAGRANGE_CODE_V2;
+  const parsed = isV2
+    ? parseLagrangeCodeV2Program(semanticArtifact)
+    : parseLagrangeCodeV1Program(semanticArtifact);
+  const program = validateTree(parsed, new Set(), {representation});
+  const rootPlan = planTree(program, id, null, {representation});
   const groupPlans = flattenPlans(rootPlan);
   // Preflight before any write, so a program neither backend accepts installs nothing.
   preflightEntries(groupPlans.map((plan, memberIndex) => ({
     entry: `run_${memberIndex}`,
     memberIndex,
     program: plan.program,
+    allowApply: isV2,
   })));
   await persistSemanticTree({images, rootRef, rootArtifact: semanticArtifact, rootPlan, rootId: id});
 

@@ -43,7 +43,12 @@ import {DispatchRegistry, InvocationService} from './dispatch/invocation-service
 import {ActivationExecutor} from './execution/activation-executor.js';
 import {CodeExecutorRegistry} from './execution/executor-registry.js';
 import {NEUTRAL_EXPRESSION_V0, neutralExpressionV0Executor} from './execution/neutral-expression-v0.js';
-import {NEUTRAL_EXPRESSION_V1, neutralExpressionV1Executor} from './execution/neutral-expression-v1.js';
+import {
+  NEUTRAL_EXPRESSION_V1,
+  NEUTRAL_EXPRESSION_V2,
+  neutralExpressionV1Executor,
+  neutralExpressionV2Executor,
+} from './execution/neutral-expression-v1.js';
 import {
   IMAGE_PROJECTION_BINDING_V1,
   createImageProjectionBindingV1Executor,
@@ -95,7 +100,12 @@ import {
   findSmalltalkKernel,
   installSmalltalkKernel,
 } from './language/smalltalk-kernel.js';
-import {defineClass, ensureClassFromDeclaration} from './language/smalltalk-class-builder.js';
+import {
+  defineClass,
+  definePolyglotMethodBridge,
+  ensureClassFromDeclaration,
+  polyglotMethodBridgeDescriptor,
+} from './language/smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './language/smalltalk-instance-variables.js';
 import {installSymmetricSmalltalkStandardImage} from './language/smalltalk-standard-image.js';
 import {resolveGlobal} from './language/smalltalk-globals.js';
@@ -144,6 +154,7 @@ function createPortableCodeExecutorRegistry({
   const registry = new CodeExecutorRegistry();
   registry.register(NEUTRAL_EXPRESSION_V0, neutralExpressionV0Executor);
   registry.register(NEUTRAL_EXPRESSION_V1, neutralExpressionV1Executor);
+  registry.register(NEUTRAL_EXPRESSION_V2, neutralExpressionV2Executor);
   // The image-native WASM lane: one executor for both durable function versions, dispatching on
   // the MODULE's ABI (ADR 0082), exactly as `createDefaultCodeExecutorRegistry` registers it. It
   // needs only the host's WebAssembly API. Every Cuis-imported method is installed in this lane,
@@ -309,6 +320,8 @@ export {
   installSmalltalkKernel,
   findSmalltalkKernel,
   defineClass,
+  definePolyglotMethodBridge,
+  polyglotMethodBridgeDescriptor,
   // The install/import owners a portable host needs to bring an application INTO an image and
   // run it (bead lagrange-images-hygu; the Object Environment's E4-E6 vertical): the standard
   // image, native class declaration and from-source method definition, the Cuis native-import

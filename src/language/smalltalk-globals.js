@@ -325,6 +325,64 @@ async function resolveGlobal({images, imageId, name, namespaceId = NAMESPACE_OBJ
   return namespace?.entries.get(name) ?? null;
 }
 
+// ADR 0061 / ADR 0097: re-export an existing GlobalBinding from `fromNamespaceId` into
+// `toNamespaceId` (optionally under alias `as`), sharing the identical GlobalBinding object
+// without creating a second GlobalBinding record.
+async function reexportGlobal({
+  images,
+  imageId,
+  name,
+  fromNamespaceId = NAMESPACE_OBJECT_ID,
+  toNamespaceId,
+  as = name,
+} = {}) {
+  requiredText(imageId, 'image id');
+  requiredText(name, 'global name');
+  requiredText(fromNamespaceId, 'source namespace id');
+  requiredText(toNamespaceId, 'target namespace id');
+  requiredText(as, 'target global name');
+
+  const sourceNamespace = await requireNamespace({images, imageId, namespaceId: fromNamespaceId});
+  const binding = sourceNamespace.entries.get(name);
+  if (!binding) {
+    throw new SmalltalkGlobalConflictError(name, `is not published in ${fromNamespaceId}`);
+  }
+  await assertIsBinding({images, imageId, name, binding});
+
+  const targetNamespace = await requireNamespace({images, imageId, namespaceId: toNamespaceId});
+  const existing = targetNamespace.entries.get(as);
+  if (existing) {
+    if (existing.objectId !== binding.objectId) {
+      throw new SmalltalkGlobalConflictError(as, `is already bound to ${existing.objectId}, not ${binding.objectId}`);
+    }
+    await assertIsBinding({images, imageId, name: as, binding: existing});
+    return binding;
+  }
+
+  const entries = new Map(targetNamespace.entries);
+  entries.set(as, binding);
+  await writeMapping({images, imageId, namespace: targetNamespace, entries});
+  return binding;
+}
+
+async function reexportGlobals({
+  images,
+  imageId,
+  names,
+  fromNamespaceId = NAMESPACE_OBJECT_ID,
+  toNamespaceId,
+} = {}) {
+  requiredText(imageId, 'image id');
+  requiredText(fromNamespaceId, 'source namespace id');
+  requiredText(toNamespaceId, 'target namespace id');
+  if (!Array.isArray(names) || names.length === 0) throw new TypeError('names must be a non-empty array');
+  const reexported = {};
+  for (const name of names) {
+    reexported[name] = await reexportGlobal({images, imageId, name, fromNamespaceId, toNamespaceId});
+  }
+  return Object.freeze(reexported);
+}
+
 // Changes the value on a stable identity. Already-compiled code observes it because it holds the
 // binding, not the value.
 async function rebindGlobal({images, imageId, bindingId, value}) {
@@ -537,6 +595,8 @@ export {
   publishGlobal,
   publishSmalltalkClassGlobals,
   rebindGlobal,
+  reexportGlobal,
+  reexportGlobals,
   removeGlobal,
   renameGlobal,
   resolveGlobal,

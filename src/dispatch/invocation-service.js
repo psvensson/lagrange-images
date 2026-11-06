@@ -68,10 +68,22 @@ function normalizeDispatchResolution(resolution) {
   });
 }
 
+function normalizeFrameMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    throw new TypeError('message dispatcher frame metadata must be a plain object when present');
+  }
+  return Object.freeze({...metadata});
+}
+
 // ADR 0050 decision 5b. The trusted facts of one dispatch, kept out of the activation record on
 // purpose: a permission fact does not belong in the closed model ADR 0005 defined and every executor
 // consumes. `inheritsFrame` is the language saying "this callee is my own host operation", which is
 // the only case that may borrow the invoker's frame.
+//
+// Two valid frame shapes are supported:
+// 1. An OO method frame: `{self, definingBehavior, metadata?}` (used by Symmetric Smalltalk).
+// 2. A language-neutral lexical/module frame: `{environment?, metadata?}` (for non-OO languages that
+//    attach a home activation frame or lexical/module scope without OO receiver/class authority).
 function normalizeInvocationFrame(resolution) {
   if (Object.hasOwn(resolution, 'inheritsFrame')) {
     if (resolution.inheritsFrame !== true) throw new TypeError('message dispatcher inheritsFrame must be true when present');
@@ -80,15 +92,38 @@ function normalizeInvocationFrame(resolution) {
   }
   if (!Object.hasOwn(resolution, 'frame')) return {};
   const {frame} = resolution;
-  if (!frame || typeof frame !== 'object' || Array.isArray(frame) || !sameKeys(frame, ['self', 'definingBehavior'])) {
-    throw new TypeError('message dispatcher frame must contain exactly self and definingBehavior');
+  if (!frame || typeof frame !== 'object' || Array.isArray(frame)) {
+    throw new TypeError('message dispatcher frame must contain exactly self and definingBehavior, or neutral environment/metadata');
   }
-  return {
-    frame: Object.freeze({
+  const hasSelf = Object.hasOwn(frame, 'self');
+  const hasDefiningBehavior = Object.hasOwn(frame, 'definingBehavior');
+  if (hasSelf || hasDefiningBehavior) {
+    const allowed = hasSelf && hasDefiningBehavior
+      && Object.keys(frame).every((key) => key === 'self' || key === 'definingBehavior' || key === 'metadata');
+    if (!allowed) {
+      throw new TypeError('message dispatcher frame must contain exactly self and definingBehavior');
+    }
+    const normalized = {
       self: canonicalizeValue(frame.self),
       definingBehavior: normalizeObjectRef(frame.definingBehavior, 'message dispatcher frame definingBehavior'),
-    }),
-  };
+    };
+    if (Object.hasOwn(frame, 'metadata')) {
+      normalized.metadata = normalizeFrameMetadata(frame.metadata);
+    }
+    return {frame: Object.freeze(normalized)};
+  }
+  const keys = Object.keys(frame);
+  if (keys.length === 0 || !keys.every((key) => key === 'environment' || key === 'metadata')) {
+    throw new TypeError('message dispatcher frame must contain exactly self and definingBehavior, or neutral environment/metadata');
+  }
+  const normalized = {};
+  if (Object.hasOwn(frame, 'environment')) {
+    normalized.environment = normalizeObjectRef(frame.environment, 'message dispatcher frame environment');
+  }
+  if (Object.hasOwn(frame, 'metadata')) {
+    normalized.metadata = normalizeFrameMetadata(frame.metadata);
+  }
+  return {frame: Object.freeze(normalized)};
 }
 
 function normalizeDispatchInfo(dispatch) {

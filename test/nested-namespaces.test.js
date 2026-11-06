@@ -22,10 +22,13 @@ import {
   objectRef,
   publishGlobal,
   rebindGlobal,
+  reexportGlobal,
+  reexportGlobals,
   removeGlobal,
   renameGlobal,
   resolveGlobal,
   setNamespaceParent,
+  SmalltalkGlobalConflictError,
   textValue,
 } from '../src/runtime.js';
 import {compileSymmetricSmalltalkMethod} from '../src/language/smalltalk-instance-variables.js';
@@ -411,3 +414,88 @@ for (const lane of ['neutral', 'wasm']) {
     });
   });
 }
+
+test('reexportGlobal and reexportGlobals share existing GlobalBinding identities across namespaces without creating duplicate bindings', async () => {
+  await withRuntime(async (runtime) => {
+    await seed(runtime, 'app');
+    await createNamespace({images: runtime.images, imageId: 'app', namespaceId: 'ns/source'});
+    await createNamespace({images: runtime.images, imageId: 'app', namespaceId: 'ns/target'});
+
+    const bindingId = 'smalltalk/global-binding/SharedWidget';
+    await publishGlobal({
+      images: runtime.images,
+      imageId: 'app',
+      namespaceId: 'ns/source',
+      name: 'SharedWidget',
+      bindingId,
+      value: objectRef('app', 'smalltalk/class/Object'),
+    });
+
+    const reexported = await reexportGlobals({
+      images: runtime.images,
+      imageId: 'app',
+      names: ['SharedWidget'],
+      fromNamespaceId: 'ns/source',
+      toNamespaceId: 'ns/target',
+    });
+    assert.deepEqual(reexported.SharedWidget, objectRef('app', bindingId));
+
+    // Re-export under an alias shares the identical GlobalBinding object.
+    const aliased = await reexportGlobal({
+      images: runtime.images,
+      imageId: 'app',
+      name: 'SharedWidget',
+      fromNamespaceId: 'ns/source',
+      toNamespaceId: 'ns/target',
+      as: 'WidgetAlias',
+    });
+    assert.deepEqual(aliased, objectRef('app', bindingId));
+
+    // Rebinding once updates both source and target namespaces because there is only one GlobalBinding.
+    await rebindGlobal({
+      images: runtime.images,
+      imageId: 'app',
+      bindingId,
+      value: objectRef('app', 'smalltalk/class/Integer'),
+    });
+    assert.equal(
+      (await readGlobal(runtime, 'app', {name: 'SharedWidget', namespaceId: 'ns/target', id: 'read-reexported'})).objectId,
+      'smalltalk/class/Integer',
+    );
+    assert.equal(
+      (await readGlobal(runtime, 'app', {name: 'WidgetAlias', namespaceId: 'ns/target', id: 'read-aliased'})).objectId,
+      'smalltalk/class/Integer',
+    );
+
+    // Refuses missing source global and conflicting target binding.
+    await assert.rejects(
+      reexportGlobal({
+        images: runtime.images,
+        imageId: 'app',
+        name: 'MissingGlobal',
+        fromNamespaceId: 'ns/source',
+        toNamespaceId: 'ns/target',
+      }),
+      (error) => error instanceof SmalltalkGlobalConflictError && /is not published/.test(error.message),
+    );
+    await publishGlobal({
+      images: runtime.images,
+      imageId: 'app',
+      namespaceId: 'ns/target',
+      name: 'OtherWidget',
+      bindingId: 'smalltalk/global-binding/OtherWidget',
+      value: objectRef('app', 'smalltalk/class/Object'),
+    });
+    await assert.rejects(
+      reexportGlobal({
+        images: runtime.images,
+        imageId: 'app',
+        name: 'SharedWidget',
+        fromNamespaceId: 'ns/source',
+        toNamespaceId: 'ns/target',
+        as: 'OtherWidget',
+      }),
+      (error) => error instanceof SmalltalkGlobalConflictError && /is already bound to/.test(error.message),
+    );
+  });
+});

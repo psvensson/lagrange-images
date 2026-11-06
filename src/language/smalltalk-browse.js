@@ -2,7 +2,7 @@ import {OBJECT_READ_OPERATION, objectResource} from '../authority/object-resourc
 import {shapeIndexedKind} from '../object/model.js';
 import {isObjectRef} from '../value/index.js';
 import {findSmalltalkKernel, isLocalRef, readBehavior} from './smalltalk-kernel.js';
-import {methodBindings} from './smalltalk-class-builder.js';
+import {methodBindings, methodSource} from './smalltalk-class-builder.js';
 import {sameRef} from './smalltalk-lookup.js';
 import {
   SMALLTALK_METHOD_READ_OPERATION,
@@ -228,6 +228,8 @@ async function authorizedMethodPosition({images, imageId, classRef, selector, re
     );
   }
 
+  const source = await methodSource({images, imageId, blockRef: binding.method});
+
   return Object.freeze({
     binding,
     descriptor: Object.freeze({
@@ -240,10 +242,10 @@ async function authorizedMethodPosition({images, imageId, classRef, selector, re
       // wants to pin or re-read it; the code, lexical environment and compiled lane behind it are
       // the execution owners' business and stay there.
       method: binding.method,
-      // Absent, not empty: the class builder installs a method's semantic program and keeps no
-      // durable text it was compiled from, so there is no native method source for this seam to
-      // report. See the module header.
-      source: null,
+      // Delegated to the class builder's `methodSource` owner (ADR 0096): returns the durable
+      // `<blockId>:source` (`symmetric-smalltalk/source-v0`) text when retained for this revision,
+      // or `null` when absent. The browse seam never walks `CodeArtifact.derivedFrom` itself.
+      source,
       provenance: null,
     }),
   });

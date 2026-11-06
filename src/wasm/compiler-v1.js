@@ -1,4 +1,9 @@
-import {LAGRANGE_CODE_V1, parseLagrangeCodeV1Program} from '../code/lagrange-code-v1.js';
+import {
+  LAGRANGE_CODE_V1,
+  LAGRANGE_CODE_V2,
+  parseLagrangeCodeV1Program,
+  parseLagrangeCodeV2Program,
+} from '../code/lagrange-code-v1.js';
 import {canonicalizeValue, isReference} from '../value/index.js';
 import {WASM_ENTRY_V0, WASM_IMPORT_MODULE, WASM_VALUE_HANDLE_ABI_V1} from './abi.js';
 import {
@@ -70,6 +75,17 @@ function collectSendSite(state, expression) {
   state.effectIndex.set(expression, effectIndex);
 }
 
+function collectApplySite(state, expression) {
+  const kindIndex = state.sendSites.length;
+  state.sendSites.push(Object.freeze({
+    kind: 'apply',
+    arity: expression.arguments.length,
+  }));
+  const effectIndex = state.effects.length;
+  state.effects.push(Object.freeze({kind: 'send', kindIndex, arity: 1 + expression.arguments.length}));
+  state.effectIndex.set(expression, effectIndex);
+}
+
 // A closure site records each capture's disposition, and its WASM arity counts snapshot captures
 // only. A cell capture consumes no handle position at all, so there is literally nowhere for a
 // snapshot of a mutable cell to enter the closure.
@@ -110,7 +126,7 @@ function collectClosureSite(state, expression) {
   state.effectIndex.set(expression, effectIndex);
 }
 
-function analyzeEffects(expression, state, {tail = false} = {}) {
+function analyzeEffects(expression, state, {tail = false, allowApply = false} = {}) {
   if (!expression || typeof expression !== 'object' || Array.isArray(expression)) throw new TypeError('WASM compiler expression must be an object');
   switch (expression.op) {
     case 'literal':
@@ -121,38 +137,46 @@ function analyzeEffects(expression, state, {tail = false} = {}) {
     // Cell reads and writes are ordinary synchronous calls, never effects: they neither suspend nor
     // re-enter, so they impose no tail-position restriction of their own.
     case 'binding-write':
-      analyzeEffects(expression.value, state);
+      analyzeEffects(expression.value, state, {allowApply});
       return;
     case 'sequence': {
       const last = expression.statements.length - 1;
       expression.statements.forEach((statement, index) => {
-        analyzeEffects(statement, state, {tail: tail && index === last});
+        analyzeEffects(statement, state, {tail: tail && index === last, allowApply});
       });
       return;
     }
     case 'integer-add':
     case 'equals':
-      analyzeEffects(expression.left, state);
-      analyzeEffects(expression.right, state);
+      analyzeEffects(expression.left, state, {allowApply});
+      analyzeEffects(expression.right, state, {allowApply});
       return;
     case 'if':
-      analyzeEffects(expression.condition, state);
-      analyzeEffects(expression.then, state, {tail});
-      analyzeEffects(expression.else, state, {tail});
+      analyzeEffects(expression.condition, state, {allowApply});
+      analyzeEffects(expression.then, state, {tail, allowApply});
+      analyzeEffects(expression.else, state, {tail, allowApply});
       return;
     case 'send':
       if (!tail) throw new WasmV1TailEffectRestrictionError('message sends');
       if (!Array.isArray(expression.arguments)) throw new TypeError('WASM send arguments must be an array');
-      analyzeEffects(expression.receiver, state);
-      for (const argument of expression.arguments) analyzeEffects(argument, state);
+      analyzeEffects(expression.receiver, state, {allowApply});
+      for (const argument of expression.arguments) analyzeEffects(argument, state, {allowApply});
       collectSendSite(state, expression);
+      return;
+    case 'apply':
+      if (!allowApply) throw new TypeError(`WASM backend v1 does not support semantic op: ${expression.op}`);
+      if (!tail) throw new WasmV1TailEffectRestrictionError('callable applications');
+      if (!Array.isArray(expression.arguments)) throw new TypeError('WASM apply arguments must be an array');
+      analyzeEffects(expression.callee, state, {allowApply});
+      for (const argument of expression.arguments) analyzeEffects(argument, state, {allowApply});
+      collectApplySite(state, expression);
       return;
     case 'make-block':
     case 'block': {
       if (!tail) throw new WasmV1TailEffectRestrictionError('nested Block creation');
       if (!Array.isArray(expression.captures)) throw new TypeError('WASM nested Block captures must be an array');
       for (const capture of expression.captures) {
-        if (capture?.mode === 'snapshot') analyzeEffects(capture.value, state);
+        if (capture?.mode === 'snapshot') analyzeEffects(capture.value, state, {allowApply});
       }
       collectClosureSite(state, expression);
       return;
@@ -237,6 +261,12 @@ function compileExpression(expression, context) {
         ...expression.arguments.flatMap((argument) => compileExpression(argument, context)),
         0x10, ...u32(BASE_IMPORT_COUNT_V1 + context.effectIndex.get(expression)),
       ];
+    case 'apply':
+      return [
+        ...compileExpression(expression.callee, context),
+        ...expression.arguments.flatMap((argument) => compileExpression(argument, context)),
+        0x10, ...u32(BASE_IMPORT_COUNT_V1 + context.effectIndex.get(expression)),
+      ];
     case 'make-block':
     case 'block':
       return [
@@ -280,10 +310,15 @@ function normalizeModuleEntry(value, index) {
   if (!Number.isInteger(value.memberIndex) || value.memberIndex < 0) {
     throw new TypeError(`WASM module entry ${index} memberIndex must be a non-negative integer`);
   }
-  return Object.freeze({entry, memberIndex: value.memberIndex, program: value.program});
+  return Object.freeze({
+    entry,
+    memberIndex: value.memberIndex,
+    program: value.program,
+    allowApply: value.allowApply === true,
+  });
 }
 
-function compileWasmV1ModuleEntries(entries) {
+function compileWasmV1ModuleEntries(entries, {allowApply = false} = {}) {
   if (!Array.isArray(entries) || entries.length === 0) throw new TypeError('WASM module entries must be a non-empty array');
   const normalizedEntries = entries.map(normalizeModuleEntry);
   const entryNames = new Set();
@@ -306,7 +341,7 @@ function compileWasmV1ModuleEntries(entries) {
     }
     const sendStart = state.sendSites.length;
     const closureStart = state.closureSites.length;
-    analyzeEffects(program.body, state, {tail: true});
+    analyzeEffects(program.body, state, {tail: true, allowApply: allowApply || entry.allowApply});
     // Only snapshot captures become entry parameters. A cell capture is reached through the host
     // cell table, so it has no handle position anywhere in the ABI.
     const snapshotCaptures = program.captures.filter(({mode}) => mode !== 'cell');
@@ -407,6 +442,20 @@ function compileWasmV1Module(program) {
   });
 }
 
+function compileWasmV2Module(program) {
+  const compiled = compileWasmV1ModuleEntries(
+    [{entry: WASM_ENTRY_V0, memberIndex: 0, program, allowApply: true}],
+    {allowApply: true},
+  );
+  const descriptor = compiled.functions[0];
+  return Object.freeze({
+    ...compiled,
+    parameterCount: descriptor.parameters,
+    captureIds: descriptor.captures,
+    cellBindings: descriptor.cellBindings,
+  });
+}
+
 const lagrangeCodeV1ToWasmModuleCompiler = Object.freeze({
   async compile({source}) {
     if (source.representation !== LAGRANGE_CODE_V1) throw new TypeError(`source must be ${LAGRANGE_CODE_V1}`);
@@ -429,6 +478,28 @@ const lagrangeCodeV1ToWasmModuleCompiler = Object.freeze({
   },
 });
 
+const lagrangeCodeV2ToWasmModuleCompiler = Object.freeze({
+  async compile({source}) {
+    if (source.representation !== LAGRANGE_CODE_V2) throw new TypeError(`source must be ${LAGRANGE_CODE_V2}`);
+    const compiled = compileWasmV2Module(parseLagrangeCodeV2Program(source));
+    return Object.freeze({
+      languageId: source.languageId,
+      bytes: compiled.bytes,
+      contract: {
+        abi: WASM_VALUE_HANDLE_ABI_V1,
+        literals: compiled.literals,
+        functions: compiled.functions,
+        sendSites: compiled.sendSites,
+        closureSites: compiled.closureSites,
+        effectSites: [],
+      },
+      metadata: {
+        semanticRepresentation: LAGRANGE_CODE_V2,
+      },
+    });
+  },
+});
+
 const lagrangeCodeV1GroupToWasmModuleCompiler = Object.freeze({
   async compile({group, members}) {
     if (group.policyId !== WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1) {
@@ -438,15 +509,20 @@ const lagrangeCodeV1GroupToWasmModuleCompiler = Object.freeze({
       throw new TypeError('WASM shared-module compiler requires physicalLayout=shared-module');
     }
     const entries = members.map((source, memberIndex) => {
-      if (source.representation !== LAGRANGE_CODE_V1) {
+      if (source.representation !== LAGRANGE_CODE_V1 && source.representation !== LAGRANGE_CODE_V2) {
         throw new TypeError(`WASM group member ${memberIndex} must be ${LAGRANGE_CODE_V1}`);
       }
+      const isV2 = source.representation === LAGRANGE_CODE_V2;
       return {
         entry: `run_${memberIndex}`,
         memberIndex,
-        program: parseLagrangeCodeV1Program(source),
+        program: isV2 ? parseLagrangeCodeV2Program(source) : parseLagrangeCodeV1Program(source),
+        allowApply: isV2,
       };
     });
+    const semanticRepresentation = members.some((source) => source.representation === LAGRANGE_CODE_V2)
+      ? LAGRANGE_CODE_V2
+      : LAGRANGE_CODE_V1;
     const compiled = compileWasmV1ModuleEntries(entries);
     return Object.freeze({
       bytes: compiled.bytes,
@@ -459,7 +535,7 @@ const lagrangeCodeV1GroupToWasmModuleCompiler = Object.freeze({
         effectSites: [],
       },
       metadata: {
-        semanticRepresentation: LAGRANGE_CODE_V1,
+        semanticRepresentation,
         groupPolicyId: group.policyId,
         physicalLayout: 'shared-module',
       },
@@ -473,7 +549,9 @@ export {
   WasmV1TailEffectRestrictionError,
   compileWasmV1Module,
   compileWasmV1ModuleEntries,
+  compileWasmV2Module,
   isWasmV1TailEffectRestrictionError,
   lagrangeCodeV1GroupToWasmModuleCompiler,
   lagrangeCodeV1ToWasmModuleCompiler,
+  lagrangeCodeV2ToWasmModuleCompiler,
 };
