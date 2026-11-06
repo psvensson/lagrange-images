@@ -132,18 +132,13 @@ async function resolveBehaviorSide({images, classRef, behavior, kernel}) {
   if (sameRef(behavior.behavior, kernel.metaclassClass)) {
     return {side: CLASS_SIDE.CLASS, classSide: null};
   }
-  const metaclassRecord = await images.getObject(behavior.behavior.imageId, behavior.behavior.objectId);
-  if (!metaclassRecord) {
-    throw new TypeError(
-      `${label} has a dangling behavior edge to ${behavior.behavior.imageId}/${behavior.behavior.objectId}`,
-    );
-  }
   let metaclass;
   try {
     metaclass = await readBehavior(images, behavior.behavior);
   } catch (error) {
+    const kind = /^behavior not found:/.test(error?.message ?? '') ? 'dangling' : 'malformed';
     throw new TypeError(
-      `${label} has a malformed behavior edge to ${behavior.behavior.imageId}/${behavior.behavior.objectId}`,
+      `${label} has a ${kind} behavior edge to ${behavior.behavior.imageId}/${behavior.behavior.objectId}`,
       {cause: error},
     );
   }
