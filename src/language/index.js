@@ -42,6 +42,8 @@ export {
 } from './smalltalk-class-builder.js';
 export * from './smalltalk-browse.js';
 export * from './smalltalk-method-position-resource.js';
+export * from './common-lisp-browse.js';
+export * from './common-lisp-definition-resource.js';
 export * from './smalltalk-control-flow.js';
 export * from './smalltalk-allocation.js';
 export * from './smalltalk-block-protocol.js';
