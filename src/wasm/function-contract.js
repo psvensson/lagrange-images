@@ -210,7 +210,7 @@ function bindClosurePrototypes({descriptor, closureSites, prototypes} = {}) {
   for (const [localIndex, siteIndex] of descriptor.closureSiteIndices.entries()) {
     const site = closureSites[siteIndex];
     if (!site) throw new TypeError(`WASM function closure site index out of range: ${siteIndex}`);
-    const ref = remaining.get(site.blockId);
+    const ref = prototypes.get(site.blockId);
     if (!ref) throw new TypeError(`missing WASM Block prototype for semantic block: ${site.blockId}`);
     const normalized = canonicalizeValue(ref);
     if (!isObjectRef(normalized)) throw new TypeError(`block prototype ${site.blockId} must be an unpinned object ref`);
