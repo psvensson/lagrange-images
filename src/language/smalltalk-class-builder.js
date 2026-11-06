@@ -1541,6 +1541,90 @@ function smalltalkClassObjectId(name) {
   return `smalltalk/class/${name}`;
 }
 
+const POLYGLOT_CALLABLE_CAPTURE_ID = 'polyglot/callable-target';
+const POLYGLOT_CALLABLE_CAPTURE_NAME = 'callableTarget';
+
+function smalltalkSelectorArity(selector) {
+  requiredText(selector, 'selector');
+  if (selector.includes(':')) {
+    if (!selector.endsWith(':')) {
+      throw new TypeError(`invalid Smalltalk selector for polyglot method bridge: ${selector}`);
+    }
+    const keywords = selector.slice(0, -1).split(':');
+    if (keywords.length === 0 || keywords.some((part) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(part))) {
+      throw new TypeError(`invalid Smalltalk selector for polyglot method bridge: ${selector}`);
+    }
+    return keywords.length;
+  }
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(selector)) return 0;
+  if (/^[-+*/\\~<>=@%|&?,!]+$/.test(selector)) return 1;
+  throw new TypeError(`invalid Smalltalk selector for polyglot method bridge: ${selector}`);
+}
+
+// Synthesize a deterministic lagrange-code method descriptor that bridges a Smalltalk selector on a
+// class to an arbitrary callable Block (WASM Component binding, foreign-runtime callable, scalar WASM
+// callable, or image binding) without violating `assertBlockApplicationReceiver` (ADR 0046) or
+// lending the method's `self`/`definingBehavior` frame to the foreign callable (ADR 0050 rule 4).
+function polyglotMethodBridgeDescriptor({selector, callableBlockRef, passSelf = false} = {}) {
+  const arity = smalltalkSelectorArity(selector);
+  const targetRef = canonicalizeValue(callableBlockRef);
+  if (!isObjectRef(targetRef)) {
+    throw new TypeError('polyglotMethodBridgeDescriptor callableBlockRef must be an unpinned object ref');
+  }
+  if (typeof passSelf !== 'boolean') {
+    throw new TypeError('polyglotMethodBridgeDescriptor passSelf must be a boolean');
+  }
+  const parameters = Array.from({length: arity}, (_, index) => ({
+    id: `${selector}:arg:${index}`,
+    name: `arg${index}`,
+  }));
+  const methodArgs = Array.from({length: arity}, (_, index) => ({op: 'argument', index}));
+  const forwardedArgs = passSelf ? [{op: 'receiver'}, ...methodArgs] : methodArgs;
+  const valueSelector = forwardedArgs.length === 0 ? 'value' : 'value:'.repeat(forwardedArgs.length);
+  return Object.freeze({
+    selector,
+    program: Object.freeze({
+      parameters,
+      captures: [{id: POLYGLOT_CALLABLE_CAPTURE_ID, name: POLYGLOT_CALLABLE_CAPTURE_NAME}],
+      body: Object.freeze({
+        op: 'send',
+        languageId: SYMMETRIC_SMALLTALK_ID,
+        receiver: {op: 'binding', id: POLYGLOT_CALLABLE_CAPTURE_ID},
+        message: textValue(valueSelector),
+        arguments: forwardedArgs,
+      }),
+    }),
+    captures: Object.freeze([
+      Object.freeze({
+        id: POLYGLOT_CALLABLE_CAPTURE_ID,
+        name: POLYGLOT_CALLABLE_CAPTURE_NAME,
+        value: targetRef,
+      }),
+    ]),
+  });
+}
+
+async function definePolyglotMethodBridge({
+  images,
+  compilation,
+  imageId,
+  classRef,
+  selector,
+  callableBlockRef,
+  passSelf = false,
+  lane = 'neutral',
+} = {}) {
+  const descriptor = polyglotMethodBridgeDescriptor({selector, callableBlockRef, passSelf});
+  return await defineMethods({
+    images,
+    compilation,
+    imageId,
+    classRef,
+    lane,
+    methods: [descriptor],
+  });
+}
+
 export {
   smalltalkClassObjectId,
   SmalltalkMethodDictionaryContentionError,
@@ -1550,6 +1634,8 @@ export {
   SmalltalkStaleMethodPositionError,
   defineClass,
   defineMethods,
+  definePolyglotMethodBridge,
+  polyglotMethodBridgeDescriptor,
   reconcileMethods,
   ensureBlock,
   ensureClassFromDeclaration,
