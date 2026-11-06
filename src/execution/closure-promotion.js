@@ -138,14 +138,19 @@ class ClosurePromoter {
     for (const [slotId, value] of Object.entries(record.slots)) {
       slots[slotId] = await this.promoteValue(value);
     }
+    let indexed;
+    if (Object.hasOwn(record, 'indexed')) {
+      indexed = [];
+      for (const value of record.indexed) {
+        indexed.push(await this.promoteValue(value));
+      }
+    }
     const desired = {
       id: durableObjectId,
       shape: record.shape,
       behavior: record.behavior,
       slots,
-      ...(Object.hasOwn(record, 'indexed')
-        ? {indexed: await Promise.all(record.indexed.map((value) => this.promoteValue(value)))}
-        : {}),
+      ...(indexed !== undefined ? {indexed} : {}),
       metadata: {...record.metadata},
     };
     this.#arena.imagesViewFor?.(this.#images)?.invalidateObject?.(ref.imageId, durableObjectId);

@@ -4884,6 +4884,23 @@ async function installCommonLispRuntime({
   assertMethodLane(lane);
   const compiler = resolveCompilation(images, compilation);
 
+  const existingCarBlock = await images.getBlock(imageId, RUNTIME_BLOCK_IDS.CAR);
+  if (existingCarBlock && existingCarBlock.metadata?.lane === lane) {
+    const existingNs = await findNamespace({images, imageId, namespaceId: COMMON_LISP_NAMESPACE_ID});
+    if (existingNs?.entries.has('MAPCAR')) {
+      const kernel = await findSmalltalkKernel({images, imageId});
+      const tRef = await ensureInternedSymbol(images, imageId, 'T');
+      return Object.freeze({
+        imageId,
+        consClass: objectRef(imageId, `smalltalk/class/${CONS_CLASS_NAME}`),
+        blockClosureClass: objectRef(imageId, `smalltalk/class/${BLOCK_CLOSURE_CLASS_NAME}`),
+        nil: kernel.nil,
+        t: tRef,
+        namespaceId: COMMON_LISP_NAMESPACE_ID,
+      });
+    }
+  }
+
   let kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) {
     await installSmalltalkKernel({images, imageId});
