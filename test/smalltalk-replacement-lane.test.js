@@ -341,13 +341,13 @@ test('an observation that is not a native method revision of this position is re
   };
 
   const cases = [
-    ['absent', async (runtime, options) => {
+    ['absent', /is not a Block in this image/, async (runtime) => {
       // A well-formed local ref that names no record at all.
       const ref = objectRef('app', 'smalltalk/block/never-written');
       assert.equal(await runtime.images.getBlock('app', ref.objectId), null);
       return ref;
     }],
-    ['not a method', async (runtime) => {
+    ['not a method', /is not a native method/, async (runtime) => {
       // An ordinary standalone Block: real and dispatchable, but never installed as a method, so it
       // carries none of the method metadata. Unary, so the position really does answer through it.
       const planted = await installSymmetricSmalltalkBlock({
@@ -356,7 +356,22 @@ test('an observation that is not a native method revision of this position is re
       assert.equal((await runtime.images.getBlock('app', planted.block.id)).metadata?.smalltalk, undefined);
       return objectRef('app', planted.block.id);
     }],
-    ['another selector', async (runtime, options) => {
+    ['non-method marker with matching selector and lane', /is not a native method/, async (runtime) => {
+      // Isolates `record.metadata?.smalltalk !== 'method'` from the selector and lane checks right
+      // below it: this Block carries the exact target selector ('refused') and a valid lane ('wasm'),
+      // so deleting the `smalltalk !== 'method'` guard would preserve 'wasm' instead of refusing.
+      const base = await installSymmetricSmalltalkBlock({
+        images: runtime.images, imageId: 'app', id: 'planted-non-method-marker-base', source: '[ 5 ]',
+      });
+      const planted = await runtime.images.putBlock('app', {
+        id: 'planted-non-method-marker',
+        code: base.block.code,
+        environment: base.block.environment,
+        metadata: {smalltalk: 'not-a-method', selector: 'refused', lane: 'wasm'},
+      });
+      return objectRef('app', planted.id);
+    }],
+    ['another selector', /is a method of another selector/, async (runtime, options) => {
       // A genuine native method revision — same class, same lane, correct metadata — of a DIFFERENT
       // selector. Only the selector check can refuse this one.
       await defineMethodsFromSource({
@@ -373,7 +388,7 @@ test('an observation that is not a native method revision of this position is re
     }],
   ];
 
-  for (const [label, build] of cases) {
+  for (const [label, expectedReason, build] of cases) {
     await withKernel(async (runtime, options) => {
       const selector = 'refused';
       await defineMethodsFromSource({...options, lane: 'wasm', methods: [{selector, source: '[ ^ 1 ]'}]});
@@ -391,6 +406,7 @@ test('an observation that is not a native method revision of this position is re
       assert.equal(error.name, 'SmalltalkMethodLaneError');
       assert.equal(error.cause, undefined, `${label}: a semantic refusal, carrying no backend cause`);
       assert.match(error.message, new RegExp(selector), `${label}: it names the caller's own position`);
+      assert.match(error.message, expectedReason, `${label}: refused by the specific guard under test`);
       assert.ok(!error.message.includes(dictionaryId), `${label}: and not the method dictionary record`);
       assert.equal(await runtime.images.frontier('app'), frontier, `${label}: the refusal published nothing`);
       assert.deepEqual(await methodBlockRef({...options, selector}), observed, `${label}: and moved nothing`);
