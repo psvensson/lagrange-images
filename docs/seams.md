@@ -88,6 +88,9 @@ an interface or definition artifact.
 | `symmetric-smalltalk/syntax-v0` | parsed syntax |
 | `common-lisp/source-v0` | in-image Common Lisp source text (ADR 0099) |
 | `common-lisp/syntax-v0` | parsed Common Lisp S-expression AST (ADR 0099) |
+| `common-lisp/macro-v0` | durable Common Lisp `defmacro` definition in `common-lisp/namespace/v1` (ADR 0099) |
+| `common-lisp/struct-v0` | durable Common Lisp `defstruct` descriptor backed by `ensureClassFromDeclaration` (ADR 0099) |
+| `common-lisp/signature-v0` | durable Common Lisp function lambda-list signature (`&optional`, `&rest`, `&key`) |
 | `lagrange-code/v0` | language-neutral semantic code; **frozen** — a closed grammar, so new semantics get a new version |
 | `lagrange-code/v1` | adds temporaries, statement sequences, assignment, and captures carrying a `snapshot`/`cell` mode; **frozen** |
 | `lagrange-code/v2` | adds direct callable Block application (`{op: 'apply', callee, arguments}`, ADR 0098) |

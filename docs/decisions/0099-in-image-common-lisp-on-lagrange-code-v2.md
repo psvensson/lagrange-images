@@ -30,9 +30,15 @@ To make Common Lisp usable as an image-native language personality whose functio
    - Top-level `defun`, `defparameter`, and `defvar` bind in the dedicated namespace `COMMON_LISP_NAMESPACE_ID = 'common-lisp/namespace/v1'` using the shared `GlobalBinding` owner (`src/language/smalltalk-globals.js`, ADR 0057/0061), pre-seeding bindings before compiling a program so recursive and mutually-recursive `defun` forms resolve at compile time and support live redefinition.
    - `classOf` in `src/language/smalltalk-primitives-objects.js` resolves callable `Block` references (including transient arena closures) to `smalltalk/class/BlockClosure` when present in the image, enabling `(functionp fn)`, `(atom fn)`, and `(consp fn)` to classify functions accurately without a special Value kind.
 
-5. **Shared condition protocol (`unwind-protect`, `handler-case`, `handler-bind`, `ignore-errors`)**:
+5. **Shared condition protocol (`unwind-protect`, `handler-case`, `handler-bind`, `ignore-errors`) and lexical non-local exits (`block`, `return-from`, `return`)**:
    - Common Lisp condition handling compiles directly to the existing execution-wide condition primitives (`block-ensure`, `block-on-do`, `condition-signal`, `condition-resume` in `src/language/smalltalk-primitives-control.js` over `src/execution/conditions.js`, ADR 0054).
    - `handler-case` installs a handler that transfers control out of the protected form on match (`return-from-handler`), while `handler-bind` runs the handler in the signalling dynamic extent so `(use-value v c)` resumes the signalling site with `v` across both Common Lisp and Smalltalk frames.
+   - Lexical `block`, `return-from`, and `return` (including implicit function blocks on `defun`, `flet`, and `labels`) allocate a unique lexical tag per `block` activation and unwind through `smalltalk/class/BlockExit` and `return-from-handler`, running all intermediate `unwind-protect` cleanups even across nested closures.
+
+6. **Phase 2 practical usability (`defmacro`, lambda-list destructuring, `setf`, `defstruct`, vectors, strings/characters, and hash tables)**:
+   - User-defined macros (`defmacro`, `gensym`, `macroexpand-1`, `macroexpand`) persist in `common-lisp/namespace/v1` (`common-lisp/macro-v0`) and support full macro lambda-list destructuring (`&optional`, `&rest`, `&body`, `&key`, and nested lists), alongside built-in macros (`prog2`, `dolist`, `dotimes`, `case`, `ecase`, `destructuring-bind`, `setf`, `incf`, `decf`, `push`, `pop`) and lambda-list keywords (`&optional`, `&rest`, `&key`) on `defun`, `lambda`, `flet`, and `labels`.
+   - Native `defstruct` (`common-lisp/struct-v0`) compiles directly to Lagrange Shapes and Classes via `ensureClassFromDeclaration` (supporting `:include` single inheritance, keyword and positional `make-<name>`, `<name>-p`, `copy-<name>`, `<name>-<slot>`, and `(setf (<name>-<slot> ...) ...)`), interoperable with Symmetric Smalltalk.
+   - Vectors (`#(...)`, `vector`, `make-array`, `aref`, `svref`, `vectorp`), strings/characters (`#\...`, `char`, `char-code`, `code-char`, `characterp`, `concatenate`), and hash tables (`make-hash-table`, `gethash`, `remhash`, `maphash`, `hash-table-count`, `hash-table-p`) map directly onto image-native `Array`, `Text`/`Character`, and `Dictionary` objects.
 
 ## Consequences
 
