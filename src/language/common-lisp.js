@@ -62,6 +62,7 @@ import {
   EMPTY_SHAPE_ID,
   findSmalltalkKernel,
   installSmalltalkKernel,
+  readBehavior,
 } from './smalltalk-kernel.js';
 import {sameRef} from './smalltalk-lookup.js';
 import {executableTargetFor, installNestedPrototypes} from './smalltalk-nested-blocks.js';
@@ -843,6 +844,27 @@ function readCommonLispSource(source) {
     forms.push(form);
   }
   return Object.freeze(forms);
+}
+
+function formatCommonLispForm(form) {
+  if (!form || typeof form !== 'object') return 'NIL';
+  switch (form.kind) {
+    case 'integer':
+      return String(form.value);
+    case 'string':
+      return JSON.stringify(String(form.value));
+    case 'symbol':
+      return form.name;
+    case 'list': {
+      const elems = (form.elements ?? []).map(formatCommonLispForm);
+      if (form.dottedTail) {
+        return `(${elems.join(' ')} . ${formatCommonLispForm(form.dottedTail)})`;
+      }
+      return `(${elems.join(' ')})`;
+    }
+    default:
+      return 'NIL';
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -5137,6 +5159,7 @@ async function installCommonLispBlock({
   compilation = null,
   imageId,
   source,
+  sourceText: explicitSourceText = null,
   id = randomUUID(),
   parameters = [],
   captures = {},
@@ -5175,7 +5198,11 @@ async function installCommonLispBlock({
     await ensureInternedSymbol(images, imageId, symSpelling);
   }
 
-  const sourceText = typeof source === 'string' ? source : JSON.stringify(source);
+  const sourceText = typeof explicitSourceText === 'string'
+    ? explicitSourceText
+    : typeof source === 'string'
+      ? source
+      : forms.map(formatCommonLispForm).join(' ');
   const sourceArtifact = await ensureCodeArtifact(images, imageId, {
     id: `${id}:source`,
     languageId: COMMON_LISP_ID,
@@ -5839,6 +5866,7 @@ async function installCommonLispProgram({
         compilation: effectiveCompilation,
         imageId,
         source: defun.bodyForms,
+        sourceText: formatCommonLispForm(form),
         id: blockId,
         parameters: defun.parameters,
         lane,
@@ -6033,6 +6061,225 @@ async function commonLispListToArray({images, imageId, value}) {
   return result;
 }
 
+async function listCommonLispNamespaceBindings({
+  images,
+  imageId,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+} = {}) {
+  requiredText(imageId, 'image id');
+  requiredText(namespaceId, 'Common Lisp namespace id');
+  const ns = await findNamespace({images, imageId, namespaceId});
+  if (!ns) throw new TypeError(`image ${imageId} has no Common Lisp namespace: ${namespaceId}`);
+  const functions = [];
+  const macros = [];
+  const structs = [];
+  const variables = [];
+  for (const [entryName, bindingRef] of ns.entries.entries()) {
+    const id = bindingRef?.objectId ?? '';
+    if (id.startsWith('common-lisp/function-binding/')) {
+      if (!entryName.startsWith('%')) functions.push(entryName);
+    } else if (id.startsWith('common-lisp/macro-binding/') && entryName.startsWith('%MACRO:')) {
+      macros.push(entryName.slice('%MACRO:'.length));
+    } else if (id.startsWith('common-lisp/struct-binding/') && entryName.startsWith('%STRUCT:')) {
+      structs.push(entryName.slice('%STRUCT:'.length));
+    } else if (id.startsWith('common-lisp/variable-binding/')) {
+      if (!entryName.startsWith('%')) variables.push(entryName);
+    }
+  }
+  functions.sort((a, b) => a.localeCompare(b));
+  macros.sort((a, b) => a.localeCompare(b));
+  structs.sort((a, b) => a.localeCompare(b));
+  variables.sort((a, b) => a.localeCompare(b));
+  return Object.freeze({
+    functions: Object.freeze(functions),
+    macros: Object.freeze(macros),
+    structs: Object.freeze(structs),
+    variables: Object.freeze(variables),
+  });
+}
+
+async function readCommonLispFunctionDefinition({
+  images,
+  imageId,
+  name,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+} = {}) {
+  requiredText(imageId, 'image id');
+  requiredText(namespaceId, 'Common Lisp namespace id');
+  const canonical = requiredText(name, 'Common Lisp function name').toUpperCase();
+  const ns = await findNamespace({images, imageId, namespaceId});
+  if (!ns) throw new TypeError(`image ${imageId} has no Common Lisp namespace: ${namespaceId}`);
+  const bindingRef = ns.entries.get(canonical);
+  if (!bindingRef || !bindingRef.objectId.startsWith('common-lisp/function-binding/')) return null;
+
+  const bindingRecord = await images.getObject(bindingRef.imageId, bindingRef.objectId);
+  const blockRef = bindingRecord?.slots?.['global-binding-value'];
+  if (!isObjectRef(blockRef)) {
+    throw new TypeError(
+      `Common Lisp namespace ${imageId}/${namespaceId} has a malformed function binding for ${canonical}`,
+    );
+  }
+  const block = await images.getBlock(blockRef.imageId, blockRef.objectId);
+  if (!block) {
+    throw new TypeError(
+      `Common Lisp namespace ${imageId}/${namespaceId} binds function ${canonical} to a missing Block: `
+      + `${blockRef.imageId}/${blockRef.objectId}`,
+    );
+  }
+
+  const semanticArtifact = await images.getCodeArtifact(blockRef.imageId, `${blockRef.objectId}:semantic`);
+  let parameters = [];
+  if (semanticArtifact?.content?.kind === VALUE_KIND.TEXT) {
+    const parsed = JSON.parse(semanticArtifact.content.value);
+    if (Array.isArray(parsed?.parameters)) {
+      parameters = parsed.parameters.map((p) => (typeof p === 'string' ? p : p.name));
+    }
+  }
+
+  let requiredCount = parameters.length;
+  let optionalCount = 0;
+  let hasRestOrKey = false;
+  const sigBindingRef = ns.entries.get(`%SIG:${canonical}`);
+  if (sigBindingRef?.objectId.startsWith('common-lisp/signature-binding/')) {
+    const sigRecord = await images.getObject(sigBindingRef.imageId, sigBindingRef.objectId);
+    const sigVal = sigRecord?.slots?.['global-binding-value'];
+    if (sigVal?.kind === VALUE_KIND.TEXT) {
+      const parsedSig = JSON.parse(sigVal.value);
+      requiredCount = Number(parsedSig.requiredCount ?? parameters.length);
+      optionalCount = Number(parsedSig.optionalCount ?? 0);
+      hasRestOrKey = Boolean(parsedSig.hasRestOrKey);
+    }
+  }
+
+  const sourceArtifact = await images.getCodeArtifact(blockRef.imageId, `${blockRef.objectId}:source`);
+  const source = sourceArtifact?.representation === COMMON_LISP_SOURCE_V0
+    && sourceArtifact?.content?.kind === VALUE_KIND.TEXT
+    ? sourceArtifact.content.value
+    : null;
+
+  return Object.freeze({
+    name: canonical,
+    blockRef,
+    signature: Object.freeze({
+      parameters: Object.freeze(parameters),
+      requiredCount,
+      optionalCount,
+      hasRestOrKey,
+    }),
+    source,
+  });
+}
+
+async function readCommonLispMacroDefinition({
+  images,
+  imageId,
+  name,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+} = {}) {
+  requiredText(imageId, 'image id');
+  requiredText(namespaceId, 'Common Lisp namespace id');
+  const canonical = requiredText(name, 'Common Lisp macro name').toUpperCase();
+  const ns = await findNamespace({images, imageId, namespaceId});
+  if (!ns) throw new TypeError(`image ${imageId} has no Common Lisp namespace: ${namespaceId}`);
+  const bindingRef = ns.entries.get(`%MACRO:${canonical}`);
+  if (!bindingRef || !bindingRef.objectId.startsWith('common-lisp/macro-binding/')) return null;
+
+  const record = await images.getObject(bindingRef.imageId, bindingRef.objectId);
+  const val = record?.slots?.['global-binding-value'];
+  if (val?.kind !== VALUE_KIND.TEXT) {
+    throw new TypeError(
+      `Common Lisp namespace ${imageId}/${namespaceId} has a malformed macro binding for ${canonical}`,
+    );
+  }
+  const parsed = JSON.parse(val.value);
+  const lambdaList = formatCommonLispForm(parsed.lambdaList);
+  const source = formatCommonLispForm(
+    makeListNode([
+      makeSymbolNode('DEFMACRO'),
+      makeSymbolNode(parsed.name),
+      parsed.lambdaList,
+      ...(parsed.bodyForms ?? []),
+    ]),
+  );
+  return Object.freeze({
+    name: canonical,
+    lambdaList,
+    source,
+  });
+}
+
+async function readCommonLispStructDefinition({
+  images,
+  imageId,
+  name,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+} = {}) {
+  requiredText(imageId, 'image id');
+  requiredText(namespaceId, 'Common Lisp namespace id');
+  const canonical = requiredText(name, 'Common Lisp struct name').toUpperCase();
+  const ns = await findNamespace({images, imageId, namespaceId});
+  if (!ns) throw new TypeError(`image ${imageId} has no Common Lisp namespace: ${namespaceId}`);
+  const bindingRef = ns.entries.get(`%STRUCT:${canonical}`);
+  if (!bindingRef || !bindingRef.objectId.startsWith('common-lisp/struct-binding/')) return null;
+
+  const record = await images.getObject(bindingRef.imageId, bindingRef.objectId);
+  const val = record?.slots?.['global-binding-value'];
+  if (val?.kind !== VALUE_KIND.TEXT) {
+    throw new TypeError(
+      `Common Lisp namespace ${imageId}/${namespaceId} has a malformed struct binding for ${canonical}`,
+    );
+  }
+  const parsed = JSON.parse(val.value);
+  const classRef = objectRef(imageId, `smalltalk/class/${parsed.className}`);
+  try {
+    await readBehavior(images, classRef);
+  } catch (error) {
+    throw new TypeError(
+      `Common Lisp struct ${canonical} in ${imageId}/${namespaceId} has a missing backing class: `
+      + `${classRef.imageId}/${classRef.objectId}`,
+      {cause: error},
+    );
+  }
+  return Object.freeze({
+    name: canonical,
+    classRef,
+    className: parsed.className,
+    include: parsed.includeName ?? null,
+    concName: parsed.concName,
+    constructor: parsed.constructorName ?? null,
+    predicate: parsed.predicateName ?? null,
+    copier: parsed.copierName ?? null,
+    slots: Object.freeze((parsed.slots ?? []).map((s) => s.name)),
+    localSlots: Object.freeze((parsed.localSlots ?? []).map((s) => s.name)),
+  });
+}
+
+async function readCommonLispVariableDefinition({
+  images,
+  imageId,
+  name,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+} = {}) {
+  requiredText(imageId, 'image id');
+  requiredText(namespaceId, 'Common Lisp namespace id');
+  const canonical = requiredText(name, 'Common Lisp variable name').toUpperCase();
+  const ns = await findNamespace({images, imageId, namespaceId});
+  if (!ns) throw new TypeError(`image ${imageId} has no Common Lisp namespace: ${namespaceId}`);
+  const bindingRef = ns.entries.get(canonical);
+  if (!bindingRef || !bindingRef.objectId.startsWith('common-lisp/variable-binding/')) return null;
+
+  const record = await images.getObject(bindingRef.imageId, bindingRef.objectId);
+  if (!record || !Object.hasOwn(record.slots ?? {}, 'global-binding-value')) {
+    throw new TypeError(
+      `Common Lisp namespace ${imageId}/${namespaceId} has a malformed variable binding for ${canonical}`,
+    );
+  }
+  return Object.freeze({
+    name: canonical,
+    value: record.slots['global-binding-value'],
+  });
+}
+
 export {
   BLOCK_CLOSURE_CLASS_NAME,
   BLOCK_EXIT_CLASS_NAME,
@@ -6062,11 +6309,17 @@ export {
   compileCommonLispSemanticProgram,
   evaluateCommonLispSource,
   expandAllMacrosInForm,
+  formatCommonLispForm,
   installCommonLispBlock,
   installCommonLispProgram,
   installCommonLispRuntime,
+  listCommonLispNamespaceBindings,
   macroexpand1CommonLispForm,
   macroexpandCommonLispForm,
+  readCommonLispFunctionDefinition,
+  readCommonLispMacroDefinition,
   readCommonLispSource,
+  readCommonLispStructDefinition,
+  readCommonLispVariableDefinition,
   tokenizeCommonLispSource,
 };

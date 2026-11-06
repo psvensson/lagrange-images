@@ -337,6 +337,39 @@ so Images owns neither a native method source nor a Cuis provenance association 
 provenance is optional metadata on a native result; a Cuis-imported class browses through this same
 seam with the same result shape, and its origin selects no second lane.
 
+## Authorized in-image Common Lisp browsing
+
+`src/language/common-lisp-browse.js` (with logical-position vocabulary in
+`src/language/common-lisp-definition-resource.js`, ADR 0087, ADR 0099, bead `lagrange-images-gn41`)
+is the public read-only seam an inspector, browser, or headless tool uses to describe an in-image
+Common Lisp namespace (`common-lisp/namespace/v1`) or one of its defined functions, macros,
+`defstruct` types, or special variables.
+
+| Identifier | Meaning |
+| --- | --- |
+| `common-lisp-namespace-description/v1` | `{format, namespace, functions, macros, structs, variables}` |
+| `common-lisp-definition-description/v1` (`kind: 'function'`) | `{format, namespace, kind, name, function, signature, source}` |
+| `common-lisp-definition-description/v1` (`kind: 'macro'`) | `{format, namespace, kind, name, lambdaList, source}` |
+| `common-lisp-definition-description/v1` (`kind: 'struct'`) | `{format, namespace, kind, name, class, className, include, concName, constructor, predicate, copier, slots, localSlots}` |
+| `common-lisp-definition-description/v1` (`kind: 'variable'`) | `{format, namespace, kind, name, value}` |
+
+Authority follows the exact ADR 0087 two-step discipline:
+
+```text
+namespace browsing    object/read on the namespace OBJECT (common-lisp/namespace/v1)
+definition browsing   that same namespace check, AND common-lisp-definition/read on the exact
+                      {imageId, namespaceId, kind, canonicalName} logical position
+```
+
+Namespace authority yields the sorted canonical symbol names of `functions`, `macros`, `structs`,
+and `variables` (filtering out internal compiler-generated `%`-prefixed helpers) and never reads the
+`GlobalBinding`, `Block`, or `CodeArtifact` records behind them. Definition browsing validates pure
+caller input, requires both grants before touching the graph (preserving the no-existence-oracle
+guarantee across existing, missing, and dangling definitions), and delegates semantic resolution to
+`src/language/common-lisp.js`. For a `struct` definition, the returned `class` `ObjectRef` is a
+locator to the backing native Smalltalk class, which the caller can browse through
+`authorizedDescribeSmalltalkClass` under that class's own grant.
+
 ## Authorized native Smalltalk method replacement
 
 `src/language/smalltalk-authorized-method-replacement.js` (ADR 0088, bead lagrange-images-qax slice C2,

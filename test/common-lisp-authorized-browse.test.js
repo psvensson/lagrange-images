@@ -1,0 +1,453 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  COMMON_LISP_DEFINITION_DESCRIPTION_V1,
+  COMMON_LISP_DEFINITION_KIND,
+  COMMON_LISP_DEFINITION_READ_OPERATION,
+  COMMON_LISP_NAMESPACE_DESCRIPTION_V1,
+  COMMON_LISP_NAMESPACE_ID,
+  LagrangeBackend,
+  OBJECT_READ_OPERATION,
+  SMALLTALK_CLASS_DESCRIPTION_V1,
+  authorizedDescribeCommonLispDefinition,
+  authorizedDescribeCommonLispNamespace,
+  authorizedDescribeSmalltalkClass,
+  commonLispDefinitionResource,
+  createRuntime,
+  evaluateCommonLispSource,
+  installCommonLispProgram,
+  integerValue,
+  objectRef,
+  objectResource,
+} from '../src/runtime.js';
+import * as portableRuntime from '../src/portable-runtime.js';
+import {createSqliteApplicationRuntime} from './support/sqlite-application-runtime.js';
+
+const FORBIDDEN_STORAGE_TOKENS = [
+  '_version',
+  'global-binding',
+  'common-lisp/function-binding/',
+  'common-lisp/variable-binding/',
+  'common-lisp/macro-binding/',
+  'common-lisp/struct-binding/',
+  'common-lisp/signature-binding/',
+  '%MACRO:',
+  '%STRUCT:',
+  '%SIG:',
+  '%MAKE-STRUCT-',
+  'instance-shape',
+  'behavior-methods',
+];
+
+function assertNoStorageLayout(description, label) {
+  const raw = JSON.stringify(description);
+  for (const token of FORBIDDEN_STORAGE_TOKENS) {
+    assert.equal(raw.includes(token), false, `${label} must not expose ${token}: ${raw}`);
+  }
+}
+
+function requireFor(runtime, grants) {
+  const context = runtime.authority.issue({principal: 'inspector', grants});
+  return (demand) => runtime.authority.require(context, demand);
+}
+
+const namespaceReadGrant = (imageId, namespaceId = COMMON_LISP_NAMESPACE_ID) => ({
+  operation: OBJECT_READ_OPERATION,
+  resource: objectResource(imageId, namespaceId),
+});
+
+const definitionReadGrant = (imageId, kind, name, namespaceId = COMMON_LISP_NAMESPACE_ID) => ({
+  operation: COMMON_LISP_DEFINITION_READ_OPERATION,
+  resource: commonLispDefinitionResource(imageId, kind, name, {namespaceId}),
+});
+
+async function withCommonLispImage(body) {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    await runtime.images.createImage({id: 'app'});
+    await installCommonLispProgram({
+      runtime,
+      imageId: 'app',
+      lane: 'neutral',
+      source: `
+        (defparameter *risk-floor* 10)
+        (defvar *audit-tag* "v1")
+
+        (defmacro with-floor (val &body body)
+          \`(let ((*risk-floor* ,val)) ,@body))
+
+        (defstruct (base-tx (:conc-name tx-))
+          id
+          (amount 0))
+
+        (defstruct (flagged-tx (:include base-tx) (:conc-name ftx-))
+          (reason "none"))
+
+        (defun score (base &optional (weight 2) &key (bonus 0))
+          (+ (* base weight) bonus *risk-floor*))
+      `,
+    });
+    return await body(runtime);
+  } finally {
+    await runtime.close();
+  }
+}
+
+test('authorizedDescribeCommonLispNamespace lists sorted canonical functions, macros, structs, and variables without storage layout', async () => {
+  await withCommonLispImage(async (runtime) => {
+    const description = await authorizedDescribeCommonLispNamespace({
+      images: runtime.images,
+      imageId: 'app',
+      require: requireFor(runtime, [namespaceReadGrant('app')]),
+    });
+
+    assert.equal(description.format, COMMON_LISP_NAMESPACE_DESCRIPTION_V1);
+    assert.deepEqual(description.namespace, objectRef('app', COMMON_LISP_NAMESPACE_ID));
+    assert.deepEqual(Object.keys(description).sort(), [
+      'format',
+      'functions',
+      'macros',
+      'namespace',
+      'structs',
+      'variables',
+    ]);
+
+    assert.ok(description.functions.includes('SCORE'));
+    assert.ok(description.functions.includes('MAKE-BASE-TX'));
+    assert.ok(description.functions.includes('MAKE-FLAGGED-TX'));
+    assert.ok(description.functions.includes('MAPCAR'));
+    assert.equal(
+      description.functions.some((fn) => fn.startsWith('%')),
+      false,
+      'internal compiler helper functions must not appear in namespace function listings',
+    );
+    assert.deepEqual(
+      description.functions,
+      [...description.functions].sort((a, b) => a.localeCompare(b)),
+      'functions are sorted canonically',
+    );
+
+    assert.deepEqual(description.macros, ['WITH-FLOOR']);
+    assert.deepEqual(description.structs, ['BASE-TX', 'FLAGGED-TX']);
+    assert.deepEqual(description.variables, ['*AUDIT-TAG*', '*RISK-FLOOR*']);
+
+    assertNoStorageLayout(description, 'namespace description');
+  });
+});
+
+test('authorizedDescribeCommonLispDefinition describes functions, macros, structs, and variables and follows revisions', async () => {
+  await withCommonLispImage(async (runtime) => {
+    const fnDesc = await authorizedDescribeCommonLispDefinition({
+      images: runtime.images,
+      imageId: 'app',
+      kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+      name: 'score',
+      require: requireFor(runtime, [
+        namespaceReadGrant('app'),
+        definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.FUNCTION, 'score'),
+      ]),
+    });
+
+    assert.equal(fnDesc.format, COMMON_LISP_DEFINITION_DESCRIPTION_V1);
+    assert.equal(fnDesc.kind, 'function');
+    assert.equal(fnDesc.name, 'SCORE');
+    assert.equal(fnDesc.function.imageId, 'app');
+    assert.equal(fnDesc.signature.requiredCount, 1);
+    assert.equal(fnDesc.signature.optionalCount, 1);
+    assert.equal(fnDesc.signature.hasRestOrKey, true);
+    assert.ok(fnDesc.source.startsWith('(DEFUN SCORE '));
+    assertNoStorageLayout(fnDesc, 'function description');
+
+    // Redefining SCORE creates a new Block revision while the logical definition grant stays valid
+    const grantBeforeRedefine = requireFor(runtime, [
+      namespaceReadGrant('app'),
+      definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.FUNCTION, 'score'),
+    ]);
+    await evaluateCommonLispSource({
+      runtime,
+      imageId: 'app',
+      source: '(defun score (base &optional (weight 3) &key (bonus 5)) (+ (* base weight) bonus))',
+    });
+    const fnDescAfter = await authorizedDescribeCommonLispDefinition({
+      images: runtime.images,
+      imageId: 'app',
+      kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+      name: 'SCORE',
+      require: grantBeforeRedefine,
+    });
+    assert.notEqual(
+      fnDescAfter.function.objectId,
+      fnDesc.function.objectId,
+      'redefinition advances the bound Block revision',
+    );
+    assert.ok(fnDescAfter.source.includes('(WEIGHT 3)'));
+
+    // Macro description
+    const macroDesc = await authorizedDescribeCommonLispDefinition({
+      images: runtime.images,
+      imageId: 'app',
+      kind: COMMON_LISP_DEFINITION_KIND.MACRO,
+      name: 'with-floor',
+      require: requireFor(runtime, [
+        namespaceReadGrant('app'),
+        definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.MACRO, 'with-floor'),
+      ]),
+    });
+    assert.equal(macroDesc.format, COMMON_LISP_DEFINITION_DESCRIPTION_V1);
+    assert.equal(macroDesc.kind, 'macro');
+    assert.equal(macroDesc.name, 'WITH-FLOOR');
+    assert.equal(macroDesc.lambdaList, '(VAL &BODY BODY)');
+    assert.ok(macroDesc.source.startsWith('(DEFMACRO WITH-FLOOR (VAL &BODY BODY)'));
+    assertNoStorageLayout(macroDesc, 'macro description');
+
+    // Struct description + browsing its backing Smalltalk class locator
+    const structDesc = await authorizedDescribeCommonLispDefinition({
+      images: runtime.images,
+      imageId: 'app',
+      kind: COMMON_LISP_DEFINITION_KIND.STRUCT,
+      name: 'flagged-tx',
+      require: requireFor(runtime, [
+        namespaceReadGrant('app'),
+        definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.STRUCT, 'flagged-tx'),
+      ]),
+    });
+    assert.equal(structDesc.format, COMMON_LISP_DEFINITION_DESCRIPTION_V1);
+    assert.equal(structDesc.kind, 'struct');
+    assert.equal(structDesc.name, 'FLAGGED-TX');
+    assert.equal(structDesc.className, 'FlaggedTx');
+    assert.equal(structDesc.include, 'BASE-TX');
+    assert.equal(structDesc.concName, 'FTX-');
+    assert.equal(structDesc.constructor, 'MAKE-FLAGGED-TX');
+    assert.equal(structDesc.predicate, 'FLAGGED-TX-P');
+    assert.equal(structDesc.copier, 'COPY-FLAGGED-TX');
+    assert.deepEqual(structDesc.slots, ['ID', 'AMOUNT', 'REASON']);
+    assert.deepEqual(structDesc.localSlots, ['REASON']);
+    assertNoStorageLayout(structDesc, 'struct description');
+
+    // The struct's `class` field is a standard Smalltalk Class locator browsable under its own grant
+    const backingClassDesc = await authorizedDescribeSmalltalkClass({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: structDesc.class,
+      require: requireFor(runtime, [
+        {operation: OBJECT_READ_OPERATION, resource: objectResource('app', structDesc.class.objectId)},
+      ]),
+    });
+    assert.equal(backingClassDesc.format, SMALLTALK_CLASS_DESCRIPTION_V1);
+    assert.equal(backingClassDesc.name, 'FlaggedTx');
+    assert.deepEqual(backingClassDesc.layout.instanceVariables, ['id', 'amount', 'reason']);
+
+    // Variable description + runtime mutation reflection
+    const varDesc = await authorizedDescribeCommonLispDefinition({
+      images: runtime.images,
+      imageId: 'app',
+      kind: COMMON_LISP_DEFINITION_KIND.VARIABLE,
+      name: '*risk-floor*',
+      require: requireFor(runtime, [
+        namespaceReadGrant('app'),
+        definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.VARIABLE, '*risk-floor*'),
+      ]),
+    });
+    assert.equal(varDesc.format, COMMON_LISP_DEFINITION_DESCRIPTION_V1);
+    assert.equal(varDesc.kind, 'variable');
+    assert.equal(varDesc.name, '*RISK-FLOOR*');
+    assert.deepEqual(varDesc.value, integerValue(10));
+    assertNoStorageLayout(varDesc, 'variable description');
+
+    await evaluateCommonLispSource({
+      runtime,
+      imageId: 'app',
+      source: '(defparameter *risk-floor* 42)',
+    });
+    const varDescUpdated = await authorizedDescribeCommonLispDefinition({
+      images: runtime.images,
+      imageId: 'app',
+      kind: COMMON_LISP_DEFINITION_KIND.VARIABLE,
+      name: '*RISK-FLOOR*',
+      require: requireFor(runtime, [
+        namespaceReadGrant('app'),
+        definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.VARIABLE, '*risk-floor*'),
+      ]),
+    });
+    assert.deepEqual(varDescUpdated.value, integerValue(42));
+  });
+});
+
+test('authorization strictly precedes existence disclosure and isolates Lisp-2 function vs variable grants', async () => {
+  await withCommonLispImage(async (runtime) => {
+    // 1. Lisp-2 separation: a grant for function SCORE does not authorize variable SCORE
+    const fnOnlyGrant = requireFor(runtime, [
+      namespaceReadGrant('app'),
+      definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.FUNCTION, 'score'),
+    ]);
+    await assert.rejects(
+      authorizedDescribeCommonLispDefinition({
+        images: runtime.images,
+        imageId: 'app',
+        kind: COMMON_LISP_DEFINITION_KIND.VARIABLE,
+        name: 'score',
+        require: fnOnlyGrant,
+      }),
+      {name: 'AuthorityError'},
+    );
+
+    // 2. Namespace authority alone does not authorize any definition
+    const nsOnlyGrant = requireFor(runtime, [namespaceReadGrant('app')]);
+    await assert.rejects(
+      authorizedDescribeCommonLispDefinition({
+        images: runtime.images,
+        imageId: 'app',
+        kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+        name: 'score',
+        require: nsOnlyGrant,
+      }),
+      {name: 'AuthorityError'},
+    );
+
+    // 3. Definition authority without namespace authority is refused before any backend read
+    let backendReads = 0;
+    const origGet = runtime.backend.get.bind(runtime.backend);
+    runtime.backend.get = async (collection, key) => {
+      backendReads += 1;
+      return await origGet(collection, key);
+    };
+    try {
+      const defOnlyGrant = requireFor(runtime, [
+        definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.FUNCTION, 'score'),
+      ]);
+      await assert.rejects(
+        authorizedDescribeCommonLispDefinition({
+          images: runtime.images,
+          imageId: 'app',
+          kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+          name: 'score',
+          require: defOnlyGrant,
+        }),
+        {name: 'AuthorityError'},
+      );
+      assert.equal(backendReads, 0, 'denied definition browse must perform zero backend reads');
+
+      // 4. Denied caller cannot distinguish existing SCORE from non-existent MISSING-FN (no existence oracle)
+      let existingError = null;
+      let missingError = null;
+      try {
+        await authorizedDescribeCommonLispDefinition({
+          images: runtime.images,
+          imageId: 'app',
+          kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+          name: 'score',
+          require: nsOnlyGrant,
+        });
+      } catch (err) {
+        existingError = err;
+      }
+      try {
+        await authorizedDescribeCommonLispDefinition({
+          images: runtime.images,
+          imageId: 'app',
+          kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+          name: 'missing-fn',
+          require: nsOnlyGrant,
+        });
+      } catch (err) {
+        missingError = err;
+      }
+      assert.equal(existingError?.name, 'AuthorityError');
+      assert.equal(missingError?.name, 'AuthorityError');
+      assert.equal(backendReads, 0, 'no existence oracle: zero backend reads when definition grant is missing');
+    } finally {
+      runtime.backend.get = origGet;
+    }
+
+    // 5. Authorized caller requesting a missing definition receives a clear TypeError
+    await assert.rejects(
+      authorizedDescribeCommonLispDefinition({
+        images: runtime.images,
+        imageId: 'app',
+        kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+        name: 'missing-fn',
+        require: requireFor(runtime, [
+          namespaceReadGrant('app'),
+          definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.FUNCTION, 'missing-fn'),
+        ]),
+      }),
+      /does not define function MISSING-FN/,
+    );
+  });
+});
+
+test('portable runtime exports exact Common Lisp browsing owner identities and survives durable SQLite restart', async () => {
+  assert.equal(
+    portableRuntime.authorizedDescribeCommonLispNamespace,
+    authorizedDescribeCommonLispNamespace,
+  );
+  assert.equal(
+    portableRuntime.authorizedDescribeCommonLispDefinition,
+    authorizedDescribeCommonLispDefinition,
+  );
+  assert.equal(
+    portableRuntime.commonLispDefinitionResource,
+    commonLispDefinitionResource,
+  );
+
+  const sqliteApp = createSqliteApplicationRuntime();
+  await sqliteApp.start();
+  try {
+    const runtime1 = await createRuntime({
+      backend: {
+        instance: new LagrangeBackend({
+          runtime: sqliteApp,
+          ownsRuntime: false,
+          namespace: 'cl-browse-durable',
+        }),
+      },
+    });
+    await runtime1.images.createImage({id: 'durable-cl'});
+    await installCommonLispProgram({
+      runtime: runtime1,
+      imageId: 'durable-cl',
+      lane: 'wasm',
+      source: `
+        (defstruct (point2d (:conc-name pt-)) (x 0) (y 0))
+        (defun manhattan (p) (+ (pt-x p) (pt-y p)))
+      `,
+    });
+    await runtime1.close();
+
+    const runtime2 = await createRuntime({
+      backend: {
+        instance: new LagrangeBackend({
+          runtime: sqliteApp,
+          ownsRuntime: false,
+          namespace: 'cl-browse-durable',
+        }),
+      },
+    });
+    try {
+      const nsDesc = await authorizedDescribeCommonLispNamespace({
+        images: runtime2.images,
+        imageId: 'durable-cl',
+        require: requireFor(runtime2, [namespaceReadGrant('durable-cl')]),
+      });
+      assert.ok(nsDesc.functions.includes('MANHATTAN'));
+      assert.deepEqual(nsDesc.structs, ['POINT2D']);
+
+      const fnDesc = await authorizedDescribeCommonLispDefinition({
+        images: runtime2.images,
+        imageId: 'durable-cl',
+        kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+        name: 'manhattan',
+        require: requireFor(runtime2, [
+          namespaceReadGrant('durable-cl'),
+          definitionReadGrant('durable-cl', COMMON_LISP_DEFINITION_KIND.FUNCTION, 'manhattan'),
+        ]),
+      });
+      assert.equal(fnDesc.name, 'MANHATTAN');
+      assert.deepEqual(fnDesc.signature.parameters, ['P']);
+    } finally {
+      await runtime2.close();
+    }
+  } finally {
+    await sqliteApp.stop();
+  }
+});
