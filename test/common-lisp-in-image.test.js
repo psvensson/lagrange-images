@@ -730,6 +730,349 @@ for (const lane of ['neutral', 'wasm']) {
       assert.equal(cl.imageId, 'app');
     });
   });
+
+  test(`Phase 3: CLOS defclass (multiple inheritance, initargs, initforms, accessors), make-instance, slot-value, defgeneric/defmethod (:before/:after/:around, call-next-method, eql & built-in specializers) and Smalltalk interop (${lane} lane)`, async () => {
+    await withRuntime(async (runtime) => {
+      await installCommonLispRuntime({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'app',
+        lane,
+      });
+      const evalCL = (source) => evaluateCommonLispSource({runtime, imageId: 'app', source, lane});
+      const toArray = (value) => commonLispListToArray({images: runtime.images, imageId: 'app', value});
+
+      await evalCL(`
+        (defclass shape ()
+          ((color :initarg :color :initform 'black :accessor shape-color)))
+
+        (defclass labeled ()
+          ((label :initarg :label :initform "none" :reader labeled-text :writer set-labeled-text)))
+
+        (defclass circle (shape labeled)
+          ((radius :initarg :radius :initform 1 :accessor circle-radius)))
+
+        (defclass rect (shape)
+          ((width :initarg :w :initform 2 :accessor rect-w)
+           (height :initarg :h :initform 3 :accessor rect-h)))
+      `);
+
+      // Instance creation (static & dynamic), slot-value (static & dynamic), readers/writers/accessors, reflection & typep
+      assert.deepEqual(
+        await toArray(await evalCL(`
+          (let* ((c1 (make-instance 'circle :radius 5 :color 'red :label "C1"))
+                 (dyn-cls 'circle)
+                 (c2 (make-instance dyn-cls :radius 10))
+                 (dyn-slot 'radius))
+            (setf (shape-color c2) 'blue)
+            (set-labeled-text "C2-tag" c2)
+            (incf (circle-radius c1) 2)
+            (setf (slot-value c2 dyn-slot) (+ (slot-value c2 'radius) 5))
+            (list (circle-radius c1)
+                  (shape-color c1)
+                  (labeled-text c1)
+                  (slot-value c2 dyn-slot)
+                  (shape-color c2)
+                  (labeled-text c2)
+                  (type-of c1)
+                  (class-name (class-of c1))
+                  (typep c1 'circle)
+                  (typep c1 'shape)
+                  (typep c1 'labeled)
+                  (typep c1 'rect)
+                  (typep c1 'standard-object)
+                  (let ((tp 'labeled)) (typep c1 tp))
+                  (typep 42 'integer)
+                  (typep 42 '(eql 42))
+                  (typep 42 '(eql 99))))
+        `)),
+        await toArray(await evalCL(`'(7 red "C1" 15 blue "C2-tag" circle circle t t t nil t t t t nil)`)),
+      );
+
+      // Generic functions: single dispatch, inheritance, next-method-p, call-next-method (0 args & explicit args),
+      // multi-dispatch, built-in & (eql ...) specializers, and :before / :after / :around method combination
+      await evalCL(`
+        (defgeneric describe-area (obj))
+        (defmethod describe-area ((s shape))
+          0)
+        (defmethod describe-area ((c circle))
+          (+ (* 3 (circle-radius c) (circle-radius c))
+             (if (next-method-p) (call-next-method) -100)))
+        (defmethod describe-area ((r rect))
+          (* (rect-w r) (rect-h r)))
+
+        (defgeneric scale-metric (obj factor))
+        (defmethod scale-metric ((s shape) factor)
+          (* factor 10))
+        (defmethod scale-metric ((c circle) factor)
+          (+ (circle-radius c) (call-next-method c (+ factor 1))))
+
+        (defgeneric interact (a b))
+        (defmethod interact ((a circle) (b circle)) 'circle-circle)
+        (defmethod interact ((a circle) (b rect)) 'circle-rect)
+        (defmethod interact ((a rect) (b circle)) 'rect-circle)
+        (defmethod interact ((a shape) (b shape)) 'shape-shape)
+
+        (defgeneric classify-val (x))
+        (defmethod classify-val ((x (eql 0))) 'zero)
+        (defmethod classify-val ((x (eql :magic))) 'magic-kw)
+        (defmethod classify-val ((x integer)) 'int)
+        (defmethod classify-val ((x string)) 'str)
+        (defmethod classify-val ((x cons)) 'pair)
+        (defmethod classify-val (x) 'other)
+
+        (defparameter *trace-log* nil)
+        (defgeneric traced-op (obj))
+        (defmethod traced-op :around ((s shape))
+          (setq *trace-log* (append *trace-log* (list 'around-shape-in)))
+          (let ((res (call-next-method)))
+            (setq *trace-log* (append *trace-log* (list 'around-shape-out)))
+            res))
+        (defmethod traced-op :around ((c circle))
+          (setq *trace-log* (append *trace-log* (list 'around-circle-in)))
+          (let ((res (call-next-method)))
+            (setq *trace-log* (append *trace-log* (list 'around-circle-out)))
+            (+ res 100)))
+        (defmethod traced-op :before ((s shape))
+          (setq *trace-log* (append *trace-log* (list 'before-shape))))
+        (defmethod traced-op :before ((c circle))
+          (setq *trace-log* (append *trace-log* (list 'before-circle))))
+        (defmethod traced-op ((s shape))
+          (setq *trace-log* (append *trace-log* (list 'primary-shape)))
+          1)
+        (defmethod traced-op ((c circle))
+          (setq *trace-log* (append *trace-log* (list 'primary-circle)))
+          (+ (circle-radius c) (call-next-method)))
+        (defmethod traced-op :after ((s shape))
+          (setq *trace-log* (append *trace-log* (list 'after-shape))))
+        (defmethod traced-op :after ((c circle))
+          (setq *trace-log* (append *trace-log* (list 'after-circle))))
+      `);
+
+      assert.deepEqual(
+        await toArray(await evalCL(`
+          (let ((c (make-instance 'circle :radius 4))
+                (r (make-instance 'rect :w 5 :h 6))
+                (s (make-instance 'shape)))
+            (setq *trace-log* nil)
+            (let ((traced-val (traced-op c)))
+              (list (describe-area c)
+                    (describe-area r)
+                    (describe-area s)
+                    (scale-metric c 2)
+                    (interact c c)
+                    (interact c r)
+                    (interact r c)
+                    (interact r r)
+                    (classify-val 0)
+                    (classify-val 42)
+                    (classify-val :magic)
+                    (classify-val "hi")
+                    (classify-val '(1 2))
+                    (classify-val c)
+                    traced-val
+                    (prin1-to-string *trace-log*))))
+        `)),
+        await toArray(await evalCL(`
+          '(48 30 0 34
+            circle-circle circle-rect rect-circle shape-shape
+            zero int magic-kw str pair other
+            105
+            "(AROUND-CIRCLE-IN AROUND-SHAPE-IN BEFORE-CIRCLE BEFORE-SHAPE PRIMARY-CIRCLE PRIMARY-SHAPE AFTER-SHAPE AFTER-CIRCLE AROUND-SHAPE-OUT AROUND-CIRCLE-OUT)")
+        `)),
+      );
+
+      // Bidirectional Smalltalk interop with CLOS class `Circle`
+      const stCircle = await evaluateSymmetricSmalltalkBlock({
+        runtime,
+        imageId: 'app',
+        source: '[ | c | c := Circle new. c radius: 6. c color: #green. c ]',
+      });
+      assert.deepEqual(
+        await evaluateCommonLispSource({
+          runtime,
+          imageId: 'app',
+          lane,
+          captures: {stCircle: {id: 'cl:cap:STCIRCLE', name: 'ST-CIRCLE', value: stCircle}},
+          source: '(list (describe-area st-circle) (shape-color st-circle) (type-of st-circle))',
+        }).then(toArray),
+        await toArray(await evalCL('\'(108 |green| circle)')),
+      );
+    });
+  });
+
+  test(`Phase 3: packages (defpackage/in-package/:use/:export), named restarts (restart-case/invoke-restart/find-restart), extended loop and format/streams (${lane} lane)`, async () => {
+    await withRuntime(async (runtime) => {
+      await installCommonLispRuntime({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'app',
+        lane,
+      });
+      const evalCL = (source) => evaluateCommonLispSource({runtime, imageId: 'app', source, lane});
+      const toArray = (value) => commonLispListToArray({images: runtime.images, imageId: 'app', value});
+
+      // 1. Packages: defpackage, in-package, :use, :export, internal symbol isolation, pkg:sym vs pkg::sym
+      await evalCL(`
+        (defpackage :math-pkg
+          (:use :cl)
+          (:export #:square #:cube #:*scale*))
+        (in-package :math-pkg)
+        (defparameter *scale* 10)
+        (defun secret-offset (x) (+ x 7))
+        (defun square (x) (* x x))
+        (defun cube (x) (* x (square x)))
+
+        (defpackage :app-pkg
+          (:use :cl :math-pkg)
+          (:export #:compute))
+        (in-package :app-pkg)
+        (defun secret-offset (x) (* x 100))
+        (defun compute (x)
+          (+ (square x)
+             (secret-offset x)
+             (math-pkg::secret-offset x)
+             *scale*))
+        (in-package :cl-user)
+      `);
+
+      assert.deepEqual(
+        await toArray(await evalCL(`
+          (list (app-pkg:compute 3)
+                (math-pkg:cube 4)
+                (math-pkg::secret-offset 5))
+        `)),
+        [integerValue(329n), integerValue(64n), integerValue(12n)],
+      );
+
+      // Referring to unexported symbol via single colon `math-pkg:secret-offset` must throw SyntaxError
+      await assert.rejects(
+        () => evalCL('(math-pkg:secret-offset 5)'),
+        /not exported from package MATH-PKG/,
+      );
+
+      // 2. Named restarts: restart-case, find-restart, invoke-restart, and handler decline
+      assert.deepEqual(
+        await toArray(await evalCL(`
+          (defun risky-divide (a b)
+            (restart-case
+                (if (= b 0)
+                    (error "division by zero")
+                    (/ a b))
+              (return-zero ()
+                :report "Return 0"
+                0)
+              (use-divisor (new-b)
+                :report "Use alternate divisor"
+                (/ a new-b))))
+
+          (list
+            ;; Invoke use-divisor restart
+            (handler-bind
+                ((error (lambda (c)
+                          (if (find-restart 'use-divisor)
+                              (invoke-restart 'use-divisor 5)
+                              0))))
+              (risky-divide 100 0))
+            ;; Inner handler declines (returns normally) when no 'nonexistent-restart is found,
+            ;; outer handler catches and invokes 'return-zero
+            (handler-bind
+                ((error (lambda (c)
+                          (invoke-restart 'return-zero))))
+              (handler-bind
+                  ((error (lambda (c)
+                            (when (find-restart 'nonexistent-restart)
+                              (invoke-restart 'nonexistent-restart)))))
+                (risky-divide 50 0))))
+        `)),
+        [integerValue(20n), integerValue(0n)],
+      );
+
+      // 3. Extended LOOP macro
+      assert.deepEqual(
+        await toArray(await evalCL(`
+          (mapcar #'prin1-to-string
+            (list
+              ;; numeric from/to, downto/by, below/sum
+              (loop for i from 1 to 5 collect (* i i))
+              (loop for i from 10 downto 2 by 3 collect i)
+              (loop for i below 5 sum i)
+              ;; in, on, across, maximize, minimize, count
+              (loop for tail on '(10 20 30) collect (length tail))
+              (loop for x across #(12 45 7 89 23) maximize x)
+              (loop for x across #(12 45 7 89 23) minimize x)
+              (loop for x in '(1 2 3 4 5 6) count (evenp x))
+              ;; when/else/and with into accumulators + finally return
+              (loop for x in '(1 2 3 4 5 6)
+                    when (evenp x)
+                      collect x into evens
+                      and sum x into even-sum
+                    else
+                      collect x into odds
+                    finally (return (list evens odds even-sum)))
+              ;; = / then stepping with repeat
+              (loop for a = 1 then b
+                    and b = 1 then (+ a b)
+                    repeat 6
+                    collect a)
+              ;; always, never, thereis
+              (loop for x in '(2 4 6 8) always (evenp x))
+              (loop for x in '(2 4 5 8) always (evenp x))
+              (loop for x in '(1 3 5) never (evenp x))
+              (loop for x in '(1 3 6 7) thereis (and (evenp x) (* x 10)))
+              ;; with, initially, while, until, append
+              (loop with base = 100
+                    for x in '(1 2 3 4 5)
+                    while (< x 4)
+                    append (list x (+ base x)))))
+        `)),
+        [
+          textValue('(1 4 9 16 25)'),
+          textValue('(10 7 4)'),
+          textValue('10'),
+          textValue('(3 2 1)'),
+          textValue('89'),
+          textValue('7'),
+          textValue('3'),
+          textValue('((2 4 6) (1 3 5) 12)'),
+          textValue('(1 1 2 4 8 16)'),
+          textValue('T'),
+          textValue('NIL'),
+          textValue('T'),
+          textValue('60'),
+          textValue('(1 101 2 102 3 103)'),
+        ],
+      );
+
+      // 4. Streams and FORMAT
+      assert.deepEqual(
+        await toArray(await evalCL(`
+          (let ((s (make-string-output-stream)))
+            (write-string "items: " s)
+            (prin1 "hello" s)
+            (write-char #\\Space s)
+            (princ 42 s)
+            (terpri s)
+            (list
+              (get-output-stream-string s)
+              (get-output-stream-string s)
+              (with-output-to-string (out)
+                (format out "~A=~D (~S)" 'count 7 "ok"))
+              (format nil "Hello ~A, ~S has ~D items~~!~%" "world" "box" 3)
+              (princ-to-string '(1 "two" :three))
+              (prin1-to-string '(1 "two" :three))))
+        `)),
+        [
+          textValue('items: "hello" 42\n'),
+          textValue(''),
+          textValue('COUNT=7 ("ok")'),
+          textValue('Hello world, "box" has 3 items~!\n'),
+          textValue('(1 two THREE)'),
+          textValue('(1 "two" :THREE)'),
+        ],
+      );
+    });
+  });
 }
 
 test('installCommonLispRuntime is idempotent, supports live defun redefinition, and runs on portable-runtime', async () => {

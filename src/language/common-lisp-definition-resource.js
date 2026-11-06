@@ -18,6 +18,8 @@ const COMMON_LISP_DEFINITION_KIND = Object.freeze({
   FUNCTION: 'function',
   MACRO: 'macro',
   STRUCT: 'struct',
+  CLASS: 'class',
+  GENERIC: 'generic',
   VARIABLE: 'variable',
 });
 
@@ -33,7 +35,7 @@ function requiredText(value, label) {
 function assertCommonLispDefinitionKind(kind, label = 'Common Lisp definition kind') {
   if (!VALID_DEFINITION_KINDS.has(kind)) {
     throw new TypeError(
-      `${label} must be one of function, macro, struct, variable; got ${String(kind)}`,
+      `${label} must be one of function, macro, struct, class, generic, variable; got ${String(kind)}`,
     );
   }
   return kind;

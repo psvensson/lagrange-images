@@ -474,3 +474,83 @@ test('Common Lisp browsing seam has a portable static module closure and survive
     await sqliteApp.stop();
   }
 });
+
+test('authorizedDescribeCommonLispDefinition describes CLOS classes and generic functions and browses package namespaces', async () => {
+  await withCommonLispImage(async (runtime) => {
+    await installCommonLispProgram({
+      runtime,
+      imageId: 'app',
+      lane: 'neutral',
+      source: `
+        (defclass account ()
+          ((balance :initarg :balance :initform 0 :accessor account-balance)))
+
+        (defclass savings-account (account)
+          ((rate :initarg :rate :initform 5 :reader savings-rate)))
+
+        (defgeneric compute-interest (acct years))
+        (defmethod compute-interest ((a account) years) 0)
+        (defmethod compute-interest ((a savings-account) years)
+          (* (account-balance a) (savings-rate a) years))
+
+        (defpackage :bank-pkg
+          (:use :cl)
+          (:export #:open-acct))
+        (in-package :bank-pkg)
+        (defun open-acct (b) b)
+        (in-package :cl-user)
+      `,
+    });
+
+    const clsDesc = await authorizedDescribeCommonLispDefinition({
+      images: runtime.images,
+      imageId: 'app',
+      kind: COMMON_LISP_DEFINITION_KIND.CLASS,
+      name: 'savings-account',
+      require: requireFor(runtime, [
+        namespaceReadGrant('app'),
+        definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.CLASS, 'savings-account'),
+      ]),
+    });
+    assert.equal(clsDesc.format, COMMON_LISP_DEFINITION_DESCRIPTION_V1);
+    assert.equal(clsDesc.kind, 'class');
+    assert.equal(clsDesc.name, 'SAVINGS-ACCOUNT');
+    assert.equal(clsDesc.className, 'SavingsAccount');
+    assert.deepEqual(clsDesc.superclasses, ['ACCOUNT']);
+    assert.deepEqual(clsDesc.cpl, ['SAVINGS-ACCOUNT', 'ACCOUNT']);
+    assert.deepEqual(clsDesc.slots, ['BALANCE', 'RATE']);
+    assert.deepEqual(clsDesc.localSlots, ['RATE']);
+    assertNoStorageLayout(clsDesc, 'CLOS class description');
+
+    const genDesc = await authorizedDescribeCommonLispDefinition({
+      images: runtime.images,
+      imageId: 'app',
+      kind: COMMON_LISP_DEFINITION_KIND.GENERIC,
+      name: 'compute-interest',
+      require: requireFor(runtime, [
+        namespaceReadGrant('app'),
+        definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.GENERIC, 'compute-interest'),
+      ]),
+    });
+    assert.equal(genDesc.format, COMMON_LISP_DEFINITION_DESCRIPTION_V1);
+    assert.equal(genDesc.kind, 'generic');
+    assert.equal(genDesc.name, 'COMPUTE-INTEREST');
+    assert.deepEqual(genDesc.parameters, ['ACCT', 'YEARS']);
+    assert.equal(genDesc.methods.length, 2);
+    assert.deepEqual(genDesc.methods[0].specializers, ['ACCOUNT', 'T']);
+    assert.deepEqual(genDesc.methods[1].specializers, ['SAVINGS-ACCOUNT', 'T']);
+    assertNoStorageLayout(genDesc, 'CLOS generic function description');
+
+    // Package namespace browsing
+    const pkgNsId = 'common-lisp/package-namespace/QkFOSy1QS0c';
+    const pkgNsDesc = await authorizedDescribeCommonLispNamespace({
+      images: runtime.images,
+      imageId: 'app',
+      namespaceId: pkgNsId,
+      require: requireFor(runtime, [namespaceReadGrant('app', pkgNsId)]),
+    });
+    assert.equal(pkgNsDesc.format, COMMON_LISP_NAMESPACE_DESCRIPTION_V1);
+    assert.deepEqual(pkgNsDesc.functions, ['OPEN-ACCT']);
+    assertNoStorageLayout(pkgNsDesc, 'package namespace description');
+  });
+});

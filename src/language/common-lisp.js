@@ -81,6 +81,9 @@ const COMMON_LISP_SOURCE_V0 = 'common-lisp/source-v0';
 const COMMON_LISP_SYNTAX_V0 = 'common-lisp/syntax-v0';
 const COMMON_LISP_MACRO_V0 = 'common-lisp/macro-v0';
 const COMMON_LISP_STRUCT_V0 = 'common-lisp/struct-v0';
+const COMMON_LISP_CLASS_V0 = 'common-lisp/class-v0';
+const COMMON_LISP_GENERIC_V0 = 'common-lisp/generic-v0';
+const COMMON_LISP_PACKAGE_V0 = 'common-lisp/package-v0';
 const COMMON_LISP_SIGNATURE_V0 = 'common-lisp/signature-v0';
 const COMMON_LISP_NAMESPACE_ID = 'common-lisp/namespace/v1';
 const CONS_CLASS_NAME = 'Cons';
@@ -93,7 +96,7 @@ const COMMON_LISP_UNSUPPLIED_ID = 'common-lisp/unsupplied/v1';
 const COMMON_LISP = Object.freeze({
   id: COMMON_LISP_ID,
   name: 'Common Lisp',
-  version: '0.2.0',
+  version: '0.3.0',
 });
 
 const CL_NIL_BINDING_ID = 'common-lisp/nil';
@@ -228,6 +231,12 @@ const STANDARD_LIBRARY_SOURCE = `
 (defun cdar (x) (cdr (car x)))
 (defun cddr (x) (cdr (cdr x)))
 
+(defun evenp (n) (= (mod n 2) 0))
+(defun oddp (n) (/= (mod n 2) 0))
+(defun abs (n) (if (< n 0) (- 0 n) n))
+(defun min (a b) (if (< a b) a b))
+(defun max (a b) (if (> a b) a b))
+
 (defun equal (a b)
   (if (%eql a b)
       t
@@ -355,10 +364,25 @@ const STANDARD_LIBRARY_SOURCE = `
     (%copy-byte-array-into buf b2 n1 0 n2)
     (send (send ByteArray :fromArray: buf) :utf8Text)))
 
+(defun %char-to-string (ch)
+  (let ((arr (%make-array 1)))
+    (%set-aref arr 0 (char-code ch))
+    (send (send ByteArray :fromArray: arr) :utf8Text)))
+
+(defun %string-subseq (str start end)
+  (let* ((limit (if end end (%string-length str)))
+         (out "")
+         (idx start))
+    (%while (< idx limit)
+      (setq out (%string-append out (%char-to-string (char str idx))))
+      (setq idx (+ idx 1)))
+    out))
+
 (defun subseq (seq start &optional end)
-  (if (vectorp seq)
-      (%vector-subseq seq start end)
-      (%list-subseq seq start end 0)))
+  (cond
+    ((vectorp seq) (%vector-subseq seq start end))
+    ((stringp seq) (%string-subseq seq start end))
+    (t (%list-subseq seq start end 0))))
 
 (defun %plist-has-key (plist key)
   (if (null plist)
@@ -434,6 +458,333 @@ const STANDARD_LIBRARY_SOURCE = `
         (if res
             res
             (some pred (cdr list))))))
+
+(defvar %active-restarts nil)
+
+(defun %apply-list (fn args)
+  (let ((len (%list-length args)))
+    (cond
+      ((= len 0) (funcall fn))
+      ((= len 1) (funcall fn (car args)))
+      ((= len 2) (funcall fn (car args) (cadr args)))
+      ((= len 3) (funcall fn (car args) (cadr args) (third args)))
+      ((= len 4) (funcall fn (car args) (cadr args) (third args) (car (cdr (cddr args)))))
+      (t (funcall fn (car args) (cadr args) (third args) (car (cdr (cddr args))) (car (cddr (cddr args))))))))
+
+(defun find-restart (name)
+  (let ((entry (assoc name %active-restarts)))
+    (if entry (car entry) nil)))
+
+(defun invoke-restart (name &rest args)
+  (let ((entry (assoc name %active-restarts)))
+    (if entry
+        (%apply-list (cdr entry) args)
+        (error "restart not active"))))
+
+(defun intern (str)
+  (send str :asSymbol))
+
+(defun %and2 (a b)
+  (if a b nil))
+
+(defun %or2 (a b)
+  (if a a b))
+
+(defun %cons-if (flag item list)
+  (if flag (cons item list) list))
+
+(defun keywordp (x)
+  (cond
+    ((null x) nil)
+    ((eq x t) nil)
+    ((symbolp x)
+     (let ((s (send x :asString)))
+       (if (> (%string-length s) 1)
+           (if (= (char-code (char s 0)) 58) t nil)
+           nil)))
+    (t nil)))
+
+(defun symbol-name (sym)
+  (cond
+    ((null sym) "NIL")
+    ((eq sym t) "T")
+    ((symbolp sym)
+     (let ((s (send sym :asString)))
+       (if (> (%string-length s) 1)
+           (if (= (char-code (char s 0)) 58)
+               (%string-subseq s 1 nil)
+               s)
+           s)))
+    (t (error "not a symbol"))))
+
+(defun %char-downcase-code (code)
+  (if (>= code 65)
+      (if (<= code 90) (+ code 32) code)
+      code))
+
+(defun %char-upcase-code (code)
+  (if (>= code 97)
+      (if (<= code 122) (- code 32) code)
+      code))
+
+(defun %lisp-slot-to-camel (str)
+  (let ((len (%string-length str))
+        (cap-next nil)
+        (out ""))
+    (dotimes (idx len)
+      (let ((code (char-code (char str idx))))
+        (if (= code 45)
+            (setq cap-next t)
+            (let ((next-ch (%char-to-string
+                             (code-char (if cap-next
+                                            (%char-upcase-code code)
+                                            (%char-downcase-code code))))))
+              (setq out (%string-append out next-ch))
+              (setq cap-next nil)))))
+    out))
+
+(defun %slot-value (obj slot-sym)
+  (let ((sel (send (%lisp-slot-to-camel (symbol-name slot-sym)) :asSymbol)))
+    (send obj :perform: sel)))
+
+(defun %set-slot-value (obj slot-sym val)
+  (let ((sel (send (%string-append (%lisp-slot-to-camel (symbol-name slot-sym)) ":") :asSymbol)))
+    (send obj :perform:with: sel val)
+    val))
+
+(defun class-of (x)
+  (if (functionp x)
+      BlockClosure
+      (send x :class)))
+
+(defun class-name (cls)
+  (if (symbolp cls)
+      cls
+      (send (send cls :clClassName) :asSymbol)))
+
+(defun type-of (x)
+  (cond
+    ((null x) 'null)
+    ((eq x t) 'boolean)
+    ((integerp x) 'integer)
+    ((stringp x) 'string)
+    ((characterp x) 'character)
+    ((keywordp x) 'keyword)
+    ((symbolp x) 'symbol)
+    ((consp x) 'cons)
+    ((vectorp x) 'vector)
+    ((hash-table-p x) 'hash-table)
+    ((functionp x) 'function)
+    (t (send (send x :clTypeName) :asSymbol))))
+
+(defun %primitive-value-p (x)
+  (cond
+    ((null x) t)
+    ((eq x t) t)
+    ((integerp x) t)
+    ((stringp x) t)
+    ((characterp x) t)
+    ((symbolp x) t)
+    ((consp x) t)
+    ((vectorp x) t)
+    ((hash-table-p x) t)
+    ((functionp x) t)
+    (t nil)))
+
+(defun %typep (x tp)
+  (cond
+    ((eq tp t) t)
+    ((null tp) nil)
+    ((consp tp)
+     (if (eq (car tp) 'eql)
+         (eql x (car (cdr tp)))
+         nil))
+    ((eq tp 'null) (null x))
+    ((eq tp 'cons) (consp x))
+    ((eq tp 'list) (listp x))
+    ((eq tp 'atom) (atom x))
+    ((eq tp 'symbol) (symbolp x))
+    ((eq tp 'keyword) (keywordp x))
+    ((eq tp 'integer) (integerp x))
+    ((eq tp 'number) (integerp x))
+    ((eq tp 'fixnum) (integerp x))
+    ((eq tp 'string) (stringp x))
+    ((eq tp 'character) (characterp x))
+    ((eq tp 'vector) (vectorp x))
+    ((eq tp 'array) (vectorp x))
+    ((eq tp 'hash-table) (hash-table-p x))
+    ((eq tp 'function) (functionp x))
+    ((%primitive-value-p x) nil)
+    ((eq tp 'standard-object) t)
+    ((symbolp tp)
+     (if (send x :perform: (send (%string-append "isClClass_" (symbol-name tp)) :asSymbol))
+         t
+         nil))
+    (t nil)))
+
+(defun initialize-instance (inst &rest initargs)
+  inst)
+
+(defun %positive-int-to-string (n acc)
+  (if (= n 0)
+      acc
+      (let ((digit (mod n 10))
+            (rest (floor n 10)))
+        (%positive-int-to-string
+          rest
+          (%string-append (%char-to-string (code-char (+ 48 digit))) acc)))))
+
+(defun %int-to-string (n)
+  (if (= n 0)
+      "0"
+      (if (< n 0)
+          (%string-append "-" (%positive-int-to-string (- 0 n) ""))
+          (%positive-int-to-string n ""))))
+
+(defun %format-list-tail (cur readable)
+  (cond
+    ((null cur) ")")
+    ((consp cur)
+     (let ((elem-str (if readable (prin1-to-string (car cur)) (princ-to-string (car cur)))))
+       (%string-append " "
+         (%string-append elem-str (%format-list-tail (cdr cur) readable)))))
+    (t
+     (let ((elem-str (if readable (prin1-to-string cur) (princ-to-string cur))))
+       (%string-append " . "
+         (%string-append elem-str ")"))))))
+
+(defun %format-vector (vec readable)
+  (let ((len (%vector-length vec))
+        (out "#("))
+    (dotimes (idx len)
+      (let* ((sep (if (> idx 0) " " ""))
+             (el (aref vec idx))
+             (s (if readable (prin1-to-string el) (princ-to-string el))))
+        (setq out (%string-append out (%string-append sep s)))))
+    (%string-append out ")")))
+
+(defun princ-to-string (x)
+  (cond
+    ((null x) "NIL")
+    ((eq x t) "T")
+    ((integerp x) (%int-to-string x))
+    ((stringp x) x)
+    ((characterp x) (%char-to-string x))
+    ((symbolp x) (symbol-name x))
+    ((consp x)
+     (%string-append "("
+       (%string-append (princ-to-string (car x))
+                       (%format-list-tail (cdr x) nil))))
+    ((vectorp x) (%format-vector x nil))
+    (t (%string-append "#<" (%string-append (send x :clTypeName) ">")))))
+
+(defun prin1-to-string (x)
+  (cond
+    ((null x) "NIL")
+    ((eq x t) "T")
+    ((integerp x) (%int-to-string x))
+    ((stringp x) (%string-append "\\"" (%string-append x "\\"")))
+    ((characterp x)
+     (let ((code (char-code x)))
+       (cond
+         ((= code 32) "#\\\\Space")
+         ((= code 10) "#\\\\Newline")
+         ((= code 9) "#\\\\Tab")
+         (t (%string-append "#\\\\" (%char-to-string x))))))
+    ((symbolp x) (send x :asString))
+    ((consp x)
+     (%string-append "("
+       (%string-append (prin1-to-string (car x))
+                       (%format-list-tail (cdr x) t))))
+    ((vectorp x) (%format-vector x t))
+    (t (%string-append "#<" (%string-append (send x :clTypeName) ">")))))
+
+(defun make-string-output-stream ()
+  (cons '%string-stream ""))
+
+(defun %string-stream-p (stream)
+  (if (consp stream)
+      (eq (car stream) '%string-stream)
+      nil))
+
+(defun write-string (str &optional stream)
+  (if (%string-stream-p stream)
+      (progn (rplacd stream (%string-append (cdr stream) str)) str)
+      str))
+
+(defun write-char (ch &optional stream)
+  (write-string (%char-to-string ch) stream)
+  ch)
+
+(defun terpri (&optional stream)
+  (write-string "\\n" stream)
+  nil)
+
+(defun princ (obj &optional stream)
+  (write-string (princ-to-string obj) stream)
+  obj)
+
+(defun prin1 (obj &optional stream)
+  (write-string (prin1-to-string obj) stream)
+  obj)
+
+(defun get-output-stream-string (stream)
+  (if (%string-stream-p stream)
+      (let ((res (cdr stream)))
+        (rplacd stream "")
+        res)
+      ""))
+
+(defun %format-directive-kind (dir)
+  (let ((c (char-code dir)))
+    (cond
+      ((= c 65) 'a)
+      ((= c 97) 'a)
+      ((= c 68) 'a)
+      ((= c 100) 'a)
+      ((= c 83) 's)
+      ((= c 115) 's)
+      ((= c 37) 'newline)
+      ((= c 126) 'tilde)
+      (t 'other))))
+
+(defun %format-walk (ctrl idx len args acc)
+  (if (>= idx len)
+      acc
+      (let ((ch (char ctrl idx)))
+        (if (char= ch #\\~)
+            (if (< (+ idx 1) len)
+                (let* ((dir (char ctrl (+ idx 1)))
+                       (kind (%format-directive-kind dir)))
+                  (cond
+                    ((eq kind 'a)
+                     (%format-walk ctrl (+ idx 2) len (cdr args)
+                                   (%string-append acc (princ-to-string (car args)))))
+                    ((eq kind 's)
+                     (%format-walk ctrl (+ idx 2) len (cdr args)
+                                   (%string-append acc (prin1-to-string (car args)))))
+                    ((eq kind 'newline)
+                     (%format-walk ctrl (+ idx 2) len args
+                                   (%string-append acc "\\n")))
+                    ((eq kind 'tilde)
+                     (%format-walk ctrl (+ idx 2) len args
+                                   (%string-append acc "~")))
+                    (t
+                     (%format-walk ctrl (+ idx 2) len args
+                                   (%string-append acc (%char-to-string dir))))))
+                (%format-walk ctrl (+ idx 1) len args
+                              (%string-append acc "~")))
+            (%format-walk ctrl (+ idx 1) len args
+                          (%string-append acc (%char-to-string ch)))))))
+
+(defun format (dest control-string &rest args)
+  (let ((rendered (%format-walk control-string 0 (%string-length control-string) args "")))
+    (cond
+      ((null dest) rendered)
+      ((%string-stream-p dest)
+       (write-string rendered dest)
+       nil)
+      (t nil))))
 `;
 
 function requiredText(value, label) {
@@ -473,6 +824,44 @@ function commonLispStructArtifactId(name, serialized = null) {
   const canonical = requiredText(name, 'Common Lisp struct name').toUpperCase();
   const base = `common-lisp/struct/${base64urlEncode(utf8Encode(canonical))}`;
   return serialized ? `${base}/${base64urlEncode(utf8Encode(serialized))}` : base;
+}
+
+function commonLispClassBindingId(name) {
+  const canonical = requiredText(name, 'Common Lisp class name').toUpperCase();
+  return `common-lisp/class-binding/${base64urlEncode(utf8Encode(canonical))}`;
+}
+
+function commonLispClassArtifactId(name, serialized = null) {
+  const canonical = requiredText(name, 'Common Lisp class name').toUpperCase();
+  const base = `common-lisp/class/${base64urlEncode(utf8Encode(canonical))}`;
+  return serialized ? `${base}/${base64urlEncode(utf8Encode(serialized))}` : base;
+}
+
+function commonLispGenericBindingId(name) {
+  const canonical = requiredText(name, 'Common Lisp generic function name').toUpperCase();
+  return `common-lisp/generic-binding/${base64urlEncode(utf8Encode(canonical))}`;
+}
+
+function commonLispGenericArtifactId(name, serialized = null) {
+  const canonical = requiredText(name, 'Common Lisp generic function name').toUpperCase();
+  const base = `common-lisp/generic/${base64urlEncode(utf8Encode(canonical))}`;
+  return serialized ? `${base}/${base64urlEncode(utf8Encode(serialized))}` : base;
+}
+
+function commonLispPackageBindingId(name) {
+  const canonical = requiredText(name, 'Common Lisp package name').toUpperCase();
+  return `common-lisp/package-binding/${base64urlEncode(utf8Encode(canonical))}`;
+}
+
+function commonLispPackageArtifactId(name, serialized = null) {
+  const canonical = requiredText(name, 'Common Lisp package name').toUpperCase();
+  const base = `common-lisp/package/${base64urlEncode(utf8Encode(canonical))}`;
+  return serialized ? `${base}/${base64urlEncode(utf8Encode(serialized))}` : base;
+}
+
+function commonLispPackageNamespaceId(name) {
+  const canonical = requiredText(name, 'Common Lisp package name').toUpperCase();
+  return `common-lisp/package-namespace/${base64urlEncode(utf8Encode(canonical))}`;
 }
 
 function commonLispSignatureBindingId(name) {
@@ -570,6 +959,28 @@ function tokenizeCommonLispSource(source) {
     if (ch === '#' && source[index + 1] === '(') {
       tokens.push({type: '#(', value: '#('});
       index += 2;
+      continue;
+    }
+    if (ch === '#' && source[index + 1] === ':') {
+      index += 2;
+      let rawChars = '';
+      let canonicalChars = '';
+      while (index < length && !isDelimiter(source[index])) {
+        rawChars += source[index];
+        canonicalChars += source[index].toUpperCase();
+        index += 1;
+      }
+      if (canonicalChars.length === 0) {
+        throw new SyntaxError('invalid Common Lisp #: uninterned symbol literal');
+      }
+      tokens.push({
+        type: 'symbol',
+        name: canonicalChars,
+        spelling: rawChars,
+        keyword: false,
+        uninterned: true,
+        escaped: false,
+      });
       continue;
     }
     if (ch === '#' && source[index + 1] === '\\') {
@@ -1020,7 +1431,7 @@ function parseLambdaList(paramForm) {
       if (item?.kind === 'symbol') {
         keys.push({
           name: item.name,
-          keyword: `:${item.name}`,
+          keyword: `:${stripPackagePrefix(item.name)}`,
           initForm: NIL_NODE,
           suppliedP: null,
         });
@@ -1030,14 +1441,16 @@ function parseLambdaList(paramForm) {
         let kwName;
         if (first?.kind === 'symbol') {
           varName = first.name;
-          kwName = `:${first.name}`;
+          kwName = `:${stripPackagePrefix(first.name)}`;
         } else if (
           first?.kind === 'list'
           && first.elements.length === 2
           && first.elements[0]?.kind === 'symbol'
           && first.elements[1]?.kind === 'symbol'
         ) {
-          kwName = first.elements[0].name.startsWith(':') ? first.elements[0].name : `:${first.elements[0].name}`;
+          kwName = first.elements[0].name.startsWith(':')
+            ? first.elements[0].name
+            : `:${stripPackagePrefix(first.elements[0].name)}`;
           varName = first.elements[1].name;
         } else {
           throw new SyntaxError('invalid Common Lisp &key parameter specification');
@@ -1063,7 +1476,16 @@ function parseLambdaList(paramForm) {
   return {isSimple, required, optional, rest, keys};
 }
 
-function createMacroContext({macros = {}, structs = {}, functionSignatures = {}} = {}) {
+function stripPackagePrefix(rawName) {
+  const s = String(rawName);
+  const dbl = s.indexOf('::');
+  if (dbl >= 0) return s.slice(dbl + 2);
+  const sgl = s.indexOf(':');
+  if (sgl > 0) return s.slice(sgl + 1);
+  return s;
+}
+
+function createMacroContext({macros = {}, structs = {}, classes = {}, functionSignatures = {}} = {}) {
   const userMacros = new Map();
   for (const [k, v] of Object.entries(macros)) {
     userMacros.set(k.toUpperCase(), v);
@@ -1078,6 +1500,10 @@ function createMacroContext({macros = {}, structs = {}, functionSignatures = {}}
       });
     }
   }
+  const classMap = new Map();
+  for (const [k, v] of Object.entries(classes)) {
+    classMap.set(k.toUpperCase(), v);
+  }
   const sigMap = new Map();
   for (const [k, v] of Object.entries(functionSignatures)) {
     sigMap.set(k.toUpperCase(), v);
@@ -1086,6 +1512,7 @@ function createMacroContext({macros = {}, structs = {}, functionSignatures = {}}
   return {
     userMacros,
     structs: structMap,
+    classes: classMap,
     functionSignatures: sigMap,
     freshGensym(prefix = 'G') {
       gensymCounter += 1;
@@ -1785,6 +2212,35 @@ function expandSetfSingle(placeForm, valueForm, ctx) {
       return makeListNode([makeSymbolNode('%SET-ELT'), args[0], args[1], valueForm]);
     case 'GETHASH':
       return makeListNode([makeSymbolNode('%SET-GETHASH'), args[0], args[1], valueForm]);
+    case 'SLOT-VALUE': {
+      const slotForm = args[1];
+      if (
+        slotForm?.kind === 'list'
+        && slotForm.elements.length === 2
+        && slotForm.elements[0]?.kind === 'symbol'
+        && slotForm.elements[0].name === 'QUOTE'
+        && slotForm.elements[1]?.kind === 'symbol'
+      ) {
+        const recvTemp = ctx.freshGensym('RECV');
+        const valTemp = ctx.freshGensym('VAL');
+        const varName = toCamelCaseSlotName(stripPackagePrefix(slotForm.elements[1].name));
+        return makeListNode([
+          makeSymbolNode('LET'),
+          makeListNode([
+            makeListNode([recvTemp, args[0]]),
+            makeListNode([valTemp, valueForm]),
+          ]),
+          makeListNode([
+            makeSymbolNode('SEND'),
+            recvTemp,
+            Object.freeze({kind: 'string', value: `${varName}:`}),
+            valTemp,
+          ]),
+          valTemp,
+        ]);
+      }
+      return makeListNode([makeSymbolNode('%SET-SLOT-VALUE'), args[0], slotForm, valueForm]);
+    }
     case 'SEND': {
       const recvTemp = ctx.freshGensym('RECV');
       const valTemp = ctx.freshGensym('VAL');
@@ -1832,6 +2288,21 @@ function extractSelectorSpellingStatic(selectorForm) {
   throw new SyntaxError('Common Lisp (send receiver selector ...) requires a keyword, quoted symbol, or string selector');
 }
 
+function isConstantPlaceArg(form) {
+  if (!form) return false;
+  if (form.kind === 'integer' || form.kind === 'string') return true;
+  if (form.kind === 'symbol' && (isNilSymbol(form) || isTSymbol(form) || form.keyword)) return true;
+  if (
+    form.kind === 'list'
+    && form.elements.length === 2
+    && form.elements[0]?.kind === 'symbol'
+    && form.elements[0].name === 'QUOTE'
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function withGeneralizedPlace(placeForm, ctx, buildBody) {
   if (placeForm?.kind === 'symbol') {
     return buildBody(
@@ -1844,9 +2315,14 @@ function withGeneralizedPlace(placeForm, ctx, buildBody) {
     throw new SyntaxError('invalid Common Lisp generalized place');
   }
   const [head, ...args] = normalized.elements;
-  const argTemps = args.map((_, idx) => ctx.freshGensym(`PLACE_ARG_${idx}`));
-  const bindings = args.map((arg, idx) => makeListNode([argTemps[idx], arg]));
-  const canonPlace = makeListNode([head, ...argTemps]);
+  const bindings = [];
+  const canonArgs = args.map((arg, idx) => {
+    if (isConstantPlaceArg(arg)) return arg;
+    const temp = ctx.freshGensym(`PLACE_ARG_${idx}`);
+    bindings.push(makeListNode([temp, arg]));
+    return temp;
+  });
+  const canonPlace = makeListNode([head, ...canonArgs]);
   const inner = buildBody(
     canonPlace,
     (newVal) => expandSetfSingle(canonPlace, newVal, ctx),
@@ -1918,6 +2394,37 @@ const BUILT_IN_MACROS = Object.freeze({
   RETURN(args) {
     if (args.length > 1) throw new SyntaxError('Common Lisp RETURN accepts at most 1 value');
     return makeListNode([makeSymbolNode('RETURN-FROM'), NIL_NODE, args[0] ?? NIL_NODE]);
+  },
+  APPLY(args) {
+    if (args.length < 2) {
+      throw new SyntaxError('Common Lisp APPLY requires a function and at least 1 argument');
+    }
+    const [fnForm, ...restArgs] = args;
+    const listArg = restArgs.length === 1
+      ? restArgs[0]
+      : makeListNode([makeSymbolNode('LIST*'), ...restArgs]);
+    return makeListNode([makeSymbolNode('%APPLY-LIST'), fnForm, listArg]);
+  },
+  '%WHILE'(args, ctx) {
+    if (args.length < 1) throw new SyntaxError('Common Lisp %WHILE requires a condition');
+    const [condForm, ...bodyForms] = args;
+    const loopSym = ctx.freshGensym('WHILE_LOOP');
+    return makeListNode([
+      makeSymbolNode('LABELS'),
+      makeListNode([
+        makeListNode([
+          loopSym,
+          NIL_NODE,
+          makeListNode([
+            makeSymbolNode('IF'),
+            condForm,
+            makeListNode([makeSymbolNode('PROGN'), ...bodyForms, makeListNode([loopSym])]),
+            NIL_NODE,
+          ]),
+        ]),
+      ]),
+      makeListNode([loopSym]),
+    ]);
   },
   DOLIST(args, ctx) {
     if (args.length < 1 || args[0]?.kind !== 'list' || args[0].elements.length < 2) {
@@ -2184,7 +2691,786 @@ const BUILT_IN_MACROS = Object.freeze({
     }
     throw new SyntaxError(`unsupported Common Lisp CONCATENATE result-type: ${typeName ?? JSON.stringify(typeForm)}`);
   },
+  'SLOT-VALUE'(args) {
+    if (args.length !== 2) {
+      throw new SyntaxError('Common Lisp SLOT-VALUE requires an object and a slot-name');
+    }
+    const [objForm, slotForm] = args;
+    if (
+      slotForm?.kind === 'list'
+      && slotForm.elements.length === 2
+      && slotForm.elements[0]?.kind === 'symbol'
+      && slotForm.elements[0].name === 'QUOTE'
+      && slotForm.elements[1]?.kind === 'symbol'
+    ) {
+      const varName = toCamelCaseSlotName(stripPackagePrefix(slotForm.elements[1].name));
+      return makeListNode([
+        makeSymbolNode('SEND'),
+        objForm,
+        Object.freeze({kind: 'string', value: varName}),
+      ]);
+    }
+    return makeListNode([makeSymbolNode('%SLOT-VALUE'), objForm, slotForm]);
+  },
+  'MAKE-INSTANCE'(args) {
+    if (args.length < 1) {
+      throw new SyntaxError('Common Lisp MAKE-INSTANCE requires a class designator');
+    }
+    const [classForm, ...initargs] = args;
+    if (
+      classForm?.kind === 'list'
+      && classForm.elements.length === 2
+      && classForm.elements[0]?.kind === 'symbol'
+      && classForm.elements[0].name === 'QUOTE'
+      && classForm.elements[1]?.kind === 'symbol'
+    ) {
+      const clsName = classForm.elements[1].name;
+      return makeListNode([makeSymbolNode(`%MAKE-CLASS-${clsName}`), ...initargs]);
+    }
+    return makeListNode([
+      makeSymbolNode('%CL-MAKE-INSTANCE'),
+      classForm,
+      makeListNode([makeSymbolNode('LIST'), ...initargs]),
+    ]);
+  },
+  TYPEP(args, ctx) {
+    if (args.length !== 2) {
+      throw new SyntaxError('Common Lisp TYPEP requires an object and a type-specifier');
+    }
+    const [objForm, typeForm] = args;
+    if (
+      typeForm?.kind === 'list'
+      && typeForm.elements.length === 2
+      && typeForm.elements[0]?.kind === 'symbol'
+      && typeForm.elements[0].name === 'QUOTE'
+    ) {
+      const spec = typeForm.elements[1];
+      if (spec?.kind === 'symbol') {
+        const tName = stripPackagePrefix(spec.name);
+        if (tName === 'T') return makeListNode([makeSymbolNode('PROGN'), objForm, T_NODE]);
+        if (tName === 'NIL') return makeListNode([makeSymbolNode('PROGN'), objForm, NIL_NODE]);
+        if (tName === 'NULL') return makeListNode([makeSymbolNode('NULL'), objForm]);
+        if (tName === 'CONS') return makeListNode([makeSymbolNode('CONSP'), objForm]);
+        if (tName === 'LIST') return makeListNode([makeSymbolNode('LISTP'), objForm]);
+        if (tName === 'ATOM') return makeListNode([makeSymbolNode('ATOM'), objForm]);
+        if (tName === 'SYMBOL') return makeListNode([makeSymbolNode('SYMBOLP'), objForm]);
+        if (tName === 'KEYWORD') return makeListNode([makeSymbolNode('KEYWORDP'), objForm]);
+        if (tName === 'INTEGER' || tName === 'NUMBER' || tName === 'FIXNUM') {
+          return makeListNode([makeSymbolNode('INTEGERP'), objForm]);
+        }
+        if (tName === 'STRING') return makeListNode([makeSymbolNode('STRINGP'), objForm]);
+        if (tName === 'CHARACTER') return makeListNode([makeSymbolNode('CHARACTERP'), objForm]);
+        if (tName === 'VECTOR' || tName === 'ARRAY') {
+          return makeListNode([makeSymbolNode('VECTORP'), objForm]);
+        }
+        if (tName === 'HASH-TABLE') return makeListNode([makeSymbolNode('HASH-TABLE-P'), objForm]);
+        if (tName === 'FUNCTION') return makeListNode([makeSymbolNode('FUNCTIONP'), objForm]);
+        if (tName === 'STANDARD-OBJECT') {
+          return makeListNode([makeSymbolNode('%TYPEP'), objForm, typeForm]);
+        }
+        const tmpSym = ctx.freshGensym('TYPEP_OBJ');
+        const selector = ctx?.structs?.has(spec.name)
+          ? `isClStruct_${spec.name}`
+          : `isClClass_${spec.name}`;
+        return makeListNode([
+          makeSymbolNode('LET'),
+          makeListNode([makeListNode([tmpSym, objForm])]),
+          makeListNode([
+            makeSymbolNode('IF'),
+            makeListNode([makeSymbolNode('FUNCTIONP'), tmpSym]),
+            NIL_NODE,
+            makeListNode([
+              makeSymbolNode('IF'),
+              makeListNode([
+                makeSymbolNode('SEND'),
+                tmpSym,
+                Object.freeze({kind: 'string', value: selector}),
+              ]),
+              T_NODE,
+              NIL_NODE,
+            ]),
+          ]),
+        ]);
+      }
+      if (
+        spec?.kind === 'list'
+        && spec.elements.length === 2
+        && spec.elements[0]?.kind === 'symbol'
+        && stripPackagePrefix(spec.elements[0].name) === 'EQL'
+      ) {
+        return makeListNode([
+          makeSymbolNode('EQL'),
+          objForm,
+          makeListNode([makeSymbolNode('QUOTE'), spec.elements[1]]),
+        ]);
+      }
+    }
+    return makeListNode([makeSymbolNode('%TYPEP'), objForm, typeForm]);
+  },
+  'RESTART-CASE'(args, ctx) {
+    if (args.length < 1) {
+      throw new SyntaxError('Common Lisp RESTART-CASE requires a restartable form');
+    }
+    const [protectedForm, ...clauses] = args;
+    if (clauses.length === 0) return protectedForm;
+    const rcBlock = ctx.freshGensym('RESTART_CASE_BLOCK');
+    const savedSym = ctx.freshGensym('SAVED_RESTARTS');
+    let restartListExpr = savedSym;
+    for (let i = clauses.length - 1; i >= 0; i -= 1) {
+      const clause = clauses[i];
+      if (clause?.kind !== 'list' || clause.elements.length < 2 || clause.elements[0]?.kind !== 'symbol') {
+        throw new SyntaxError('Common Lisp RESTART-CASE clause must be (restart-name (params...) body...)');
+      }
+      const [restartSym, paramList, ...restClause] = clause.elements;
+      let bodyStart = 0;
+      while (
+        bodyStart + 1 < restClause.length
+        && restClause[bodyStart]?.kind === 'symbol'
+        && (restClause[bodyStart].name === ':REPORT'
+          || restClause[bodyStart].name === ':INTERACTIVE'
+          || restClause[bodyStart].name === ':TEST')
+      ) {
+        bodyStart += 2;
+      }
+      const clauseBody = restClause.slice(bodyStart);
+      const bodyExpr = clauseBody.length > 0
+        ? makeListNode([makeSymbolNode('PROGN'), ...clauseBody])
+        : NIL_NODE;
+      const pairExpr = makeListNode([
+        makeSymbolNode('CONS'),
+        makeListNode([makeSymbolNode('QUOTE'), restartSym]),
+        makeListNode([
+          makeSymbolNode('LAMBDA'),
+          paramList,
+          makeListNode([makeSymbolNode('RETURN-FROM'), rcBlock, bodyExpr]),
+        ]),
+      ]);
+      restartListExpr = makeListNode([makeSymbolNode('CONS'), pairExpr, restartListExpr]);
+    }
+    const activeRestartsSym = makeSymbolNode('%ACTIVE-RESTARTS');
+    return makeListNode([
+      makeSymbolNode('BLOCK'),
+      rcBlock,
+      makeListNode([
+        makeSymbolNode('LET'),
+        makeListNode([makeListNode([savedSym, activeRestartsSym])]),
+        makeListNode([
+          makeSymbolNode('UNWIND-PROTECT'),
+          makeListNode([
+            makeSymbolNode('PROGN'),
+            makeListNode([makeSymbolNode('SETQ'), activeRestartsSym, restartListExpr]),
+            protectedForm,
+          ]),
+          makeListNode([makeSymbolNode('SETQ'), activeRestartsSym, savedSym]),
+        ]),
+      ]),
+    ]);
+  },
+  'WITH-OUTPUT-TO-STRING'(args) {
+    if (args.length < 1 || args[0]?.kind !== 'list' || args[0].elements.length < 1 || args[0].elements[0]?.kind !== 'symbol') {
+      throw new SyntaxError('Common Lisp WITH-OUTPUT-TO-STRING requires (stream-var) and body');
+    }
+    const [varSpec, ...bodyForms] = args;
+    const streamVar = varSpec.elements[0];
+    return makeListNode([
+      makeSymbolNode('LET'),
+      makeListNode([
+        makeListNode([streamVar, makeListNode([makeSymbolNode('MAKE-STRING-OUTPUT-STREAM')])]),
+      ]),
+      ...bodyForms,
+      makeListNode([makeSymbolNode('GET-OUTPUT-STREAM-STRING'), streamVar]),
+    ]);
+  },
+  LOOP(args, ctx) {
+    return expandLoopMacro(args, ctx);
+  },
 });
+
+const TOP_LOOP_KEYWORDS = new Set([
+  'NAMED',
+  'WITH',
+  'INITIALLY',
+  'FINALLY',
+  'FOR',
+  'AS',
+  'REPEAT',
+  'WHILE',
+  'UNTIL',
+  'ALWAYS',
+  'NEVER',
+  'THEREIS',
+  'DO',
+  'DOING',
+  'RETURN',
+  'COLLECT',
+  'COLLECTING',
+  'APPEND',
+  'APPENDING',
+  'NCONC',
+  'NCONCING',
+  'SUM',
+  'SUMMING',
+  'COUNT',
+  'COUNTING',
+  'MAXIMIZE',
+  'MAXIMIZING',
+  'MINIMIZE',
+  'MINIMIZING',
+  'WHEN',
+  'IF',
+  'UNLESS',
+]);
+
+function loopKey(node) {
+  if (!node || node.kind !== 'symbol' || isNilSymbol(node) || isTSymbol(node)) return null;
+  const raw = node.name.startsWith(':') ? node.name.slice(1) : node.name;
+  return stripPackagePrefix(raw);
+}
+
+function isTopLoopKeyword(node) {
+  const k = loopKey(node);
+  return k !== null && TOP_LOOP_KEYWORDS.has(k);
+}
+
+function expandLoopMacro(args, ctx) {
+  if (args.length === 0 || args[0]?.kind === 'list') {
+    return makeListNode([
+      makeSymbolNode('BLOCK'),
+      NIL_NODE,
+      makeListNode([makeSymbolNode('%WHILE'), T_NODE, ...args]),
+    ]);
+  }
+
+  let blockName = NIL_NODE;
+  const outerBindings = [];
+  const declaredVars = new Set();
+  const initiallyForms = [];
+  const finallyForms = [];
+  const preChecks = [];
+  const bodyStatements = [];
+  const postUpdates = [];
+  let defaultAccSym = null;
+  const bodyExitSym = ctx.freshGensym('LOOP_BODY_EXIT');
+
+  function declareOuter(varSym, initForm) {
+    if (!declaredVars.has(varSym.name)) {
+      declaredVars.add(varSym.name);
+      outerBindings.push(makeListNode([varSym, initForm]));
+    }
+  }
+
+  function ensureAcc(intoVar, mode) {
+    const defaultInit = mode === 'sum' || mode === 'count'
+      ? makeIntNode(0n)
+      : mode === 'always' || mode === 'never'
+        ? T_NODE
+        : NIL_NODE;
+    if (intoVar) {
+      declareOuter(intoVar, defaultInit);
+      return intoVar;
+    }
+    if (!defaultAccSym) {
+      defaultAccSym = ctx.freshGensym('LOOP_ACC');
+      declareOuter(defaultAccSym, defaultInit);
+    }
+    return defaultAccSym;
+  }
+
+  let i = 0;
+
+  function parseForSingle() {
+    const varSym = args[i];
+    if (!varSym || varSym.kind !== 'symbol') {
+      throw new SyntaxError('Common Lisp LOOP FOR requires a variable symbol');
+    }
+    i += 1;
+    const subKey = loopKey(args[i]);
+    if (subKey === 'IN' || subKey === 'ON') {
+      const isOn = subKey === 'ON';
+      const listForm = args[i + 1];
+      i += 2;
+      let stepFnForm = null;
+      if (loopKey(args[i]) === 'BY') {
+        stepFnForm = args[i + 1];
+        i += 2;
+      }
+      const curSym = ctx.freshGensym('LOOP_LIST');
+      declareOuter(curSym, listForm);
+      declareOuter(varSym, NIL_NODE);
+      preChecks.push(
+        makeListNode([
+          makeSymbolNode('WHEN'),
+          makeListNode([makeSymbolNode('NULL'), curSym]),
+          makeListNode([makeSymbolNode('RETURN-FROM'), bodyExitSym, NIL_NODE]),
+        ]),
+      );
+      preChecks.push(
+        makeListNode([
+          makeSymbolNode('SETQ'),
+          varSym,
+          isOn ? curSym : makeListNode([makeSymbolNode('CAR'), curSym]),
+        ]),
+      );
+      postUpdates.push(
+        makeListNode([
+          makeSymbolNode('SETQ'),
+          curSym,
+          stepFnForm
+            ? makeListNode([makeSymbolNode('FUNCALL'), stepFnForm, curSym])
+            : makeListNode([makeSymbolNode('CDR'), curSym]),
+        ]),
+      );
+      return;
+    }
+    if (subKey === 'ACROSS') {
+      const seqForm = args[i + 1];
+      i += 2;
+      const seqSym = ctx.freshGensym('LOOP_SEQ');
+      const idxSym = ctx.freshGensym('LOOP_IDX');
+      const lenSym = ctx.freshGensym('LOOP_LEN');
+      declareOuter(seqSym, seqForm);
+      declareOuter(idxSym, makeIntNode(0n));
+      declareOuter(lenSym, makeListNode([makeSymbolNode('LENGTH'), seqSym]));
+      declareOuter(varSym, NIL_NODE);
+      preChecks.push(
+        makeListNode([
+          makeSymbolNode('WHEN'),
+          makeListNode([makeSymbolNode('>='), idxSym, lenSym]),
+          makeListNode([makeSymbolNode('RETURN-FROM'), bodyExitSym, NIL_NODE]),
+        ]),
+      );
+      preChecks.push(
+        makeListNode([
+          makeSymbolNode('SETQ'),
+          varSym,
+          makeListNode([makeSymbolNode('ELT'), seqSym, idxSym]),
+        ]),
+      );
+      postUpdates.push(
+        makeListNode([
+          makeSymbolNode('SETQ'),
+          idxSym,
+          makeListNode([makeSymbolNode('1+'), idxSym]),
+        ]),
+      );
+      return;
+    }
+    if (subKey === '=') {
+      const initExpr = args[i + 1];
+      i += 2;
+      if (loopKey(args[i]) === 'THEN') {
+        const thenExpr = args[i + 1];
+        i += 2;
+        const firstSym = ctx.freshGensym('LOOP_FIRST');
+        declareOuter(firstSym, T_NODE);
+        declareOuter(varSym, NIL_NODE);
+        preChecks.push(
+          makeListNode([
+            makeSymbolNode('IF'),
+            firstSym,
+            makeListNode([
+              makeSymbolNode('PROGN'),
+              makeListNode([makeSymbolNode('SETQ'), varSym, initExpr]),
+              makeListNode([makeSymbolNode('SETQ'), firstSym, NIL_NODE]),
+            ]),
+            makeListNode([makeSymbolNode('SETQ'), varSym, thenExpr]),
+          ]),
+        );
+      } else {
+        declareOuter(varSym, NIL_NODE);
+        preChecks.push(makeListNode([makeSymbolNode('SETQ'), varSym, initExpr]));
+      }
+      return;
+    }
+
+    // Numeric stepping: [FROM|UPFROM|DOWNFROM start] [TO|UPTO|BELOW|DOWNTO|ABOVE limit] [BY step]
+    let startForm = makeIntNode(0n);
+    let limitForm = null;
+    let limitKind = null;
+    let stepForm = makeIntNode(1n);
+    let downward = false;
+    while (i < args.length) {
+      const nk = loopKey(args[i]);
+      if (nk === 'FROM' || nk === 'UPFROM') {
+        startForm = args[i + 1];
+        i += 2;
+      } else if (nk === 'DOWNFROM') {
+        startForm = args[i + 1];
+        downward = true;
+        i += 2;
+      } else if (nk === 'TO' || nk === 'UPTO') {
+        limitForm = args[i + 1];
+        limitKind = 'TO';
+        i += 2;
+      } else if (nk === 'BELOW') {
+        limitForm = args[i + 1];
+        limitKind = 'BELOW';
+        i += 2;
+      } else if (nk === 'DOWNTO') {
+        limitForm = args[i + 1];
+        limitKind = 'DOWNTO';
+        downward = true;
+        i += 2;
+      } else if (nk === 'ABOVE') {
+        limitForm = args[i + 1];
+        limitKind = 'ABOVE';
+        downward = true;
+        i += 2;
+      } else if (nk === 'BY') {
+        stepForm = args[i + 1];
+        i += 2;
+      } else {
+        break;
+      }
+    }
+    declareOuter(varSym, startForm);
+    if (limitForm !== null) {
+      const limSym = ctx.freshGensym('LOOP_LIM');
+      declareOuter(limSym, limitForm);
+      const stopOp = limitKind === 'TO'
+        ? '>'
+        : limitKind === 'BELOW'
+          ? '>='
+          : limitKind === 'DOWNTO'
+            ? '<'
+            : '<=';
+      preChecks.push(
+        makeListNode([
+          makeSymbolNode('WHEN'),
+          makeListNode([makeSymbolNode(stopOp), varSym, limSym]),
+          makeListNode([makeSymbolNode('RETURN-FROM'), bodyExitSym, NIL_NODE]),
+        ]),
+      );
+    }
+    const stepSym = ctx.freshGensym('LOOP_STEP');
+    declareOuter(stepSym, stepForm);
+    postUpdates.push(
+      makeListNode([
+        makeSymbolNode('SETQ'),
+        varSym,
+        makeListNode([makeSymbolNode(downward ? '-' : '+'), varSym, stepSym]),
+      ]),
+    );
+  }
+
+  function parseActionClause() {
+    const kw = loopKey(args[i]);
+    if (kw === 'DO' || kw === 'DOING') {
+      i += 1;
+      const doForms = [];
+      while (i < args.length && !isTopLoopKeyword(args[i]) && loopKey(args[i]) !== 'AND' && loopKey(args[i]) !== 'ELSE' && loopKey(args[i]) !== 'END') {
+        doForms.push(args[i]);
+        i += 1;
+      }
+      return makeListNode([makeSymbolNode('PROGN'), ...doForms]);
+    }
+    if (kw === 'RETURN') {
+      const valForm = args[i + 1];
+      i += 2;
+      return makeListNode([makeSymbolNode('RETURN-FROM'), blockName, valForm]);
+    }
+    if (kw === 'COLLECT' || kw === 'COLLECTING') {
+      const valForm = args[i + 1];
+      i += 2;
+      let intoVar = null;
+      if (loopKey(args[i]) === 'INTO') {
+        intoVar = args[i + 1];
+        i += 2;
+      }
+      const accSym = ensureAcc(intoVar, 'list');
+      return makeListNode([
+        makeSymbolNode('SETQ'),
+        accSym,
+        makeListNode([
+          makeSymbolNode('APPEND'),
+          accSym,
+          makeListNode([makeSymbolNode('LIST'), valForm]),
+        ]),
+      ]);
+    }
+    if (kw === 'APPEND' || kw === 'APPENDING' || kw === 'NCONC' || kw === 'NCONCING') {
+      const valForm = args[i + 1];
+      i += 2;
+      let intoVar = null;
+      if (loopKey(args[i]) === 'INTO') {
+        intoVar = args[i + 1];
+        i += 2;
+      }
+      const accSym = ensureAcc(intoVar, 'list');
+      return makeListNode([
+        makeSymbolNode('SETQ'),
+        accSym,
+        makeListNode([makeSymbolNode('APPEND'), accSym, valForm]),
+      ]);
+    }
+    if (kw === 'SUM' || kw === 'SUMMING') {
+      const valForm = args[i + 1];
+      i += 2;
+      let intoVar = null;
+      if (loopKey(args[i]) === 'INTO') {
+        intoVar = args[i + 1];
+        i += 2;
+      }
+      const accSym = ensureAcc(intoVar, 'sum');
+      return makeListNode([
+        makeSymbolNode('SETQ'),
+        accSym,
+        makeListNode([makeSymbolNode('+'), accSym, valForm]),
+      ]);
+    }
+    if (kw === 'COUNT' || kw === 'COUNTING') {
+      const valForm = args[i + 1];
+      i += 2;
+      let intoVar = null;
+      if (loopKey(args[i]) === 'INTO') {
+        intoVar = args[i + 1];
+        i += 2;
+      }
+      const accSym = ensureAcc(intoVar, 'count');
+      return makeListNode([
+        makeSymbolNode('WHEN'),
+        valForm,
+        makeListNode([
+          makeSymbolNode('SETQ'),
+          accSym,
+          makeListNode([makeSymbolNode('1+'), accSym]),
+        ]),
+      ]);
+    }
+    if (kw === 'MAXIMIZE' || kw === 'MAXIMIZING' || kw === 'MINIMIZE' || kw === 'MINIMIZING') {
+      const isMax = kw.startsWith('MAX');
+      const valForm = args[i + 1];
+      i += 2;
+      let intoVar = null;
+      if (loopKey(args[i]) === 'INTO') {
+        intoVar = args[i + 1];
+        i += 2;
+      }
+      const accSym = ensureAcc(intoVar, isMax ? 'max' : 'min');
+      const vSym = ctx.freshGensym('LOOP_EXT');
+      return makeListNode([
+        makeSymbolNode('LET'),
+        makeListNode([makeListNode([vSym, valForm])]),
+        makeListNode([
+          makeSymbolNode('WHEN'),
+          makeListNode([
+            makeSymbolNode('OR'),
+            makeListNode([makeSymbolNode('NULL'), accSym]),
+            makeListNode([makeSymbolNode(isMax ? '>' : '<'), vSym, accSym]),
+          ]),
+          makeListNode([makeSymbolNode('SETQ'), accSym, vSym]),
+        ]),
+      ]);
+    }
+    if (kw === 'WHEN' || kw === 'IF' || kw === 'UNLESS') {
+      const isUnless = kw === 'UNLESS';
+      const testForm = args[i + 1];
+      i += 2;
+      const thenActions = [parseActionClause()];
+      while (loopKey(args[i]) === 'AND') {
+        i += 1;
+        thenActions.push(parseActionClause());
+      }
+      const elseActions = [];
+      if (loopKey(args[i]) === 'ELSE') {
+        i += 1;
+        elseActions.push(parseActionClause());
+        while (loopKey(args[i]) === 'AND') {
+          i += 1;
+          elseActions.push(parseActionClause());
+        }
+      }
+      if (loopKey(args[i]) === 'END') {
+        i += 1;
+      }
+      const thenExpr = makeListNode([makeSymbolNode('PROGN'), ...thenActions]);
+      const elseExpr = elseActions.length > 0
+        ? makeListNode([makeSymbolNode('PROGN'), ...elseActions])
+        : NIL_NODE;
+      return makeListNode([
+        makeSymbolNode('IF'),
+        testForm,
+        isUnless ? elseExpr : thenExpr,
+        isUnless ? thenExpr : elseExpr,
+      ]);
+    }
+    throw new SyntaxError(`unsupported Common Lisp LOOP clause: ${args[i]?.name ?? JSON.stringify(args[i])}`);
+  }
+
+  while (i < args.length) {
+    const kw = loopKey(args[i]);
+    if (kw === 'NAMED') {
+      blockName = args[i + 1];
+      i += 2;
+      continue;
+    }
+    if (kw === 'WITH') {
+      i += 1;
+      for (;;) {
+        const varSym = args[i];
+        i += 1;
+        let initForm = NIL_NODE;
+        if (loopKey(args[i]) === '=') {
+          initForm = args[i + 1];
+          i += 2;
+        }
+        declareOuter(varSym, initForm);
+        if (loopKey(args[i]) === 'AND') {
+          i += 1;
+        } else {
+          break;
+        }
+      }
+      continue;
+    }
+    if (kw === 'INITIALLY') {
+      i += 1;
+      while (i < args.length && !isTopLoopKeyword(args[i])) {
+        initiallyForms.push(args[i]);
+        i += 1;
+      }
+      continue;
+    }
+    if (kw === 'FINALLY') {
+      i += 1;
+      if (loopKey(args[i]) === 'DO' || loopKey(args[i]) === 'DOING') {
+        i += 1;
+      }
+      if (loopKey(args[i]) === 'RETURN') {
+        finallyForms.push(makeListNode([makeSymbolNode('RETURN-FROM'), blockName, args[i + 1]]));
+        i += 2;
+      } else {
+        while (i < args.length && !isTopLoopKeyword(args[i])) {
+          finallyForms.push(args[i]);
+          i += 1;
+        }
+      }
+      continue;
+    }
+    if (kw === 'FOR' || kw === 'AS') {
+      i += 1;
+      parseForSingle();
+      while (loopKey(args[i]) === 'AND') {
+        i += 1;
+        parseForSingle();
+      }
+      continue;
+    }
+    if (kw === 'REPEAT') {
+      const countForm = args[i + 1];
+      i += 2;
+      const repSym = ctx.freshGensym('LOOP_REP');
+      declareOuter(repSym, countForm);
+      preChecks.push(
+        makeListNode([
+          makeSymbolNode('WHEN'),
+          makeListNode([makeSymbolNode('<='), repSym, makeIntNode(0n)]),
+          makeListNode([makeSymbolNode('RETURN-FROM'), bodyExitSym, NIL_NODE]),
+        ]),
+      );
+      postUpdates.push(
+        makeListNode([
+          makeSymbolNode('SETQ'),
+          repSym,
+          makeListNode([makeSymbolNode('1-'), repSym]),
+        ]),
+      );
+      continue;
+    }
+    if (kw === 'WHILE') {
+      const testForm = args[i + 1];
+      i += 2;
+      bodyStatements.push(
+        makeListNode([
+          makeSymbolNode('UNLESS'),
+          testForm,
+          makeListNode([makeSymbolNode('RETURN-FROM'), bodyExitSym, NIL_NODE]),
+        ]),
+      );
+      continue;
+    }
+    if (kw === 'UNTIL') {
+      const testForm = args[i + 1];
+      i += 2;
+      bodyStatements.push(
+        makeListNode([
+          makeSymbolNode('WHEN'),
+          testForm,
+          makeListNode([makeSymbolNode('RETURN-FROM'), bodyExitSym, NIL_NODE]),
+        ]),
+      );
+      continue;
+    }
+    if (kw === 'ALWAYS') {
+      const testForm = args[i + 1];
+      i += 2;
+      ensureAcc(null, 'always');
+      bodyStatements.push(
+        makeListNode([
+          makeSymbolNode('UNLESS'),
+          testForm,
+          makeListNode([makeSymbolNode('RETURN-FROM'), blockName, NIL_NODE]),
+        ]),
+      );
+      continue;
+    }
+    if (kw === 'NEVER') {
+      const testForm = args[i + 1];
+      i += 2;
+      ensureAcc(null, 'never');
+      bodyStatements.push(
+        makeListNode([
+          makeSymbolNode('WHEN'),
+          testForm,
+          makeListNode([makeSymbolNode('RETURN-FROM'), blockName, NIL_NODE]),
+        ]),
+      );
+      continue;
+    }
+    if (kw === 'THEREIS') {
+      const testForm = args[i + 1];
+      i += 2;
+      ensureAcc(null, 'thereis');
+      const itSym = ctx.freshGensym('LOOP_IT');
+      bodyStatements.push(
+        makeListNode([
+          makeSymbolNode('LET'),
+          makeListNode([makeListNode([itSym, testForm])]),
+          makeListNode([
+            makeSymbolNode('WHEN'),
+            itSym,
+            makeListNode([makeSymbolNode('RETURN-FROM'), blockName, itSym]),
+          ]),
+        ]),
+      );
+      continue;
+    }
+    bodyStatements.push(parseActionClause());
+  }
+
+  return makeListNode([
+    makeSymbolNode('BLOCK'),
+    blockName,
+    makeListNode([
+      makeSymbolNode('LET*'),
+      makeListNode(outerBindings),
+      ...initiallyForms,
+      makeListNode([
+        makeSymbolNode('BLOCK'),
+        bodyExitSym,
+        makeListNode([
+          makeSymbolNode('%WHILE'),
+          T_NODE,
+          ...preChecks,
+          ...bodyStatements,
+          ...postUpdates,
+        ]),
+      ]),
+      ...finallyForms,
+      defaultAccSym ?? NIL_NODE,
+    ]),
+  ]);
+}
 
 function macroexpand1CommonLispForm(inputForm, optionsOrCtx = {}, shadowedFunctions = new Set()) {
   const form = typeof inputForm === 'string' ? readCommonLispSource(inputForm)[0] : inputForm;
@@ -2510,13 +3796,14 @@ function compileCommonLispSemanticProgram(rawForms, {
   variableBindings = {},
   macros = {},
   structs = {},
+  classes = {},
   functionSignatures = {},
   alreadyExpanded = false,
 } = {}) {
   if (!Array.isArray(rawForms)) {
     throw new TypeError('compileCommonLispSemanticProgram forms must be an array');
   }
-  const macroContext = createMacroContext({macros, structs, functionSignatures});
+  const macroContext = createMacroContext({macros, structs, classes, functionSignatures});
   const forms = alreadyExpanded
     ? rawForms
     : rawForms.map((f) => expandAllMacrosInForm(f, macroContext));
@@ -2770,7 +4057,33 @@ function compileCommonLispSemanticProgram(rawForms, {
     };
   }
 
+  function isTBindingExpr(expr) {
+    return expr?.op === 'binding' && expr.id === CL_T_BINDING_ID;
+  }
+
+  function isNilBindingExpr(expr) {
+    return expr?.op === 'binding' && expr.id === CL_NIL_BINDING_ID;
+  }
+
   function compileTruthBranch(scope, testExpr, thenExpr, elseExpr) {
+    if (testExpr?.op === 'if') {
+      if (isTBindingExpr(testExpr.then) && isNilBindingExpr(testExpr.else)) {
+        return {
+          op: 'if',
+          condition: testExpr.condition,
+          then: thenExpr,
+          else: elseExpr,
+        };
+      }
+      if (isNilBindingExpr(testExpr.then) && isTBindingExpr(testExpr.else)) {
+        return {
+          op: 'if',
+          condition: testExpr.condition,
+          then: elseExpr,
+          else: thenExpr,
+        };
+      }
+    }
     return {
       op: 'if',
       condition: {
@@ -3156,14 +4469,28 @@ function compileCommonLispSemanticProgram(rawForms, {
             throw new SyntaxError('Common Lisp SETQ target must be a mutable symbol');
           }
           const lexical = lookupLexical(scope, target.name);
-          if (!lexical) {
-            throw new SyntaxError(`unbound Common Lisp variable in SETQ: ${target.name}`);
+          if (lexical) {
+            statements.push({
+              op: 'binding-write',
+              id: lexical.id,
+              value: compileForm(scope, valForm),
+            });
+            continue;
           }
-          statements.push({
-            op: 'binding-write',
-            id: lexical.id,
-            value: compileForm(scope, valForm),
-          });
+          if (varBindingMap.has(target.name)) {
+            const bindingId = varBindingMap.get(target.name);
+            globalBindingIdsUsed.add(bindingId);
+            const bindingExpr = requireRootCapture(scope, bindingId, target.name);
+            statements.push({
+              op: 'send',
+              languageId: SYMMETRIC_SMALLTALK_ID,
+              receiver: bindingExpr,
+              message: textValue('clSetValue:'),
+              arguments: [compileForm(scope, valForm)],
+            });
+            continue;
+          }
+          throw new SyntaxError(`unbound Common Lisp variable in SETQ: ${target.name}`);
         }
         return statements.length === 1 ? statements[0] : {op: 'sequence', statements};
       }
@@ -3358,9 +4685,8 @@ function compileCommonLispSemanticProgram(rawForms, {
               op: 'binding-write',
               id: tagLocal.id,
               value: {
-                op: 'apply',
-                callee: refRuntimeBlock(scope, RUNTIME_BLOCK_IDS.CONS, '$cons'),
-                arguments: [compileQuoted(scope, blockSym), refNil(scope)],
+                op: 'literal',
+                value: textValue(tagVarName),
               },
             },
             {
@@ -3616,7 +4942,17 @@ function compileCommonLispSemanticProgram(rawForms, {
           }
           const [typeSym, handlerForm] = b.elements;
           const conditionClassExpr = resolveConditionClassExpr(scope, typeSym);
-          const handlerBlock = compileForm(scope, handlerForm);
+          const condSym = makeSymbolNode(`__CL_HB_COND_${nextTempId + 1}__`);
+          const wrapperBody = [
+            makeListNode([makeSymbolNode('FUNCALL'), handlerForm, condSym]),
+            makeListNode([makeSymbolNode('SIGNAL'), condSym]),
+          ];
+          const handlerBlock = compileLambdaExpr(
+            scope,
+            makeListNode([condSym]),
+            wrapperBody,
+            'handler_bind_handler',
+          );
           const protectedBlock = compileLambdaExpr(scope, emptyList, currentForms, 'handler_bind_protected');
           if (currentExpr !== null) {
             protectedBlock.program = Object.freeze({
@@ -4887,7 +6223,7 @@ async function installCommonLispRuntime({
   const existingCarBlock = await images.getBlock(imageId, RUNTIME_BLOCK_IDS.CAR);
   if (existingCarBlock && existingCarBlock.metadata?.lane === lane) {
     const existingNs = await findNamespace({images, imageId, namespaceId: COMMON_LISP_NAMESPACE_ID});
-    if (existingNs?.entries.has('MAPCAR')) {
+    if (existingNs?.entries.has('MAPCAR') && existingNs?.entries.has('FORMAT')) {
       const kernel = await findSmalltalkKernel({images, imageId});
       const tRef = await ensureInternedSymbol(images, imageId, 'T');
       return Object.freeze({
@@ -4949,6 +6285,15 @@ async function installCommonLispRuntime({
     methods: [{selector: 'messageText:', source: '[ :t | messageText := t. ^self ]'}],
   });
   await installSmalltalkGlobalNamespace({images, compilation: compiler, imageId, lane});
+  await defineMethodsFromSource({
+    images,
+    compilation: compiler,
+    imageId,
+    lane,
+    classRef: objectRef(imageId, 'smalltalk/class/GlobalBinding'),
+    allowRedefinition: true,
+    methods: [{selector: 'clSetValue:', source: '[ :v | value := v. ^ v ]'}],
+  });
 
   // Ensure Cons, BlockExit, and BlockClosure classes exist in the image
   const consShapeRef = await ensureSmalltalkShape(images, imageId, {
@@ -4988,7 +6333,19 @@ async function installCommonLispRuntime({
     lane,
     classRef: kernel.objectClass,
     allowRedefinition: true,
-    methods: [{selector: 'isCons', source: '[ ^false ]'}],
+    methods: [
+      {selector: 'isCons', source: '[ ^false ]'},
+      {selector: 'clTypeName', source: "[ ^ 'OBJECT' ]"},
+    ],
+  });
+  await defineMethodsFromSource({
+    images,
+    compilation: compiler,
+    imageId,
+    lane,
+    classRef: kernel.classClass,
+    allowRedefinition: true,
+    methods: [{selector: 'clClassName', source: "[ ^ 'STANDARD-OBJECT' ]"}],
   });
   const {classRef: blockClosureClassRef} = await ensureNamedClass({
     images,
@@ -4996,6 +6353,29 @@ async function installCommonLispRuntime({
     name: BLOCK_CLOSURE_CLASS_NAME,
     superclassRef: kernel.objectClass,
   });
+
+  for (const [clsName, clName] of [
+    ['Object', 'STANDARD-OBJECT'],
+    ['Integer', 'INTEGER'],
+    ['Text', 'STRING'],
+    [CONS_CLASS_NAME, 'CONS'],
+    ['Symbol', 'SYMBOL'],
+    ['UndefinedObject', 'NULL'],
+    ['Array', 'VECTOR'],
+    ['Character', 'CHARACTER'],
+    ['Dictionary', 'HASH-TABLE'],
+    [BLOCK_CLOSURE_CLASS_NAME, 'FUNCTION'],
+  ]) {
+    await defineMethodsFromSource({
+      images,
+      compilation: compiler,
+      imageId,
+      lane,
+      classRef: objectRef(imageId, `smalltalk/metaclass/${clsName}`),
+      allowRedefinition: true,
+      methods: [{selector: 'clClassName', source: `[ ^ '${clName}' ]`}],
+    });
+  }
 
   // Ensure singleton sentinels for hash-table tombstones and unsupplied optional args
   for (const sentinelId of [COMMON_LISP_TOMBSTONE_ID, COMMON_LISP_UNSUPPLIED_ID]) {
@@ -5061,7 +6441,7 @@ async function installCommonLispRuntime({
 
   // Install the Common Lisp standard library functions (if not already present)
   const ns = await findNamespace({images, imageId, namespaceId: COMMON_LISP_NAMESPACE_ID});
-  if (!ns?.entries.has('MAPCAR')) {
+  if (!ns?.entries.has('MAPCAR') || !ns?.entries.has('FORMAT')) {
     await installCommonLispProgram({
       images,
       compilation: compiler,
@@ -5132,6 +6512,9 @@ async function collectCommonLispCompileContext({images, imageId}) {
   const variableBindings = {};
   const macros = {};
   const structs = {};
+  const classes = {};
+  const generics = {};
+  const packages = {};
   const functionSignatures = {};
 
   for (const [name, bindingId] of Object.entries(globals)) {
@@ -5159,6 +6542,27 @@ async function collectCommonLispCompileContext({images, imageId}) {
           };
         }
       }
+    } else if (bindingId.startsWith('common-lisp/class-binding/')) {
+      const record = await images.getObject(imageId, bindingId);
+      const val = record?.slots?.['global-binding-value'];
+      if (val?.kind === VALUE_KIND.TEXT) {
+        const parsed = JSON.parse(val.value);
+        classes[parsed.name] = parsed;
+      }
+    } else if (bindingId.startsWith('common-lisp/generic-binding/')) {
+      const record = await images.getObject(imageId, bindingId);
+      const val = record?.slots?.['global-binding-value'];
+      if (val?.kind === VALUE_KIND.TEXT) {
+        const parsed = JSON.parse(val.value);
+        generics[parsed.name] = parsed;
+      }
+    } else if (bindingId.startsWith('common-lisp/package-binding/')) {
+      const record = await images.getObject(imageId, bindingId);
+      const val = record?.slots?.['global-binding-value'];
+      if (val?.kind === VALUE_KIND.TEXT) {
+        const parsed = JSON.parse(val.value);
+        packages[parsed.name] = parsed;
+      }
     } else if (bindingId.startsWith('common-lisp/signature-binding/')) {
       const record = await images.getObject(imageId, bindingId);
       const val = record?.slots?.['global-binding-value'];
@@ -5168,7 +6572,17 @@ async function collectCommonLispCompileContext({images, imageId}) {
       }
     }
   }
-  return {globals, functionBindings, variableBindings, macros, structs, functionSignatures};
+  return {
+    globals,
+    functionBindings,
+    variableBindings,
+    macros,
+    structs,
+    classes,
+    generics,
+    packages,
+    functionSignatures,
+  };
 }
 
 async function installCommonLispBlock({
@@ -5206,6 +6620,7 @@ async function installCommonLispBlock({
     variableBindings: ctx.variableBindings,
     macros: ctx.macros ?? {},
     structs: ctx.structs ?? {},
+    classes: ctx.classes ?? {},
     functionSignatures: ctx.functionSignatures ?? {},
     alreadyExpanded,
   });
@@ -5448,17 +6863,18 @@ function parseTopLevelDefstruct(form, existingStructs = {}) {
     .filter((sf) => sf?.kind !== 'string') // skip optional docstring
     .map((sf) => {
       if (sf?.kind === 'symbol') {
+        const bareSlot = stripPackagePrefix(sf.name);
         return {
-          name: sf.name,
-          varName: toCamelCaseSlotName(sf.name),
+          name: bareSlot,
+          varName: toCamelCaseSlotName(bareSlot),
           defaultForm: NIL_NODE,
         };
       }
       if (sf?.kind === 'list' && sf.elements[0]?.kind === 'symbol') {
-        const sName = sf.elements[0].name;
+        const bareSlot = stripPackagePrefix(sf.elements[0].name);
         return {
-          name: sName,
-          varName: toCamelCaseSlotName(sName),
+          name: bareSlot,
+          varName: toCamelCaseSlotName(bareSlot),
           defaultForm: sf.elements[1] ?? NIL_NODE,
         };
       }
@@ -5539,13 +6955,18 @@ function buildDefstructProgramForms(struct) {
         makeListNode([xSym]),
         makeListNode([
           makeSymbolNode('IF'),
-          makeListNode([
-            makeSymbolNode('SEND'),
-            xSym,
-            Object.freeze({kind: 'string', value: `isClStruct_${struct.name}`}),
-          ]),
-          T_NODE,
+          makeListNode([makeSymbolNode('FUNCTIONP'), xSym]),
           NIL_NODE,
+          makeListNode([
+            makeSymbolNode('IF'),
+            makeListNode([
+              makeSymbolNode('SEND'),
+              xSym,
+              Object.freeze({kind: 'string', value: `isClStruct_${struct.name}`}),
+            ]),
+            T_NODE,
+            NIL_NODE,
+          ]),
         ]),
       ]),
     );
@@ -5605,6 +7026,899 @@ function buildDefstructProgramForms(struct) {
   return generated;
 }
 
+function computeClassPrecedenceList(className, directSuperclasses, existingClasses = {}) {
+  const result = [className];
+  const seen = new Set([className]);
+  function visit(name) {
+    if (!seen.has(name)) {
+      seen.add(name);
+      result.push(name);
+    }
+    const cls = existingClasses[name];
+    if (cls && Array.isArray(cls.superclasses)) {
+      for (const sup of cls.superclasses) {
+        visit(sup);
+      }
+    }
+  }
+  for (const sup of directSuperclasses) {
+    visit(sup);
+  }
+  return result;
+}
+
+function parseTopLevelDefclass(form, existingClasses = {}) {
+  if (form?.kind !== 'list' || form.elements[0]?.kind !== 'symbol' || form.elements[0].name !== 'DEFCLASS') {
+    return null;
+  }
+  if (form.elements.length < 4) {
+    throw new SyntaxError('Common Lisp DEFCLASS requires a name, superclasses list, and slot-specs list');
+  }
+  const [, nameSym, supersForm, slotsForm] = form.elements;
+  if (nameSym?.kind !== 'symbol' || isNilSymbol(nameSym) || isTSymbol(nameSym) || nameSym.keyword) {
+    throw new SyntaxError('Common Lisp DEFCLASS name must be an ordinary symbol');
+  }
+  const classNameSym = nameSym.name;
+  const className = toPascalCaseIdentifier(nameSym.spelling || classNameSym);
+
+  let directSuperclasses = [];
+  if (supersForm?.kind === 'list') {
+    directSuperclasses = supersForm.elements.map((s) => {
+      if (s?.kind !== 'symbol' || isNilSymbol(s) || isTSymbol(s) || s.keyword) {
+        throw new SyntaxError(`invalid superclass in Common Lisp DEFCLASS ${classNameSym}`);
+      }
+      return s.name;
+    });
+  } else if (!isNilSymbol(supersForm)) {
+    throw new SyntaxError(`Common Lisp DEFCLASS ${classNameSym} superclasses must be a list`);
+  }
+
+  for (const sup of directSuperclasses) {
+    if (!existingClasses[sup]) {
+      throw new SyntaxError(`Common Lisp DEFCLASS ${classNameSym} inherits from unknown class ${sup}`);
+    }
+  }
+
+  const rawSlotSpecs = isNilSymbol(slotsForm)
+    ? []
+    : slotsForm?.kind === 'list'
+      ? slotsForm.elements
+      : null;
+  if (!rawSlotSpecs) {
+    throw new SyntaxError(`Common Lisp DEFCLASS ${classNameSym} slots must be a list`);
+  }
+
+  const localSlots = rawSlotSpecs.map((spec) => {
+    if (spec?.kind === 'symbol') {
+      const bare = stripPackagePrefix(spec.name);
+      return {
+        name: bare,
+        rawName: spec.name,
+        varName: toCamelCaseSlotName(bare),
+        initarg: null,
+        initform: NIL_NODE,
+        readers: [],
+        writers: [],
+        accessors: [],
+      };
+    }
+    if (spec?.kind === 'list' && spec.elements.length >= 1 && spec.elements[0]?.kind === 'symbol') {
+      const sSym = spec.elements[0];
+      const bare = stripPackagePrefix(sSym.name);
+      let initarg = null;
+      let initform = NIL_NODE;
+      const readers = [];
+      const writers = [];
+      const accessors = [];
+      for (let i = 1; i + 1 < spec.elements.length; i += 2) {
+        const optKey = spec.elements[i];
+        const optVal = spec.elements[i + 1];
+        if (optKey?.kind !== 'symbol') continue;
+        const k = optKey.name.startsWith(':') ? optKey.name : `:${stripPackagePrefix(optKey.name)}`;
+        if (k === ':INITARG' && optVal?.kind === 'symbol') {
+          initarg = optVal.name.startsWith(':') ? optVal.name : `:${stripPackagePrefix(optVal.name)}`;
+        } else if (k === ':INITFORM') {
+          initform = optVal ?? NIL_NODE;
+        } else if (k === ':READER' && optVal?.kind === 'symbol') {
+          readers.push(optVal.name);
+        } else if (k === ':WRITER' && optVal?.kind === 'symbol') {
+          writers.push(optVal.name);
+        } else if (k === ':ACCESSOR' && optVal?.kind === 'symbol') {
+          accessors.push(optVal.name);
+        }
+      }
+      return {
+        name: bare,
+        rawName: sSym.name,
+        varName: toCamelCaseSlotName(bare),
+        initarg,
+        initform,
+        readers,
+        writers,
+        accessors,
+      };
+    }
+    throw new SyntaxError(`invalid slot specification in Common Lisp DEFCLASS ${classNameSym}`);
+  });
+
+  const cpl = computeClassPrecedenceList(classNameSym, directSuperclasses, existingClasses);
+
+  // Merge slots along CPL (from most general to most specific so child slot options override parent defaults)
+  const slotMap = new Map();
+  for (const ancestorName of [...cpl].reverse()) {
+    const ancestorSlots = ancestorName === classNameSym
+      ? localSlots
+      : existingClasses[ancestorName]?.localSlots ?? [];
+    for (const s of ancestorSlots) {
+      const prev = slotMap.get(s.name);
+      if (!prev) {
+        slotMap.set(s.name, {...s});
+      } else {
+        slotMap.set(s.name, {
+          name: s.name,
+          rawName: s.rawName ?? prev.rawName,
+          varName: prev.varName,
+          initarg: s.initarg ?? prev.initarg,
+          initform: s.initform !== NIL_NODE ? s.initform : prev.initform,
+          readers: [...new Set([...prev.readers, ...s.readers])],
+          writers: [...new Set([...prev.writers, ...s.writers])],
+          accessors: [...new Set([...prev.accessors, ...s.accessors])],
+        });
+      }
+    }
+  }
+
+  const allSlots = [...slotMap.values()];
+  const primaryParent = directSuperclasses.length > 0 ? existingClasses[directSuperclasses[0]] : null;
+  const primaryParentSlotNames = new Set((primaryParent?.slots ?? []).map((s) => s.name));
+  // Backing Smalltalk class inherits instance variables from primaryParent; any slots from secondary
+  // superclasses (multiple inheritance) or newly declared on this class become local instance variables.
+  const backingLocalSlots = allSlots.filter((s) => !primaryParentSlotNames.has(s.name));
+
+  return Object.freeze({
+    name: classNameSym,
+    className,
+    superclasses: directSuperclasses,
+    cpl,
+    parentClassName: primaryParent ? primaryParent.className : null,
+    localSlots,
+    backingLocalSlots,
+    slots: allSlots,
+  });
+}
+
+function buildDefclassProgramForms(cls) {
+  const generated = [];
+  const classSym = makeSymbolNode(cls.className, {spelling: cls.className});
+  const instSym = makeSymbolNode('%INST');
+  const valSym = makeSymbolNode('%VAL');
+
+  // 1. Class constructor (%MAKE-CLASS-<NAME> &rest %initargs &key ...)
+  const keySpecs = [];
+  const slotInitAssigns = [];
+  for (const s of cls.slots) {
+    const paramSym = makeSymbolNode(`%SLOT_${s.name}`);
+    if (s.initarg) {
+      const kwSym = makeSymbolNode(s.initarg, {spelling: s.initarg, keyword: true});
+      keySpecs.push(makeListNode([makeListNode([kwSym, paramSym]), s.initform]));
+    } else {
+      const dummyKw = makeSymbolNode(`:%UNEXPOSED_${s.name}`, {
+        spelling: `:%UNEXPOSED_${s.name}`,
+        keyword: true,
+      });
+      keySpecs.push(makeListNode([makeListNode([dummyKw, paramSym]), s.initform]));
+    }
+    slotInitAssigns.push(
+      makeListNode([
+        makeSymbolNode('SEND'),
+        instSym,
+        Object.freeze({kind: 'string', value: `${s.varName}:`}),
+        paramSym,
+      ]),
+    );
+  }
+
+  const initargsRestSym = makeSymbolNode('%INITARGS');
+  generated.push(
+    makeListNode([
+      makeSymbolNode('DEFUN'),
+      makeSymbolNode(`%MAKE-CLASS-${cls.name}`),
+      makeListNode([
+        makeSymbolNode('&REST'),
+        initargsRestSym,
+        makeSymbolNode('&KEY'),
+        ...keySpecs,
+      ]),
+      makeListNode([
+        makeSymbolNode('LET'),
+        makeListNode([
+          makeListNode([
+            instSym,
+            makeListNode([makeSymbolNode('SEND'), classSym, Object.freeze({kind: 'string', value: 'basicNew'})]),
+          ]),
+        ]),
+        ...slotInitAssigns,
+        makeListNode([
+          makeSymbolNode('FUNCALL'),
+          makeListNode([makeSymbolNode('FUNCTION'), makeSymbolNode('INITIALIZE-INSTANCE')]),
+          instSym,
+          initargsRestSym,
+        ]),
+        instSym,
+      ]),
+    ]),
+  );
+
+  // 2. Readers, writers, and accessors (using polymorphic Smalltalk selectors so unrelated classes can share reader/accessor names)
+  for (const s of cls.localSlots) {
+    for (const readerName of [...s.readers, ...s.accessors]) {
+      const cleanR = stripPackagePrefix(readerName);
+      generated.push(
+        makeListNode([
+          makeSymbolNode('DEFUN'),
+          makeSymbolNode(readerName),
+          makeListNode([instSym]),
+          makeListNode([
+            makeSymbolNode('SEND'),
+            instSym,
+            Object.freeze({kind: 'string', value: `clAcc_${cleanR}`}),
+          ]),
+        ]),
+      );
+    }
+    for (const accName of s.accessors) {
+      const cleanA = stripPackagePrefix(accName);
+      generated.push(
+        makeListNode([
+          makeSymbolNode('DEFUN'),
+          makeSymbolNode(`%SET-${accName}`),
+          makeListNode([instSym, valSym]),
+          makeListNode([
+            makeSymbolNode('SEND'),
+            instSym,
+            Object.freeze({kind: 'string', value: `clSetAcc_${cleanA}:`}),
+            valSym,
+          ]),
+          valSym,
+        ]),
+      );
+    }
+    for (const writerName of s.writers) {
+      const cleanW = stripPackagePrefix(writerName);
+      generated.push(
+        makeListNode([
+          makeSymbolNode('DEFUN'),
+          makeSymbolNode(writerName),
+          makeListNode([valSym, instSym]),
+          makeListNode([
+            makeSymbolNode('SEND'),
+            instSym,
+            Object.freeze({kind: 'string', value: `clWriter_${cleanW}:`}),
+            valSym,
+          ]),
+          valSym,
+        ]),
+      );
+    }
+  }
+
+  return generated;
+}
+
+function buildDynamicMakeInstanceDefun(allClasses = {}) {
+  const clsSym = makeSymbolNode('%CLS');
+  const argsSym = makeSymbolNode('%ARGS');
+  const nameSym = makeSymbolNode('%NAME');
+  const clauses = Object.values(allClasses).map((cls) =>
+    makeListNode([
+      makeListNode([
+        makeSymbolNode('EQ'),
+        nameSym,
+        makeListNode([makeSymbolNode('QUOTE'), makeSymbolNode(cls.name)]),
+      ]),
+      makeListNode([
+        makeSymbolNode('FUNCALL'),
+        makeListNode([makeSymbolNode('FUNCTION'), makeSymbolNode(`%MAKE-CLASS-${cls.name}`)]),
+        argsSym,
+      ]),
+    ]),
+  );
+  clauses.push(
+    makeListNode([
+      T_NODE,
+      makeListNode([
+        makeSymbolNode('ERROR'),
+        Object.freeze({kind: 'string', value: 'unknown CLOS class in MAKE-INSTANCE'}),
+      ]),
+    ]),
+  );
+  return makeListNode([
+    makeSymbolNode('DEFUN'),
+    makeSymbolNode('%CL-MAKE-INSTANCE'),
+    makeListNode([clsSym, argsSym]),
+    makeListNode([
+      makeSymbolNode('LET'),
+      makeListNode([
+        makeListNode([nameSym, makeListNode([makeSymbolNode('CLASS-NAME'), clsSym])]),
+      ]),
+      makeListNode([makeSymbolNode('COND'), ...clauses]),
+    ]),
+  ]);
+}
+
+function parseTopLevelDefgeneric(form) {
+  if (form?.kind !== 'list' || form.elements[0]?.kind !== 'symbol' || form.elements[0].name !== 'DEFGENERIC') {
+    return null;
+  }
+  if (form.elements.length < 3 || form.elements[2]?.kind !== 'list') {
+    throw new SyntaxError('Common Lisp DEFGENERIC requires a name and lambda-list');
+  }
+  const [, nameSym, lambdaListForm] = form.elements;
+  if (nameSym?.kind !== 'symbol' || isNilSymbol(nameSym) || isTSymbol(nameSym) || nameSym.keyword) {
+    throw new SyntaxError('Common Lisp DEFGENERIC name must be an ordinary symbol');
+  }
+  const params = [];
+  for (const el of lambdaListForm.elements) {
+    if (el?.kind !== 'symbol') break;
+    if (el.name.startsWith('&')) break;
+    params.push(el.name);
+  }
+  return Object.freeze({
+    name: nameSym.name,
+    parameters: params,
+  });
+}
+
+function parseTopLevelDefmethod(form) {
+  if (form?.kind !== 'list' || form.elements[0]?.kind !== 'symbol' || form.elements[0].name !== 'DEFMETHOD') {
+    return null;
+  }
+  if (form.elements.length < 3) {
+    throw new SyntaxError('Common Lisp DEFMETHOD requires a name, specialized lambda-list, and body');
+  }
+  const [, nameSym, third, ...rest] = form.elements;
+  if (nameSym?.kind !== 'symbol' || isNilSymbol(nameSym) || isTSymbol(nameSym) || nameSym.keyword) {
+    throw new SyntaxError('Common Lisp DEFMETHOD name must be an ordinary symbol');
+  }
+  let qualifier = 'PRIMARY';
+  let specListForm;
+  let bodyForms;
+  if (third?.kind === 'symbol' && third.keyword) {
+    const q = third.name.slice(1);
+    if (q !== 'BEFORE' && q !== 'AFTER' && q !== 'AROUND') {
+      throw new SyntaxError(`unsupported Common Lisp DEFMETHOD qualifier: ${third.name}`);
+    }
+    qualifier = q;
+    [specListForm, ...bodyForms] = rest;
+  } else {
+    specListForm = third;
+    bodyForms = rest;
+  }
+  if (specListForm?.kind !== 'list' && !isNilSymbol(specListForm)) {
+    throw new SyntaxError(`Common Lisp DEFMETHOD ${nameSym.name} requires a specialized lambda-list`);
+  }
+  const rawElements = isNilSymbol(specListForm) ? [] : specListForm.elements;
+  const parameters = [];
+  const specializers = [];
+  for (const item of rawElements) {
+    if (item?.kind === 'symbol') {
+      if (item.name.startsWith('&')) break;
+      parameters.push(item.name);
+      specializers.push({kind: 'type', typeName: 'T'});
+    } else if (item?.kind === 'list' && item.elements.length === 2 && item.elements[0]?.kind === 'symbol') {
+      const pName = item.elements[0].name;
+      const spec = item.elements[1];
+      parameters.push(pName);
+      if (spec?.kind === 'symbol') {
+        specializers.push({kind: 'type', typeName: spec.name});
+      } else if (
+        spec?.kind === 'list'
+        && spec.elements.length === 2
+        && spec.elements[0]?.kind === 'symbol'
+        && stripPackagePrefix(spec.elements[0].name) === 'EQL'
+      ) {
+        specializers.push({kind: 'eql', valueForm: spec.elements[1]});
+      } else {
+        throw new SyntaxError(`invalid parameter specializer in Common Lisp DEFMETHOD ${nameSym.name}`);
+      }
+    } else {
+      throw new SyntaxError(`invalid parameter in Common Lisp DEFMETHOD ${nameSym.name}`);
+    }
+  }
+  const specKey = `${qualifier}:${specializers
+    .map((s) => (s.kind === 'eql' ? `(EQL ${formatCommonLispForm(s.valueForm)})` : s.typeName))
+    .join(',')}`;
+  return Object.freeze({
+    name: nameSym.name,
+    qualifier,
+    parameters,
+    specializers,
+    specKey,
+    bodyForms,
+  });
+}
+
+function specializerSpecificityRank(spec, existingClasses = {}) {
+  if (spec.kind === 'eql') return 1000;
+  const t = spec.typeName;
+  if (t === 'T') return 0;
+  const cls = existingClasses[t];
+  if (cls && Array.isArray(cls.cpl)) {
+    return 100 + cls.cpl.length;
+  }
+  // Built-in types (INTEGER, STRING, CONS, SYMBOL, VECTOR, etc.)
+  const stripped = stripPackagePrefix(t);
+  if (stripped === 'NULL' || stripped === 'CONS' || stripped === 'KEYWORD') return 60;
+  if (stripped === 'LIST' || stripped === 'SYMBOL' || stripped === 'INTEGER') return 50;
+  if (stripped === 'NUMBER' || stripped === 'STRING' || stripped === 'VECTOR') return 45;
+  if (stripped === 'ATOM' || stripped === 'STANDARD-OBJECT') return 20;
+  return 40;
+}
+
+function compareMethodsBySpecificity(mA, mB, existingClasses = {}) {
+  const len = Math.min(mA.specializers.length, mB.specializers.length);
+  for (let i = 0; i < len; i += 1) {
+    const sA = mA.specializers[i];
+    const sB = mB.specializers[i];
+    if (sA.kind === 'type' && sB.kind === 'type' && sA.typeName !== sB.typeName) {
+      const clsA = existingClasses[sA.typeName];
+      const clsB = existingClasses[sB.typeName];
+      if (clsA?.cpl?.includes(sB.typeName)) return -1;
+      if (clsB?.cpl?.includes(sA.typeName)) return 1;
+    }
+    const rA = specializerSpecificityRank(sA, existingClasses);
+    const rB = specializerSpecificityRank(sB, existingClasses);
+    if (rA !== rB) return rB - rA;
+  }
+  return 0;
+}
+
+function buildSpecializerCheckForm(argSym, spec) {
+  if (spec.kind === 'eql') {
+    return makeListNode([makeSymbolNode('EQL'), argSym, spec.valueForm]);
+  }
+  if (spec.typeName === 'T') {
+    return T_NODE;
+  }
+  return makeListNode([
+    makeSymbolNode('%TYPEP'),
+    argSym,
+    makeListNode([makeSymbolNode('QUOTE'), makeSymbolNode(spec.typeName)]),
+  ]);
+}
+
+function buildMethodApplicabilityTest(paramSyms, method) {
+  const checks = [];
+  for (let i = 0; i < method.specializers.length; i += 1) {
+    const chk = buildSpecializerCheckForm(paramSyms[i], method.specializers[i]);
+    if (chk !== T_NODE) checks.push(chk);
+  }
+  if (checks.length === 0) return T_NODE;
+  if (checks.length === 1) return checks[0];
+  return checks.slice(1).reduce(
+    (acc, c) => makeListNode([makeSymbolNode('%AND2'), acc, c]),
+    checks[0],
+  );
+}
+
+function buildDefgenericProgramForms(generic, existingClasses = {}) {
+  const generated = [];
+  const paramSyms = generic.parameters.map((_, i) => makeSymbolNode(`%GF_ARG_${i}`));
+  const nextFnSym = makeSymbolNode('%NEXT_FN');
+  const methods = generic.methods ?? [];
+
+  const sortedWithIdx = methods.map((m, idx) => ({m, idx, fnName: `%GF-M-${generic.name}-${idx}`}));
+
+  // 1. Emit a helper DEFUN for each method body
+  // Primary and :around methods receive (%NEXT_FN p1 p2 ...) and bind CALL-NEXT-METHOD / NEXT-METHOD-P via FLET
+  // :before and :after methods receive (p1 p2 ...) and check applicability at top of their own body (tail-position IF)
+  for (const {m, fnName} of sortedWithIdx) {
+    const mParamSyms = m.parameters.map((p) => makeSymbolNode(p));
+    if (m.qualifier === 'PRIMARY' || m.qualifier === 'AROUND') {
+      const cnmArgsSym = makeSymbolNode('%CNM_ARGS');
+      generated.push(
+        makeListNode([
+          makeSymbolNode('DEFUN'),
+          makeSymbolNode(fnName),
+          makeListNode([nextFnSym, ...mParamSyms]),
+          makeListNode([
+            makeSymbolNode('FLET'),
+            makeListNode([
+              makeListNode([
+                makeSymbolNode('NEXT-METHOD-P'),
+                NIL_NODE,
+                makeListNode([makeSymbolNode('IF'), nextFnSym, T_NODE, NIL_NODE]),
+              ]),
+              makeListNode([
+                makeSymbolNode('CALL-NEXT-METHOD'),
+                makeListNode([makeSymbolNode('&REST'), cnmArgsSym]),
+                makeListNode([
+                  makeSymbolNode('IF'),
+                  nextFnSym,
+                  makeListNode([
+                    makeSymbolNode('IF'),
+                    makeListNode([makeSymbolNode('NULL'), cnmArgsSym]),
+                    makeListNode([makeSymbolNode('FUNCALL'), nextFnSym, ...mParamSyms]),
+                    makeListNode([makeSymbolNode('APPLY'), nextFnSym, cnmArgsSym]),
+                  ]),
+                  makeListNode([
+                    makeSymbolNode('ERROR'),
+                    Object.freeze({kind: 'string', value: `no next method in ${generic.name}`}),
+                  ]),
+                ]),
+              ]),
+            ]),
+            ...m.bodyForms,
+          ]),
+        ]),
+      );
+    } else {
+      const appTest = buildMethodApplicabilityTest(mParamSyms, m);
+      generated.push(
+        makeListNode([
+          makeSymbolNode('DEFUN'),
+          makeSymbolNode(fnName),
+          makeListNode(mParamSyms),
+          appTest === T_NODE
+            ? makeListNode([makeSymbolNode('PROGN'), ...m.bodyForms])
+            : makeListNode([makeSymbolNode('WHEN'), appTest, ...m.bodyForms]),
+        ]),
+      );
+    }
+  }
+
+  const primaries = sortedWithIdx
+    .filter((x) => x.m.qualifier === 'PRIMARY')
+    .sort((a, b) => compareMethodsBySpecificity(a.m, b.m, existingClasses));
+  const befores = sortedWithIdx
+    .filter((x) => x.m.qualifier === 'BEFORE')
+    .sort((a, b) => compareMethodsBySpecificity(a.m, b.m, existingClasses));
+  const afters = sortedWithIdx
+    .filter((x) => x.m.qualifier === 'AFTER')
+    .sort((a, b) => compareMethodsBySpecificity(b.m, a.m, existingClasses)); // least-specific first!
+  const arounds = sortedWithIdx
+    .filter((x) => x.m.qualifier === 'AROUND')
+    .sort((a, b) => compareMethodsBySpecificity(a.m, b.m, existingClasses));
+
+  // Build chain of applicable primary methods dynamically at dispatch time using flat %CONS-IF calls
+  // so there are no non-tail IF branches in the dispatcher sequence.
+  const primChainSym = makeSymbolNode('%PRIM_CHAIN');
+  const primPushForms = [...primaries].reverse().map(({m, fnName}) =>
+    makeListNode([
+      makeSymbolNode('SETQ'),
+      primChainSym,
+      makeListNode([
+        makeSymbolNode('%CONS-IF'),
+        buildMethodApplicabilityTest(paramSyms, m),
+        makeListNode([makeSymbolNode('FUNCTION'), makeSymbolNode(fnName)]),
+        primChainSym,
+      ]),
+    ]),
+  );
+
+  const runPrimSym = makeSymbolNode('%RUN_PRIM');
+  const chainParamSym = makeSymbolNode('%CHAIN');
+  const cArgsSyms = generic.parameters.map((_, i) => makeSymbolNode(`%CA_${i}`));
+  const nArgsSyms = generic.parameters.map((_, i) => makeSymbolNode(`%NA_${i}`));
+
+  const coreCallSym = makeSymbolNode('%CORE_FN');
+  const beforeForms = befores.map(({fnName}) =>
+    makeListNode([makeSymbolNode(fnName), ...cArgsSyms]),
+  );
+  const afterForms = afters.map(({fnName}) =>
+    makeListNode([makeSymbolNode(fnName), ...cArgsSyms]),
+  );
+
+  const primaryResultSym = makeSymbolNode('%PRIM_RES');
+  const coreBody = makeListNode([
+    makeSymbolNode('PROGN'),
+    ...beforeForms,
+    makeListNode([
+      makeSymbolNode('IF'),
+      makeListNode([makeSymbolNode('NULL'), primChainSym]),
+      makeListNode([
+        makeSymbolNode('ERROR'),
+        Object.freeze({kind: 'string', value: `no applicable primary method for ${generic.name}`}),
+      ]),
+      makeListNode([
+        makeSymbolNode('LET'),
+        makeListNode([
+          makeListNode([
+            primaryResultSym,
+            makeListNode([makeSymbolNode(runPrimSym.name), primChainSym, ...cArgsSyms]),
+          ]),
+        ]),
+        ...afterForms,
+        primaryResultSym,
+      ]),
+    ]),
+  ]);
+
+  const aroundChainSym = makeSymbolNode('%AROUND_CHAIN');
+  const aroundPushForms = [...arounds].reverse().map(({m, fnName}) =>
+    makeListNode([
+      makeSymbolNode('SETQ'),
+      aroundChainSym,
+      makeListNode([
+        makeSymbolNode('%CONS-IF'),
+        buildMethodApplicabilityTest(paramSyms, m),
+        makeListNode([makeSymbolNode('FUNCTION'), makeSymbolNode(fnName)]),
+        aroundChainSym,
+      ]),
+    ]),
+  );
+  const runAroundSym = makeSymbolNode('%RUN_AROUND');
+  const aChainParamSym = makeSymbolNode('%ACHAIN');
+
+  generated.push(
+    makeListNode([
+      makeSymbolNode('DEFUN'),
+      makeSymbolNode(generic.name),
+      makeListNode(paramSyms),
+      makeListNode([
+        makeSymbolNode('LET'),
+        makeListNode([
+          makeListNode([primChainSym, NIL_NODE]),
+          makeListNode([aroundChainSym, NIL_NODE]),
+        ]),
+        ...primPushForms,
+        ...aroundPushForms,
+        makeListNode([
+          makeSymbolNode('LABELS'),
+          makeListNode([
+            makeListNode([
+              runPrimSym,
+              makeListNode([chainParamSym, ...cArgsSyms]),
+              makeListNode([
+                makeSymbolNode('FUNCALL'),
+                makeListNode([makeSymbolNode('CAR'), chainParamSym]),
+                makeListNode([
+                  makeSymbolNode('IF'),
+                  makeListNode([
+                    makeSymbolNode('NULL'),
+                    makeListNode([makeSymbolNode('CDR'), chainParamSym]),
+                  ]),
+                  NIL_NODE,
+                  makeListNode([
+                    makeSymbolNode('LAMBDA'),
+                    makeListNode(nArgsSyms),
+                    makeListNode([
+                      runPrimSym,
+                      makeListNode([makeSymbolNode('CDR'), chainParamSym]),
+                      ...nArgsSyms,
+                    ]),
+                  ]),
+                ]),
+                ...cArgsSyms,
+              ]),
+            ]),
+            makeListNode([
+              coreCallSym,
+              makeListNode(cArgsSyms),
+              coreBody,
+            ]),
+            makeListNode([
+              runAroundSym,
+              makeListNode([aChainParamSym, ...cArgsSyms]),
+              makeListNode([
+                makeSymbolNode('IF'),
+                makeListNode([makeSymbolNode('NULL'), aChainParamSym]),
+                makeListNode([coreCallSym, ...cArgsSyms]),
+                makeListNode([
+                  makeSymbolNode('FUNCALL'),
+                  makeListNode([makeSymbolNode('CAR'), aChainParamSym]),
+                  makeListNode([
+                    makeSymbolNode('LAMBDA'),
+                    makeListNode(nArgsSyms),
+                    makeListNode([
+                      runAroundSym,
+                      makeListNode([makeSymbolNode('CDR'), aChainParamSym]),
+                      ...nArgsSyms,
+                    ]),
+                  ]),
+                  ...cArgsSyms,
+                ]),
+              ]),
+            ]),
+          ]),
+          makeListNode([runAroundSym, aroundChainSym, ...paramSyms]),
+        ]),
+      ]),
+    ]),
+  );
+
+  return generated;
+}
+
+function designatorName(node) {
+  if (!node) throw new SyntaxError('missing package/symbol designator');
+  if (node.kind === 'string') return node.value.toUpperCase();
+  if (node.kind === 'symbol') {
+    return node.name.startsWith(':') ? node.name.slice(1) : stripPackagePrefix(node.name);
+  }
+  if (
+    node.kind === 'list'
+    && node.elements.length === 2
+    && node.elements[0]?.kind === 'symbol'
+    && node.elements[0].name === 'QUOTE'
+    && node.elements[1]?.kind === 'symbol'
+  ) {
+    return stripPackagePrefix(node.elements[1].name);
+  }
+  throw new SyntaxError('invalid Common Lisp package/symbol designator');
+}
+
+function parseTopLevelDefpackage(form) {
+  if (form?.kind !== 'list' || form.elements[0]?.kind !== 'symbol' || form.elements[0].name !== 'DEFPACKAGE') {
+    return null;
+  }
+  if (form.elements.length < 2) {
+    throw new SyntaxError('Common Lisp DEFPACKAGE requires a package name');
+  }
+  const pkgName = designatorName(form.elements[1]);
+  const uses = [];
+  const exports = [];
+  for (let i = 2; i < form.elements.length; i += 1) {
+    const opt = form.elements[i];
+    if (opt?.kind === 'list' && opt.elements[0]?.kind === 'symbol') {
+      const key = opt.elements[0].name.startsWith(':')
+        ? opt.elements[0].name
+        : `:${stripPackagePrefix(opt.elements[0].name)}`;
+      if (key === ':USE') {
+        for (const u of opt.elements.slice(1)) {
+          uses.push(designatorName(u));
+        }
+      } else if (key === ':EXPORT') {
+        for (const e of opt.elements.slice(1)) {
+          exports.push(designatorName(e));
+        }
+      }
+    }
+  }
+  return Object.freeze({
+    name: pkgName,
+    uses,
+    exports,
+  });
+}
+
+function parseTopLevelInPackage(form) {
+  if (form?.kind !== 'list' || form.elements[0]?.kind !== 'symbol' || form.elements[0].name !== 'IN-PACKAGE') {
+    return null;
+  }
+  if (form.elements.length !== 2) {
+    throw new SyntaxError('Common Lisp IN-PACKAGE requires 1 package designator');
+  }
+  return designatorName(form.elements[1]);
+}
+
+const CL_CORE_PACKAGES = new Set(['CL', 'COMMON-LISP', 'CL-USER', 'COMMON-LISP-USER']);
+
+const CL_SPECIAL_AND_STD_SYMBOLS = new Set([
+  'NIL', 'T', 'QUOTE', 'FUNCTION', 'PROGN', 'PROG1', 'PROG2', 'IF', 'COND', 'WHEN', 'UNLESS',
+  'LET', 'LET*', 'FLET', 'LABELS', 'LAMBDA', 'DEFUN', 'DEFMACRO', 'DEFSTRUCT', 'DEFCLASS',
+  'DEFGENERIC', 'DEFMETHOD', 'DEFPACKAGE', 'IN-PACKAGE', 'DEFPARAMETER', 'DEFVAR',
+  'SETQ', 'SETF', 'INCF', 'DECF', 'PUSH', 'POP', 'AND', 'OR', 'NOT', 'NULL', 'EQ', 'EQL', 'EQUAL',
+  'CONS', 'CAR', 'CDR', 'FIRST', 'REST', 'SECOND', 'THIRD', 'NTH', 'NTHCDR', 'LAST', 'BUTLAST',
+  'CAAR', 'CADR', 'CDAR', 'CDDR', 'RPLACA', 'RPLACD', 'CONSP', 'ATOM', 'LISTP', 'LIST', 'LIST*',
+  'APPEND', 'REVERSE', 'LENGTH', 'SUBSEQ', 'ELT', 'COERCE', 'MAPCAR', 'MAPC', 'REMOVE-IF',
+  'REMOVE-IF-NOT', 'REDUCE', 'EVERY', 'SOME', 'MEMBER', 'ASSOC', 'FUNCALL', 'APPLY', 'VALUES',
+  'MULTIPLE-VALUE-BIND', 'MULTIPLE-VALUE-LIST', 'VALUES-LIST', 'DESTRUCTURING-BIND',
+  'BLOCK', 'RETURN-FROM', 'RETURN', 'CATCH', 'THROW', 'UNWIND-PROTECT', 'HANDLER-CASE',
+  'HANDLER-BIND', 'IGNORE-ERRORS', 'RESTART-CASE', 'FIND-RESTART', 'INVOKE-RESTART',
+  'SIGNAL', 'ERROR', 'USE-VALUE', 'SEND', 'DOLIST', 'DOTIMES', 'LOOP', 'CASE', 'ECASE',
+  'MAKE-ARRAY', 'VECTOR', 'AREF', 'VECTORP', 'STRINGP', 'CHARACTERP', 'CHAR', 'CHAR-CODE',
+  'CODE-CHAR', 'CHAR=', 'STRING=', 'STRING<', 'STRING>', 'CONCATENATE', 'MAKE-HASH-TABLE',
+  'HASH-TABLE-P', 'GETHASH', 'REMHASH', 'MAPHASH', 'HASH-TABLE-COUNT', 'SYMBOLP', 'KEYWORDP',
+  'SYMBOL-NAME', 'INTERN', 'FUNCTIONP', 'INTEGERP', 'NUMBERP', 'ZEROP', 'PLUSP', 'MINUSP',
+  'EVENP', 'ODDP', 'ABS', 'MIN', 'MAX', 'MOD', 'REM', 'FLOOR', 'ASH', 'LOGAND', 'LOGIOR',
+  'LOGXOR', 'LOGNOT', '1+', '1-', '+', '-', '*', '=', '/=', '<', '>', '<=', '>=',
+  'SLOT-VALUE', 'MAKE-INSTANCE', 'INITIALIZE-INSTANCE', 'CLASS-OF', 'CLASS-NAME', 'TYPE-OF',
+  'TYPEP', 'CALL-NEXT-METHOD', 'NEXT-METHOD-P', 'FORMAT', 'WITH-OUTPUT-TO-STRING',
+  'MAKE-STRING-OUTPUT-STREAM', 'WRITE-STRING', 'WRITE-CHAR', 'TERPRI', 'PRINC', 'PRIN1',
+  'GET-OUTPUT-STREAM-STRING', 'PRINC-TO-STRING', 'PRIN1-TO-STRING',
+  '&OPTIONAL', '&REST', '&BODY', '&KEY', 'OTHERWISE',
+  ...BUILT_IN_MACROS ? Object.keys(BUILT_IN_MACROS) : [],
+]);
+
+function resolveSymbolInPackage(symNode, currentPkg, packages, compileContext) {
+  if (!symNode || symNode.kind !== 'symbol') return symNode;
+  if (symNode.keyword || symNode.uninterned || isNilSymbol(symNode) || isTSymbol(symNode)) {
+    return symNode;
+  }
+  const raw = symNode.name;
+  // Explicit package qualification: PKG::SYM or PKG:SYM
+  const dblIdx = raw.indexOf('::');
+  if (dblIdx > 0) {
+    const pkgPart = raw.slice(0, dblIdx);
+    const symPart = raw.slice(dblIdx + 2);
+    if (CL_CORE_PACKAGES.has(pkgPart)) {
+      return makeSymbolNode(symPart, {spelling: symPart});
+    }
+    return makeSymbolNode(`${pkgPart}::${symPart}`, {spelling: `${pkgPart}::${symPart}`});
+  }
+  const sglIdx = raw.indexOf(':');
+  if (sglIdx > 0) {
+    const pkgPart = raw.slice(0, sglIdx);
+    const symPart = raw.slice(sglIdx + 1);
+    if (CL_CORE_PACKAGES.has(pkgPart)) {
+      return makeSymbolNode(symPart, {spelling: symPart});
+    }
+    const pkgDef = packages[pkgPart];
+    if (!pkgDef) {
+      throw new SyntaxError(`Common Lisp package ${pkgPart} is not defined (resolving ${raw})`);
+    }
+    if (!pkgDef.exports?.includes(symPart)) {
+      throw new SyntaxError(`Common Lisp symbol ${symPart} is not exported from package ${pkgPart}`);
+    }
+    return makeSymbolNode(`${pkgPart}::${symPart}`, {spelling: `${pkgPart}::${symPart}`});
+  }
+
+  // Unqualified symbol inside currentPkg
+  if (!currentPkg || CL_CORE_PACKAGES.has(currentPkg)) {
+    return symNode;
+  }
+  if (raw.startsWith('%') || raw.startsWith('&') || CL_SPECIAL_AND_STD_SYMBOLS.has(raw)) {
+    return symNode;
+  }
+  // Check if symbol is inherited from a :USE package's exports
+  const curPkgDef = packages[currentPkg];
+  if (curPkgDef && Array.isArray(curPkgDef.uses)) {
+    for (const usedPkgName of curPkgDef.uses) {
+      if (CL_CORE_PACKAGES.has(usedPkgName)) continue;
+      const usedPkg = packages[usedPkgName];
+      if (usedPkg?.exports?.includes(raw)) {
+        return makeSymbolNode(`${usedPkgName}::${raw}`, {spelling: `${usedPkgName}::${raw}`});
+      }
+    }
+  }
+  // If it resolves to a published Smalltalk class global, keep it unqualified
+  if (compileContext?.globals?.[symNode.spelling] || compileContext?.globals?.[raw]) {
+    const gId = compileContext.globals[symNode.spelling] ?? compileContext.globals[raw];
+    if (typeof gId === 'string' && gId.startsWith('smalltalk/global-binding/')) {
+      return symNode;
+    }
+  }
+  return makeSymbolNode(`${currentPkg}::${raw}`, {spelling: `${currentPkg}::${raw}`});
+}
+
+function qualifyFormForPackage(form, currentPkg, packages, compileContext) {
+  if (!form) return form;
+  if (form.kind === 'symbol') {
+    return resolveSymbolInPackage(form, currentPkg, packages, compileContext);
+  }
+  if (form.kind !== 'list') return form;
+  if (form.elements.length === 0) return form;
+  const head = form.elements[0];
+  if (head?.kind === 'symbol' && (head.name === 'DEFPACKAGE' || head.name === 'IN-PACKAGE')) {
+    return form;
+  }
+  if (head?.kind === 'symbol' && head.name === 'LOOP') {
+    const loopClauseKeywords = new Set([
+      'FOR', 'AS', 'FROM', 'DOWNFROM', 'UPFROM', 'TO', 'DOWNTO', 'UPTO', 'BELOW', 'ABOVE', 'BY',
+      'IN', 'ON', 'ACROSS', '=', 'THEN', 'REPEAT', 'WITH', 'AND', 'WHILE', 'UNTIL', 'ALWAYS',
+      'NEVER', 'THEREIS', 'WHEN', 'UNLESS', 'IF', 'ELSE', 'END', 'DO', 'DOING', 'RETURN',
+      'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING', 'NCONC', 'NCONCING', 'SUM', 'SUMMING',
+      'COUNT', 'COUNTING', 'MAXIMIZE', 'MAXIMIZING', 'MINIMIZE', 'MINIMIZING', 'INTO',
+      'INITIALLY', 'FINALLY',
+    ]);
+    return makeListNode(
+      form.elements.map((el, idx) => {
+        if (idx === 0) return head;
+        if (el?.kind === 'symbol' && !el.name.includes(':') && loopClauseKeywords.has(el.name)) {
+          return el;
+        }
+        return qualifyFormForPackage(el, currentPkg, packages, compileContext);
+      }),
+      form.dottedTail ? qualifyFormForPackage(form.dottedTail, currentPkg, packages, compileContext) : null,
+    );
+  }
+  return makeListNode(
+    form.elements.map((el) => qualifyFormForPackage(el, currentPkg, packages, compileContext)),
+    form.dottedTail ? qualifyFormForPackage(form.dottedTail, currentPkg, packages, compileContext) : null,
+  );
+}
+
 function parseTopLevelDefvar(form) {
   if (
     form?.kind !== 'list'
@@ -5654,31 +7968,92 @@ async function installCommonLispProgram({
   const rawForms = typeof source === 'string' ? readCommonLispSource(source) : source;
   const compileContext = await collectCommonLispCompileContext({images: effectiveImages, imageId});
 
-  // Expand any top-level DEFMACRO and DEFSTRUCT forms first so subsequent DEFUNs and expressions
-  // in the same program can use them immediately.
+  // Expand any top-level DEFPACKAGE, IN-PACKAGE, DEFMACRO, DEFSTRUCT, DEFCLASS, DEFGENERIC, and DEFMETHOD
+  // forms first so subsequent DEFUNs and expressions in the same program can use them immediately.
   const expandedTopForms = [];
   const macros = {};
   const structs = {};
+  const classes = {};
+  const generics = {};
+  const packages = {};
+  const touchedGenerics = new Set();
+  let classesModified = false;
+  let currentPackage = null;
 
   const queue = [...rawForms];
   while (queue.length > 0) {
-    const rawForm = queue.shift();
+    const nextItem = queue.shift();
+    const defpkg = parseTopLevelDefpackage(nextItem);
+    if (defpkg) {
+      const prevPkg = compileContext.packages[defpkg.name];
+      const mergedPkg = Object.freeze({
+        name: defpkg.name,
+        uses: [...new Set([...(prevPkg?.uses ?? []), ...defpkg.uses])],
+        exports: [...new Set([...(prevPkg?.exports ?? []), ...defpkg.exports])],
+      });
+      const serialized = JSON.stringify(mergedPkg);
+      await ensureCodeArtifact(effectiveImages, imageId, {
+        id: commonLispPackageArtifactId(mergedPkg.name, serialized),
+        languageId: COMMON_LISP_ID,
+        representation: COMMON_LISP_PACKAGE_V0,
+        content: textValue(serialized),
+        metadata: {commonLisp: 'defpackage', packageName: mergedPkg.name},
+      });
+      await ensureGlobalBindingInNamespace({
+        images: effectiveImages,
+        imageId,
+        namespaceId: COMMON_LISP_NAMESPACE_ID,
+        name: `%PACKAGE:${mergedPkg.name}`,
+        bindingId: commonLispPackageBindingId(mergedPkg.name),
+        value: textValue(serialized),
+      });
+      const pkgNsId = commonLispPackageNamespaceId(mergedPkg.name);
+      const existingPkgNs = await findNamespace({images: effectiveImages, imageId, namespaceId: pkgNsId});
+      if (!existingPkgNs) {
+        await createNamespace({
+          images: effectiveImages,
+          imageId,
+          namespaceId: pkgNsId,
+          parent: COMMON_LISP_NAMESPACE_ID,
+        });
+      }
+      compileContext.packages[mergedPkg.name] = mergedPkg;
+      packages[mergedPkg.name] = mergedPkg;
+      continue;
+    }
+
+    const inPkg = parseTopLevelInPackage(nextItem);
+    if (inPkg) {
+      if (!CL_CORE_PACKAGES.has(inPkg) && !compileContext.packages[inPkg]) {
+        throw new SyntaxError(`Common Lisp IN-PACKAGE unknown package: ${inPkg}`);
+      }
+      currentPackage = CL_CORE_PACKAGES.has(inPkg) ? null : inPkg;
+      continue;
+    }
+
+    const rawForm = nextItem?.__packageQualified
+      ? nextItem.form
+      : qualifyFormForPackage(nextItem, currentPackage, compileContext.packages, compileContext);
+
     if (
       rawForm?.kind === 'list'
       && rawForm.elements[0]?.kind === 'symbol'
       && rawForm.elements[0].name !== 'DEFMACRO'
       && rawForm.elements[0].name !== 'DEFSTRUCT'
+      && rawForm.elements[0].name !== 'DEFCLASS'
+      && rawForm.elements[0].name !== 'DEFGENERIC'
+      && rawForm.elements[0].name !== 'DEFMETHOD'
       && rawForm.elements[0].name !== 'DEFUN'
       && rawForm.elements[0].name !== 'DEFPARAMETER'
       && rawForm.elements[0].name !== 'DEFVAR'
     ) {
       const step = macroexpandCommonLispForm(rawForm, createMacroContext(compileContext));
       if (step.expanded) {
-        queue.unshift(step.form);
+        queue.unshift({__packageQualified: true, form: step.form});
         continue;
       }
       if (rawForm.elements[0].name === 'PROGN') {
-        queue.unshift(...rawForm.elements.slice(1));
+        queue.unshift(...rawForm.elements.slice(1).map((f) => ({__packageQualified: true, form: f})));
         continue;
       }
     }
@@ -5701,6 +8076,17 @@ async function installCommonLispProgram({
         bindingId: commonLispMacroBindingId(defmacro.name),
         value: textValue(serialized),
       });
+      if (defmacro.name.includes('::')) {
+        const [pkgPart, bare] = defmacro.name.split('::');
+        await ensureGlobalBindingInNamespace({
+          images: effectiveImages,
+          imageId,
+          namespaceId: commonLispPackageNamespaceId(pkgPart),
+          name: `%MACRO:${bare}`,
+          bindingId: commonLispMacroBindingId(defmacro.name),
+          value: textValue(serialized),
+        });
+      }
       compileContext.macros[defmacro.name] = defmacro;
       macros[defmacro.name] = defmacro;
       continue;
@@ -5732,6 +8118,14 @@ async function installCommonLispProgram({
         selector: `isClStruct_${defstruct.name}`,
         source: '[ ^ self ]',
       });
+      slotMethods.push({
+        selector: `isClClass_${defstruct.name}`,
+        source: '[ ^ self ]',
+      });
+      slotMethods.push({
+        selector: 'clTypeName',
+        source: `[ ^ '${defstruct.name}' ]`,
+      });
       await defineMethodsFromSource({
         images: effectiveImages,
         compilation: effectiveCompilation,
@@ -5746,9 +8140,21 @@ async function installCommonLispProgram({
         compilation: effectiveCompilation,
         imageId,
         lane,
+        classRef: objectRef(imageId, `smalltalk/metaclass/${defstruct.className}`),
+        allowRedefinition: true,
+        methods: [{selector: 'clClassName', source: `[ ^ '${defstruct.name}' ]`}],
+      });
+      await defineMethodsFromSource({
+        images: effectiveImages,
+        compilation: effectiveCompilation,
+        imageId,
+        lane,
         classRef: kernel.objectClass,
         allowRedefinition: true,
-        methods: [{selector: `isClStruct_${defstruct.name}`, source: '[ ^ nil ]'}],
+        methods: [
+          {selector: `isClStruct_${defstruct.name}`, source: '[ ^ nil ]'},
+          {selector: `isClClass_${defstruct.name}`, source: '[ ^ nil ]'},
+        ],
       });
 
       const serialized = JSON.stringify(defstruct);
@@ -5767,6 +8173,17 @@ async function installCommonLispProgram({
         bindingId: commonLispStructBindingId(defstruct.name),
         value: textValue(serialized),
       });
+      if (defstruct.name.includes('::')) {
+        const [pkgPart, bare] = defstruct.name.split('::');
+        await ensureGlobalBindingInNamespace({
+          images: effectiveImages,
+          imageId,
+          namespaceId: commonLispPackageNamespaceId(pkgPart),
+          name: `%STRUCT:${bare}`,
+          bindingId: commonLispStructBindingId(defstruct.name),
+          value: textValue(serialized),
+        });
+      }
       compileContext.structs[defstruct.name] = defstruct;
       compileContext.globals[defstruct.className] = `smalltalk/global-binding/${defstruct.className}`;
       if (defstruct.constructorName) {
@@ -5780,7 +8197,181 @@ async function installCommonLispProgram({
       continue;
     }
 
+    const defclass = parseTopLevelDefclass(rawForm, compileContext.classes);
+    if (defclass) {
+      const superclassRef = defclass.parentClassName
+        ? objectRef(imageId, `smalltalk/class/${defclass.parentClassName}`)
+        : kernel.objectClass;
+      const {classRef} = await ensureClassFromDeclaration({
+        images: effectiveImages,
+        imageId,
+        name: defclass.className,
+        superclassRef,
+        instanceVariables: defclass.backingLocalSlots.map((s) => s.varName),
+      });
+      await publishSmalltalkClassGlobals({
+        images: effectiveImages,
+        imageId,
+        names: [defclass.className],
+      });
+      const classMethods = [];
+      for (const s of defclass.backingLocalSlots) {
+        classMethods.push({selector: s.varName, source: `[ ^ ${s.varName} ]`});
+        classMethods.push({selector: `${s.varName}:`, source: `[ :v | ${s.varName} := v. ^ self ]`});
+        for (const r of [...s.readers, ...s.accessors]) {
+          const cleanR = stripPackagePrefix(r);
+          classMethods.push({selector: `clAcc_${cleanR}`, source: `[ ^ ${s.varName} ]`});
+        }
+        for (const a of s.accessors) {
+          const cleanA = stripPackagePrefix(a);
+          classMethods.push({selector: `clSetAcc_${cleanA}:`, source: `[ :v | ${s.varName} := v. ^ v ]`});
+        }
+        for (const w of s.writers) {
+          const cleanW = stripPackagePrefix(w);
+          classMethods.push({selector: `clWriter_${cleanW}:`, source: `[ :v | ${s.varName} := v. ^ v ]`});
+        }
+      }
+      for (const anc of defclass.cpl) {
+        classMethods.push({
+          selector: `isClClass_${anc}`,
+          source: '[ ^ self ]',
+        });
+      }
+      classMethods.push({
+        selector: 'clTypeName',
+        source: `[ ^ '${defclass.name}' ]`,
+      });
+      await defineMethodsFromSource({
+        images: effectiveImages,
+        compilation: effectiveCompilation,
+        imageId,
+        lane,
+        classRef,
+        allowRedefinition: true,
+        methods: classMethods,
+      });
+      await defineMethodsFromSource({
+        images: effectiveImages,
+        compilation: effectiveCompilation,
+        imageId,
+        lane,
+        classRef: objectRef(imageId, `smalltalk/metaclass/${defclass.className}`),
+        allowRedefinition: true,
+        methods: [{selector: 'clClassName', source: `[ ^ '${defclass.name}' ]`}],
+      });
+      await defineMethodsFromSource({
+        images: effectiveImages,
+        compilation: effectiveCompilation,
+        imageId,
+        lane,
+        classRef: kernel.objectClass,
+        allowRedefinition: true,
+        methods: [{selector: `isClClass_${defclass.name}`, source: '[ ^ nil ]'}],
+      });
+
+      const serialized = JSON.stringify(defclass);
+      await ensureCodeArtifact(effectiveImages, imageId, {
+        id: commonLispClassArtifactId(defclass.name, serialized),
+        languageId: COMMON_LISP_ID,
+        representation: COMMON_LISP_CLASS_V0,
+        content: textValue(serialized),
+        metadata: {commonLisp: 'defclass', className: defclass.name, backingClassName: defclass.className},
+      });
+      await ensureGlobalBindingInNamespace({
+        images: effectiveImages,
+        imageId,
+        namespaceId: COMMON_LISP_NAMESPACE_ID,
+        name: `%CLASS:${defclass.name}`,
+        bindingId: commonLispClassBindingId(defclass.name),
+        value: textValue(serialized),
+      });
+      if (defclass.name.includes('::')) {
+        const [pkgPart, bare] = defclass.name.split('::');
+        await ensureGlobalBindingInNamespace({
+          images: effectiveImages,
+          imageId,
+          namespaceId: commonLispPackageNamespaceId(pkgPart),
+          name: `%CLASS:${bare}`,
+          bindingId: commonLispClassBindingId(defclass.name),
+          value: textValue(serialized),
+        });
+      }
+      compileContext.classes[defclass.name] = defclass;
+      compileContext.globals[defclass.className] = `smalltalk/global-binding/${defclass.className}`;
+      classes[defclass.name] = Object.freeze({...defclass, classRef});
+      classesModified = true;
+      expandedTopForms.push(...buildDefclassProgramForms(defclass));
+      continue;
+    }
+
+    const defgeneric = parseTopLevelDefgeneric(rawForm);
+    if (defgeneric) {
+      const existingGen = compileContext.generics[defgeneric.name];
+      const genRecord = Object.freeze({
+        name: defgeneric.name,
+        parameters: defgeneric.parameters,
+        methods: existingGen?.methods ?? [],
+      });
+      compileContext.generics[defgeneric.name] = genRecord;
+      generics[defgeneric.name] = genRecord;
+      touchedGenerics.add(defgeneric.name);
+      continue;
+    }
+
+    const defmethod = parseTopLevelDefmethod(rawForm);
+    if (defmethod) {
+      const existingGen = compileContext.generics[defmethod.name];
+      const prevMethods = existingGen?.methods ?? [];
+      const filteredMethods = prevMethods.filter((m) => m.specKey !== defmethod.specKey);
+      const nextMethods = [...filteredMethods, defmethod];
+      const genRecord = Object.freeze({
+        name: defmethod.name,
+        parameters: existingGen?.parameters ?? defmethod.parameters,
+        methods: nextMethods,
+      });
+      compileContext.generics[defmethod.name] = genRecord;
+      generics[defmethod.name] = genRecord;
+      touchedGenerics.add(defmethod.name);
+      continue;
+    }
+
     expandedTopForms.push(rawForm);
+  }
+
+  if (classesModified) {
+    expandedTopForms.push(buildDynamicMakeInstanceDefun(compileContext.classes));
+  }
+
+  for (const genName of touchedGenerics) {
+    const genRecord = compileContext.generics[genName];
+    const serialized = JSON.stringify(genRecord);
+    await ensureCodeArtifact(effectiveImages, imageId, {
+      id: commonLispGenericArtifactId(genRecord.name, serialized),
+      languageId: COMMON_LISP_ID,
+      representation: COMMON_LISP_GENERIC_V0,
+      content: textValue(serialized),
+      metadata: {commonLisp: 'defgeneric', genericName: genRecord.name},
+    });
+    await ensureGlobalBindingInNamespace({
+      images: effectiveImages,
+      imageId,
+      namespaceId: COMMON_LISP_NAMESPACE_ID,
+      name: `%GENERIC:${genRecord.name}`,
+      bindingId: commonLispGenericBindingId(genRecord.name),
+      value: textValue(serialized),
+    });
+    if (genRecord.name.includes('::')) {
+      const [pkgPart, bare] = genRecord.name.split('::');
+      await ensureGlobalBindingInNamespace({
+        images: effectiveImages,
+        imageId,
+        namespaceId: commonLispPackageNamespaceId(pkgPart),
+        name: `%GENERIC:${bare}`,
+        bindingId: commonLispGenericBindingId(genRecord.name),
+        value: textValue(serialized),
+      });
+    }
+    expandedTopForms.push(...buildDefgenericProgramForms(genRecord, compileContext.classes));
   }
 
   // Pre-seed all DEFUN (and their signatures) and DEFPARAMETER/DEFVAR global bindings so recursive
@@ -5835,6 +8426,17 @@ async function installCommonLispProgram({
             bindingId: commonLispSignatureBindingId(nameSym.name),
             value: textValue(sigJson),
           });
+          if (nameSym.name.includes('::')) {
+            const [pkgPart, bare] = nameSym.name.split('::');
+            await ensureGlobalBindingInNamespace({
+              images: effectiveImages,
+              imageId,
+              namespaceId: commonLispPackageNamespaceId(pkgPart),
+              name: `%SIG:${bare}`,
+              bindingId: commonLispSignatureBindingId(nameSym.name),
+              value: textValue(sigJson),
+            });
+          }
           compileContext.functionSignatures[nameSym.name] = sig;
           preMacroCtx.functionSignatures.set(nameSym.name, sig);
         }
@@ -5900,6 +8502,19 @@ async function installCommonLispProgram({
         bindingId: commonLispFunctionBindingId(defun.name),
         value: blockRef,
       });
+      if (defun.name.includes('::')) {
+        const [pkgPart, bare] = defun.name.split('::');
+        if (!bare.startsWith('%')) {
+          await ensureGlobalBindingInNamespace({
+            images: effectiveImages,
+            imageId,
+            namespaceId: commonLispPackageNamespaceId(pkgPart),
+            name: bare,
+            bindingId: commonLispFunctionBindingId(defun.name),
+            value: blockRef,
+          });
+        }
+      }
       functions[defun.name] = Object.freeze({
         name: defun.name,
         blockRef,
@@ -5939,6 +8554,17 @@ async function installCommonLispProgram({
         bindingId: commonLispVariableBindingId(defvar.name),
         value: initValue,
       });
+      if (defvar.name.includes('::')) {
+        const [pkgPart, bare] = defvar.name.split('::');
+        await ensureGlobalBindingInNamespace({
+          images: effectiveImages,
+          imageId,
+          namespaceId: commonLispPackageNamespaceId(pkgPart),
+          name: bare,
+          bindingId: commonLispVariableBindingId(defvar.name),
+          value: initValue,
+        });
+      }
       variables[defvar.name] = Object.freeze({
         name: defvar.name,
         bindingRef,
@@ -5955,6 +8581,9 @@ async function installCommonLispProgram({
     variables: Object.freeze(variables),
     macros: Object.freeze(macros),
     structs: Object.freeze(structs),
+    classes: Object.freeze(classes),
+    generics: Object.freeze(generics),
+    packages: Object.freeze(packages),
     expressions: Object.freeze(expressions),
     compileContext,
   });
@@ -5982,6 +8611,14 @@ async function evaluateCommonLispSource({
   });
 
   if (programResult.expressions.length === 0) {
+    const classNames = Object.keys(programResult.classes);
+    if (classNames.length > 0) {
+      return ensureInternedSymbol(runtime.images, imageId, classNames[classNames.length - 1]);
+    }
+    const genericNames = Object.keys(programResult.generics);
+    if (genericNames.length > 0) {
+      return ensureInternedSymbol(runtime.images, imageId, genericNames[genericNames.length - 1]);
+    }
     const structNames = Object.keys(programResult.structs);
     if (structNames.length > 0) {
       return ensureInternedSymbol(runtime.images, imageId, structNames[structNames.length - 1]);
@@ -5989,6 +8626,10 @@ async function evaluateCommonLispSource({
     const macroNames = Object.keys(programResult.macros);
     if (macroNames.length > 0) {
       return ensureInternedSymbol(runtime.images, imageId, macroNames[macroNames.length - 1]);
+    }
+    const pkgNames = Object.keys(programResult.packages);
+    if (pkgNames.length > 0) {
+      return ensureInternedSymbol(runtime.images, imageId, pkgNames[pkgNames.length - 1]);
     }
     const fnNames = Object.keys(programResult.functions);
     if (fnNames.length > 0) {
@@ -6091,16 +8732,23 @@ async function listCommonLispNamespaceBindings({
   const macros = [];
   const structs = [];
   const variables = [];
+  const isRootNs = namespaceId === COMMON_LISP_NAMESPACE_ID;
   for (const [entryName, bindingRef] of ns.entries.entries()) {
     const id = bindingRef?.objectId ?? '';
     if (id.startsWith('common-lisp/function-binding/')) {
-      if (!entryName.startsWith('%')) functions.push(entryName);
+      if (!entryName.startsWith('%') && (!isRootNs || !entryName.includes('::'))) {
+        functions.push(entryName);
+      }
     } else if (id.startsWith('common-lisp/macro-binding/') && entryName.startsWith('%MACRO:')) {
-      macros.push(entryName.slice('%MACRO:'.length));
+      const mName = entryName.slice('%MACRO:'.length);
+      if (!isRootNs || !mName.includes('::')) macros.push(mName);
     } else if (id.startsWith('common-lisp/struct-binding/') && entryName.startsWith('%STRUCT:')) {
-      structs.push(entryName.slice('%STRUCT:'.length));
+      const sName = entryName.slice('%STRUCT:'.length);
+      if (!isRootNs || !sName.includes('::')) structs.push(sName);
     } else if (id.startsWith('common-lisp/variable-binding/')) {
-      if (!entryName.startsWith('%')) variables.push(entryName);
+      if (!entryName.startsWith('%') && (!isRootNs || !entryName.includes('::'))) {
+        variables.push(entryName);
+      }
     }
   }
   functions.sort((a, b) => a.localeCompare(b));
@@ -6271,6 +8919,89 @@ async function readCommonLispStructDefinition({
   });
 }
 
+async function readCommonLispClassDefinition({
+  images,
+  imageId,
+  name,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+} = {}) {
+  requiredText(imageId, 'image id');
+  requiredText(namespaceId, 'Common Lisp namespace id');
+  const canonical = requiredText(name, 'Common Lisp class name').toUpperCase();
+  const ns = await findNamespace({images, imageId, namespaceId});
+  if (!ns) throw new TypeError(`image ${imageId} has no Common Lisp namespace: ${namespaceId}`);
+  const bindingRef = ns.entries.get(`%CLASS:${canonical}`);
+  if (!bindingRef || !bindingRef.objectId.startsWith('common-lisp/class-binding/')) return null;
+
+  const record = await images.getObject(bindingRef.imageId, bindingRef.objectId);
+  const val = record?.slots?.['global-binding-value'];
+  if (val?.kind !== VALUE_KIND.TEXT) {
+    throw new TypeError(
+      `Common Lisp namespace ${imageId}/${namespaceId} has a malformed class binding for ${canonical}`,
+    );
+  }
+  const parsed = JSON.parse(val.value);
+  const classRef = objectRef(imageId, `smalltalk/class/${parsed.className}`);
+  try {
+    await readBehavior(images, classRef);
+  } catch (error) {
+    throw new TypeError(
+      `Common Lisp class ${canonical} in ${imageId}/${namespaceId} has a missing backing class: `
+      + `${classRef.imageId}/${classRef.objectId}`,
+      {cause: error},
+    );
+  }
+  return Object.freeze({
+    name: canonical,
+    classRef,
+    className: parsed.className,
+    superclasses: Object.freeze([...(parsed.superclasses ?? [])]),
+    cpl: Object.freeze([...(parsed.cpl ?? [])]),
+    slots: Object.freeze((parsed.slots ?? []).map((s) => s.name)),
+    localSlots: Object.freeze((parsed.localSlots ?? []).map((s) => s.name)),
+  });
+}
+
+async function readCommonLispGenericDefinition({
+  images,
+  imageId,
+  name,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+} = {}) {
+  requiredText(imageId, 'image id');
+  requiredText(namespaceId, 'Common Lisp namespace id');
+  const canonical = requiredText(name, 'Common Lisp generic function name').toUpperCase();
+  const ns = await findNamespace({images, imageId, namespaceId});
+  if (!ns) throw new TypeError(`image ${imageId} has no Common Lisp namespace: ${namespaceId}`);
+  const bindingRef = ns.entries.get(`%GENERIC:${canonical}`);
+  if (!bindingRef || !bindingRef.objectId.startsWith('common-lisp/generic-binding/')) return null;
+
+  const record = await images.getObject(bindingRef.imageId, bindingRef.objectId);
+  const val = record?.slots?.['global-binding-value'];
+  if (val?.kind !== VALUE_KIND.TEXT) {
+    throw new TypeError(
+      `Common Lisp namespace ${imageId}/${namespaceId} has a malformed generic binding for ${canonical}`,
+    );
+  }
+  const parsed = JSON.parse(val.value);
+  return Object.freeze({
+    name: canonical,
+    parameters: Object.freeze([...(parsed.parameters ?? [])]),
+    methods: Object.freeze(
+      (parsed.methods ?? []).map((m) =>
+        Object.freeze({
+          qualifier: m.qualifier,
+          specializers: Object.freeze(
+            (m.specializers ?? []).map((s) =>
+              s.kind === 'eql' ? `(EQL ${formatCommonLispForm(s.valueForm)})` : s.typeName,
+            ),
+          ),
+        }),
+      ),
+    ),
+  });
+}
+
 async function readCommonLispVariableDefinition({
   images,
   imageId,
@@ -6303,9 +9034,12 @@ export {
   CL_NIL_BINDING_ID,
   CL_T_BINDING_ID,
   COMMON_LISP,
+  COMMON_LISP_CLASS_V0,
+  COMMON_LISP_GENERIC_V0,
   COMMON_LISP_ID,
   COMMON_LISP_MACRO_V0,
   COMMON_LISP_NAMESPACE_ID,
+  COMMON_LISP_PACKAGE_V0,
   COMMON_LISP_SIGNATURE_V0,
   COMMON_LISP_SOURCE_V0,
   COMMON_LISP_STRUCT_V0,
@@ -6314,11 +9048,18 @@ export {
   CONS_SHAPE_ID,
   RUNTIME_BLOCK_IDS,
   attachCommonLispMethod,
+  commonLispClassArtifactId,
+  commonLispClassBindingId,
   commonLispFunctionBindingId,
   commonLispFunctionBlockId,
+  commonLispGenericArtifactId,
+  commonLispGenericBindingId,
   commonLispListToArray,
   commonLispMacroArtifactId,
   commonLispMacroBindingId,
+  commonLispPackageArtifactId,
+  commonLispPackageBindingId,
+  commonLispPackageNamespaceId,
   commonLispStructArtifactId,
   commonLispStructBindingId,
   commonLispVariableBindingId,
@@ -6333,7 +9074,9 @@ export {
   listCommonLispNamespaceBindings,
   macroexpand1CommonLispForm,
   macroexpandCommonLispForm,
+  readCommonLispClassDefinition,
   readCommonLispFunctionDefinition,
+  readCommonLispGenericDefinition,
   readCommonLispMacroDefinition,
   readCommonLispSource,
   readCommonLispStructDefinition,
