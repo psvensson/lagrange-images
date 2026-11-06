@@ -91,8 +91,8 @@ function sameRef(left, right) {
     && left.objectId === right.objectId;
 }
 
-async function loadBehavior(images, ref, {edge = null, from = null} = {}) {
-  const record = await images.getObject(ref.imageId, ref.objectId);
+async function loadBehavior(images, ref, {edge = null, from = null, record: preloaded = null} = {}) {
+  const record = preloaded ?? await images.getObject(ref.imageId, ref.objectId);
   // An absent target is a dangling edge when we arrived along one, and a malformed receiver
   // otherwise. Both are graph problems; neither is a selector miss.
   if (!record) {
@@ -100,7 +100,7 @@ async function loadBehavior(images, ref, {edge = null, from = null} = {}) {
     throw new SmalltalkDanglingEdgeError('behavior', from ?? ref, ref);
   }
   try {
-    return await readBehavior(images, ref);
+    return await readBehavior(images, ref, {record});
   } catch (error) {
     throw new SmalltalkMalformedBehaviorError(ref, error);
   }
@@ -178,9 +178,12 @@ async function methodAt(images, behavior, selector, nilRef, validationCache = nu
 // Behavior before the chain could reach here, and within one image the two comparisons coincide. It
 // is written this way so that relaxing the locality rule for cross-image inheritance would not
 // silently turn every image's `smalltalk/nil` into a chain terminator.
-async function lookupSelector({images, behaviorRef, selector, nilRef, receiverDescription, validationCache = null}) {
+async function lookupSelector({
+  images, behaviorRef, behaviorRecord = null, selector, nilRef, receiverDescription, validationCache = null,
+}) {
   const visited = new TupleSet(2);
   let currentRef = behaviorRef;
+  let currentRecord = behaviorRecord;
   let edge = null;
   let from = null;
 
@@ -193,7 +196,8 @@ async function lookupSelector({images, behaviorRef, selector, nilRef, receiverDe
     }
     visited.add(key);
 
-    const behavior = await loadBehavior(images, currentRef, {edge, from});
+    const behavior = await loadBehavior(images, currentRef, {edge, from, record: currentRecord});
+    currentRecord = null;
     const method = await methodAt(images, behavior, selector, nilRef, validationCache);
     // ADR 0050 decision 5: *which* Behavior's dictionary supplied the method is a permission fact,
     // and this walk is the only place it is known. Reconstructing it later by asking which

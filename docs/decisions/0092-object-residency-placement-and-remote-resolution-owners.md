@@ -137,13 +137,18 @@ Two proofs exist today, and one remains open:
      `commitCandidateRecords` issues 3 SQL write statements (`records`, `stream_heads`, `events`),
      and each SQL write statement in Lagrange's `SqlQueryEngine` opens an internal
      `writeTransaction` performing 41 system-table metadata writes (~1.28 s/record, ~1.56 s/tx).
-   - **Read amplification (`1,090,772` `backend.get` calls)**: `proveSharedLife` issues `1,090,772`
-     `backend.get` calls (`21,399` in `installRecoveredLife`, `20,863` in `buildBlinkerModel`,
-     `20,980` per `stateString` × 3, and `492,785` per `nextState` × 2), because every dynamic
-     message send re-reads `smalltalk-kernel/v1`, Behavior/MethodDictionary chains, and Block /
-     CodeArtifact / LexicalEnvironment records without an activation-scoped read cache, and every
-     `ImageService.getRecord` call first reads `images/<imageId>` via `ObjectLocator.locate(ref)`.
-     At ~5.52 ms per `LagrangeBackend.get`, 1.09M reads alone require ~6,000 s.
+   - **Read and scan amplification (reduced by `91.8%` for point reads and `99.5%` for full scans)**:
+     Before owner-scoped memoization, `proveSharedLife` issued `1,091,137` `backend.get` calls and
+     `193` full-collection `backend.scan` calls (`174,190` scanned rows) because every
+     `ImageService.getRecord` re-read `images/<imageId>` via `ObjectLocator.locate(ref)` (`546,568`
+     reads), every `CompilationService` compilation rescanned all image records via
+     `listCodeArtifacts` (`187` scans), and every nested activation re-read immutable
+     `Block`/`CodeArtifact`/`Shape`/`LexicalEnvironment` records, Smalltalk protocol objects, and
+     duplicate Behavior/kernel records. Caching confirmed `ObjectResidency` per `imageId` in
+     `ObjectLocator`, indexing reusable derivations per `imageId` in `CompilationService`,
+     memoizing immutable record and protocol reads within a single `LexicalCellArena` execution
+     view, and eliminating duplicate in-call Behavior/kernel reads reduces `proveSharedLife` to
+     `89,197` `backend.get` calls (`-91.8%`) and `1` `backend.scan` call (`67` rows, `-99.96%`).
 
 The M6.2 witness (`test/cuis-life-m6-two-node-red.test.js`) remains the separate two-backend
 per-object relocation falsifier: it stays RED until per-object residency and cross-backend routing

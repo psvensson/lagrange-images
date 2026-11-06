@@ -285,6 +285,28 @@ class LexicalCellArena {
     this.#conditions ??= new ConditionRuntime();
     return this.#conditions;
   }
+
+  #imagesViews = new WeakMap();
+
+  imagesViewFor(images) {
+    return this.#imagesViews.get(images) ?? null;
+  }
+
+  cacheImagesView(images, view) {
+    this.#imagesViews.set(images, view);
+    return view;
+  }
+
+  #temporaryInitializers = new TupleMap(2);
+
+  temporaryContents(dispatchImage, languageId) {
+    return this.#temporaryInitializers.get([String(dispatchImage ?? ''), String(languageId ?? '')]);
+  }
+
+  cacheTemporaryContents(dispatchImage, languageId, value) {
+    this.#temporaryInitializers.set([String(dispatchImage ?? ''), String(languageId ?? '')], value);
+    return value;
+  }
 }
 
 // What an executor is given. Deliberately narrow: declare a slot, resolve one, associate a new
@@ -331,11 +353,23 @@ class ActivationCells {
 // it reaches no durable record, and it dies with the arena.
 function arenaImagesView(images, arena) {
   if (!arena) return images;
+  const cachedView = arena.imagesViewFor?.(images);
+  if (cachedView) return cachedView;
   const view = Object.create(images);
-  const transient = (imageId, objectId, kind) => {
-    const record = arena.transientRecord(imageId, objectId);
-    if (!record) return null;
-    return record.kind === kind ? record : null;
+  const immutableDurable = new TupleMap(3);
+  const protocols = new TupleMap(2);
+  const readImmutableDurable = async (kind, imageId, objectId, durable) => {
+    const key = [kind, imageId, objectId];
+    const hit = immutableDurable.get(key);
+    if (hit) return hit;
+    const loaded = await durable.call(images, imageId, objectId);
+    if (loaded) immutableDurable.set(key, loaded);
+    return loaded;
+  };
+  view.cachedProtocol = (protocol, imageId) => protocols.get([protocol, imageId]) ?? null;
+  view.cacheProtocol = (protocol, imageId, value) => {
+    protocols.set([protocol, imageId], value);
+    return value;
   };
   // Durable fallback is never reached for a reserved id, because decision 5b forbids a durable
   // record from taking one. A reserved id absent from this arena is therefore an *expired*
@@ -348,17 +382,35 @@ function arenaImagesView(images, arena) {
   // different kind, and only a reserved id present *nowhere* in the arena has outlived its
   // execution. So "not this kind" answers null and lets the durable-negative fall through, while
   // "not in the arena at all" is the lifetime error.
-  const resolve = async (imageId, objectId, kind, durable) => {
+  const resolve = async (imageId, objectId, kind, durable, {immutable = false} = {}) => {
     const record = arena.transientRecord(imageId, objectId);
     if (record) return record.kind === kind ? record : null;
     if (isTransientObjectId(objectId)) {
       throw new ExpiredClosureInstanceError(imageId, objectId);
     }
+    if (immutable) return await readImmutableDurable(kind, imageId, objectId, durable);
     return await durable.call(images, imageId, objectId);
   };
-  view.getBlock = (imageId, objectId) => resolve(imageId, objectId, 'block', images.getBlock);
+  view.getBlock = (imageId, objectId) =>
+    resolve(imageId, objectId, 'block', images.getBlock, {immutable: true});
   view.getLexicalEnvironment = (imageId, objectId) =>
-    resolve(imageId, objectId, 'lexical-environment', images.getLexicalEnvironment);
+    resolve(imageId, objectId, 'lexical-environment', images.getLexicalEnvironment, {immutable: true});
+  if (typeof images.putLexicalEnvironment === 'function') {
+    view.putLexicalEnvironment = async (imageId, input, options) => {
+      if (typeof input?.id === 'string') immutableDurable.delete(['lexical-environment', imageId, input.id]);
+      const saved = await images.putLexicalEnvironment(imageId, input, options);
+      if (saved?.id) immutableDurable.set(['lexical-environment', imageId, saved.id], saved);
+      return saved;
+    };
+  }
+  if (typeof images.getCodeArtifact === 'function') {
+    view.getCodeArtifact = (imageId, objectId) =>
+      readImmutableDurable('code-artifact', imageId, objectId, images.getCodeArtifact);
+  }
+  if (typeof images.getShape === 'function') {
+    view.getShape = (imageId, objectId) =>
+      readImmutableDurable('shape', imageId, objectId, images.getShape);
+  }
   // ADR 0060: object reads resolve arena-first, exactly as Block reads already do — so a primitive
   // holding a transient receiver (a `basicNew` result, an unhandled condition still in its
   // execution) sees its state without the object ever becoming durable. The durable fallback is
@@ -425,9 +477,10 @@ function arenaImagesView(images, arena) {
       }
       return record;
     }
+    if (typeof record?.id === 'string') protocols.delete([record.id, imageId]);
     return await images.putObject(imageId, record, options);
   };
-  return view;
+  return arena.cacheImagesView ? arena.cacheImagesView(images, view) : view;
 }
 
 export {

@@ -231,6 +231,8 @@ async function installSmalltalkConditionProtocol({images, compilation, imageId, 
 // local ref.
 async function findSmalltalkBlockUnwindProtocol({images, imageId} = {}) {
   requiredText(imageId, 'block unwind protocol image id');
+  const cached = images?.cachedProtocol?.(SMALLTALK_BLOCK_UNWIND_PROTOCOL_V1, imageId);
+  if (cached) return cached;
   const record = await images.getObject(imageId, BLOCK_UNWIND_PROTOCOL_OBJECT_ID);
   if (!record) return null;
   if (record.metadata?.protocol !== SMALLTALK_BLOCK_UNWIND_PROTOCOL_V1) {
@@ -270,7 +272,8 @@ async function findSmalltalkBlockUnwindProtocol({images, imageId} = {}) {
     }
     refs[slot.name] = value;
   }
-  return Object.freeze({protocol: SMALLTALK_BLOCK_UNWIND_PROTOCOL_V1, ref: objectRef(imageId, record.id), ...refs});
+  const protocol = Object.freeze({protocol: SMALLTALK_BLOCK_UNWIND_PROTOCOL_V1, ref: objectRef(imageId, record.id), ...refs});
+  return images?.cacheProtocol ? images.cacheProtocol(SMALLTALK_BLOCK_UNWIND_PROTOCOL_V1, imageId, protocol) : protocol;
 }
 
 // Workstream 3 (MessagePack pressure). `Exception>>messageText`, installed as a *separate* pass
