@@ -1184,10 +1184,11 @@ function normalizeFunctionDefinition(name, paramForm, bodyForms, ctx) {
       ? makeSymbolNode(optSpec.suppliedP)
       : ctx.freshGensym(`SUP_${optSpec.name}`);
     letStarBindings.push(makeListNode([suppliedSym, suppliedExpr]));
+    const initExpr = expandAllMacrosInForm(optSpec.initForm, ctx);
     letStarBindings.push(
       makeListNode([
         makeSymbolNode(optSpec.name),
-        makeListNode([makeSymbolNode('IF'), suppliedSym, optParamSym, optSpec.initForm]),
+        makeListNode([makeSymbolNode('IF'), suppliedSym, optParamSym, initExpr]),
       ]),
     );
   }
@@ -1208,6 +1209,7 @@ function normalizeFunctionDefinition(name, paramForm, bodyForms, ctx) {
       const suppliedSym = keySpec.suppliedP
         ? makeSymbolNode(keySpec.suppliedP)
         : ctx.freshGensym(`KEY_SUP_${keySpec.name}`);
+      const initExpr = expandAllMacrosInForm(keySpec.initForm, ctx);
       letStarBindings.push(makeListNode([suppliedSym, suppliedExpr]));
       letStarBindings.push(
         makeListNode([
@@ -1216,7 +1218,7 @@ function normalizeFunctionDefinition(name, paramForm, bodyForms, ctx) {
             makeSymbolNode('IF'),
             suppliedSym,
             makeListNode([makeSymbolNode('%PLIST-GET'), restParamSym, kwNode, NIL_NODE]),
-            keySpec.initForm,
+            initExpr,
           ]),
         ]),
       );
@@ -2487,12 +2489,15 @@ function compileCommonLispSemanticProgram(rawForms, {
   macros = {},
   structs = {},
   functionSignatures = {},
+  alreadyExpanded = false,
 } = {}) {
   if (!Array.isArray(rawForms)) {
     throw new TypeError('compileCommonLispSemanticProgram forms must be an array');
   }
   const macroContext = createMacroContext({macros, structs, functionSignatures});
-  const forms = rawForms.map((f) => expandAllMacrosInForm(f, macroContext));
+  const forms = alreadyExpanded
+    ? rawForms
+    : rawForms.map((f) => expandAllMacrosInForm(f, macroContext));
   const mutatedNames = new Set();
   for (const form of forms) collectMutatedVariables(form, mutatedNames);
 
@@ -5139,6 +5144,7 @@ async function installCommonLispBlock({
   lane = 'neutral',
   metadata = {},
   compileContext = null,
+  alreadyExpanded = false,
 } = {}) {
   requiredText(imageId, 'image id');
   assertMethodLane(lane);
@@ -5161,6 +5167,7 @@ async function installCommonLispBlock({
     macros: ctx.macros ?? {},
     structs: ctx.structs ?? {},
     functionSignatures: ctx.functionSignatures ?? {},
+    alreadyExpanded,
   });
 
   // Ensure any quoted symbols referenced via symbol-intern have their Symbol protocol ready
@@ -5837,6 +5844,7 @@ async function installCommonLispProgram({
         lane,
         metadata: {commonLisp: 'defun', functionName: defun.name},
         compileContext,
+        alreadyExpanded: true,
       });
       const blockRef = objectRef(imageId, installed.block.id);
       const bindingRef = await ensureGlobalBindingInNamespace({
