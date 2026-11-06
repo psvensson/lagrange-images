@@ -52,6 +52,13 @@ export async function proveKernel(backend, mark = () => {}) {
   assert.deepEqual(await images.listRecords('real-kernel'), classRecords);
   assert.deepEqual(await images.history('real-kernel'), classEvents);
   mark('class-reused');
+  return {records: classRecords, events: classEvents};
+}
+
+export async function assertKernelResult(backend, expected) {
+  const images = new ImageService({backend});
+  assert.deepEqual(await images.listRecords('real-kernel'), expected.records);
+  assert.deepEqual(await images.history('real-kernel'), expected.events);
 }
 
 export async function proveTransaction(backend) {

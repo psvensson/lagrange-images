@@ -1,7 +1,8 @@
 import {channel} from 'node:diagnostics_channel';
 import {createServer} from 'node:net';
 import {createBackend} from '../src/backend/index.js';
-import {assertTransactionResult, proveKernel, proveTransaction} from './real-lagrange-backend-scenarios.js';
+import {assertKernelResult, assertTransactionResult, proveKernel, proveTransaction} from './real-lagrange-backend-scenarios.js';
+import {loadSharedLifeFixture, proveSharedLife} from './real-lagrange-m6-scenario.js';
 import {
   REAL_LAGRANGE_BUDGETS,
   REAL_LAGRANGE_REPORT_PREFIX,
@@ -9,8 +10,8 @@ import {
 } from './real-lagrange-suite.js';
 
 const [dataDir, proof = 'transaction'] = process.argv.slice(2);
-if (!dataDir) throw new TypeError('usage: real-lagrange-backend-process.js <data-dir> [warm|transaction|kernel]');
-if (!['warm', 'transaction', 'kernel'].includes(proof)) throw new TypeError('unknown real Lagrange proof');
+if (!dataDir) throw new TypeError('usage: real-lagrange-backend-process.js <data-dir> [warm|transaction|kernel|life]');
+if (!['warm', 'transaction', 'kernel', 'life'].includes(proof)) throw new TypeError('unknown real Lagrange proof');
 const mark = (stage, detail = {}) => {
   console.error(JSON.stringify({proof, stage, at: new Date().toISOString(), ...detail}));
   if (stage === 'phase') channel('lagrange-images.m6-stage/1').publish({
@@ -61,11 +62,19 @@ async function startBackend() {
 
 // Cold modes retain the original first-write/admission reproductions. The CI
 // warm mode shares only the running backend, never installed image contents.
+const lifeFixture = proof === 'life' ? await loadSharedLifeFixture() : null;
+let kernelSnapshot = null;
 const cases = {
   transaction: {name: 'transaction', timeoutMs: REAL_LAGRANGE_BUDGETS.transaction, run: proveTransaction},
   kernel: {name: 'kernel', timeoutMs: REAL_LAGRANGE_BUDGETS.kernel, run: async (backend) => {
-    await proveKernel(backend, mark);
-    if (proof === 'warm') await assertTransactionResult(backend);
+    kernelSnapshot = await proveKernel(backend, mark);
+    if (proof === 'warm') {
+      await assertTransactionResult(backend);
+      await assertKernelResult(backend, kernelSnapshot);
+    }
+  }},
+  life: {name: 'life', timeoutMs: REAL_LAGRANGE_BUDGETS.kernel, run: async (backend) => {
+    await proveSharedLife(backend.runtime, lifeFixture);
   }},
 };
 const report = await runRealLagrangeSuite({

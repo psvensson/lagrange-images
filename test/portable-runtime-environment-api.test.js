@@ -189,7 +189,13 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // 140 after the in-image Common Lisp personality (src/language/common-lisp.js, ADR 0099) — ONE
   // module registered on createDefaultLanguagePlatform() and composed only from existing portable
   // language, code, value, object and ensure owners; no new host/foreign dependency and no node:*.
-  assert.equal(modules.length, 140, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), the authorized Cuis native import seam, and the in-image Common Lisp personality');
+  // 143 after the M6.3 whole-image residency, placement and remote-resolution owners (ADR 0092):
+  // src/image/storage-layout.js, src/graph/locator.js and src/graph/remote-resolution.js, composed
+  // by src/image/graph-image-service.js with no node:* dependency and no host/foreign runtime.
+  assert.equal(modules.length, 143, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), the authorized Cuis native import seam, the in-image Common Lisp personality, and the three M6.3 residency/locator/remote-resolution owners');
+  assert.ok(paths.includes('src/image/storage-layout.js'));
+  assert.ok(paths.includes('src/graph/locator.js'));
+  assert.ok(paths.includes('src/graph/remote-resolution.js'));
   assert.ok(paths.includes('src/language/common-lisp.js'));
   assert.ok(paths.includes('src/language/smalltalk-string-equality.js'));
   assert.ok(paths.includes('src/wasm/function-executor.js'));
