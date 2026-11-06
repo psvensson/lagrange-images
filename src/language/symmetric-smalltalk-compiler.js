@@ -19,9 +19,8 @@ import {
   installNestedPrototypes,
 } from './smalltalk-nested-blocks.js';
 import {compileSymmetricSmalltalkSemanticBlock} from './symmetric-smalltalk-semantic.js';
-import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
+import {SYMMETRIC_SMALLTALK_ID, SYMMETRIC_SMALLTALK_SOURCE_V0} from './symmetric-smalltalk.js';
 
-const SYMMETRIC_SMALLTALK_SOURCE_V0 = 'symmetric-smalltalk/source-v0';
 const SYMMETRIC_SMALLTALK_SYNTAX_V0 = 'symmetric-smalltalk/syntax-v0';
 
 function compileSymmetricSmalltalkBlock(source, options = {}) {
@@ -234,7 +233,6 @@ async function evaluateSymmetricSmalltalkBlock({runtime, arguments: args = [], .
 }
 
 export {
-  SYMMETRIC_SMALLTALK_SOURCE_V0,
   SYMMETRIC_SMALLTALK_SYNTAX_V0,
   compileSymmetricSmalltalkBlock,
   evaluateSymmetricSmalltalkBlock,

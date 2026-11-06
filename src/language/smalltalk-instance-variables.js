@@ -232,9 +232,10 @@ async function compileSymmetricSmalltalkMethod({
 // capture declaration acquires its value: the slot primitives resolve to their well-known Blocks in
 // this image, and anything else must have been supplied by the caller.
 async function methodsFromSource({
-  images, compilation, imageId, classRef, methods, lane, namespaceId, install,
+  images, compilation, imageId, classRef, methods, lane, namespaceId, retainSource = false, install,
 }) {
   if (!Array.isArray(methods) || methods.length === 0) throw new TypeError('methods must be a non-empty array');
+  if (typeof retainSource !== 'boolean') throw new TypeError('retainSource must be a boolean');
   const primitiveIds = new Set(Object.values(PRIMITIVE_BLOCK_ID));
   // Resolved once: `nil` means this image's kernel nil, and a method that never writes it carries
   // no binding to resolve.
@@ -246,7 +247,11 @@ async function methodsFromSource({
   // namespace the batch compiles in, defaulting to the root.
   const globals = await globalDeclarations({images, imageId, namespaceId});
   const compiled = [];
-  for (const {selector, source, captures, expectedCurrent} of methods) {
+  for (const {selector, source, captures, expectedCurrent, retainSource: entryRetainSource} of methods) {
+    if (entryRetainSource !== undefined && typeof entryRetainSource !== 'boolean') {
+      throw new TypeError(`method ${selector} retainSource must be a boolean`);
+    }
+    const shouldRetainSource = entryRetainSource ?? retainSource;
     const declared = normalizeCaptureDeclarations(captures ?? {});
     const supplied = new Map(declared.map(({id, value}) => [id, value]));
     const method = await compileSymmetricSmalltalkMethod({
@@ -291,6 +296,7 @@ async function methodsFromSource({
       selector: method.selector,
       program: method.program,
       captures: bound,
+      ...(shouldRetainSource ? {source} : {}),
       ...(expectedCurrent === undefined ? {} : {expectedCurrent}),
     });
   }

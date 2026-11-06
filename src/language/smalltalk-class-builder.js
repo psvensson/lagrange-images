@@ -59,7 +59,7 @@ import {WASM_MODULE_V2, readModuleDescriptor, soleModuleEntry} from '../wasm/mod
 import {assembleWasmV1FunctionArtifact} from '../wasm/tree-installer-v1.js';
 import {ensureClassStateCompanion} from './smalltalk-class-state.js';
 import {maintainSubclassRegistries} from './smalltalk-subclasses.js';
-import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
+import {SYMMETRIC_SMALLTALK_ID, SYMMETRIC_SMALLTALK_SOURCE_V0} from './symmetric-smalltalk.js';
 
 // Installing methods onto a class, and defining new classes with their metaclasses.
 //
@@ -240,12 +240,13 @@ async function installedMethodLane({images, classRef, selector, block}) {
 // bindings. It is deliberately NOT Cuis source and not a probabilistic digest. Canonical JSON plus
 // base64url is injective for these normalized Values, so concurrent equal revisions select the same
 // create-once records while different revisions cannot alias.
-function methodRevisionId(classObjectId, selector, program, captures, lane) {
+function methodRevisionId(classObjectId, selector, program, captures, lane, source = null) {
   const material = canonicalJson({
     captures,
     lane,
     representation: methodRepresentation(program),
     semanticContent: JSON.stringify(program),
+    ...(source === null || source === undefined ? {} : {source}),
   });
   return `${methodId(classObjectId, selector)}/revision/${base64urlEncode(utf8Encode(material))}`;
 }
@@ -446,17 +447,28 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
 // Both are native-owner identities, and the complete Block/semantic/environment contract must
 // still agree. Merely finding equal source or an arbitrary Block with equal-looking content is not
 // convergence.
-async function isSameInstalledMethod({images, imageId, classRef, selector, program, captures, lane, installed}) {
+async function isSameInstalledMethod({images, imageId, classRef, selector, program, captures, lane, source = null, installed}) {
   const baseId = methodId(classRef.objectId, selector);
-  const revisionId = methodRevisionId(classRef.objectId, selector, program, captures, lane);
+  const revisionId = methodRevisionId(classRef.objectId, selector, program, captures, lane, source);
   if (!isObjectRef(installed) || installed.imageId !== imageId
     || (installed.objectId !== baseId && installed.objectId !== revisionId)) return false;
   const id = installed.objectId;
   const block = await images.getBlock(imageId, id);
   if (!block || block.metadata?.lane !== lane) return false;
+  const existingSource = await images.getCodeArtifact(imageId, `${id}:source`);
+  if (source === null || source === undefined) {
+    if (existingSource) return false;
+  } else {
+    if (!existingSource || existingSource.representation !== SYMMETRIC_SMALLTALK_SOURCE_V0) return false;
+    if (existingSource.content?.value !== source) return false;
+  }
   const semantic = await images.getCodeArtifact(imageId, `${id}:semantic`);
   if (!semantic || semantic.representation !== methodRepresentation(program)) return false;
   if (semantic.content?.value !== JSON.stringify(program)) return false;
+  const expectedDerivedFrom = source === null || source === undefined ? [] : [objectRef(imageId, `${id}:source`)];
+  const actualDerivedFrom = semantic.derivedFrom ?? [];
+  if (actualDerivedFrom.length !== expectedDerivedFrom.length) return false;
+  if (expectedDerivedFrom.length === 1 && !sameOptionalRef(actualDerivedFrom[0], expectedDerivedFrom[0])) return false;
   // The semantic program names its captures but does not contain their values, so two definitions
   // differing only in what `nil` they capture would otherwise look identical here and the second
   // would be silently accepted as already installed.
@@ -693,7 +705,7 @@ function assertExpectedCurrentBindings({classRef, expected, bindings}) {
 // A write that supplied an expected current binding does NOT come here: it has a per-position
 // precondition rather than a whole-dictionary one, so it rebases instead (`commitMethodDictionary`).
 async function classifyLostMethodDictionaryCas({
-  images, imageId, classRef, methods, capturesBySelector, lane,
+  images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, lane,
 }) {
   const {dictionaryRef: currentRef, existing: current, merged} =
     await readMethodDictionaryForUpdate({images, imageId, classRef});
@@ -710,6 +722,7 @@ async function classifyLostMethodDictionaryCas({
       selector,
       program,
       captures: capturesBySelector.get(selector),
+      source: sourcesBySelector.get(selector),
       lane,
       installed,
     })) {
@@ -820,7 +833,7 @@ const MAX_UNRELATED_REBASE_ATTEMPTS = 4;
 // publication property and this slice adds no rollback or transaction to hide it. The load-bearing
 // invariant is narrower and exact: a failed or stale replacement never makes its revision CURRENT.
 async function commitMethodDictionary({
-  images, imageId, classRef, methods, capturesBySelector, lane, expected, installedRefs, read,
+  images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, lane, expected, installedRefs, read,
 }) {
   let attempt = read;
   for (let rebases = MAX_UNRELATED_REBASE_ATTEMPTS; ; rebases -= 1) {
@@ -833,7 +846,7 @@ async function commitMethodDictionary({
       if (error?.name !== 'VersionConflictError') throw error;
       if (expected.size === 0) {
         return await classifyLostMethodDictionaryCas({
-          images, imageId, classRef, methods, capturesBySelector, lane,
+          images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, lane,
         });
       }
       // EVERY boundary re-asserts the expectation, INCLUDING THE LAST one. Checking the budget
@@ -901,12 +914,17 @@ async function installMethods({
   const incoming = new Set();
   const alreadyInstalled = new Set();
   const capturesBySelector = new Map();
-  for (const {selector, program, captures = []} of methods) {
+  const sourcesBySelector = new Map();
+  for (const {selector, program, captures = [], source = null} of methods) {
     requiredText(selector, 'selector');
     if (incoming.has(selector)) {
       throw new TypeError(`${operation} declares ${selector} twice in one call`);
     }
     incoming.add(selector);
+    const normalizedSource = source === null || source === undefined
+      ? null
+      : requiredText(source, `method ${selector} source`);
+    sourcesBySelector.set(selector, normalizedSource);
     capturesBySelector.set(selector, normalizeMethodCaptures(selector, program, captures));
     // BEFORE the exact-replay branch below, deliberately. A guarded caller that observed A and asks
     // for C must be refused when someone else has already moved the position to B — INCLUDING when
@@ -923,7 +941,9 @@ async function installMethods({
       // or lane for an existing selector is replacement.
       if (await isSameInstalledMethod({
         images, imageId, classRef, selector, program,
-        captures: capturesBySelector.get(selector), lane, installed: merged.get(selector),
+        captures: capturesBySelector.get(selector),
+        source: normalizedSource,
+        lane, installed: merged.get(selector),
       })) {
         alreadyInstalled.add(selector);
         continue;
@@ -956,14 +976,25 @@ async function installMethods({
   for (const {selector, program} of methods) {
     if (alreadyInstalled.has(selector)) continue;
     const captures = capturesBySelector.get(selector);
+    const source = sourcesBySelector.get(selector);
     const id = merged.has(selector)
-      ? methodRevisionId(classRef.objectId, selector, program, captures, lane)
+      ? methodRevisionId(classRef.objectId, selector, program, captures, lane, source)
       : methodId(classRef.objectId, selector);
+    const sourceArtifact = source === null
+      ? null
+      : await ensureCodeArtifact(images, imageId, {
+        id: `${id}:source`,
+        languageId: SYMMETRIC_SMALLTALK_ID,
+        representation: SYMMETRIC_SMALLTALK_SOURCE_V0,
+        content: textValue(source),
+        metadata: {smalltalk: 'method-source', selector},
+      });
     const semantic = await ensureCodeArtifact(images, imageId, {
       id: `${id}:semantic`,
       languageId: SYMMETRIC_SMALLTALK_ID,
       representation: methodRepresentation(program),
       content: textValue(JSON.stringify(program)),
+      ...(sourceArtifact ? {derivedFrom: [objectRef(imageId, sourceArtifact.id)]} : {}),
       metadata: {smalltalk: 'method', selector},
     });
     // ADR 0044 decision 6: one semantic method, an executable Block derived per lane. The WASM
@@ -1036,6 +1067,7 @@ async function installMethods({
     classRef,
     methods,
     capturesBySelector,
+    sourcesBySelector,
     lane,
     expected,
     installedRefs,
@@ -1625,6 +1657,20 @@ async function definePolyglotMethodBridge({
   });
 }
 
+async function methodSource({images, imageId, blockRef} = {}) {
+  requiredText(imageId, 'imageId');
+  if (!isObjectRef(blockRef) || blockRef.imageId !== imageId) {
+    throw new TypeError(`methodSource blockRef must be an unpinned object ref in ${imageId}`);
+  }
+  const block = await images.getBlock(imageId, blockRef.objectId);
+  if (!block || block.metadata?.smalltalk !== 'method') return null;
+  const artifact = await images.getCodeArtifact(imageId, `${blockRef.objectId}:source`);
+  if (!artifact || artifact.representation !== SYMMETRIC_SMALLTALK_SOURCE_V0 || artifact.content?.kind !== 'text') {
+    return null;
+  }
+  return artifact.content.value;
+}
+
 export {
   smalltalkClassObjectId,
   SmalltalkMethodDictionaryContentionError,
@@ -1643,5 +1689,6 @@ export {
   ensureSmalltalkShape,
   methodBindings,
   methodBlockRef,
+  methodSource,
   ensureCodeArtifact,
 };

@@ -1,8 +1,10 @@
+import {textValue} from '../value/index.js';
 import {ensureClassFromDeclaration} from './smalltalk-class-builder.js';
 import {ensureClassVariableBindings} from './smalltalk-class-variables.js';
 import {GLOBAL_BINDING_VALUE_SLOT, findSmalltalkGlobalNamespace, publishSmalltalkClassGlobals, resolveGlobal} from './smalltalk-globals.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {reconcileMethodsFromSource} from './smalltalk-instance-variables.js';
+import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 import {isAssignmentToken, tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
 
 // ADR 0085 M1/M2: this adapter owns translation only. The canonical representation remains owned
@@ -493,14 +495,241 @@ function normalizeScope(scope) {
   return Object.freeze({classes: new Set(classes), methods: new Set(methods)});
 }
 
+const CLASS_DEFINITION_KEYWORD = new Set([
+  'subclass:',
+  'variableSubclass:',
+  'variableByteSubclass:',
+  'variableWordSubclass:',
+]);
+
+function splitCuisChunks(pckSource) {
+  const chunks = [];
+  let index = 0;
+  let inMethodSection = false;
+  let skipNextChunk = false;
+
+  while (index < pckSource.length) {
+    while (index < pckSource.length && /\s/.test(pckSource[index])) {
+      index += 1;
+    }
+    if (index >= pckSource.length) break;
+
+    let isDirective = false;
+    if (!inMethodSection && pckSource[index] === '!') {
+      isDirective = true;
+      index += 1;
+    } else if (inMethodSection && pckSource[index] === '!') {
+      inMethodSection = false;
+      index += 1;
+      continue;
+    }
+
+    let current = '';
+    let inString = false;
+    while (index < pckSource.length) {
+      const ch = pckSource[index];
+      if (ch === '\'') {
+        if (inString && pckSource[index + 1] === '\'') {
+          current += '\'\'';
+          index += 2;
+          continue;
+        }
+        inString = !inString;
+        current += ch;
+        index += 1;
+        continue;
+      }
+      if (!inString && ch === '!') {
+        if (pckSource[index + 1] === '!') {
+          current += '!';
+          index += 2;
+          continue;
+        }
+        index += 1;
+        break;
+      }
+      current += ch;
+      index += 1;
+    }
+
+    const trimmed = current.trim();
+    if (skipNextChunk) {
+      skipNextChunk = false;
+      continue;
+    }
+    if (isDirective) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*(\s+class)?\s+methodsFor:/m.test(trimmed)) {
+        inMethodSection = true;
+      } else if (/^commentStamp:/m.test(trimmed)) {
+        skipNextChunk = true;
+      }
+      continue;
+    }
+    if (!inMethodSection && trimmed.length > 0) {
+      chunks.push(trimmed);
+    }
+  }
+  return chunks;
+}
+
+function canonicalInitializerIdentity(packageName, className, selector = 'initialize') {
+  return `cuis-initializer/${packageName}/${className}/${selector}`;
+}
+
+// Parse top-level chunks of a Cuis .pck.st source string and extract explicit post-load
+// `<ClassName> initialize!` chunks into canonical initializer descriptors, while refusing
+// arbitrary top-level DoIt expressions (ADR 0096).
+function extractCuisPackagePostLoadInitializers(packageName, pckSource) {
+  const pkg = text(packageName, 'packageName');
+  const source = text(pckSource, 'pckSource');
+  const initializers = [];
+  const seen = new Set();
+  for (const trimmed of splitCuisChunks(source)) {
+    let tokens;
+    try {
+      tokens = tokenizeSymmetricSmalltalk(trimmed);
+    } catch (error) {
+      fail(`Cuis package ${pkg} contains unparseable top-level chunk: ${error.message}`);
+    }
+    const bodyTokens = tokens.filter((token) => token.type !== 'eof');
+    if (bodyTokens.length === 0) continue;
+    if (bodyTokens.length === 1 && bodyTokens[0].type === 'string') continue;
+    if (bodyTokens[0].type === 'identifier' && bodyTokens[1]?.type === 'keyword' && CLASS_DEFINITION_KEYWORD.has(bodyTokens[1].value)) {
+      continue;
+    }
+    if (
+      bodyTokens.length === 2
+      && bodyTokens[0].type === 'identifier'
+      && bodyTokens[1].type === 'identifier'
+      && bodyTokens[1].value === 'initialize'
+    ) {
+      const className = bodyTokens[0].value;
+      const classIdentity = canonicalClassIdentity(pkg, className);
+      if (!seen.has(classIdentity)) {
+        seen.add(classIdentity);
+        initializers.push(Object.freeze({
+          identity: canonicalInitializerIdentity(pkg, className, 'initialize'),
+          package: pkg,
+          class: classIdentity,
+          selector: 'initialize',
+        }));
+      }
+      continue;
+    }
+    fail(`unsupported Cuis post-load DoIt chunk in ${pkg}: ${trimmed}`);
+  }
+  return Object.freeze(initializers);
+}
+
+function normalizePostLoadInitializerEntry(entry, byIdentity, byClassName) {
+  if (typeof entry === 'string') {
+    const trimmed = text(entry, 'postLoadInitializers entry').trim();
+    if (trimmed.startsWith('cuis-class/')) {
+      const declaration = byIdentity.get(trimmed);
+      if (!declaration) {
+        fail(`postLoadInitializers names class ${trimmed}, which this manifest does not declare`, trimmed);
+      }
+      return Object.freeze({
+        identity: canonicalInitializerIdentity(declaration.package, declaration.name, 'initialize'),
+        package: declaration.package,
+        class: declaration.identity,
+        selector: 'initialize',
+      });
+    }
+    let tokens;
+    try {
+      tokens = tokenizeSymmetricSmalltalk(trimmed);
+    } catch (error) {
+      fail(`postLoadInitializers entry ${trimmed} is not a valid class initializer: ${error.message}`);
+    }
+    const bodyTokens = tokens.filter((token) => token.type !== 'eof');
+    if (
+      bodyTokens.length !== 2
+      || bodyTokens[0].type !== 'identifier'
+      || bodyTokens[1].type !== 'identifier'
+      || bodyTokens[1].value !== 'initialize'
+    ) {
+      fail(`postLoadInitializers only supports <ClassName> initialize, got: ${trimmed}`);
+    }
+    const declaration = byClassName.get(bodyTokens[0].value);
+    if (!declaration) {
+      fail(`postLoadInitializers names undeclared class ${bodyTokens[0].value}`);
+    }
+    return Object.freeze({
+      identity: canonicalInitializerIdentity(declaration.package, declaration.name, 'initialize'),
+      package: declaration.package,
+      class: declaration.identity,
+      selector: 'initialize',
+    });
+  }
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    fail('postLoadInitializers entry must be an object or string');
+  }
+  const keys = Object.keys(entry).sort().join(',');
+  if (keys !== 'class,selector' && keys !== 'class,identity,package,selector') {
+    fail('postLoadInitializers entry must have fields {class, selector} or {identity, package, class, selector}');
+  }
+  const classIdentity = text(entry.class, 'postLoadInitializers entry class');
+  const selector = text(entry.selector, 'postLoadInitializers entry selector');
+  if (selector !== 'initialize') {
+    fail(`postLoadInitializers selector must be initialize, got ${selector}`, classIdentity);
+  }
+  const declaration = byIdentity.get(classIdentity);
+  if (!declaration) {
+    fail(`postLoadInitializers names class ${classIdentity}, which this manifest does not declare`, classIdentity);
+  }
+  const expectedIdentity = canonicalInitializerIdentity(declaration.package, declaration.name, 'initialize');
+  if (entry.package !== undefined && text(entry.package, 'postLoadInitializers entry package') !== declaration.package) {
+    fail(`postLoadInitializers entry package ${entry.package} does not match ${declaration.package}`, classIdentity);
+  }
+  if (entry.identity !== undefined && text(entry.identity, 'postLoadInitializers entry identity') !== expectedIdentity) {
+    fail(`postLoadInitializers entry identity ${entry.identity} does not match ${expectedIdentity}`, classIdentity);
+  }
+  return Object.freeze({
+    identity: expectedIdentity,
+    package: declaration.package,
+    class: declaration.identity,
+    selector: 'initialize',
+  });
+}
+
+function orderPackagesByRequires(packages) {
+  const byName = new Map(packages.map((pkg) => [pkg.name, pkg]));
+  const rank = new Map();
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = (name) => {
+    if (visited.has(name)) return;
+    if (visiting.has(name)) fail(`package dependency cycle reaches ${name}`);
+    const pkg = byName.get(name);
+    if (!pkg) return;
+    visiting.add(name);
+    for (const req of pkg.requires) {
+      if (byName.has(req)) visit(req);
+    }
+    visiting.delete(name);
+    visited.add(name);
+    rank.set(name, rank.size);
+  };
+  for (const pkg of packages) visit(pkg.name);
+  return rank;
+}
+
 // Validate every adapter-owned schema, identity and dependency-graph rule before the first native
 // owner call. Native declaration semantics (for example inherited-name legality) stay exclusively
 // in the class builder; this adapter does not duplicate them to promise a batch transaction it does
 // not own. An owner rejection may therefore leave already-valid immutable ancestors, and an exact
 // retry converges through their ordinary admission rules.
-function importPlan(manifest, scope) {
+function importPlan(manifest, scope, {postLoadInitializers: optionInitializers = null} = {}) {
   const requested = normalizeScope(scope);
-  exactKeys(manifest, ['format', 'packages', 'classes', 'methods'], 'manifest');
+  const manifestRecord = record(manifest, 'manifest');
+  const expectedManifestKeys = Object.hasOwn(manifestRecord, 'postLoadInitializers')
+    ? ['format', 'packages', 'classes', 'methods', 'postLoadInitializers']
+    : ['format', 'packages', 'classes', 'methods'];
+  exactKeys(manifestRecord, expectedManifestKeys, 'manifest');
+  if (optionInitializers !== null && optionInitializers !== undefined && Object.hasOwn(manifestRecord, 'postLoadInitializers')) {
+    fail('postLoadInitializers may be supplied on manifest or options, not both');
+  }
   if (manifest.format !== CUIS_SEMANTIC_EXPORT_V2) {
     fail(`manifest format must be ${CUIS_SEMANTIC_EXPORT_V2}, got ${manifest.format ?? 'missing'}`);
   }
@@ -509,16 +738,20 @@ function importPlan(manifest, scope) {
   if (!Array.isArray(manifest.methods)) fail('manifest methods must be an array');
 
   const packageNames = new Set();
+  const normalizedPackages = [];
   for (const item of manifest.packages) {
     exactKeys(item, ['name', 'requires'], 'package declaration');
     const name = text(item.name, 'package name');
     if (packageNames.has(name)) fail(`package ${name} appears more than once`);
     packageNames.add(name);
-    textArray(item.requires, `package ${name} requirements`);
+    const requires = textArray(item.requires, `package ${name} requirements`);
+    normalizedPackages.push(Object.freeze({name, requires}));
   }
+  const packageRank = orderPackagesByRequires(normalizedPackages);
 
   const classes = [];
   const byIdentity = new Map();
+  const byClassName = new Map();
   const nativeNames = new Set();
   for (const item of manifest.classes) {
     exactKeys(
@@ -561,6 +794,7 @@ function importPlan(manifest, scope) {
     const normalized = Object.freeze({identity, package: packageName, name, superclass, instanceVariables, classVariables});
     classes.push(normalized);
     byIdentity.set(identity, normalized);
+    byClassName.set(name, normalized);
   }
   // Package attribution is a property of the manifest as a whole, so it is checked for every
   // declaration whether or not this import covers it.
@@ -679,7 +913,55 @@ function importPlan(manifest, scope) {
       }
     }
   }
-  return {classes: scopedClasses, ordered, methods};
+
+  const rawInitializers = optionInitializers ?? manifestRecord.postLoadInitializers ?? null;
+  const postLoadInitializers = [];
+  if (rawInitializers !== null && rawInitializers !== undefined) {
+    if (!Array.isArray(rawInitializers)) fail('postLoadInitializers must be an array');
+    const scopedSet = new Set(scopedClasses.map((declaration) => declaration.identity));
+    const coveredClassInitSet = new Set(
+      methods
+        .filter((method) => method.side === 'class' && method.selector === 'initialize')
+        .map((method) => method.classIdentity),
+    );
+    const seenInitializers = new Set();
+    for (const entry of rawInitializers) {
+      const normalized = normalizePostLoadInitializerEntry(entry, byIdentity, byClassName);
+      const classIdentity = normalized.class;
+      if (seenInitializers.has(classIdentity)) {
+        fail(`postLoadInitializers must not contain duplicate class ${classIdentity}`, classIdentity);
+      }
+      seenInitializers.add(classIdentity);
+      if (!scopedSet.has(classIdentity)) {
+        fail(`postLoadInitializers target ${classIdentity} is outside the requested import scope`, classIdentity);
+      }
+      if (!coveredClassInitSet.has(classIdentity)) {
+        fail(
+          `postLoadInitializers target ${classIdentity} does not declare a covered class-side initialize method`,
+          classIdentity,
+        );
+      }
+      postLoadInitializers.push(normalized);
+    }
+    const orderedIndex = new Map(ordered.map((declaration, index) => [declaration.identity, index]));
+    const isAncestor = (candidateAncestor, candidateDescendant) => {
+      let current = byIdentity.get(candidateDescendant);
+      while (current) {
+        if (current.superclass === candidateAncestor) return true;
+        current = byIdentity.get(current.superclass);
+      }
+      return false;
+    };
+    postLoadInitializers.sort((left, right) => {
+      if (isAncestor(left.class, right.class)) return -1;
+      if (isAncestor(right.class, left.class)) return 1;
+      const pkgDiff = (packageRank.get(left.package) ?? 0) - (packageRank.get(right.package) ?? 0);
+      if (pkgDiff !== 0) return pkgDiff;
+      return (orderedIndex.get(left.class) ?? 0) - (orderedIndex.get(right.class) ?? 0);
+    });
+  }
+
+  return {classes: scopedClasses, ordered, methods, postLoadInitializers: Object.freeze(postLoadInitializers)};
 }
 
 // Cancellation between declarations. The adapter checks the caller's `signal` before each class
@@ -703,11 +985,24 @@ function assertProgressOptions(signal, onProgress) {
   if (onProgress !== null && typeof onProgress !== 'function') fail('onProgress must be null or a function');
 }
 
-async function importCuisNativePackage({images, compilation, imageId, manifest, scope = null, signal = null, onProgress = null} = {}) {
+async function importCuisNativePackage({
+  images,
+  compilation,
+  invocations = null,
+  executor = null,
+  imageId,
+  manifest,
+  scope = null,
+  postLoadInitializers = null,
+  retainSource = false,
+  signal = null,
+  onProgress = null,
+} = {}) {
   text(imageId, 'image id');
   if (!images || typeof images !== 'object') fail('images must be an image service');
+  if (typeof retainSource !== 'boolean') fail('retainSource must be a boolean');
   assertProgressOptions(signal, onProgress);
-  const plan = importPlan(manifest, scope);
+  const plan = importPlan(manifest, scope, {postLoadInitializers});
   const admitted = {classes: [], methods: []};
   const checkpoint = (reason) => {
     if (signal?.aborted) throw new CuisNativeImportAbortedError({admitted, reason: signal.reason ?? reason ?? null});
@@ -716,6 +1011,14 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
   const totals = Object.freeze({classes: plan.ordered.length, methods: plan.methods.length});
   if (plan.methods.length > 0 && (!compilation || typeof compilation.compileArtifact !== 'function')) {
     fail('compilation must be a compilation service when methods are present');
+  }
+  if (plan.postLoadInitializers.length > 0) {
+    if (!invocations || typeof invocations.sendMessage !== 'function') {
+      fail('invocations must be an invocation service when postLoadInitializers are present');
+    }
+    if (!executor || typeof executor.execute !== 'function') {
+      fail('executor must be an execution service when postLoadInitializers are present');
+    }
   }
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) fail(`image ${imageId} has no Smalltalk kernel`);
@@ -803,10 +1106,25 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
       imageId,
       classRef,
       methods,
+      retainSource,
       lane: 'wasm',
     });
     admitted.methods.push(...identities);
     progress({event: 'admitted', phase: 'methods', identity: classIdentity, methods: Object.freeze([...identities]), totals});
+  }
+
+  for (const initializer of plan.postLoadInitializers) {
+    checkpoint(`before post-load initializer ${initializer.identity}`);
+    progress({event: 'begin', phase: 'initializer', identity: initializer.identity, totals});
+    const target = resolved.get(initializer.class);
+    const activation = await invocations.sendMessage({
+      languageId: SYMMETRIC_SMALLTALK_ID,
+      receiver: target.classRef,
+      message: textValue(initializer.selector),
+      arguments: [],
+    }, {dispatchImage: imageId});
+    await executor.execute(activation);
+    progress({event: 'admitted', phase: 'initializer', identity: initializer.identity, totals});
   }
 
   // Semantic identity is useful to the caller, but this is deliberately transient output: the
@@ -816,6 +1134,9 @@ async function importCuisNativePackage({images, compilation, imageId, manifest, 
       identity: declaration.identity,
       ...resolved.get(declaration.identity),
     }))),
+    ...(plan.postLoadInitializers.length === 0
+      ? {}
+      : {initializers: plan.postLoadInitializers}),
   });
 }
 
@@ -829,6 +1150,7 @@ export {
   CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
   CuisNativeImportAbortedError,
   CuisNativeImportError,
+  extractCuisPackagePostLoadInitializers,
   importCuisNativePackage,
   isMappedCuisClass,
   mappedCuisClassName,

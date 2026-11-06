@@ -11,6 +11,7 @@ import {
   SmalltalkGlobalConflictError,
   SymmetricSmalltalkSyntaxError,
   createRuntime,
+  extractCuisPackagePostLoadInitializers,
   findSmalltalkKernel,
   globalBindingId,
   importCuisNativePackage,
@@ -2117,6 +2118,175 @@ test('the adapter never lends the arrow assignment semantics: native owners refu
     await assert.rejects(
       importSeed(runtime, 'seed\n\tnothingBound _ 4.\n\t^ 1'),
       /unbound Symmetric Smalltalk name: nothingBound/,
+    );
+  });
+});
+
+test('extractCuisPackagePostLoadInitializers extracts bounded <ClassName> initialize! chunks and refuses arbitrary DoIts', () => {
+  const samplePck = [
+    '\'From Cuis 7.3 [latest update: #7100] on 6 November 2026!\'!',
+    '!provides: \'Fixture\' 1 0!',
+    '!classDefinition: #ZuluBase category: #\'Fixture\'!',
+    'Object subclass: #ZuluBase instanceVariableNames: \'\' classVariableNames: \'Table\' poolDictionaries: \'\' category: \'Fixture\'!',
+    '!ZuluBase class methodsFor: \'class initialization\' stamp: \'test\'!',
+    'initialize',
+    '\tTable := 42! !',
+    'ZuluBase initialize!',
+    'AChild initialize!',
+    'ZuluBase initialize!',
+  ].join('\n');
+
+  assert.deepEqual(extractCuisPackagePostLoadInitializers('Fixture', samplePck), [
+    {
+      identity: 'cuis-initializer/Fixture/ZuluBase/initialize',
+      package: 'Fixture',
+      class: 'cuis-class/Fixture/ZuluBase',
+      selector: 'initialize',
+    },
+    {
+      identity: 'cuis-initializer/Fixture/AChild/initialize',
+      package: 'Fixture',
+      class: 'cuis-class/Fixture/AChild',
+      selector: 'initialize',
+    },
+  ]);
+
+  assert.throws(
+    () => extractCuisPackagePostLoadInitializers('Fixture', 'ZuluBase bootNow!'),
+    (error) => error instanceof CuisNativeImportError && /unsupported Cuis post-load DoIt chunk/.test(error.message),
+  );
+  assert.throws(
+    () => extractCuisPackagePostLoadInitializers('Fixture', 'Transcript show: \'hi\'!'),
+    (error) => error instanceof CuisNativeImportError && /unsupported Cuis post-load DoIt chunk/.test(error.message),
+  );
+});
+
+test('importCuisNativePackage executes postLoadInitializers in topological superclass order and populates class variables', async () => {
+  await withStandardImage(async (runtime) => {
+    const input = {
+      format: CUIS_SEMANTIC_EXPORT_V2,
+      packages: [{name: 'Fixture', requires: ['Cuis-Base']}],
+      classes: [
+        {
+          identity: 'cuis-class/Fixture/AChild',
+          package: 'Fixture',
+          name: 'AChild',
+          superclassName: 'ZuluBase',
+          superclass: 'cuis-class/Fixture/ZuluBase',
+          instanceVariables: [],
+          classVariables: ['ChildSeed'],
+        },
+        {
+          identity: 'cuis-class/Fixture/ZuluBase',
+          package: 'Fixture',
+          name: 'ZuluBase',
+          superclassName: 'Object',
+          superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
+          instanceVariables: [],
+          classVariables: ['BaseSeed'],
+        },
+      ],
+      methods: [
+        {
+          identity: 'cuis-method/Fixture/ZuluBase/class/initialize',
+          package: 'Fixture',
+          class: 'cuis-class/Fixture/ZuluBase',
+          side: 'class',
+          selector: 'initialize',
+          source: 'initialize\n\tBaseSeed := 40',
+        },
+        {
+          identity: 'cuis-method/Fixture/ZuluBase/class/baseSeed',
+          package: 'Fixture',
+          class: 'cuis-class/Fixture/ZuluBase',
+          side: 'class',
+          selector: 'baseSeed',
+          source: 'baseSeed\n\t^ BaseSeed',
+        },
+        {
+          identity: 'cuis-method/Fixture/AChild/class/initialize',
+          package: 'Fixture',
+          class: 'cuis-class/Fixture/AChild',
+          side: 'class',
+          selector: 'initialize',
+          // Depends on ZuluBase initialize having already run!
+          source: 'initialize\n\tChildSeed := BaseSeed + 2',
+        },
+        {
+          identity: 'cuis-method/Fixture/AChild/instance/answer',
+          package: 'Fixture',
+          class: 'cuis-class/Fixture/AChild',
+          side: 'instance',
+          selector: 'answer',
+          source: 'answer\n\t^ ChildSeed',
+        },
+      ],
+    };
+
+    // Deliberately list AChild BEFORE ZuluBase in postLoadInitializers: the adapter must order by
+    // topological package + superclass dependency order so ZuluBase initialize runs first.
+    const postLoadInitializers = [
+      {
+        identity: 'cuis-initializer/Fixture/AChild/initialize',
+        package: 'Fixture',
+        class: 'cuis-class/Fixture/AChild',
+        selector: 'initialize',
+      },
+      {
+        identity: 'cuis-initializer/Fixture/ZuluBase/initialize',
+        package: 'Fixture',
+        class: 'cuis-class/Fixture/ZuluBase',
+        selector: 'initialize',
+      },
+    ];
+
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      invocations: runtime.invocations,
+      executor: runtime.executor,
+      imageId: 'app',
+      manifest: input,
+      postLoadInitializers,
+    });
+
+    assert.deepEqual(
+      imported.initializers.map(({identity}) => identity),
+      [
+        'cuis-initializer/Fixture/ZuluBase/initialize',
+        'cuis-initializer/Fixture/AChild/initialize',
+      ],
+    );
+
+    const childClassRef = imported.classes.find(({identity}) => identity === 'cuis-class/Fixture/AChild').classRef;
+    const probe = await installSymmetricSmalltalkBlock({
+      images: runtime.images,
+      imageId: 'app',
+      id: 'probe-postload-init',
+      source: '[ :cls | cls basicNew answer ]',
+    });
+    const answer = await runtime.executor.execute(
+      await runtime.invocations.invokeBlock(objectRef('app', probe.block.id), [childClassRef]),
+    );
+    assert.deepEqual(answer, integerValue(42));
+
+    // Rejects non-initialize selector or undeclared class-side initialize method before publication.
+    await assert.rejects(
+      importCuisNativePackage({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        invocations: runtime.invocations,
+        executor: runtime.executor,
+        imageId: 'app',
+        manifest: input,
+        postLoadInitializers: [{
+          identity: 'cuis-initializer/Fixture/ZuluBase/other',
+          package: 'Fixture',
+          class: 'cuis-class/Fixture/ZuluBase',
+          selector: 'other',
+        }],
+      }),
+      (error) => error instanceof CuisNativeImportError && /selector must be initialize/.test(error.message),
     );
   });
 });

@@ -1,4 +1,5 @@
 const SYMMETRIC_SMALLTALK_ID = 'symmetric-smalltalk';
+const SYMMETRIC_SMALLTALK_SOURCE_V0 = 'symmetric-smalltalk/source-v0';
 
 const SYMMETRIC_SMALLTALK = Object.freeze({
   id: SYMMETRIC_SMALLTALK_ID,
@@ -20,4 +21,4 @@ const SYMMETRIC_SMALLTALK = Object.freeze({
   }),
 });
 
-export {SYMMETRIC_SMALLTALK, SYMMETRIC_SMALLTALK_ID};
+export {SYMMETRIC_SMALLTALK, SYMMETRIC_SMALLTALK_ID, SYMMETRIC_SMALLTALK_SOURCE_V0};
