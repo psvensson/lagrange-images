@@ -443,13 +443,13 @@ test('installCommonLispRuntime is idempotent, supports live defun redefinition, 
   const runtime = await portable.createPortableRuntime({backend: {mode: 'mock'}});
   try {
     await runtime.images.createImage({id: 'portable-cl', name: 'Portable CL'});
-    await portable.installCommonLispRuntime({
+    await installCommonLispRuntime({
       images: runtime.images,
       compilation: runtime.compilation,
       imageId: 'portable-cl',
     });
 
-    await portable.installCommonLispProgram({
+    await installCommonLispProgram({
       images: runtime.images,
       compilation: runtime.compilation,
       runtime,
@@ -460,7 +460,7 @@ test('installCommonLispRuntime is idempotent, supports live defun redefinition, 
       `,
     });
     assert.deepEqual(
-      await portable.evaluateCommonLispSource({
+      await evaluateCommonLispSource({
         runtime,
         imageId: 'portable-cl',
         source: '(caller 5)',
@@ -469,13 +469,13 @@ test('installCommonLispRuntime is idempotent, supports live defun redefinition, 
     );
 
     // Re-running installCommonLispRuntime converges and preserves user definitions
-    await portable.installCommonLispRuntime({
+    await installCommonLispRuntime({
       images: runtime.images,
       compilation: runtime.compilation,
       imageId: 'portable-cl',
     });
     assert.deepEqual(
-      await portable.evaluateCommonLispSource({
+      await evaluateCommonLispSource({
         runtime,
         imageId: 'portable-cl',
         source: '(caller 5)',
@@ -484,7 +484,7 @@ test('installCommonLispRuntime is idempotent, supports live defun redefinition, 
     );
 
     // Redefining compute updates its GlobalBinding; caller observes the new definition without recompiling caller
-    await portable.installCommonLispProgram({
+    await installCommonLispProgram({
       images: runtime.images,
       compilation: runtime.compilation,
       runtime,
@@ -492,7 +492,7 @@ test('installCommonLispRuntime is idempotent, supports live defun redefinition, 
       source: '(defun compute (x) (+ x 100))',
     });
     assert.deepEqual(
-      await portable.evaluateCommonLispSource({
+      await evaluateCommonLispSource({
         runtime,
         imageId: 'portable-cl',
         source: '(caller 5)',

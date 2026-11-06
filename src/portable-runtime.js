@@ -125,18 +125,6 @@ import {
   authorizedReplaceSmalltalkMethod,
 } from './language/smalltalk-authorized-method-replacement.js';
 import {authorizedImportCuisPackage} from './language/smalltalk-authorized-import.js';
-import {
-  COMMON_LISP,
-  COMMON_LISP_ID,
-  attachCommonLispMethod,
-  commonLispListToArray,
-  compileCommonLispBlock,
-  evaluateCommonLispSource,
-  installCommonLispBlock,
-  installCommonLispProgram,
-  installCommonLispRuntime,
-  readCommonLispSource,
-} from './language/common-lisp.js';
 import {createDefaultLanguagePlatform} from './language/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './language/symmetric-smalltalk.js';
 import {createSymmetricSmalltalkDispatcher} from './language/symmetric-smalltalk-dispatcher.js';
@@ -392,14 +380,4 @@ export {
   // The authorized Cuis native IMPORT seam (ADR 0094, Object Environment E4): the exact owner
   // function from src/language/smalltalk-authorized-import.js; its error classes stay internal.
   authorizedImportCuisPackage,
-  COMMON_LISP,
-  COMMON_LISP_ID,
-  attachCommonLispMethod,
-  commonLispListToArray,
-  compileCommonLispBlock,
-  evaluateCommonLispSource,
-  installCommonLispBlock,
-  installCommonLispProgram,
-  installCommonLispRuntime,
-  readCommonLispSource,
 };

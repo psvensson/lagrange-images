@@ -36,5 +36,5 @@ To make Common Lisp usable as an image-native language personality whose functio
 
 ## Consequences
 
-- Common Lisp programs compile and execute in-image across both the `neutral` (`neutral-expression/v2`) and `wasm` (`wasm-module/v2` / `wasm-function/v2`) lanes, and the entire compiler and runtime surface ships in `src/portable-runtime.js` with zero Node-only dependencies.
+- Common Lisp programs compile and execute in-image across both the `neutral` (`neutral-expression/v2`) and `wasm` (`wasm-module/v2` / `wasm-function/v2`) lanes, and the entire compiler and runtime surface ships in the portable module closure with zero Node-only dependencies while keeping `src/portable-runtime.js` and `src/runtime.js` language-neutral.
 - Common Lisp and Symmetric Smalltalk interoperate bidirectionally in a single image: Common Lisp invokes Smalltalk methods via `(send ...)`, Smalltalk attaches Common Lisp functions as native methods via `attachCommonLispMethod` / `definePolyglotMethodBridge`, and both languages share `Cons` cells, `Symbol`s, `GlobalBinding`s, and dynamic condition handlers.
