@@ -174,6 +174,25 @@ test('definePolyglotMethodBridge attaches a WASM Component callable to a native 
     {authority: context},
   );
 
+  // Verify that polyglotMethodBridgeDescriptor emits lagrange-code/v2 with direct `op: 'apply'`
+  // rather than a `value:` message send, and that executing the bridged method in both neutral and
+  // WASM lanes never dispatches `value:` through SymmetricSmalltalkDispatcher.
+  const descriptor = polyglotMethodBridgeDescriptor({
+    selector: 'relabelComposite:',
+    callableBlockRef: objectRef('app', componentBinding.block.id),
+  });
+  assert.equal(descriptor.program.body.op, 'apply');
+
+  const resolvedSelectors = [];
+  const originalPrepareDispatch = runtime.invocations.prepareDispatch.bind(runtime.invocations);
+  runtime.invocations.prepareDispatch = async (input, options) => {
+    resolvedSelectors.push(input.message?.value);
+    if (input.message?.value?.startsWith('value')) {
+      throw new Error(`polyglot method bridge must use direct apply, not ${input.message.value}`);
+    }
+    return await originalPrepareDispatch(input, options);
+  };
+
   // Send ordinary Smalltalk message `relabelComposite:` and `relabelCompositeWasm:` to `item-1`.
   for (const selector of ['relabelComposite:', 'relabelCompositeWasm:']) {
     const caller = await installSymmetricSmalltalkBlock({
@@ -194,6 +213,8 @@ test('definePolyglotMethodBridge attaches a WASM Component callable to a native 
       enabled: false,
     });
   }
+  runtime.invocations.prepareDispatch = originalPrepareDispatch;
+  assert.deepEqual(resolvedSelectors, ['relabelComposite:', 'relabelCompositeWasm:']);
 
   // Validation: invalid selector or non-ref target is rejected before any write.
   assert.throws(
