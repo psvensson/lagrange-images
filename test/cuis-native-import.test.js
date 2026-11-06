@@ -10,6 +10,7 @@ import {
   CuisNativeImportError,
   SmalltalkGlobalConflictError,
   SymmetricSmalltalkSyntaxError,
+  createNamespace,
   createRuntime,
   extractCuisPackagePostLoadInitializers,
   findSmalltalkKernel,
@@ -2288,5 +2289,29 @@ test('importCuisNativePackage executes postLoadInitializers in topological super
       }),
       (error) => error instanceof CuisNativeImportError && /selector must be initialize/.test(error.message),
     );
+  });
+});
+
+test('importCuisNativePackage with targetNamespaceId re-exports imported classes as shared GlobalBindings into the target Project namespace without publishing String or UnicodeString', async () => {
+  await withStandardImage(async (runtime) => {
+    await createNamespace({images: runtime.images, imageId: 'app', namespaceId: 'ns/project'});
+    await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      manifest: manifest(),
+      targetNamespaceId: 'ns/project',
+    });
+
+    const rootBinding = await resolveGlobal({images: runtime.images, imageId: 'app', name: 'AChild'});
+    const projectBinding = await resolveGlobal({
+      images: runtime.images,
+      imageId: 'app',
+      name: 'AChild',
+      namespaceId: 'ns/project',
+    });
+    assert.deepEqual(projectBinding, rootBinding, 'both namespaces map AChild to the identical GlobalBinding object');
+    assert.equal(await resolveGlobal({images: runtime.images, imageId: 'app', name: 'String', namespaceId: 'ns/project'}), null);
+    assert.equal(await resolveGlobal({images: runtime.images, imageId: 'app', name: 'UnicodeString', namespaceId: 'ns/project'}), null);
   });
 });

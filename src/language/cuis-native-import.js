@@ -1,11 +1,19 @@
 import {textValue} from '../value/index.js';
 import {ensureClassFromDeclaration} from './smalltalk-class-builder.js';
 import {ensureClassVariableBindings} from './smalltalk-class-variables.js';
-import {GLOBAL_BINDING_VALUE_SLOT, findSmalltalkGlobalNamespace, publishSmalltalkClassGlobals, resolveGlobal} from './smalltalk-globals.js';
+import {
+  GLOBAL_BINDING_VALUE_SLOT,
+  NAMESPACE_OBJECT_ID,
+  findSmalltalkGlobalNamespace,
+  publishSmalltalkClassGlobals,
+  reexportGlobals,
+  resolveGlobal,
+} from './smalltalk-globals.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {reconcileMethodsFromSource} from './smalltalk-instance-variables.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
-import {isAssignmentToken, tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
+import {parseSymmetricSmalltalkDialect} from './symmetric-smalltalk-parser.js';
+import {tokenizeSymmetricSmalltalk} from './symmetric-smalltalk-tokenizer.js';
 
 // ADR 0085 M1/M2: this adapter owns translation only. The canonical representation remains owned
 // by the OpenSmalltalk/Cuis toolchain provider; native builders/compilers remain the sole owners of
@@ -282,150 +290,288 @@ function canonicalMethodIdentity(packageName, classIdentity, side, selector) {
 // take contents. Those semantics stay native and direct native source can call them with no Cuis
 // material present. This remains no claim that UnicodeString is generally Text and publishes no
 // UnicodeString global.
-const CUIS_DIALECT_IDIOMS = Object.freeze([Object.freeze({
-  tokens: Object.freeze([
-    Object.freeze({type: 'identifier', value: 'String'}),
-    Object.freeze({type: 'identifier', value: 'new'}),
-  ]),
-  native: "''",
-}), Object.freeze({
-  tokens: Object.freeze([
-    Object.freeze({type: 'identifier', value: 'UnicodeString'}),
-    Object.freeze({type: 'identifier', value: 'writeStream'}),
-  ]),
-  native: "(WriteStream on: '')",
-}), Object.freeze({
-  // Include the opening block token in the MATCH so the adaptation cannot capture a different
-  // `streamContents:` argument form. `replaceTokens` leaves that block untouched: only receiver +
-  // selector are the foreign semantic locator being normalized.
-  tokens: Object.freeze([
-    Object.freeze({type: 'identifier', value: 'UnicodeString'}),
-    Object.freeze({type: 'keyword', value: 'streamContents:'}),
-    Object.freeze({type: '[', value: '['}),
-  ]),
-  replaceTokens: 2,
-  exactBlockArgument: true,
-  native: 'Text streamContents:',
-})]);
+const CUIS_DIALECT_IDIOMS = Object.freeze([
+  Object.freeze({
+    receiverName: 'String',
+    selector: 'new',
+    arity: 0,
+    lower() {
+      return Object.freeze({kind: 'string', value: ''});
+    },
+  }),
+  Object.freeze({
+    receiverName: 'UnicodeString',
+    selector: 'writeStream',
+    arity: 0,
+    lower() {
+      return Object.freeze({
+        kind: 'send',
+        receiver: Object.freeze({kind: 'name', name: 'WriteStream'}),
+        selector: 'on:',
+        arguments: Object.freeze([Object.freeze({kind: 'string', value: ''})]),
+      });
+    },
+  }),
+  Object.freeze({
+    receiverName: 'UnicodeString',
+    selector: 'streamContents:',
+    arity: 1,
+    exactBlockArgument: true,
+    lower([blockArg]) {
+      return Object.freeze({
+        kind: 'send',
+        receiver: Object.freeze({kind: 'name', name: 'Text'}),
+        selector: 'streamContents:',
+        arguments: Object.freeze([blockArg]),
+      });
+    },
+  }),
+]);
 
 // A dialect idiom is about a GLOBAL name. If the method binds that name itself — as a parameter,
-// a temporary or a block parameter — then the source means something else entirely and needs no
-// translation at all, so the idiom must not fire. Temporary bars need their lexical position:
-// blindly toggling on every `|` mistakes a block-parameter CLOSING bar for a temporary opener and
-// can suppress a later, unrelated idiom. A temporary opener is only the method body's first token,
-// the first token after `[`, or the second bar in `[:parameter | | temporary | ...]`.
-function boundNames(tokens, bodyTokenIndex, parameters) {
+// a temporary, a block parameter or an assignment target — then the source means something else
+// entirely and needs no translation at all, so the idiom must not fire. Walking the parsed AST
+// directly (ADR 0097) collects every declared temporary, block parameter and assignment target
+// structurally without token-level bar heuristics.
+function collectAstBoundNames(ast, parameters) {
   const bound = new Set(parameters);
-
-  const collectTemporaries = (openAt) => {
-    for (let at = openAt + 1; at < tokens.length && tokens[at].type !== '|'; at += 1) {
-      if (tokens[at].type === 'identifier') bound.add(tokens[at].value);
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return;
+    switch (node.kind) {
+      case 'sequence':
+        for (const temp of node.temporaries) bound.add(temp);
+        for (const statement of node.statements) visit(statement);
+        break;
+      case 'block':
+        for (const param of node.parameters) bound.add(param);
+        visit(node.body);
+        break;
+      case 'assign':
+        bound.add(node.name);
+        visit(node.value);
+        break;
+      case 'return':
+        visit(node.value);
+        break;
+      case 'send':
+        visit(node.receiver);
+        for (const arg of node.arguments) visit(arg);
+        break;
+      case 'cascade':
+        visit(node.receiver);
+        for (const msg of node.messages) {
+          for (const arg of msg.arguments) visit(arg);
+        }
+        break;
+      default:
+        break;
     }
   };
-
-  for (let at = bodyTokenIndex; at < tokens.length; at += 1) {
-    const token = tokens[at];
-    if (token.type === '|' && (
-      at === bodyTokenIndex || tokens[at - 1]?.type === '[' || tokens[at - 1]?.type === '|'
-    )) {
-      collectTemporaries(at);
-    }
-    if (token.type !== 'identifier') continue;
-    // `[ :each | ... ]` block parameters and assignment targets — under EITHER assignment spelling
-    // the dialect token stream can carry, through the tokenizer owner's one shared predicate — join
-    // the explicit temporary declarations above in this one definition of a bound name.
-    if (tokens[at - 1]?.type === ':' || isAssignmentToken(tokens[at + 1])) {
-      bound.add(token.value);
-    }
-  }
+  visit(ast);
   return bound;
 }
 
-const IDIOM_EXPRESSION_PREFIXES = new Set([
-  'assign', 'legacyAssign', 'caret', '.', '(', '[', '|', 'binary', 'keyword',
-]);
-
-function matchesIdiom(tokens, at, pattern, bodyTokenIndex) {
-  // The first name must be a primary expression, not a unary selector in a longer chain. In
-  // `self UnicodeString writeStream`, for example, `UnicodeString` is a message to `self`; treating
-  // the two following identifiers as the global construction would rewrite the receiver. The
-  // prefix set names precisely the token positions where the parser can begin a new expression or
-  // operand. `;` is deliberately absent because a cascade continues on its earlier receiver.
-  if (at !== bodyTokenIndex && !IDIOM_EXPRESSION_PREFIXES.has(tokens[at - 1]?.type)) return false;
-  if (!pattern.every((expected, offset) => {
-    const token = tokens[at + offset];
-    return token !== undefined && token.type === expected.type && token.value === expected.value;
-  })) return false;
-  // A cascade continues to the RECEIVER of the last message, so in `String new; yourself` the
-  // later messages go to the class, not to what `new` answered. Substituting a literal there would
-  // silently change which object the rest of the cascade talks to, so the idiom does not fire.
-  return tokens[at + pattern.length]?.type !== ';';
-}
-
-// `UnicodeString streamContents:` is deliberately the complete one-keyword call with one literal
-// Block argument, not a prefix of another selector chain. Find the matching closing bracket in the
-// ORIGINAL tokens (nested Blocks included) and allow only an expression boundary afterwards. A
-// later unary/keyword/cascade chain remains unsupported rather than silently widening the idiom.
-const EXACT_IDIOM_END = new Set(['eof', '.', ']', ')']);
-function hasExactBlockArgument(tokens, openAt) {
-  let depth = 0;
-  for (let at = openAt; at < tokens.length; at += 1) {
-    if (tokens[at].type === '[') depth += 1;
-    if (tokens[at].type !== ']') continue;
-    depth -= 1;
-    if (depth === 0) return EXACT_IDIOM_END.has(tokens[at + 1]?.type);
-  }
-  return false;
-}
-
-// ONE immutable replacement plan, collected against the SAME original token stream and applied
-// right-to-left in a single pass. Two translation kinds share the plan:
-//
-//   * the measured legacy assignment arrow — the tokenizer's distinct `legacyAssign` token,
-//     translated to canonical native `:=`. This is dialect SYNTAX, not a name, so none of the
-//     idiom exclusions apply: every arrow token in the body translates. The adapter translates the
-//     token and NOTHING more — whether the assignment is then legal (a bindable target, a
-//     resolvable right-hand side, an ordinary refusal such as an unbound name) is decided by the
-//     ordinary native parser and compiler after translation, never here. In particular a masked
-//     name such as `driver _ SAXDriver on: aStream` becomes `driver := SAXDriver on: aStream` and
-//     then undergoes ordinary native name resolution, which is the refusal the un-translated
-//     arrow hid (bead lagrange-images-xxm.3).
-//   * the closed dialect-idiom table above (`String new`, `UnicodeString writeStream`, and exact
-//     `UnicodeString streamContents: [block]`), with its bound/declared exclusions.
-//
-// Collecting both against the same token stream and splicing in start-descending order is what
-// makes offset drift impossible by construction: no splice is ever applied at offsets an earlier
-// splice invalidated. The two kinds cannot overlap (an arrow token is never part of an idiom
-// match), so one pass over the tokens suffices.
-function adaptDialect(bodySource, tokens, bodyTokenIndex, bodyStart, parameters, declaredNames) {
-  const bound = boundNames(tokens, bodyTokenIndex, parameters);
-  const replacements = [];
-  for (let at = bodyTokenIndex; at < tokens.length; at += 1) {
-    const token = tokens[at];
-    if (token.type === 'legacyAssign') {
-      replacements.push({start: token.start - bodyStart, end: token.end - bodyStart, native: ':='});
-      continue;
+// Structured AST-to-AST lowering of the closed three-entry `CUIS_DIALECT_IDIOMS` table (ADR 0097).
+// Because matching operates on parsed `send` nodes:
+//   * a cascade (`String new; yourself`) is a `cascade` node, never a `send`, so it is untouched;
+//   * a unary chain (`self UnicodeString writeStream`) has a `send` receiver rather than `{kind: 'name'}`;
+//   * `UnicodeString streamContents: [ ... ] yourself` parses `yourself` onto the block argument,
+//     making `node.arguments[0]` a `send` node rather than `{kind: 'block'}`.
+function lowerCuisDialectAst(node, context) {
+  if (!node || typeof node !== 'object') return node;
+  switch (node.kind) {
+    case 'sequence':
+      return Object.freeze({
+        kind: 'sequence',
+        temporaries: node.temporaries,
+        statements: Object.freeze(node.statements.map((stmt) => lowerCuisDialectAst(stmt, context))),
+      });
+    case 'block':
+      return Object.freeze({
+        ...node,
+        body: lowerCuisDialectAst(node.body, context),
+      });
+    case 'assign':
+      return Object.freeze({
+        kind: 'assign',
+        name: node.name,
+        value: lowerCuisDialectAst(node.value, context),
+      });
+    case 'return':
+      return Object.freeze({
+        ...node,
+        value: lowerCuisDialectAst(node.value, context),
+      });
+    case 'cascade':
+      return Object.freeze({
+        kind: 'cascade',
+        receiver: lowerCuisDialectAst(node.receiver, context),
+        messages: Object.freeze(node.messages.map((msg) => Object.freeze({
+          selector: msg.selector,
+          arguments: Object.freeze(msg.arguments.map((arg) => lowerCuisDialectAst(arg, context))),
+        }))),
+      });
+    case 'send': {
+      const loweredArgs = Object.freeze(node.arguments.map((arg) => lowerCuisDialectAst(arg, context)));
+      if (node.receiver.kind === 'name') {
+        const receiverName = node.receiver.name;
+        if (!context.bound.has(receiverName) && !context.declaredNames.has(receiverName)) {
+          for (const idiom of CUIS_DIALECT_IDIOMS) {
+            if (idiom.receiverName !== receiverName) continue;
+            if (idiom.selector !== node.selector) continue;
+            if (idiom.arity !== node.arguments.length) continue;
+            if (idiom.exactBlockArgument && node.arguments[0]?.kind !== 'block') continue;
+            return idiom.lower(loweredArgs);
+          }
+        }
+      }
+      return Object.freeze({
+        kind: 'send',
+        receiver: lowerCuisDialectAst(node.receiver, context),
+        selector: node.selector,
+        arguments: loweredArgs,
+      });
     }
-    for (const idiom of CUIS_DIALECT_IDIOMS) {
-      if (!matchesIdiom(tokens, at, idiom.tokens, bodyTokenIndex)) continue;
-      if (idiom.exactBlockArgument && !hasExactBlockArgument(tokens, at + idiom.tokens.length - 1)) continue;
-      // The method binds the name itself, or the package declares a class of that name, so the
-      // source means its own thing and this is not the dialect idiom at all.
-      if (bound.has(token.value) || declaredNames.has(token.value)) continue;
-      const replacedTokenCount = idiom.replaceTokens ?? idiom.tokens.length;
-      const last = tokens[at + replacedTokenCount - 1];
-      replacements.push({start: token.start - bodyStart, end: last.end - bodyStart, native: idiom.native});
-      break;
-    }
+    default:
+      return node;
   }
-  let adapted = bodySource;
-  for (const {start, end, native} of [...replacements].sort((a, b) => b.start - a.start)) {
-    adapted = `${adapted.slice(0, start)}${native}${adapted.slice(end)}`;
-  }
-  return adapted;
 }
 
-function nativeMethodSource({identity, selector, source, declaredNames}) {
+function formatArrayLiteralElement(element) {
+  switch (element.kind) {
+    case 'integer':
+      return element.value;
+    case 'string':
+      return `'${element.value.replaceAll("'", "''")}'`;
+    case 'character':
+      return `$${element.value}`;
+    case 'symbol':
+      return `#${element.value}`;
+    case 'true':
+    case 'false':
+    case 'nil':
+      return element.kind;
+    case 'arrayLiteral':
+      return `#(${element.elements.map(formatArrayLiteralElement).join(' ')})`;
+    default:
+      throw new TypeError(`unexpected array literal element kind: ${element.kind}`);
+  }
+}
+
+function parenthesizeIf(condition, text) {
+  return condition ? `(${text})` : text;
+}
+
+function formatMessageSendChain( selector, args ) {
+  if (args.length === 0) return selector;
+  if (!selector.endsWith(':')) {
+    const arg = args[0];
+    const needsParens = arg.kind === 'assign'
+      || arg.kind === 'cascade'
+      || (arg.kind === 'send' && arg.arguments.length > 0);
+    return `${selector} ${parenthesizeIf(needsParens, formatAstExpression(arg))}`;
+  }
+  const parts = selector.match(/[^:]+:/g);
+  return parts.map((part, index) => {
+    const arg = args[index];
+    const needsParens = arg.kind === 'assign'
+      || arg.kind === 'cascade'
+      || (arg.kind === 'send' && arg.selector.endsWith(':'));
+    return `${part} ${parenthesizeIf(needsParens, formatAstExpression(arg))}`;
+  }).join(' ');
+}
+
+function formatSendExpression(receiver, selector, args) {
+  const receiverNeedsParens = args.length === 0
+    ? (receiver.kind === 'assign' || receiver.kind === 'cascade' || (receiver.kind === 'send' && receiver.arguments.length > 0))
+    : (receiver.kind === 'assign' || receiver.kind === 'cascade' || (receiver.kind === 'send' && receiver.selector.endsWith(':')));
+  const recvText = parenthesizeIf(receiverNeedsParens, formatAstExpression(receiver));
+  return `${recvText} ${formatMessageSendChain(selector, args)}`;
+}
+
+function formatInlineBody(bodyAst) {
+  const temporaries = bodyAst.kind === 'sequence' ? bodyAst.temporaries : [];
+  const statements = bodyAst.kind === 'sequence' ? bodyAst.statements : [bodyAst];
+  const parts = [];
+  if (temporaries.length > 0) parts.push(`| ${temporaries.join(' ')} |`);
+  if (statements.length > 0) {
+    parts.push(statements.map(formatAstStatement).join('. '));
+  }
+  return parts.join(' ');
+}
+
+function formatAstExpression(node) {
+  switch (node.kind) {
+    case 'integer':
+      return node.value;
+    case 'string':
+      return `'${node.value.replaceAll("'", "''")}'`;
+    case 'character':
+      return `$${node.value}`;
+    case 'symbol':
+      return `#${node.value}`;
+    case 'self':
+    case 'super':
+    case 'true':
+    case 'false':
+    case 'nil':
+      return node.kind;
+    case 'name':
+      return node.name;
+    case 'arrayLiteral':
+      return `#(${node.elements.map(formatArrayLiteralElement).join(' ')})`;
+    case 'block': {
+      if (node.parameters.length === 0 && node.body.kind === 'nil') return '[]';
+      const params = node.parameters.length === 0
+        ? ''
+        : ` ${node.parameters.map((param) => `:${param}`).join(' ')} |`;
+      return `[${params} ${formatInlineBody(node.body)} ]`;
+    }
+    case 'assign':
+      return `${node.name} := ${formatAstExpression(node.value)}`;
+    case 'send':
+      return formatSendExpression(node.receiver, node.selector, node.arguments);
+    case 'cascade': {
+      const first = formatSendExpression(
+        node.receiver,
+        node.messages[0].selector,
+        node.messages[0].arguments,
+      );
+      const rest = node.messages
+        .slice(1)
+        .map(({selector, arguments: args}) => formatMessageSendChain(selector, args));
+      return `${first}; ${rest.join('; ')}`;
+    }
+    default:
+      throw new TypeError(`unexpected AST expression kind: ${node.kind}`);
+  }
+}
+
+function formatAstStatement(statement) {
+  if (statement.kind === 'return') {
+    return `^ ${formatAstExpression(statement.value)}`;
+  }
+  return formatAstExpression(statement);
+}
+
+function formatSymmetricSmalltalkMethodBlock(parameters, bodyAst) {
+  const parameterSource = parameters.length === 0
+    ? ''
+    : ` ${parameters.map((name) => `:${name}`).join(' ')} |`;
+  const temporaries = bodyAst.kind === 'sequence' ? bodyAst.temporaries : [];
+  const statements = bodyAst.kind === 'sequence' ? bodyAst.statements : [bodyAst];
+  const lines = [];
+  if (temporaries.length > 0) {
+    lines.push(`| ${temporaries.join(' ')} |`);
+  }
+  for (const statement of statements) {
+    lines.push(`${formatAstStatement(statement)}.`);
+  }
+  lines.push('self');
+  return `[${parameterSource}\n${lines.join('\n')}\n]`;
+}
+
+function parseCuisMethodHeader({identity, selector, source}) {
   let tokens;
   try {
     tokens = tokenizeSymmetricSmalltalk(source);
@@ -463,15 +609,17 @@ function nativeMethodSource({identity, selector, source, declaredNames}) {
     fail(`method ${identity} source header declares ${parsedSelector}, not ${selector}`, identity);
   }
   const bodyStart = tokens[index - 1].end;
-  const body = adaptDialect(source.slice(bodyStart), tokens, index, bodyStart, parameters, declaredNames).trim();
-  // An empty method body is ordinary Smalltalk: an empty (or comment-only) hook such as the
-  // pinned YAXO `XMLNode>>contentsDo:` answers its receiver. The appended trailing `self` below
-  // is exactly that answer; an empty body needs no statement of its own. Refusing it would make
-  // a fine-grained package method unimportable for no semantic reason.
-  const parameterSource = parameters.length === 0 ? '' : ` ${parameters.map((name) => `:${name}`).join(' ')} |`;
-  const bodyTokens = tokens.slice(index, -1);
-  const statementSeparator = bodyTokens.length === 0 || bodyTokens.at(-1).type === '.' ? '' : '.';
-  return `[${parameterSource}\n${body}${statementSeparator}\nself\n]`;
+  return Object.freeze({
+    parameters: Object.freeze(parameters),
+    bodySource: source.slice(bodyStart),
+  });
+}
+
+function lowerCuisMethodToNativeSource({parameters, bodySource, declaredNames}) {
+  const dialectAst = parseSymmetricSmalltalkDialect(bodySource, {allowEmpty: true});
+  const bound = collectAstBoundNames(dialectAst, parameters);
+  const loweredAst = lowerCuisDialectAst(dialectAst, {bound, declaredNames});
+  return formatSymmetricSmalltalkMethodBlock(parameters, loweredAst);
 }
 
 // M3 (bead lagrange-images-nv1.2): a real package is imported progressively, so the caller names
@@ -898,12 +1046,15 @@ function importPlan(manifest, scope, {postLoadInitializers: optionInitializers =
     } else if (requested && !requested.classes.has(classIdentity)) {
       fail(`method target ${classIdentity} is outside the requested import scope`, identity);
     }
+    const header = parseCuisMethodHeader({identity, selector, source});
     methods.push(Object.freeze({
       identity,
       classIdentity,
       side: item.side,
       selector,
-      source: nativeMethodSource({identity, selector, source, declaredNames: nativeNames}),
+      parameters: header.parameters,
+      bodySource: header.bodySource,
+      declaredNames: nativeNames,
     }));
   }
   if (requested) {
@@ -994,6 +1145,7 @@ async function importCuisNativePackage({
   manifest,
   scope = null,
   postLoadInitializers = null,
+  targetNamespaceId = null,
   retainSource = false,
   signal = null,
   onProgress = null,
@@ -1001,6 +1153,7 @@ async function importCuisNativePackage({
   text(imageId, 'image id');
   if (!images || typeof images !== 'object') fail('images must be an image service');
   if (typeof retainSource !== 'boolean') fail('retainSource must be a boolean');
+  if (targetNamespaceId !== null) text(targetNamespaceId, 'targetNamespaceId');
   assertProgressOptions(signal, onProgress);
   const plan = importPlan(manifest, scope, {postLoadInitializers});
   const admitted = {classes: [], methods: []};
@@ -1077,11 +1230,21 @@ async function importCuisNativePackage({
   const globalNamespace = await findSmalltalkGlobalNamespace({images, imageId});
   if (globalNamespace && plan.classes.length > 0) {
     progress({event: 'begin', phase: 'globals', identity: null, totals});
+    const classNames = plan.classes.map(({name}) => name);
     await publishSmalltalkClassGlobals({
       images,
       imageId,
-      names: plan.classes.map(({name}) => name),
+      names: classNames,
     });
+    if (targetNamespaceId !== null && targetNamespaceId !== NAMESPACE_OBJECT_ID) {
+      await reexportGlobals({
+        images,
+        imageId,
+        names: classNames,
+        fromNamespaceId: NAMESPACE_OBJECT_ID,
+        toNamespaceId: targetNamespaceId,
+      });
+    }
     progress({event: 'admitted', phase: 'globals', identity: null, totals});
   }
 
@@ -1091,7 +1254,7 @@ async function importCuisNativePackage({
     const classRef = method.side === 'class' ? target.metaclassRef : target.classRef;
     const key = `${classRef.imageId}\u0000${classRef.objectId}`;
     const group = methodGroups.get(key) ?? {classRef, classIdentity: method.classIdentity, methods: [], identities: []};
-    group.methods.push({selector: method.selector, source: method.source});
+    group.methods.push(method);
     group.identities.push(method.identity);
     methodGroups.set(key, group);
   }
@@ -1100,13 +1263,18 @@ async function importCuisNativePackage({
     // progress and of cancellation is the group: a group is admitted whole or not at all.
     checkpoint(`before the methods of ${classIdentity}`);
     progress({event: 'begin', phase: 'methods', identity: classIdentity, methods: Object.freeze([...identities]), totals});
+    const loweredMethods = methods.map((method) => ({
+      selector: method.selector,
+      source: lowerCuisMethodToNativeSource(method),
+    }));
     await reconcileMethodsFromSource({
       images,
       compilation,
       imageId,
       classRef,
-      methods,
+      methods: loweredMethods,
       retainSource,
+      ...(targetNamespaceId !== null ? {namespaceId: targetNamespaceId} : {}),
       lane: 'wasm',
     });
     admitted.methods.push(...identities);
