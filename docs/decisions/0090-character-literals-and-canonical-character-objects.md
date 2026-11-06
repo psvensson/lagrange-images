@@ -1,7 +1,7 @@
 # ADR 0090: Character literals and canonical Character objects
 
 Status: implemented — direct Symmetric Smalltalk `$x` syntax lowers through an image-local Character interner, native Text indexing and scalar enumeration produce the same canonical Character objects, and the Character personality exposes its scalar plus the first pinned classification protocol.
-Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/smalltalk-character-is-ascii.test.js, test/smalltalk-character-constructor.test.js, test/smalltalk-character-digit.test.js, test/smalltalk-character-letter.test.js, test/smalltalk-character-digit-value.test.js, test/smalltalk-character-range.test.js, test/smalltalk-character-range-recovery.test.js, test/cuis-yaxo-native-import-real.test.js
+Proven by: test/symmetric-smalltalk-character.test.js, test/smalltalk-character-neutral-recovery.test.js, test/smalltalk-character-wasm-recovery.test.js, test/smalltalk-text-enumeration.test.js, test/smalltalk-character-ascii.test.js, test/smalltalk-character-is-ascii.test.js, test/smalltalk-character-constructor.test.js, test/smalltalk-character-digit.test.js, test/smalltalk-character-letter.test.js, test/smalltalk-character-digit-value.test.js, test/smalltalk-character-range.test.js, test/smalltalk-character-range-recovery.test.js, test/cuis-yaxo-native-import-real.test.js
 
 ## Problem
 

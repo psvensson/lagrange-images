@@ -323,11 +323,20 @@ test('a derivation persisted under the pre-entrypoint cache contract is not reus
     assert.equal(oldAgain.reused, true);
     assert.equal(oldAgain.outputs[0].artifact.id, 'cargo-wasm');
 
-    // 3. Under v1 the identical request does not find it. The provider runs again, and because the
-    //    caller asked for the id the v0 record already holds, the service refuses to overwrite —
-    //    the old result is neither reused nor silently replaced.
+    // 3. Under v1 the identical request does not find the v0 record. Because the caller asked for
+    //    the id the v0 record already holds, the service fails fast before invoking the provider —
+    //    the old result is neither reused nor silently replaced, and no build is wasted (bead iu6).
     await assert.rejects(runtime.toolchains.run(request), /toolchain output already exists: module -> demo\/cargo-wasm/);
+    assert.equal(runs, 1);
+
+    //    When given a fresh output id, the v1 provider misses the v0 cache and executes a fresh build.
+    const freshV1 = await runtime.toolchains.run({
+      ...request,
+      outputIds: {module: 'cargo-wasm-v1'},
+    });
     assert.equal(runs, 2);
+    assert.equal(freshV1.reused, false);
+    assert.notEqual(freshV1.derivationKey, old.derivationKey);
 
     // 4. The two namespaces really are distinct keys over identical request material.
     const material = Object.freeze({
@@ -343,6 +352,45 @@ test('a derivation persisted under the pre-entrypoint cache contract is not reus
     const v0 = await createToolchainDerivationDescriptor(legacy, material, context);
     const v1 = await createToolchainDerivationDescriptor(current, material, context);
     assert.notEqual(v0.derivationKey, v1.derivationKey);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('ToolchainService fails fast on occupied requested output ids before invoking the provider', async () => {
+  let runs = 0;
+  const provider = Object.freeze({
+    identity: 'fail-fast-provider/v1',
+    cacheKey() { return {contract: 'fail-fast/v1'}; },
+    async run() {
+      runs += 1;
+      return {
+        outputs: [{name: 'module', representation: 'example/module-v1', content: textValue(`run-${runs}`)}],
+      };
+    },
+  });
+  const runtime = await createRuntime({
+    backend: {mode: 'mock'},
+    toolchainProviders: [['example/fail-fast', provider]],
+  });
+  await runtime.images.createImage({id: 'demo'});
+  try {
+    const source = await putSource(runtime, 'source');
+    const base = {
+      providerId: 'example/fail-fast',
+      imageId: 'demo',
+      roots: [objectRef('demo', source.id)],
+      target: {representation: 'example/module-v1'},
+    };
+    await runtime.toolchains.run({...base, outputIds: {module: 'occupied-id'}});
+    assert.equal(runs, 1);
+
+    // With reuse: false and an occupied id, the pre-run check rejects without running the provider.
+    await assert.rejects(
+      runtime.toolchains.run({...base, outputIds: {module: 'occupied-id'}, reuse: false}),
+      /toolchain output already exists: module -> demo\/occupied-id/,
+    );
+    assert.equal(runs, 1, 'provider must not run when a requested output id is already occupied');
   } finally {
     await runtime.close();
   }

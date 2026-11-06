@@ -42,6 +42,7 @@ import {
   entriesFromBuckets,
   isMethodDictionary,
   isSealed,
+  lookupSelectorInTable,
   methodDictionaryRecordFields,
   validateMethodDictionary,
 } from './smalltalk-method-dictionary.js';
@@ -579,10 +580,13 @@ function validateProgramTree(program, imageId, representation = methodRepresenta
 // kernel's legacy adoption check (`isLegacyMethodDictionary` in `smalltalk-kernel.js`) all call this
 // function. The no-undeclared-slots invariant is a general current-binding rule enforced here so
 // every reader reaches the same verdict on a legacy record with a stray slot.
-async function currentSelectorBindings({images, dictionaryRef, record, nilRef}) {
+async function currentSelectorBindings({images, dictionaryRef, record, nilRef, selector = null}) {
   if (isMethodDictionary(record)) {
     const table = validateMethodDictionary(record, dictionaryRef, nilRef);
-    return new Map(entriesFromBuckets(table.buckets).map(([selector, method]) => [selector.value, method]));
+    if (selector !== null) {
+      return lookupSelectorInTable(table, textValue(selector));
+    }
+    return new Map(entriesFromBuckets(table.buckets).map(([entrySelector, method]) => [entrySelector.value, method]));
   }
   // The legacy branch owes the same corruption semantics as dispatch: a missing Shape is a dangling
   // edge rather than a miss, and duplicate selector names are refused rather than resolved
@@ -619,7 +623,7 @@ async function currentSelectorBindings({images, dictionaryRef, record, nilRef}) 
     }
     bindings.set(name, method);
   }
-  return bindings;
+  return selector !== null ? (bindings.get(selector) ?? null) : bindings;
 }
 
 // The write planner's read-for-update: the same current bindings, plus the representation facts it
@@ -1168,22 +1172,29 @@ async function reconcileMethods(options = {}) {
 // `behavior` is an optional already-read (and already-validated) Behavior, so a caller that has just
 // read the Class record for its own reasons describes it from ONE read rather than reading it again
 // here — the same single-read discipline the authorized Project read keeps.
-async function selectorBindings({images, imageId, classRef, behavior: readAlready = null}) {
+async function selectorBindings({
+  images,
+  imageId,
+  classRef,
+  behavior: readAlready = null,
+  kernel: kernelAlready = null,
+  selector = null,
+}) {
   const behavior = readAlready ?? await readBehavior(images, classRef);
   const dictionaryRef = behavior.methods;
   const record = await images.getObject(dictionaryRef.imageId, dictionaryRef.objectId);
   if (!record) throw new TypeError(`method dictionary not found: ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
-  const kernel = await findSmalltalkKernel({images, imageId});
+  const kernel = kernelAlready ?? await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   // A sealed dictionary is readable: sealing forbids writing it, not describing it.
-  return await currentSelectorBindings({images, dictionaryRef, record, nilRef: kernel.nil});
+  return await currentSelectorBindings({images, dictionaryRef, record, nilRef: kernel.nil, selector});
 }
 
 // The Block installed for a selector on a class. `null` is an ordinary "this class does not
 // implement it", never a way to read a corrupt dictionary quietly.
-async function methodBlockRef({images, imageId, classRef, selector, behavior = null} = {}) {
+async function methodBlockRef({images, imageId, classRef, selector, behavior = null, kernel = null} = {}) {
   requiredText(selector, 'selector');
-  return (await selectorBindings({images, imageId, classRef, behavior})).get(selector) ?? null;
+  return await selectorBindings({images, imageId, classRef, behavior, kernel, selector});
 }
 
 // The selectors a class itself implements, in canonical (sorted) order, each with the exact Block
@@ -1192,8 +1203,8 @@ async function methodBlockRef({images, imageId, classRef, selector, behavior = n
 //
 // This is the class builder's public answer to "what does this class implement": the MethodDictionary
 // representation, its buckets and its slot ids stay private to this owner.
-async function methodBindings({images, imageId, classRef, behavior = null} = {}) {
-  const bindings = await selectorBindings({images, imageId, classRef, behavior});
+async function methodBindings({images, imageId, classRef, behavior = null, kernel = null} = {}) {
+  const bindings = await selectorBindings({images, imageId, classRef, behavior, kernel});
   return Object.freeze([...bindings.keys()].sort().map((selector) => Object.freeze({
     selector,
     method: bindings.get(selector),

@@ -2,7 +2,7 @@ import {OBJECT_READ_OPERATION, objectResource} from '../authority/object-resourc
 import {shapeIndexedKind} from '../object/model.js';
 import {isObjectRef} from '../value/index.js';
 import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
-import {methodBindings, methodSource} from './smalltalk-class-builder.js';
+import {methodBindings, methodBlockRef, methodSource} from './smalltalk-class-builder.js';
 import {sameRef} from './smalltalk-lookup.js';
 import {
   SMALLTALK_METHOD_READ_OPERATION,
@@ -178,7 +178,7 @@ async function describeBehavior({images, imageId, classRef, behavior, kernel}) {
     // The selectors THIS class implements. Inherited protocol is deliberately absent: an inherited
     // selector is the declaring class's fact, and reporting it here would let one grant speak for
     // objects the caller was never authorized to read.
-    selectors: Object.freeze((await methodBindings({images, imageId, classRef, behavior})).map(({selector}) => selector)),
+    selectors: Object.freeze((await methodBindings({images, imageId, classRef, behavior, kernel})).map(({selector}) => selector)),
     // Optional metadata; see the module header. Images owns no durable Cuis association today.
     provenance: null,
   });
@@ -240,13 +240,13 @@ async function authorizedMethodPosition({images, imageId, classRef, selector, re
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const behavior = await readBehavior(images, classRef);
   const {side} = await resolveBehaviorSide({images, classRef, behavior, kernel});
-  // The SAME Behavior record answers the side and the selector bindings: one read of the Class, so a
-  // description can never be assembled from two different versions of it.
-  const binding = (await methodBindings({images, imageId, classRef, behavior}))
-    .find((entry) => entry.selector === selector);
-  if (!binding) {
+  // The SAME Behavior record and kernel answer the side and the selector binding: one read of the
+  // Class and one read of the kernel, so a description can never be assembled from two versions.
+  const method = await methodBlockRef({images, imageId, classRef, selector, behavior, kernel});
+  if (!method) {
     throw new TypeError(`native class ${classRef.imageId}/${classRef.objectId} does not implement ${selector}`);
   }
+  const binding = Object.freeze({selector, method});
 
   // The binding is only truthful if the Block it names is actually there; a dangling method edge is
   // corrupt graph state, correctly disclosed to a caller authorized for the class and position.

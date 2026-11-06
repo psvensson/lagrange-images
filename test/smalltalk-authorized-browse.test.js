@@ -921,3 +921,47 @@ test('the no-storage-layout scan accepts caller-controlled names containing buck
     }
   });
 });
+
+test('authorized class and method browsing each perform a single kernel read, and methodBlockRef probes single selectors with unchanged corruption checks', async () => {
+  await withImage(async (runtime) => {
+    const { child } = await declareNativeClasses(runtime);
+
+    let kernelReads = 0;
+    const countingImages = new Proxy(runtime.images, {
+      get(target, key) {
+        const value = target[key];
+        if (key === 'getObject') {
+          return (imageId, objectId) => {
+            if (objectId === 'smalltalk-kernel/v1') kernelReads += 1;
+            return value.call(target, imageId, objectId);
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    kernelReads = 0;
+    const classDesc = await authorizedDescribeSmalltalkClass({
+      images: countingImages,
+      imageId: 'app',
+      classRef: child.classRef,
+      require: requireFor(runtime, [readGrant('app', child.classRef.objectId)]),
+    });
+    assert.equal(kernelReads, 1, 'authorizedDescribeSmalltalkClass must read smalltalk-kernel/v1 once');
+    assert.deepEqual(classDesc.selectors, ['childFirst', 'childSecond']);
+
+    kernelReads = 0;
+    const methodDesc = await authorizedDescribeSmalltalkMethod({
+      images: countingImages,
+      imageId: 'app',
+      classRef: child.classRef,
+      selector: 'childFirst',
+      require: requireFor(runtime, [
+        readGrant('app', child.classRef.objectId),
+        methodPositionGrant('app', child.classRef, 'childFirst'),
+      ]),
+    });
+    assert.equal(kernelReads, 1, 'authorizedDescribeSmalltalkMethod must read smalltalk-kernel/v1 once');
+    assert.equal(methodDesc.selector, 'childFirst');
+  });
+});

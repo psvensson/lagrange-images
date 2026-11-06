@@ -305,6 +305,12 @@ class ToolchainService {
       }
     }
 
+    for (const [name, outputId] of Object.entries(requestedOutputIds)) {
+      if (await this.images.getRecord(outputImageId, outputId)) {
+        throw new TypeError(`toolchain output already exists: ${name} -> ${outputImageId}/${outputId}`);
+      }
+    }
+
     const result = normalizeProviderResult(await provider.run(request, context));
     const outputNames = new Set(result.outputs.map(({name}) => name));
     for (const name of Object.keys(requestedOutputIds)) {
