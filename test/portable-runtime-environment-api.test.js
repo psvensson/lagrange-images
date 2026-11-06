@@ -192,11 +192,17 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // 143 after the M6.3 whole-image residency, placement and remote-resolution owners (ADR 0092):
   // src/image/storage-layout.js, src/graph/locator.js and src/graph/remote-resolution.js, composed
   // by src/image/graph-image-service.js with no node:* dependency and no host/foreign runtime.
-  assert.equal(modules.length, 143, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), the authorized Cuis native import seam, the in-image Common Lisp personality, and the three M6.3 residency/locator/remote-resolution owners');
+  // 145 after the authorized in-image Common Lisp browsing seam and its logical definition-position
+  // resource owner (src/language/common-lisp-browse.js and
+  // src/language/common-lisp-definition-resource.js, bead lagrange-images-gn41), composed only from
+  // existing portable language, value, authority and byte owners with no node:* dependency.
+  assert.equal(modules.length, 145, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), the authorized Cuis native import seam, the in-image Common Lisp personality, the three M6.3 residency/locator/remote-resolution owners, and the two Common Lisp browsing/definition-resource owners');
   assert.ok(paths.includes('src/image/storage-layout.js'));
   assert.ok(paths.includes('src/graph/locator.js'));
   assert.ok(paths.includes('src/graph/remote-resolution.js'));
   assert.ok(paths.includes('src/language/common-lisp.js'));
+  assert.ok(paths.includes('src/language/common-lisp-browse.js'));
+  assert.ok(paths.includes('src/language/common-lisp-definition-resource.js'));
   assert.ok(paths.includes('src/language/smalltalk-string-equality.js'));
   assert.ok(paths.includes('src/wasm/function-executor.js'));
   assert.ok(paths.includes('src/language/cuis-native-import.js'));
