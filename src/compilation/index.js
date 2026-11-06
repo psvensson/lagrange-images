@@ -1,16 +1,23 @@
 import {LAGRANGE_CODE_V0, lagrangeCodeV0ToNeutralExpressionCompiler} from '../code/lagrange-code-v0.js';
-import {LAGRANGE_CODE_V1, lagrangeCodeV1ToNeutralExpressionCompiler} from '../code/lagrange-code-v1.js';
+import {
+  LAGRANGE_CODE_V1,
+  LAGRANGE_CODE_V2,
+  lagrangeCodeV1ToNeutralExpressionCompiler,
+  lagrangeCodeV2ToNeutralExpressionCompiler,
+} from '../code/lagrange-code-v1.js';
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
-import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
+import {NEUTRAL_EXPRESSION_V1, NEUTRAL_EXPRESSION_V2} from '../execution/neutral-expression-v1.js';
 import {
   WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1,
   isWasmV1TailEffectRestrictionError,
   lagrangeCodeV1GroupToWasmModuleCompiler,
   lagrangeCodeV1ToWasmModuleCompiler,
+  lagrangeCodeV2ToWasmModuleCompiler,
 } from '../wasm/compiler-v1.js';
 import {
   lagrangeCodeV1GroupToResumableWasmModuleCompiler,
   lagrangeCodeV1ToResumableWasmModuleCompiler,
+  lagrangeCodeV2ToResumableWasmModuleCompiler,
 } from '../wasm/resumable-compiler-v2.js';
 import {
   WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
@@ -36,6 +43,7 @@ import {CompilationGroupCompilerRegistry} from './group-compiler-registry.js';
 // non-semantic optimization the registry attaches as provenance, never as contract.
 const LAGRANGE_CODE_WASM_COMPILER_ID = 'lagrange-code-v0-to-wasm-module-v2/value-handle-hybrid/compiler-v1';
 const LAGRANGE_CODE_V1_WASM_COMPILER_ID = 'lagrange-code-v1-to-wasm-module-v2/lexical-cell/compiler-v1';
+const LAGRANGE_CODE_V2_WASM_COMPILER_ID = 'lagrange-code-v2-to-wasm-module-v2/lexical-cell-apply/compiler-v1';
 const LAGRANGE_CODE_V1_WASM_GROUP_COMPILER_ID = 'lagrange-code-v1-group-to-wasm-module-v2/lexical-cell/compiler-v1';
 const LAGRANGE_CODE_WASM_GROUP_COMPILER_ID = 'lagrange-code-group-to-wasm-module-v2/value-handle-hybrid/compiler-v1';
 
@@ -113,6 +121,16 @@ const reusableLagrangeCodeV1ToWasmCompiler = Object.freeze({
   },
 });
 
+const reusableLagrangeCodeV2ToWasmCompiler = Object.freeze({
+  identity: LAGRANGE_CODE_V2_WASM_COMPILER_ID,
+  cacheKey: sourceCacheKey,
+  async compile(request, context) {
+    return asWasmModuleV2Result(await compileWithV1ResumableFallback(
+      request, context, lagrangeCodeV2ToWasmModuleCompiler, lagrangeCodeV2ToResumableWasmModuleCompiler,
+    ));
+  },
+});
+
 const reusableLagrangeCodeV1GroupToWasmCompiler = Object.freeze({
   identity: LAGRANGE_CODE_V1_WASM_GROUP_COMPILER_ID,
   cacheKey: groupCacheKey,
@@ -129,6 +147,8 @@ function createDefaultCodeCompilerRegistry() {
   registry.register(LAGRANGE_CODE_V0, WASM_MODULE_V2, reusableLagrangeCodeV0ToWasmCompiler);
   registry.register(LAGRANGE_CODE_V1, NEUTRAL_EXPRESSION_V1, lagrangeCodeV1ToNeutralExpressionCompiler);
   registry.register(LAGRANGE_CODE_V1, WASM_MODULE_V2, reusableLagrangeCodeV1ToWasmCompiler);
+  registry.register(LAGRANGE_CODE_V2, NEUTRAL_EXPRESSION_V2, lagrangeCodeV2ToNeutralExpressionCompiler);
+  registry.register(LAGRANGE_CODE_V2, WASM_MODULE_V2, reusableLagrangeCodeV2ToWasmCompiler);
   return registry;
 }
 

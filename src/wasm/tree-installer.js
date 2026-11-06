@@ -16,7 +16,7 @@ import {
   compileWasmModule,
   compileWasmModuleEntries,
 } from './compiler.js';
-import {LAGRANGE_CODE_V1} from '../code/lagrange-code-v1.js';
+import {LAGRANGE_CODE_V1, LAGRANGE_CODE_V2} from '../code/lagrange-code-v1.js';
 import {installWasmV1BlockTree} from './tree-installer-v1.js';
 import {
   compileResumableWasmModule,
@@ -257,7 +257,7 @@ async function installWasmBlockTree({
   // Dispatch on the root representation, before anything is written. The v1 path is a sibling
   // implementation rather than a widening of this one: that decision was already made when the
   // semantic artifact was created, so there is no second "does this need mutable state?" analysis.
-  if (semanticArtifact.representation === LAGRANGE_CODE_V1) {
+  if (semanticArtifact.representation === LAGRANGE_CODE_V1 || semanticArtifact.representation === LAGRANGE_CODE_V2) {
     return await installWasmV1BlockTree({images, compilation, semanticRef, id, environment, metadata});
   }
   if (semanticArtifact.representation !== LAGRANGE_CODE_V0) {

@@ -468,6 +468,35 @@ class ActivationExecutor {
         // method activation this operation is acting for, never a capability.
         invocationFrame: activeFrame,
         createClosure: whileActive('createClosure', async (request) => await this.createClosure(request, cells, arena, activeFrame)),
+        // ADR 0098. Language-neutral direct callable Block application. Unlike `sendMessage`,
+        // `invokeBlock` resolves no selector through a language dispatcher, sets `receiver: null`
+        // and `dispatch: null` via `prepareActivation` (so `assertBlockApplicationReceiver`
+        // accepts all callable bindings while `assertLoopBlock` still refuses un-dispatched loop
+        // primitives), and passes neither `invocationFrame` nor `inheritedFrame` (so a method
+        // cannot lend its `self`/`definingBehavior` to a Block it applies, while a lexical closure
+        // still restores its own creation frame from `arena.frameFor(activation.block)`).
+        invokeBlock: whileActive('invokeBlock', async (blockRef, args = [], {attenuate = null} = {}) => {
+          if (!this.invocations) throw new TypeError('activation executor has no message runtime');
+          if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
+          let nestedAuthority = authority;
+          if (attenuate !== null) {
+            if (!this.authority) throw new TypeError('cannot attenuate without an authority service');
+            if (authority === null) throw new TypeError('cannot attenuate without an authority context');
+            nestedAuthority = this.authority.attenuate(authority, {grants: attenuate});
+          }
+          const nestedActivation = await this.invocations.prepareActivation({
+            block: blockRef,
+            arguments: args,
+            images: view,
+          });
+          return await this.execute(nestedActivation, {
+            depth: depth + 1,
+            authority: nestedAuthority,
+            cellArena: arena,
+            conditionRuntime: conditions,
+            dispatchImage: nestedActivation.block.imageId,
+          });
+        }),
         // ADR 0089. The activation half of a language-resolved send, and the only reason a
         // Symmetric Smalltalk super send needs no execution path of its own.
         //

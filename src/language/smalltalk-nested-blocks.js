@@ -1,7 +1,7 @@
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
-import {LAGRANGE_CODE_V1} from '../code/lagrange-code-v1.js';
+import {LAGRANGE_CODE_V1, LAGRANGE_CODE_V2} from '../code/lagrange-code-v1.js';
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
-import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
+import {NEUTRAL_EXPRESSION_V1, NEUTRAL_EXPRESSION_V2} from '../execution/neutral-expression-v1.js';
 import {ensureBlock, ensureCodeArtifact} from '../graph/ensure-records.js';
 import {objectRef, textValue} from '../value/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
@@ -21,6 +21,7 @@ import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 const EXECUTABLE_TARGET = Object.freeze({
   [LAGRANGE_CODE_V0]: NEUTRAL_EXPRESSION_V0,
   [LAGRANGE_CODE_V1]: NEUTRAL_EXPRESSION_V1,
+  [LAGRANGE_CODE_V2]: NEUTRAL_EXPRESSION_V2,
 });
 
 function executableTargetFor(representation) {
@@ -41,6 +42,10 @@ function directNestedBlocks(expression, result = []) {
       return result;
     case 'send':
       directNestedBlocks(expression.receiver, result);
+      for (const argument of expression.arguments) directNestedBlocks(argument, result);
+      return result;
+    case 'apply':
+      directNestedBlocks(expression.callee, result);
       for (const argument of expression.arguments) directNestedBlocks(argument, result);
       return result;
     // A Block is very often the right-hand side of an assignment or a statement of a sequence, so

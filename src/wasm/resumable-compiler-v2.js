@@ -8,7 +8,12 @@ import {
   u32,
   vector,
 } from './encoding.js';
-import {LAGRANGE_CODE_V1, parseLagrangeCodeV1Program} from '../code/lagrange-code-v1.js';
+import {
+  LAGRANGE_CODE_V1,
+  LAGRANGE_CODE_V2,
+  parseLagrangeCodeV1Program,
+  parseLagrangeCodeV2Program,
+} from '../code/lagrange-code-v1.js';
 import {canonicalizeValue, isReference} from '../value/index.js';
 import {WASM_ENTRY_V0, WASM_IMPORT_MODULE} from './abi.js';
 import {WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1} from './compiler-v1.js';
@@ -53,7 +58,12 @@ function normalizeModuleEntry(value, index) {
   if (!Number.isInteger(value.memberIndex) || value.memberIndex < 0) {
     throw new TypeError(`WASM module entry ${index} memberIndex must be a non-negative integer`);
   }
-  return Object.freeze({entry, memberIndex: value.memberIndex, program: value.program});
+  return Object.freeze({
+    entry,
+    memberIndex: value.memberIndex,
+    program: value.program,
+    allowApply: value.allowApply === true,
+  });
 }
 
 function collectLiteral(literals, value) {
@@ -102,6 +112,24 @@ function collectSendEffect(state, expression) {
   state.sendSites.push(Object.freeze({
     languageId: requiredText(expression.languageId, 'send languageId'),
     message,
+    arity: expression.arguments.length,
+  }));
+  const effectIndex = state.effects.length;
+  state.effects.push({
+    kind: 'send',
+    siteIndex,
+    requestArity: 1 + expression.arguments.length,
+    savedCount: 0,
+    resumeEntry: null,
+  });
+  return effectIndex;
+}
+
+function collectApplyEffect(state, expression) {
+  if (!Array.isArray(expression.arguments)) throw new TypeError('WASM apply arguments must be an array');
+  const siteIndex = state.sendSites.length;
+  state.sendSites.push(Object.freeze({
+    kind: 'apply',
     arity: expression.arguments.length,
   }));
   const effectIndex = state.effects.length;
@@ -219,6 +247,20 @@ function lowerExpression(expression, state, context, continuation) {
             kind: 'effect',
             effectIndex: collectSendEffect(state, expression),
             requestValues: [receiver, ...args],
+            resultId,
+            next: continuation(resultId),
+          };
+        }));
+    case 'apply':
+      if (!context.allowApply) throw new TypeError(`WASM resumable backend v2 does not support semantic op: ${expression.op}`);
+      if (!Array.isArray(expression.arguments)) throw new TypeError('WASM apply arguments must be an array');
+      return lowerExpression(expression.callee, state, context, (callee) =>
+        lowerSequenceValues(expression.arguments, state, context, 0, [], (args) => {
+          const resultId = newTemp(state);
+          return {
+            kind: 'effect',
+            effectIndex: collectApplyEffect(state, expression),
+            requestValues: [callee, ...args],
             resultId,
             next: continuation(resultId),
           };
@@ -429,7 +471,7 @@ function cellBindingsOf(program) {
   return {bindings: Object.freeze(bindings), slots};
 }
 
-function compileResumableWasmV2ModuleEntries(entries) {
+function compileResumableWasmV2ModuleEntries(entries, {allowApply = false} = {}) {
   const {normalizedEntries, entryNames} = prepareEntries(entries);
   const state = {
     sendSites: [],
@@ -457,6 +499,7 @@ function compileResumableWasmV2ModuleEntries(entries) {
       parameterCount: program.parameters.length,
       captureIds: new Set(captureIds),
       cellSlots,
+      allowApply: allowApply || entry.allowApply,
     };
 
     const sendStart = state.sendSites.length;
@@ -574,6 +617,20 @@ function compileResumableWasmV2Module(program) {
   });
 }
 
+function compileResumableWasmV2ModuleForV2(program) {
+  const compiled = compileResumableWasmV2ModuleEntries(
+    [{entry: WASM_ENTRY_V0, memberIndex: 0, program, allowApply: true}],
+    {allowApply: true},
+  );
+  const descriptor = compiled.functions[0];
+  return Object.freeze({
+    ...compiled,
+    parameterCount: descriptor.parameters,
+    captureIds: descriptor.captures,
+    cellBindings: descriptor.cellBindings,
+  });
+}
+
 const lagrangeCodeV1ToResumableWasmModuleCompiler = Object.freeze({
   async compile({source}) {
     if (source.representation !== LAGRANGE_CODE_V1) throw new TypeError(`source must be ${LAGRANGE_CODE_V1}`);
@@ -597,6 +654,29 @@ const lagrangeCodeV1ToResumableWasmModuleCompiler = Object.freeze({
   },
 });
 
+const lagrangeCodeV2ToResumableWasmModuleCompiler = Object.freeze({
+  async compile({source}) {
+    if (source.representation !== LAGRANGE_CODE_V2) throw new TypeError(`source must be ${LAGRANGE_CODE_V2}`);
+    const compiled = compileResumableWasmV2ModuleForV2(parseLagrangeCodeV2Program(source));
+    return Object.freeze({
+      languageId: source.languageId,
+      bytes: compiled.bytes,
+      contract: {
+        abi: WASM_RESUMABLE_VALUE_HANDLE_ABI_V2,
+        literals: compiled.literals,
+        functions: compiled.functions,
+        sendSites: compiled.sendSites,
+        closureSites: compiled.closureSites,
+        effectSites: compiled.effectSites,
+      },
+      metadata: {
+        continuations: compiled.continuations,
+        semanticRepresentation: LAGRANGE_CODE_V2,
+      },
+    });
+  },
+});
+
 const lagrangeCodeV1GroupToResumableWasmModuleCompiler = Object.freeze({
   async compile({group, members}) {
     if (group.policyId !== WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1) {
@@ -606,15 +686,20 @@ const lagrangeCodeV1GroupToResumableWasmModuleCompiler = Object.freeze({
       throw new TypeError('WASM shared-module compiler requires physicalLayout=shared-module');
     }
     const entries = members.map((source, memberIndex) => {
-      if (source.representation !== LAGRANGE_CODE_V1) {
+      if (source.representation !== LAGRANGE_CODE_V1 && source.representation !== LAGRANGE_CODE_V2) {
         throw new TypeError(`WASM group member ${memberIndex} must be ${LAGRANGE_CODE_V1}`);
       }
+      const isV2 = source.representation === LAGRANGE_CODE_V2;
       return {
         entry: `run_${memberIndex}`,
         memberIndex,
-        program: parseLagrangeCodeV1Program(source),
+        program: isV2 ? parseLagrangeCodeV2Program(source) : parseLagrangeCodeV1Program(source),
+        allowApply: isV2,
       };
     });
+    const semanticRepresentation = members.some((source) => source.representation === LAGRANGE_CODE_V2)
+      ? LAGRANGE_CODE_V2
+      : LAGRANGE_CODE_V1;
     const compiled = compileResumableWasmV2ModuleEntries(entries);
     return Object.freeze({
       bytes: compiled.bytes,
@@ -628,7 +713,7 @@ const lagrangeCodeV1GroupToResumableWasmModuleCompiler = Object.freeze({
       },
       metadata: {
         continuations: compiled.continuations,
-        semanticRepresentation: LAGRANGE_CODE_V1,
+        semanticRepresentation,
         groupPolicyId: group.policyId,
         physicalLayout: 'shared-module',
       },
@@ -640,6 +725,8 @@ export {
   BASE_IMPORT_COUNT_V2,
   compileResumableWasmV2Module,
   compileResumableWasmV2ModuleEntries,
+  compileResumableWasmV2ModuleForV2,
   lagrangeCodeV1GroupToResumableWasmModuleCompiler,
   lagrangeCodeV1ToResumableWasmModuleCompiler,
+  lagrangeCodeV2ToResumableWasmModuleCompiler,
 };

@@ -4,10 +4,15 @@ import {
   isObjectRef,
   textValue,
 } from '../value/index.js';
-import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
+import {
+  NEUTRAL_EXPRESSION_V1,
+  NEUTRAL_EXPRESSION_V2,
+} from '../execution/neutral-expression-v1.js';
 
 // lagrange-code/v1 adds mutable lexical semantics: temporaries, statement sequences, assignment,
 // and captures that must resolve to a live cell rather than a snapshot.
+// lagrange-code/v2 (ADR 0098) adds direct callable Block application (`{op: 'apply', callee, arguments}`)
+// while keeping lagrange-code/v1 frozen.
 //
 // v0 is frozen. Its grammar is closed — `exactKeys(program, ['parameters','captures','body'])` and
 // a switch that throws on any unknown op — so extending it in place would silently change the
@@ -17,6 +22,7 @@ import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
 // This module duplicates v0's shared-op normalization rather than sharing a core with it. That is
 // normally the wrong trade, but v0 is frozen by decision, so the copies cannot drift.
 const LAGRANGE_CODE_V1 = 'lagrange-code/v1';
+const LAGRANGE_CODE_V2 = 'lagrange-code/v2';
 
 // A capture either carries a durable snapshot of a value, or requires the live execution cell of
 // the binding it names. `cell` deliberately has no value: see ADR 0043 decision 5.
@@ -63,16 +69,24 @@ function assertDistinctIds(descriptors, label) {
   }
 }
 
-function normalizeProgram(program) {
-  exactKeys(program, ['parameters', 'temporaries', 'captures', 'body'], 'lagrange code v1 program');
+function normalizeProgramWithLabel(program, label = 'lagrange code v1') {
+  exactKeys(program, ['parameters', 'temporaries', 'captures', 'body'], `${label} program`);
   for (const key of ['parameters', 'temporaries', 'captures']) {
-    if (!Array.isArray(program[key])) throw new TypeError(`lagrange code v1 ${key} must be an array`);
+    if (!Array.isArray(program[key])) throw new TypeError(`${label} ${key} must be an array`);
   }
   const parameters = Object.freeze(program.parameters.map((value, index) => normalizeBindingDescriptor(value, `parameter ${index}`)));
   const temporaries = Object.freeze(program.temporaries.map((value, index) => normalizeBindingDescriptor(value, `temporary ${index}`)));
   const captures = Object.freeze(program.captures.map((value, index) => normalizeCaptureDescriptor(value, `capture ${index}`)));
-  assertDistinctIds([...parameters, ...temporaries, ...captures], 'lagrange code v1 program');
+  assertDistinctIds([...parameters, ...temporaries, ...captures], `${label} program`);
   return Object.freeze({parameters, temporaries, captures, body: program.body});
+}
+
+function normalizeProgram(program) {
+  return normalizeProgramWithLabel(program, 'lagrange code v1');
+}
+
+function normalizeLagrangeCodeV2Program(program) {
+  return normalizeProgramWithLabel(program, 'lagrange code v2');
 }
 
 function parseLagrangeCodeV1Program(code) {
@@ -85,6 +99,18 @@ function parseLagrangeCodeV1Program(code) {
     throw new TypeError(`${LAGRANGE_CODE_V1} content must contain valid JSON`, {cause: error});
   }
   return normalizeProgram(program);
+}
+
+function parseLagrangeCodeV2Program(code) {
+  if (!code || code.representation !== LAGRANGE_CODE_V2) throw new TypeError(`code artifact is not ${LAGRANGE_CODE_V2}`);
+  if (code.content?.kind !== VALUE_KIND.TEXT) throw new TypeError(`${LAGRANGE_CODE_V2} content must be a text Value`);
+  let program;
+  try {
+    program = JSON.parse(code.content.value);
+  } catch (error) {
+    throw new TypeError(`${LAGRANGE_CODE_V2} content must contain valid JSON`, {cause: error});
+  }
+  return normalizeLagrangeCodeV2Program(program);
 }
 
 function normalizePrototypeMap(blockPrototypes) {
@@ -101,9 +127,14 @@ function normalizePrototypeMap(blockPrototypes) {
   return result;
 }
 
-function lowerExpression(expression, prototypes) {
+function lowerExpression(expression, prototypes, {
+  representation = LAGRANGE_CODE_V1,
+  allowApply = false,
+} = {}) {
+  const options = {representation, allowApply};
+  const label = representation === LAGRANGE_CODE_V2 ? 'lagrange code v2' : 'lagrange code v1';
   if (!expression || typeof expression !== 'object' || Array.isArray(expression)) {
-    throw new TypeError('lagrange code v1 expression must be an object');
+    throw new TypeError(`${label} expression must be an object`);
   }
   switch (expression.op) {
     case 'literal':
@@ -127,7 +158,7 @@ function lowerExpression(expression, prototypes) {
       return Object.freeze({
         op: 'binding-write',
         id: requiredText(expression.id, 'binding-write id'),
-        value: lowerExpression(expression.value, prototypes),
+        value: lowerExpression(expression.value, prototypes, options),
       });
     case 'sequence': {
       exactKeys(expression, ['op', 'statements'], 'sequence expression');
@@ -136,7 +167,7 @@ function lowerExpression(expression, prototypes) {
       }
       return Object.freeze({
         op: 'sequence',
-        statements: Object.freeze(expression.statements.map((entry) => lowerExpression(entry, prototypes))),
+        statements: Object.freeze(expression.statements.map((entry) => lowerExpression(entry, prototypes, options))),
       });
     }
     case 'send': {
@@ -145,9 +176,19 @@ function lowerExpression(expression, prototypes) {
       return Object.freeze({
         op: 'send',
         languageId: requiredText(expression.languageId, 'send languageId'),
-        receiver: lowerExpression(expression.receiver, prototypes),
+        receiver: lowerExpression(expression.receiver, prototypes, options),
         message: canonicalizeValue(expression.message),
-        arguments: Object.freeze(expression.arguments.map((entry) => lowerExpression(entry, prototypes))),
+        arguments: Object.freeze(expression.arguments.map((entry) => lowerExpression(entry, prototypes, options))),
+      });
+    }
+    case 'apply': {
+      if (!allowApply) throw new TypeError(`unknown ${representation} expression op: ${expression.op}`);
+      exactKeys(expression, ['op', 'callee', 'arguments'], 'apply expression');
+      if (!Array.isArray(expression.arguments)) throw new TypeError('apply arguments must be an array');
+      return Object.freeze({
+        op: 'apply',
+        callee: lowerExpression(expression.callee, prototypes, options),
+        arguments: Object.freeze(expression.arguments.map((entry) => lowerExpression(entry, prototypes, options))),
       });
     }
     case 'integer-add':
@@ -155,51 +196,51 @@ function lowerExpression(expression, prototypes) {
       exactKeys(expression, ['op', 'left', 'right'], `${expression.op} expression`);
       return Object.freeze({
         op: expression.op,
-        left: lowerExpression(expression.left, prototypes),
-        right: lowerExpression(expression.right, prototypes),
+        left: lowerExpression(expression.left, prototypes, options),
+        right: lowerExpression(expression.right, prototypes, options),
       });
     }
     case 'if':
       exactKeys(expression, ['op', 'condition', 'then', 'else'], 'if expression');
       return Object.freeze({
         op: 'if',
-        condition: lowerExpression(expression.condition, prototypes),
-        then: lowerExpression(expression.then, prototypes),
-        else: lowerExpression(expression.else, prototypes),
+        condition: lowerExpression(expression.condition, prototypes, options),
+        then: lowerExpression(expression.then, prototypes, options),
+        else: lowerExpression(expression.else, prototypes, options),
       });
     case 'block': {
       exactKeys(expression, ['op', 'blockId', 'captures', 'program'], 'block expression');
       const blockId = requiredText(expression.blockId, 'semantic block id');
-      normalizeProgram(expression.program);
+      normalizeProgramWithLabel(expression.program, label);
       if (!Array.isArray(expression.captures)) throw new TypeError('block captures must be an array');
       const prototype = prototypes.get(blockId);
       if (!prototype) throw new TypeError(`missing executable prototype for semantic block: ${blockId}`);
       const captures = Object.freeze(expression.captures.map((capture, index) => {
-        const label = `block capture ${index}`;
-        const mode = requiredText(capture?.mode, `${label} mode`);
+        const captureLabel = `block capture ${index}`;
+        const mode = requiredText(capture?.mode, `${captureLabel} mode`);
         if (mode === 'cell') {
           // No value expression at all: a live-cell capture has nothing to snapshot, which is
           // precisely what stops a later invocation restarting from an old value.
-          exactKeys(capture, ['id', 'mode', 'name'], label);
+          exactKeys(capture, ['id', 'mode', 'name'], captureLabel);
           return Object.freeze({
-            id: requiredText(capture.id, `${label} id`),
-            name: requiredText(capture.name, `${label} name`),
+            id: requiredText(capture.id, `${captureLabel} id`),
+            name: requiredText(capture.name, `${captureLabel} name`),
             mode: 'cell',
           });
         }
-        if (mode !== 'snapshot') throw new TypeError(`${label} mode must be one of ${CAPTURE_MODES.join(', ')}`);
-        exactKeys(capture, ['id', 'mode', 'name', 'value'], label);
+        if (mode !== 'snapshot') throw new TypeError(`${captureLabel} mode must be one of ${CAPTURE_MODES.join(', ')}`);
+        exactKeys(capture, ['id', 'mode', 'name', 'value'], captureLabel);
         return Object.freeze({
-          id: requiredText(capture.id, `${label} id`),
-          name: requiredText(capture.name, `${label} name`),
+          id: requiredText(capture.id, `${captureLabel} id`),
+          name: requiredText(capture.name, `${captureLabel} name`),
           mode: 'snapshot',
-          value: lowerExpression(capture.value, prototypes),
+          value: lowerExpression(capture.value, prototypes, options),
         });
       }));
       return Object.freeze({op: 'make-block', prototype, captures});
     }
     default:
-      throw new TypeError(`unknown ${LAGRANGE_CODE_V1} expression op: ${expression.op}`);
+      throw new TypeError(`unknown ${representation} expression op: ${expression.op}`);
   }
 }
 
@@ -211,6 +252,19 @@ function lowerLagrangeCodeV1(program, {blockPrototypes = {}} = {}) {
     // The executor declares a cell per temporary when it allocates this activation's frame.
     temporaries: normalized.temporaries,
     body: lowerExpression(normalized.body, prototypes),
+  });
+}
+
+function lowerLagrangeCodeV2(program, {blockPrototypes = {}} = {}) {
+  const normalized = normalizeLagrangeCodeV2Program(program);
+  const prototypes = normalizePrototypeMap(blockPrototypes);
+  return Object.freeze({
+    parameters: normalized.parameters.length,
+    temporaries: normalized.temporaries,
+    body: lowerExpression(normalized.body, prototypes, {
+      representation: LAGRANGE_CODE_V2,
+      allowApply: true,
+    }),
   });
 }
 
@@ -226,11 +280,28 @@ const lagrangeCodeV1ToNeutralExpressionCompiler = Object.freeze({
   },
 });
 
+const lagrangeCodeV2ToNeutralExpressionCompiler = Object.freeze({
+  async compile({source, options}) {
+    const program = parseLagrangeCodeV2Program(source);
+    const lowered = lowerLagrangeCodeV2(program, options ?? {});
+    return Object.freeze({
+      languageId: source.languageId,
+      content: textValue(JSON.stringify(lowered)),
+      metadata: {semanticRepresentation: LAGRANGE_CODE_V2, executableRepresentation: NEUTRAL_EXPRESSION_V2},
+    });
+  },
+});
+
 export {
   CAPTURE_MODES,
   LAGRANGE_CODE_V1,
+  LAGRANGE_CODE_V2,
   lagrangeCodeV1ToNeutralExpressionCompiler,
+  lagrangeCodeV2ToNeutralExpressionCompiler,
   lowerLagrangeCodeV1,
+  lowerLagrangeCodeV2,
   normalizeProgram as normalizeLagrangeCodeV1Program,
+  normalizeLagrangeCodeV2Program,
   parseLagrangeCodeV1Program,
+  parseLagrangeCodeV2Program,
 };

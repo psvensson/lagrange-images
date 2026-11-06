@@ -17,6 +17,7 @@ artifact's `representation`.
 | --- | --- | --- |
 | `neutral-expression/v0` | — (built by language personalities) | `neutralExpressionV0Executor` |
 | `neutral-expression/v1` | — (built by language personalities) | `neutralExpressionV1Executor`; adds temporaries, sequences and assignment |
+| `neutral-expression/v2` | — (built by language personalities / `lagrange-code/v2`) | `neutralExpressionV2Executor`; adds direct callable Block application (`op: 'apply'`, ADR 0098) |
 | `wasm-function/v2` | `installWasmBlockTree()` / `assembleWasmFunctionArtifact()` (ADR 0082: selection `{entry, closurePrototypes}` as content + one `module` dependency) | `createWasmFunctionV1Executor()` (chooses by the module's ABI) |
 | `wasm-function/v1` | FROZEN (ADR 0082) — never produced; readable/executable in-image, does not survive release | `createWasmFunctionV1Executor()` |
 | `wasm-callable-interface/v1` | `installWasmScalarCallable()` | `createWasmCallableInterfaceV1Executor()` |
@@ -86,7 +87,8 @@ an interface or definition artifact.
 | `symmetric-smalltalk/source-v0` | language source text |
 | `symmetric-smalltalk/syntax-v0` | parsed syntax |
 | `lagrange-code/v0` | language-neutral semantic code; **frozen** — a closed grammar, so new semantics get a new version |
-| `lagrange-code/v1` | adds temporaries, statement sequences, assignment, and captures carrying a `snapshot`/`cell` mode |
+| `lagrange-code/v1` | adds temporaries, statement sequences, assignment, and captures carrying a `snapshot`/`cell` mode; **frozen** |
+| `lagrange-code/v2` | adds direct callable Block application (`{op: 'apply', callee, arguments}`, ADR 0098) |
 
 The semantic representation is chosen per compilation unit from what the program needs, and
 applies to the whole nested tree: `selectSemanticRepresentation()` returns `lagrange-code/v0`

@@ -15,10 +15,13 @@ import {
 import {lowerLagrangeCodeV0, normalizeLagrangeCodeProgram} from '../code/lagrange-code-v0.js';
 import {
   LAGRANGE_CODE_V1,
+  LAGRANGE_CODE_V2,
   lowerLagrangeCodeV1,
+  lowerLagrangeCodeV2,
   normalizeLagrangeCodeV1Program,
+  normalizeLagrangeCodeV2Program,
 } from '../code/lagrange-code-v1.js';
-import {NEUTRAL_EXPRESSION_V1} from '../execution/neutral-expression-v1.js';
+import {NEUTRAL_EXPRESSION_V1, NEUTRAL_EXPRESSION_V2} from '../execution/neutral-expression-v1.js';
 import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {
   codeArtifactProjection,
@@ -79,7 +82,40 @@ function requiredText(value, label) {
 // A method's semantic representation follows from what the program actually is, exactly as
 // `selectSemanticRepresentation` decides it for a Block. ADR 0043's v1 adds temporaries, statement
 // sequences and assignment; a method that needs none still lands on the v0 artifact it always did.
+function expressionUsesApply(expression) {
+  if (!expression || typeof expression !== 'object' || Array.isArray(expression)) return false;
+  switch (expression.op) {
+    case 'apply':
+      return true;
+    case 'binding-write':
+      return expressionUsesApply(expression.value);
+    case 'sequence':
+      return Array.isArray(expression.statements) && expression.statements.some(expressionUsesApply);
+    case 'send':
+      return expressionUsesApply(expression.receiver)
+        || (Array.isArray(expression.arguments) && expression.arguments.some(expressionUsesApply));
+    case 'integer-add':
+    case 'equals':
+      return expressionUsesApply(expression.left) || expressionUsesApply(expression.right);
+    case 'if':
+      return expressionUsesApply(expression.condition)
+        || expressionUsesApply(expression.then)
+        || expressionUsesApply(expression.else);
+    case 'block':
+      return (Array.isArray(expression.captures)
+        && expression.captures.some((capture) => capture?.mode === 'snapshot' && expressionUsesApply(capture.value)))
+        || programUsesApply(expression.program);
+    default:
+      return false;
+  }
+}
+
+function programUsesApply(program) {
+  return Boolean(program && typeof program === 'object' && expressionUsesApply(program.body));
+}
+
 function methodRepresentation(program) {
+  if (programUsesApply(program)) return LAGRANGE_CODE_V2;
   return Object.hasOwn(program ?? {}, 'temporaries') ? LAGRANGE_CODE_V1 : LAGRANGE_CODE_V0;
 }
 
@@ -383,7 +419,7 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
   // ADR 0043's v1 semantics reach the WASM lane through their own assembler. There is no `describe`
   // helper for it, so reuse compares against a freshly assembled probe — the same trick
   // `ensureNeutralCode` uses, and for the same reason: matching provenance is not matching output.
-  if (representation === LAGRANGE_CODE_V1) {
+  if (representation === LAGRANGE_CODE_V1 || representation === LAGRANGE_CODE_V2) {
     const moduleArtifact = await compilation.compileArtifact(semanticRef, {
       targetRepresentation: WASM_MODULE_V2,
       id: `${id}:wasm:module`,
@@ -489,16 +525,18 @@ async function isSameInstalledMethod({images, imageId, classRef, selector, progr
 // resolves a `block` op through a prototype map, so preflight supplies placeholders — the point is
 // to reject an unknown op or a malformed nested program before any create-once artifact claims a
 // deterministic id, not to produce executable output.
-function validateProgramTree(program, imageId) {
-  const v1 = methodRepresentation(program) === LAGRANGE_CODE_V1;
-  if (v1) normalizeLagrangeCodeV1Program(program); else normalizeLagrangeCodeProgram(program);
+function validateProgramTree(program, imageId, representation = methodRepresentation(program)) {
+  if (representation === LAGRANGE_CODE_V2) normalizeLagrangeCodeV2Program(program);
+  else if (representation === LAGRANGE_CODE_V1) normalizeLagrangeCodeV1Program(program);
+  else normalizeLagrangeCodeProgram(program);
   const nested = directNestedBlocks(program.body);
   const blockPrototypes = Object.fromEntries(
     nested.map(({blockId}) => [blockId, objectRef(imageId, 'preflight-placeholder')]),
   );
-  if (v1) lowerLagrangeCodeV1(program, {blockPrototypes});
+  if (representation === LAGRANGE_CODE_V2) lowerLagrangeCodeV2(program, {blockPrototypes});
+  else if (representation === LAGRANGE_CODE_V1) lowerLagrangeCodeV1(program, {blockPrototypes});
   else lowerLagrangeCodeV0(program, {blockPrototypes});
-  for (const child of nested) validateProgramTree(child.program, imageId);
+  for (const child of nested) validateProgramTree(child.program, imageId, representation);
 }
 
 // THE CURRENT BINDING. What Block is bound at `{Class, selector}` right now is ONE question, so it
@@ -1043,7 +1081,11 @@ async function installMethods({
           imageId,
           id,
           semanticRef,
-          target: representation === LAGRANGE_CODE_V1 ? NEUTRAL_EXPRESSION_V1 : NEUTRAL_EXPRESSION_V0,
+          target: representation === LAGRANGE_CODE_V2
+            ? NEUTRAL_EXPRESSION_V2
+            : representation === LAGRANGE_CODE_V1
+              ? NEUTRAL_EXPRESSION_V1
+              : NEUTRAL_EXPRESSION_V0,
           blockPrototypes,
         });
     }
