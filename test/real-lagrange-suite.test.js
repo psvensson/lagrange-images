@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {LagrangeBackend} from '../src/backend/lagrange-backend.js';
+import {ImageService} from '../src/image/graph-image-service.js';
 import {createSqliteApplicationRuntime} from './support/sqlite-application-runtime.js';
-import {assertTransactionResult, proveKernel, proveTransaction} from '../fixtures/real-lagrange-backend-scenarios.js';
+import {assertKernelResult, assertTransactionResult, proveKernel, proveTransaction} from '../fixtures/real-lagrange-backend-scenarios.js';
 import {
   REAL_LAGRANGE_REPORT_PREFIX,
   readRealLagrangeReport,
@@ -161,9 +162,46 @@ test('existing scenario assertions coexist in one SQL compatibility session', as
   await backend.start();
   try {
     await proveTransaction(backend);
-    await proveKernel(backend);
+    const kernelSnapshot = await proveKernel(backend);
     await assertTransactionResult(backend);
+    await assertKernelResult(backend, kernelSnapshot);
   } finally {
     await backend.stop();
   }
+});
+
+test('attached Life image sessions neither isolate by namespace nor own the warm server', async () => {
+  // SQL compatibility proves fixture isolation/lifetime only, not native semantics.
+  const server = createSqliteApplicationRuntime();
+  const start = server.start.bind(server);
+  const stop = server.stop.bind(server);
+  let starts = 0;
+  let stops = 0;
+  server.start = async () => { starts++; await start(); };
+  server.stop = async () => { stops++; await stop(); };
+  const owner = new LagrangeBackend({runtime: server});
+  const sessionA = new LagrangeBackend({runtime: server, ownsRuntime: false, namespace: 'm6-a'});
+  const sessionB = new LagrangeBackend({runtime: server, ownsRuntime: false, namespace: 'm6-b'});
+  await owner.start();
+  try {
+    await proveTransaction(owner);
+    const kernel = await proveKernel(owner);
+    await sessionA.start();
+    await sessionB.start();
+    const imagesA = new ImageService({backend: sessionA});
+    const imagesB = new ImageService({backend: sessionB});
+    const life = await imagesB.createImage({id: 'life-native-m6'});
+    assert.deepEqual(await imagesA.getImage(life.id), life);
+    await sessionA.stop();
+    assert.deepEqual(await imagesB.getImage(life.id), life);
+    assert.equal(starts, 1);
+    assert.equal(stops, 0);
+    await assertTransactionResult(owner);
+    await assertKernelResult(owner, kernel);
+  } finally {
+    await sessionA.stop();
+    await sessionB.stop();
+    await owner.stop();
+  }
+  assert.equal(stops, 1);
 });

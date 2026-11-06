@@ -509,6 +509,8 @@ Not representations — these appear inside artifact content as an `abi` or cont
 src/authority/       transient execution authority; never durable, never a Value
 src/value/           canonical Values; the smallest thing in the repo, keep it that way
 src/object/          shapes, generic objects, refs
+src/graph/           graph bundles, deterministic ensure, provisioning, object locator and remote resolution
+src/image/           GraphImageService and canonical image storage-layout naming
 src/code/            CodeArtifacts and representations
 src/execution/       activation model, executor registry, block application
 src/language/        Symmetric Smalltalk personality (parser, compiler, dispatch)

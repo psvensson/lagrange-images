@@ -1,16 +1,17 @@
 # ADR 0092: Object residency, placement and remote resolution are generic Images owners over Lagrange routing
 
-Status: accepted — decision-only; the M6.2 measurement is the evidence, and M6.3 implements the first owner with its own proof list
+Status: accepted — whole-image locator and shared-server resolution candidates are implemented and proven across two attached runtimes over a shared SQL application server (`test/object-locator.test.js`); real Lagrange shared-server Life acceptance remains open (`lagrange-images-0pxf.4`)
 
-**Decides WHERE the generic owners M6 needs live and WHAT each may own, before any of them is
-built.** ADR 0085 M6 asks whether the exact M5 application runs unchanged when its ordinary objects
+**Decides WHERE the generic owners M6 needs live and WHAT each may own.** ADR 0085 M6 asks whether the exact M5 application runs unchanged when its ordinary objects
 are placed across Lagrange nodes, with no placement or routing logic in the application, the Cuis
 importer or the Cuis personality. The M6.1 census (bead `lagrange-images-0pxf.2`) found that
 residency and placement have no owner at all and that resolution, routing and execution placement
 have single-node owners only. The M6.2 witness (bead `lagrange-images-0pxf.3`,
-`test/cuis-life-m6-two-node-red.test.js`) then measured the refusals those gaps produce. This ADR
-builds nothing; it fixes the boundary so that the first repair cannot become a second distribution
-system inside Images.
+`test/cuis-life-m6-two-node-red.test.js`) then measured the refusals those gaps produce. M6.3
+(`lagrange-images-0pxf.4`) adds the first candidate owners: the whole-image object locator
+(`src/graph/locator.js`) and the shared-server remote record resolver
+(`src/graph/remote-resolution.js`), keeping the boundary fixed so that the repair does not become
+a second distribution system inside Images.
 
 ## Context
 
@@ -56,14 +57,16 @@ decides it, and no owner can answer for a record that lives elsewhere.
 ### 1. Residency is graph data with ONE owner: the object locator
 
 A record's **residency** — which node scope holds it — is a fact about the record, owned by a new
-generic owner, the **object locator** (planned locus `src/graph/locator.js`). It answers, for a
+generic owner, the **object locator** (`src/graph/locator.js`). It answers, for a
 ref, where the record can be read and written. Identity `(imageId, objectId)` is unchanged by
 residency; a moved record is the same record.
 
 The first form of residency is **whole-image**: an image resides where its backend session does.
 That is exactly what the M6.2 refusals describe ("image not found" is a residency answer given by
 accident), so the first owner makes the accidental answer explicit rather than inventing a finer
-one. Per-object residency is deferred until whole-image residency is green across two nodes.
+one. `ObjectLocator.locate(ref)` checks the image record in the shared backend session and returns
+`{placementKind: 'whole-image', imageId, collection, key}`. Per-object residency is deferred until
+whole-image residency is green across two nodes.
 
 ### 2. Placement is a separate generic owner, never consulted by a language
 
@@ -80,19 +83,22 @@ identity loss.
 ### 3. Remote resolution is an interaction owner over Lagrange routing, and Images never owns transport
 
 The arrow **Images runtime -> a record resident on another node** has one owner: **remote
-resolution** (planned). It translates a read or a dispatch of a ref that the local composed backend
-does not hold into a request that Lagrange routes to the node holding it, and it owns the error
-mapping (the M6.2 refusals become classified remote errors that name the ref and the missing
-residency, never a raw transport failure), read idempotency, and the rule that authority is
-re-checked at the resolving node and never carried.
+resolution** (`src/graph/remote-resolution.js`). It translates a read or a dispatch of a ref that
+the local composed backend does not hold into a request that Lagrange routes to the node holding
+it, and it owns the error mapping (the M6.2 refusals become classified remote errors that name the
+ref and the missing residency, never a raw transport failure), read idempotency, and the rule that
+authority is re-checked at the resolving node and never carried. `GraphImageService.getRecord`
+delegates record reads through `ObjectLocator.locate(ref)` and
+`RemoteRecordResolver.resolveAt(ref, residency)`.
 
 Images does **not** implement transport, membership, replication or consensus. Those are Lagrange's
 (ADR 0033's placement of the durable backend below Images stands). An Images-side RPC, gossip or
-"node registry" would be a second distribution system and is rejected. If Lagrange cannot yet route
-an Images record request, the first green vertical uses the lowest form that needs no new transport:
-**two Images runtimes over ONE shared real Lagrange server**, where residency is shared durability
-and "remote" is a different runtime process reading the same partitioned store. Placement across
-separately composed backends waits for Lagrange routing of Images' requests.
+"node registry" would be a second distribution system and is rejected. Because Lagrange does not
+yet route an arbitrary Images record request between separately composed embedded servers, the
+first vertical uses the lowest form that needs no new transport: **two Images runtimes over ONE
+shared Lagrange server** (`LagrangeBackend` with `ownsRuntime: false`), where residency is shared
+durability and "remote" is a different runtime reading and mutating the same partitioned store.
+Placement across separately composed backends waits for Lagrange routing of Images' requests.
 
 ### 4. Execution placement is deferred
 
@@ -103,22 +109,54 @@ placement.
 
 ### 5. Ownership map and proof discipline
 
-`docs/ownership.md` gains three **planned** rows (residency: object locator; placement policy;
-the remote-resolution interaction). A planned row reserves the responsibility and names no
-implementation. M6.3 turns the first of them into a current row with its proof list; a row may not
-become current without one.
+`docs/ownership.md` records the whole-image object locator (`src/graph/locator.js`) and the
+remote-resolution interaction owner (`src/graph/remote-resolution.js`) as **candidate** rows while
+real-Lagrange shared-server Life acceptance (`lagrange-images-0pxf.4`) remains open, and keeps
+placement policy **planned** until the first non-default placement is introduced.
 
-The M6.2 witness is the falsifier of every repair: it stays exactly as written and flips to the
-distributed-green oracle only when the unchanged `nextState` on node B resolves the relocated
-`cells` record through the locator and remote resolution, with both nodes still provider-free and
-the M5 acceptance still green on one node. A repair that makes the witness pass by keeping the
-record on node B, by copying it, or by teaching Life or the importer anything is a failed repair.
+Two proofs exist today, and one remains open:
+
+1. **Unit and shared-SQL two-runtime Life proof (`test/object-locator.test.js`,
+   `test/lagrange-backend.test.js`, `test/real-lagrange-suite.test.js`)**: `ObjectLocator` and
+   `RemoteRecordResolver` resolve whole-image records by canonical ref; `ImageService.getRecord`
+   delegates through both owners; two attached `LagrangeBackend` instances (`ownsRuntime: false`)
+   share one running application server without owning its lifecycle; and `proveSharedLife`
+   (`fixtures/real-lagrange-m6-scenario.js`) installs the recovered M5 Life application on runtime
+   1, steps `S0 -> S1` on runtime 1, observes `S1` on runtime 2, steps `S1 -> S2` on runtime 2, and
+   observes `S2` on runtime 1 with zero changes to Life, the Cuis importer or the Smalltalk
+   personality.
+2. **Real Lagrange shared-server Life witness (`fixtures/real-lagrange-m6-shared-server-process.js`,
+   `fixtures/real-lagrange-backend-process.js` `life` mode) — open under `lagrange-images-0pxf.4`**:
+   Measured against `lagrange-server` `a43ce6a9fe3c2ffd17fcb084e596a0c709ba88c9`, `proveSharedLife`
+   exceeds the 340 s phase budget for two quantitative reasons:
+   - **Write amplification (`1,783` transactions / `1,859` records)**: `installRecoveredLife`
+     executes `1,703` `backend.transaction` calls (`1,544` in
+     `installSymmetricSmalltalkStandardImage`, `154` in `importCuisNativePackage`, `4` in
+     `installManagedProjectRelease`, `1` in `createImage`) writing `1,859` records, plus `80`
+     transactions during `buildBlinkerModel`, `stateString` and `nextState`. Each record write in
+     `commitCandidateRecords` issues 3 SQL write statements (`records`, `stream_heads`, `events`),
+     and each SQL write statement in Lagrange's `SqlQueryEngine` opens an internal
+     `writeTransaction` performing 41 system-table metadata writes (~1.28 s/record, ~1.56 s/tx).
+   - **Read amplification (`1,090,772` `backend.get` calls)**: `proveSharedLife` issues `1,090,772`
+     `backend.get` calls (`21,399` in `installRecoveredLife`, `20,863` in `buildBlinkerModel`,
+     `20,980` per `stateString` × 3, and `492,785` per `nextState` × 2), because every dynamic
+     message send re-reads `smalltalk-kernel/v1`, Behavior/MethodDictionary chains, and Block /
+     CodeArtifact / LexicalEnvironment records without an activation-scoped read cache, and every
+     `ImageService.getRecord` call first reads `images/<imageId>` via `ObjectLocator.locate(ref)`.
+     At ~5.52 ms per `LagrangeBackend.get`, 1.09M reads alone require ~6,000 s.
+
+The M6.2 witness (`test/cuis-life-m6-two-node-red.test.js`) remains the separate two-backend
+per-object relocation falsifier: it stays RED until per-object residency and cross-backend routing
+are implemented.
 
 ## Consequences
 
-- M6.3 opens against this ADR with a fixed shape: whole-image residency in the locator, the
-  shared-server form of remote resolution, the witness flipped to green, and three ownership rows
-  promoted or kept planned honestly.
+- M6.3 lands the candidate whole-image locator (`src/graph/locator.js`), the shared-server remote
+  record resolver (`src/graph/remote-resolution.js`), the storage-layout owner
+  (`src/image/storage-layout.js`), and `LagrangeBackend` shared-runtime attachment
+  (`ownsRuntime: false`), proven in `test/object-locator.test.js` and `test/lagrange-backend.test.js`,
+  while keeping the `ownership.md` rows at `candidate` status until the real-Lagrange Life witness
+  completes within budget.
 - The Lagrange backend adapter stays the sole translation between the backend contract and
   Lagrange sessions; the locator and remote resolution sit above it and consume it.
 - `docs/lagrange-integration.md` checklist items 7 to 10 remain unchecked until the real
