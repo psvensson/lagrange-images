@@ -1,7 +1,7 @@
 import {OBJECT_READ_OPERATION, objectResource} from '../authority/object-resource.js';
 import {shapeIndexedKind} from '../object/model.js';
 import {isObjectRef} from '../value/index.js';
-import {findSmalltalkKernel, isLocalRef, readBehavior} from './smalltalk-kernel.js';
+import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
 import {methodBindings, methodSource} from './smalltalk-class-builder.js';
 import {sameRef} from './smalltalk-lookup.js';
 import {
@@ -121,18 +121,52 @@ async function describeLayout({images, instanceShape, nilRef, label}) {
   });
 }
 
+// Instance side or class side, decided strictly from the kernel's metaclass knot (ADR 0044 decision
+// 4) and never from an object-id spelling:
+//   * `behavior(aMetaclass) == Metaclass` -> side: 'class', classSide: null
+//   * `behavior(aClass) == aMetaclass` where `behavior(aMetaclass) == Metaclass` -> side: 'instance', classSide: aMetaclass
+// A dangling or non-Metaclass `behavior` edge is corrupt graph state and is refused rather than
+// normalized silently into `side: 'instance', classSide: null`.
+async function resolveBehaviorSide({images, classRef, behavior, kernel}) {
+  const label = `native class ${classRef.imageId}/${classRef.objectId}`;
+  if (sameRef(behavior.behavior, kernel.metaclassClass)) {
+    return {side: CLASS_SIDE.CLASS, classSide: null};
+  }
+  const metaclassRecord = await images.getObject(behavior.behavior.imageId, behavior.behavior.objectId);
+  if (!metaclassRecord) {
+    throw new TypeError(
+      `${label} has a dangling behavior edge to ${behavior.behavior.imageId}/${behavior.behavior.objectId}`,
+    );
+  }
+  let metaclass;
+  try {
+    metaclass = await readBehavior(images, behavior.behavior);
+  } catch (error) {
+    throw new TypeError(
+      `${label} has a malformed behavior edge to ${behavior.behavior.imageId}/${behavior.behavior.objectId}`,
+      {cause: error},
+    );
+  }
+  if (!sameRef(metaclass.behavior, kernel.metaclassClass)) {
+    throw new TypeError(
+      `${label} behavior edge ${behavior.behavior.imageId}/${behavior.behavior.objectId} is not an instance of Metaclass`,
+    );
+  }
+  return {side: CLASS_SIDE.INSTANCE, classSide: behavior.behavior};
+}
+
 // ONE already-authorized, already-read Class/Metaclass record -> the canonical native class
 // description. Every field comes from that one record (the selector bindings are read from the
 // dictionary edge IT names), so a description can never be assembled from two versions of a class.
 // `superclass` and `classSide` are refs the caller may browse NEXT, each under its own grant.
 async function describeBehavior({images, imageId, classRef, behavior, kernel}) {
   const label = `native class ${classRef.imageId}/${classRef.objectId}`;
-  const metaclass = sameRef(behavior.record.behavior, kernel.metaclassClass);
+  const {side, classSide} = await resolveBehaviorSide({images, classRef, behavior, kernel});
   return Object.freeze({
     format: SMALLTALK_CLASS_DESCRIPTION_V1,
     class: classRef,
     name: behavior.name.value,
-    side: metaclass ? CLASS_SIDE.CLASS : CLASS_SIDE.INSTANCE,
+    side,
     // The kernel's `nil` terminates the chain; a root class has no superclass, it does not have a
     // superclass named "nil".
     superclass: sameRef(behavior.superclass, kernel.nil) ? null : behavior.superclass,
@@ -144,7 +178,7 @@ async function describeBehavior({images, imageId, classRef, behavior, kernel}) {
     // class -> metaclass edge and no metaclass -> sole-instance edge, so answering "which class is
     // this the metaclass of" would mean deriving one object id from another. A browser that wants
     // to toggle sides keeps the class ref it started from.
-    classSide: metaclass || !isLocalRef(behavior.record.behavior, imageId) ? null : behavior.record.behavior,
+    classSide,
     layout: await describeLayout({images, instanceShape: behavior.instanceShape, nilRef: kernel.nil, label}),
     // The selectors THIS class implements. Inherited protocol is deliberately absent: an inherited
     // selector is the declaring class's fact, and reporting it here would let one grant speak for
@@ -210,6 +244,7 @@ async function authorizedMethodPosition({images, imageId, classRef, selector, re
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const behavior = await readBehavior(images, classRef);
+  const {side} = await resolveBehaviorSide({images, classRef, behavior, kernel});
   // The SAME Behavior record answers the side and the selector bindings: one read of the Class, so a
   // description can never be assembled from two different versions of it.
   const binding = (await methodBindings({images, imageId, classRef, behavior}))
@@ -236,7 +271,7 @@ async function authorizedMethodPosition({images, imageId, classRef, selector, re
       format: SMALLTALK_METHOD_DESCRIPTION_V1,
       // The Behavior that DECLARES this method, not the receiver class a send happened to start from.
       class: classRef,
-      side: sameRef(behavior.record.behavior, kernel.metaclassClass) ? CLASS_SIDE.CLASS : CLASS_SIDE.INSTANCE,
+      side,
       selector,
       // The exact Block ref the dictionary binds. It is the method's identity for a caller that
       // wants to pin or re-read it; the code, lexical environment and compiled lane behind it are

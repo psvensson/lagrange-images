@@ -678,3 +678,124 @@ test('retained native and Cuis-imported methods answer durable source through bo
     assert.equal(importedMethod.source, '[\n^ baseValue.\nself\n]');
   });
 });
+
+test('a missing, cross-image, dangling or non-Metaclass behavior edge is reported as corrupt to an authorized caller and hidden behind AuthorityError for a denied caller', async () => {
+  await withImage(async (runtime) => {
+    const {base, child} = await declareNativeClasses(runtime);
+    await defineMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef: child.metaclassRef,
+      methods: [{selector: 'describe', source: '[ ^7 ]'}],
+    });
+
+    const originalClassRecord = await runtime.images.getObject('app', child.classRef.objectId);
+    const originalMetaclassRecord = await runtime.images.getObject('app', child.metaclassRef.objectId);
+
+    const rewriteBehaviorEdge = async (record, newBehavior) => {
+      const current = await runtime.images.getObject('app', record.id);
+      await runtime.images.putObject('app', {
+        id: current.id,
+        shape: current.shape,
+        ...(newBehavior === null ? {} : {behavior: newBehavior}),
+        slots: current.slots,
+        metadata: current.metadata,
+      }, {expectedVersion: current._version});
+    };
+
+    const classGrants = [
+      readGrant('app', child.classRef.objectId),
+      methodPositionGrant('app', child.classRef, 'childFirst'),
+    ];
+    const metaclassGrants = [
+      readGrant('app', child.metaclassRef.objectId),
+      methodPositionGrant('app', child.metaclassRef, 'describe'),
+    ];
+    const denied = requireFor(runtime, []);
+
+    for (const [label, targetRecord, targetRef, selector, grants, corruptEdge, expectedPattern] of [
+      [
+        'missing behavior edge on class',
+        originalClassRecord,
+        child.classRef,
+        'childFirst',
+        classGrants,
+        null,
+        /behavior must be an unpinned ref in app/,
+      ],
+      [
+        'cross-image behavior edge on class',
+        originalClassRecord,
+        child.classRef,
+        'childFirst',
+        classGrants,
+        objectRef('other', child.metaclassRef.objectId),
+        /behavior must be an unpinned ref in app/,
+      ],
+      [
+        'dangling behavior edge on class',
+        originalClassRecord,
+        child.classRef,
+        'childFirst',
+        classGrants,
+        objectRef('app', 'smalltalk/metaclass/Vanished'),
+        /has a dangling behavior edge/,
+      ],
+      [
+        'Metaclass with behavior edge corrupted to an instance-side class',
+        originalMetaclassRecord,
+        child.metaclassRef,
+        'describe',
+        metaclassGrants,
+        base.classRef,
+        /is not an instance of Metaclass/,
+      ],
+    ]) {
+      await rewriteBehaviorEdge(targetRecord, corruptEdge);
+
+      // 1. Denied caller still learns only AuthorityError (no corruption/existence oracle).
+      await assert.rejects(
+        authorizedDescribeSmalltalkClass({
+          images: runtime.images, imageId: 'app', classRef: targetRef, require: denied,
+        }),
+        {name: 'AuthorityError'},
+        `${label}: denied class browse must remain AuthorityError`,
+      );
+      await assert.rejects(
+        authorizedDescribeSmalltalkMethod({
+          images: runtime.images, imageId: 'app', classRef: targetRef, selector, require: denied,
+        }),
+        {name: 'AuthorityError'},
+        `${label}: denied method browse must remain AuthorityError`,
+      );
+
+      // 2. Authorized caller receives a corruption error instead of normalizing to instance-side.
+      const authorized = requireFor(runtime, grants);
+      await assert.rejects(
+        authorizedDescribeSmalltalkClass({
+          images: runtime.images, imageId: 'app', classRef: targetRef, require: authorized,
+        }),
+        expectedPattern,
+        `${label}: authorized class browse must report corruption`,
+      );
+      await assert.rejects(
+        authorizedDescribeSmalltalkMethod({
+          images: runtime.images, imageId: 'app', classRef: targetRef, selector, require: authorized,
+        }),
+        expectedPattern,
+        `${label}: authorized method browse must report corruption`,
+      );
+      await assert.rejects(
+        authorizedReadSmalltalkMethodForUpdate({
+          images: runtime.images, imageId: 'app', classRef: targetRef, selector, require: authorized,
+        }),
+        expectedPattern,
+        `${label}: authorized method-for-update read must report corruption`,
+      );
+
+      // Restore before next arm.
+      await rewriteBehaviorEdge(targetRecord, targetRecord.behavior);
+    }
+  });
+});
