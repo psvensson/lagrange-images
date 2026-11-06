@@ -122,18 +122,6 @@ import {
   smalltalkMethodPositionResource,
 } from './language/smalltalk-method-position-resource.js';
 import {
-  COMMON_LISP_DEFINITION_DESCRIPTION_V1,
-  COMMON_LISP_NAMESPACE_DESCRIPTION_V1,
-  authorizedDescribeCommonLispDefinition,
-  authorizedDescribeCommonLispNamespace,
-} from './language/common-lisp-browse.js';
-import {
-  COMMON_LISP_DEFINITION_KIND,
-  COMMON_LISP_DEFINITION_READ_OPERATION,
-  COMMON_LISP_DEFINITION_RESOURCE_V0,
-  commonLispDefinitionResource,
-} from './language/common-lisp-definition-resource.js';
-import {
   authorizedReplaceSmalltalkMethod,
 } from './language/smalltalk-authorized-method-replacement.js';
 import {authorizedImportCuisPackage} from './language/smalltalk-authorized-import.js';
@@ -385,17 +373,6 @@ export {
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
   authorizedReadSmalltalkMethodForUpdate,
-  // The authorized in-image Common Lisp browsing seam (bead lagrange-images-gn41): exact owner
-  // functions and logical-position vocabulary from src/language/common-lisp-browse.js and
-  // src/language/common-lisp-definition-resource.js.
-  COMMON_LISP_DEFINITION_DESCRIPTION_V1,
-  COMMON_LISP_DEFINITION_KIND,
-  COMMON_LISP_DEFINITION_READ_OPERATION,
-  COMMON_LISP_DEFINITION_RESOURCE_V0,
-  COMMON_LISP_NAMESPACE_DESCRIPTION_V1,
-  authorizedDescribeCommonLispDefinition,
-  authorizedDescribeCommonLispNamespace,
-  commonLispDefinitionResource,
   // The authorized native method REPLACEMENT seam (bead lagrange-images-qax, Object Environment
   // E3). The exact owner function from src/language/smalltalk-authorized-method-replacement.js;
   // that module's error classes stay internal and are distinguished by `error.name`.

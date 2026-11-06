@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {dirname, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {
   COMMON_LISP_DEFINITION_DESCRIPTION_V1,
   COMMON_LISP_DEFINITION_KIND,
@@ -20,7 +22,9 @@ import {
   objectRef,
   objectResource,
 } from '../src/runtime.js';
-import * as portableRuntime from '../src/portable-runtime.js';
+import {createPortableRuntime} from '../src/portable-runtime.js';
+import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
+import {createNodeSourceReader} from '../src/portable-artifact/node-source-reader.js';
 import {createSqliteApplicationRuntime} from './support/sqlite-application-runtime.js';
 
 const FORBIDDEN_STORAGE_TOKENS = [
@@ -376,19 +380,38 @@ test('authorization strictly precedes existence disclosure and isolates Lisp-2 f
   });
 });
 
-test('portable runtime exports exact Common Lisp browsing owner identities and survives durable SQLite restart', async () => {
-  assert.equal(
-    portableRuntime.authorizedDescribeCommonLispNamespace,
-    authorizedDescribeCommonLispNamespace,
-  );
-  assert.equal(
-    portableRuntime.authorizedDescribeCommonLispDefinition,
-    authorizedDescribeCommonLispDefinition,
-  );
-  assert.equal(
-    portableRuntime.commonLispDefinitionResource,
-    commonLispDefinitionResource,
-  );
+test('Common Lisp browsing seam has a portable static module closure and survives createPortableRuntime and durable SQLite restart', async () => {
+  const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const {modules, violations} = collectStaticModuleClosure({
+    entry: 'src/language/common-lisp-browse.js',
+    readSource: createNodeSourceReader(repo),
+  });
+  const paths = modules.map(({path}) => path);
+  assert.ok(paths.includes('src/language/common-lisp-browse.js'));
+  assert.ok(paths.includes('src/language/common-lisp-definition-resource.js'));
+  const forbidden = paths.filter((path) =>
+    /(cuis|toolchain|foreign-runtime|perspective|session|presentation|src\/project\/)/i.test(path));
+  assert.deepEqual(forbidden, []);
+  assert.deepEqual(violations, [], 'the seam stays portable: no node:* import on the browsing lane');
+
+  const portable = await createPortableRuntime({backend: {mode: 'mock'}});
+  try {
+    await portable.images.createImage({id: 'portable-cl'});
+    await installCommonLispProgram({
+      runtime: portable,
+      imageId: 'portable-cl',
+      lane: 'neutral',
+      source: '(defun portable-inc (x) (+ x 1))',
+    });
+    const portableNs = await authorizedDescribeCommonLispNamespace({
+      images: portable.images,
+      imageId: 'portable-cl',
+      require: requireFor(portable, [namespaceReadGrant('portable-cl')]),
+    });
+    assert.ok(portableNs.functions.includes('PORTABLE-INC'));
+  } finally {
+    await portable.close();
+  }
 
   const sqliteApp = createSqliteApplicationRuntime();
   await sqliteApp.start();
