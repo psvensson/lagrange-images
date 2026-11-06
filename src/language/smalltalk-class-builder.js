@@ -228,6 +228,13 @@ class SmalltalkMethodLaneError extends TypeError {
 const METHOD_LANES = Object.freeze(['neutral', 'wasm']);
 const isMethodLane = (lane) => METHOD_LANES.includes(lane);
 
+function assertMethodLane(lane) {
+  if (!isMethodLane(lane)) {
+    throw new TypeError(`unknown method lane: ${lane}`);
+  }
+  return lane;
+}
+
 // The execution lane a native method revision was compiled in — the ONE question bead
 // lagrange-images-it3 exists to give an owner.
 //
@@ -923,13 +930,10 @@ async function installMethods({
   allowRedefinition,
   operation,
 } = {}) {
-  // Caller-owned input, and deliberately still a bare TypeError with its existing wording: ten
-  // sibling protocol installers spell this same check, and renaming one of them is a separate
-  // cleanup. `SmalltalkMethodLaneError` answers a different question — what lane an ALREADY
-  // INSTALLED revision is in — which no caller supplied.
-  if (requestedLane !== undefined && !isMethodLane(requestedLane)) {
-    throw new TypeError(`unknown method lane: ${requestedLane}`);
-  }
+  // Caller-owned input, validated through the single `assertMethodLane` owner shared across all
+  // protocol installers (bead lagrange-images-29b). `SmalltalkMethodLaneError` answers a different
+  // question — what lane an ALREADY INSTALLED revision is in — which no caller supplied.
+  if (requestedLane !== undefined) assertMethodLane(requestedLane);
   requiredText(imageId, 'image id');
   if (!Array.isArray(methods) || methods.length === 0) throw new TypeError('methods must be a non-empty array');
   // Caller-supplied input first, before anything is read: a malformed or mixed expectation is a
@@ -1719,6 +1723,9 @@ async function methodSource({images, imageId, blockRef} = {}) {
 }
 
 export {
+  METHOD_LANES,
+  assertMethodLane,
+  isMethodLane,
   smalltalkClassObjectId,
   SmalltalkMethodDictionaryContentionError,
   SmalltalkMethodLaneError,

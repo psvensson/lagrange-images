@@ -2,6 +2,7 @@ import {SHAPE_INDEXED} from '../object/model.js';
 import {ensureShape} from '../graph/ensure-records.js';
 import {integerValue, objectRef, textValue} from '../value/index.js';
 import {
+  assertMethodLane,
   defineClass,
   defineMethods,
   ensureBlock,
@@ -225,7 +226,7 @@ function protocolFor({kernel, arrayClass, imageId}) {
 
 async function installSmalltalkIndexedProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 
@@ -290,7 +291,7 @@ const ARRAY_ENUMERATION_METHODS = Object.freeze([
 
 async function installSmalltalkArrayEnumerationProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   await defineMethodsFromSource({

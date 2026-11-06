@@ -2,7 +2,7 @@ import {canonicalRecordJson} from '../graph/ensure-records.js';
 import {SHAPE_INDEXED} from '../object/model.js';
 import {VALUE_KIND, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
-import {ensureNamedClass} from './smalltalk-class-builder.js';
+import {assertMethodLane, ensureNamedClass} from './smalltalk-class-builder.js';
 import {KERNEL_CLASSES, ensureObject, ensureShape, findSmalltalkKernel, isLocalRef} from './smalltalk-kernel.js';
 
 // ADR 0057: the durable namespace, and the first-class bindings it maps to.
@@ -117,7 +117,7 @@ async function assertIsBinding({images, imageId, name, binding}) {
 // binding can exist before the classes it will name.
 async function installSmalltalkGlobalNamespace({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 

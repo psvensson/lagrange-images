@@ -4,7 +4,7 @@ import {SHAPE_INDEXED} from '../object/model.js';
 import {SMALLTALK_PRIMITIVE} from './smalltalk-primitive-support.js';
 import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
-import {ensureBlock, ensureCodeArtifact} from './smalltalk-class-builder.js';
+import {assertMethodLane, ensureBlock, ensureCodeArtifact} from './smalltalk-class-builder.js';
 import {SMALLTALK_KERNEL_PRIMITIVE_V1} from './smalltalk-primitives.js';
 import {primitiveCodeContent} from './smalltalk-primitives.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
@@ -199,7 +199,7 @@ const SUBCLASS_PROTOCOL_METHODS = Object.freeze([
 
 async function installSmalltalkSubclassProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 

@@ -1,5 +1,5 @@
 import {booleanValue, objectRef, textValue} from '../value/index.js';
-import {defineMethods, ensureBlock, ensureCodeArtifact, methodBlockRef} from './smalltalk-class-builder.js';
+import {assertMethodLane, defineMethods, ensureBlock, ensureCodeArtifact, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {resolveGlobal} from './smalltalk-globals.js';
@@ -154,7 +154,7 @@ async function installPrimitiveBlock({images, imageId, primitive}) {
 
 async function installSmalltalkIntegerProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 
@@ -283,7 +283,7 @@ const INTEGER_PRINTING_METHODS = Object.freeze([Object.freeze({
 // sequences this stage after the namespace exists.
 async function installSmalltalkIntegerPrintingProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 

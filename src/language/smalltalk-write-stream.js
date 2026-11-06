@@ -1,4 +1,4 @@
-import {ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
+import {assertMethodLane, ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {resolveGlobal} from './smalltalk-globals.js';
@@ -222,7 +222,7 @@ function requiredText(value, label) {
 
 async function installSmalltalkWriteStreamProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 

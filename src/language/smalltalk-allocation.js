@@ -1,5 +1,5 @@
 import {objectRef, textValue} from '../value/index.js';
-import {defineMethods, ensureBlock, ensureCodeArtifact, methodBlockRef} from './smalltalk-class-builder.js';
+import {assertMethodLane, defineMethods, ensureBlock, ensureCodeArtifact, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {
@@ -135,7 +135,7 @@ async function installSmalltalkAllocationProtocol({images, compilation, imageId,
   requiredText(imageId, 'image id');
   // Validated here rather than only inside `defineMethods`, which runs after both primitive Blocks
   // and their code artifacts are already committed. Validate everything before publishing anything.
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 
@@ -193,7 +193,7 @@ async function installSmalltalkAllocationProtocol({images, compilation, imageId,
 // Keep this after Symbol installation rather than adding a dependency to base allocation.
 async function installSmalltalkStringTestingProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   if (!images || typeof images.getObject !== 'function') throw new TypeError('images service is required');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const symbolClass = objectRef(imageId, 'smalltalk/class/Symbol');

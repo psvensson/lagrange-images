@@ -1,5 +1,5 @@
 import {objectRef} from '../value/index.js';
-import {methodBlockRef} from './smalltalk-class-builder.js';
+import {assertMethodLane, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {SYMBOL_CLASS_NAME} from './smalltalk-primitives-symbol.js';
@@ -9,7 +9,7 @@ import {SYMBOL_CLASS_NAME} from './smalltalk-primitives-symbol.js';
 // Spelling and its hash are obtained through ordinary protocol, never by decoding Symbol records.
 async function installSmalltalkStringEqualityProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   if (!images || typeof images.getObject !== 'function') throw new TypeError('images service is required');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const symbolClass = objectRef(imageId, `smalltalk/class/${SYMBOL_CLASS_NAME}`);

@@ -22,7 +22,7 @@ import {
 } from '../src/runtime.js';
 import {SMALLTALK_KERNEL_PRIMITIVE_V1} from '../src/language/smalltalk-primitives.js';
 import {SYMMETRIC_SMALLTALK_ID} from '../src/language/symmetric-smalltalk.js';
-import {methodBlockRef} from '../src/language/smalltalk-class-builder.js';
+import {METHOD_LANES, assertMethodLane, isMethodLane, methodBlockRef} from '../src/language/smalltalk-class-builder.js';
 import {faultingImages, forkableRuntime} from './support/recovery-harness.js';
 
 // ADR 0046: `basicNew`, `new` and `class` as ordinary messages over two language-owned primitive
@@ -669,7 +669,29 @@ test('a primitive Block invoked as a method is refused, not run with self discar
   });
 });
 
-test('an unknown lane is refused before any primitive record is written', async () => {
+test('an unknown lane is refused before any primitive record is written, and assertMethodLane is the single owner across src/language/', async () => {
+  assert.deepEqual(METHOD_LANES, ['neutral', 'wasm']);
+  assert.equal(isMethodLane('neutral'), true);
+  assert.equal(isMethodLane('wasm'), true);
+  assert.equal(isMethodLane('wasm2'), false);
+  assert.equal(assertMethodLane('neutral'), 'neutral');
+  assert.equal(assertMethodLane('wasm'), 'wasm');
+  assert.throws(() => assertMethodLane('wasm2'), {
+    name: 'TypeError',
+    message: 'unknown method lane: wasm2',
+  });
+
+  // Bead lagrange-images-29b: no sibling installer in src/language/ duplicates the
+  // `unknown method lane:` guard outside `src/language/smalltalk-class-builder.js`.
+  const languageDir = join(dirname(fileURLToPath(import.meta.url)), '../src/language');
+  const languageFiles = (await readdir(languageDir)).filter((name) => name.endsWith('.js'));
+  const owners = [];
+  for (const name of languageFiles) {
+    const text = await readFile(join(languageDir, name), 'utf8');
+    if (text.includes('unknown method lane:')) owners.push(name);
+  }
+  assert.deepEqual(owners, ['smalltalk-class-builder.js']);
+
   await withRuntime(async (runtime) => {
     await runtime.images.createImage({id: 'app'});
     await installSmalltalkKernel({images: runtime.images, imageId: 'app'});
