@@ -301,6 +301,47 @@ test('an unpromoted transient object ref cannot be written into a durable record
 
 // --- lanes -----------------------------------------------------------------------------------------
 
+test('promoting an indexed object holding multiple transient objects serializes backend writes without overlapping transactions', async () => {
+  await withRuntime(async (runtime) => {
+    const {options} = await seed(runtime, 'app', {library: true});
+    const counter = await defineCounter({options});
+
+    let activeTransactions = 0;
+    let maxConcurrentTransactions = 0;
+    const origTransaction = runtime.backend.transaction.bind(runtime.backend);
+    runtime.backend.transaction = async (callback) => {
+      activeTransactions += 1;
+      maxConcurrentTransactions = Math.max(maxConcurrentTransactions, activeTransactions);
+      if (activeTransactions > 1) {
+        throw new Error('cannot start a transaction within a transaction');
+      }
+      try {
+        await new Promise((resolve) => setImmediate(resolve));
+        return await origTransaction(callback);
+      } finally {
+        activeTransactions -= 1;
+      }
+    };
+
+    const arrayClass = objectRef('app', 'smalltalk/class/Array');
+    const arr = await evaluate(
+      runtime,
+      'app',
+      'promote-multi-indexed',
+      `[ :arrCls :c | | a x y |
+        a := arrCls new: 2.
+        x := c new. x add: 10.
+        y := c new. y add: 20.
+        a at: 1 put: x.
+        a at: 2 put: y.
+        a ]`,
+      [arrayClass, counter],
+    );
+    assert.ok(arr.objectId.startsWith('object/'));
+    assert.equal(maxConcurrentTransactions, 1);
+  });
+});
+
 for (const lane of ['neutral', 'wasm']) {
   test(`an escaping object promotes and a non-escaping one does not, through the ${lane} lane`, async () => {
     await withRuntime(async (runtime) => {
