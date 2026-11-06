@@ -2,7 +2,7 @@ import {findSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
 import {findSmalltalkBlockUnwindProtocol} from './smalltalk-conditions.js';
 import {resolveGlobal} from './smalltalk-globals.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
-import {ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
+import {assertMethodLane, ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {objectRef} from '../value/index.js';
 
@@ -222,7 +222,7 @@ async function ensureLibraryClass({images, imageId, name, shapeId, slots, superc
 // conditionals (0045), Array (0047), equality (0048) and instance variables (0050).
 async function installSmalltalkLibrary({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 

@@ -8,7 +8,7 @@ import {
   SMALLTALK_PRIMITIVE,
   primitiveCodeContent,
 } from './smalltalk-primitives.js';
-import {defineMethods, ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
+import {assertMethodLane, defineMethods, ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {resolveGlobal} from './smalltalk-globals.js';
@@ -52,7 +52,7 @@ async function installSmalltalkCharacterProtocol({images, compilation, imageId, 
   if (!images || typeof images.getObject !== 'function') {
     throw new TypeError('images service is required');
   }
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 
@@ -201,7 +201,7 @@ const CHARACTER_RANGE_METHODS = Object.freeze([Object.freeze({
 
 async function installSmalltalkCharacterRangeProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   if (!images || typeof images.getObject !== 'function') throw new TypeError('images service is required');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   if (!await findSmalltalkKernel({images, imageId})) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   for (const name of ['Array', CHARACTER_CLASS_NAME]) {
     if (!await resolveGlobal({images, imageId, name})) {

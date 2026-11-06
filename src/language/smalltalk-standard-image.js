@@ -1,4 +1,4 @@
-import {defineMethods} from './smalltalk-class-builder.js';
+import {assertMethodLane, defineMethods} from './smalltalk-class-builder.js';
 import {installSmalltalkAllocationProtocol, installSmalltalkStringTestingProtocol} from './smalltalk-allocation.js';
 import {installSmalltalkBlockProtocol} from './smalltalk-block-protocol.js';
 import {installSmalltalkClassVariableSupport} from './smalltalk-class-variables.js';
@@ -85,7 +85,7 @@ async function installSymmetricSmalltalkStandardImage({
   lane = 'neutral',
 } = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   // Composition has stronger requirements than any one low-level installer, so validate them before
   // publishing the first kernel record. A missing dependency is a caller error, not a recoverable
   // partial standard-image installation.

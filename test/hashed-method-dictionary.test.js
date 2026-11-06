@@ -1055,3 +1055,80 @@ test('a foreign method ref in a legacy slot is refused by both readers, on the s
     assert.equal(after._version, before._version, 'a refused write leaves the record untouched');
   });
 });
+
+// ONE SHARED LEGACY READER ACROSS ALL FOUR CALLERS (bead lagrange-images-jtz.6).
+// Previously `isLegacyMethodDictionary` rejected undeclared slots while `currentSelectorBindings`
+// and `readLegacyEntries` ignored them. All four callers now delegate to `currentSelectorBindings`,
+// and a legacy dictionary record carrying a stray undeclared slot is rejected by browsing, write
+// planning, migration and kernel adoption alike.
+test('a legacy dictionary with a stray undeclared slot is rejected by browsing, write planning, migration and kernel adoption alike', async () => {
+  await withRuntime(async (runtime) => {
+    const kernel = await seed(runtime, 'app');
+    const plusBlock = await methodBlockRef({
+      images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: '+',
+    });
+    const dictionaryRef = await legacyDictionaryFor(runtime, 'app', kernel.integerClass, {'+': plusBlock});
+    const clean = await runtime.images.getObject('app', dictionaryRef.objectId);
+
+    // Corrupt the stored legacy dictionary in the backend by injecting a slot not declared by its Shape.
+    await runtime.images.backend.put(
+      'image:app:objects',
+      dictionaryRef.objectId,
+      {
+        ...clean,
+        slots: {...clean.slots, 'stray-undeclared-slot': plusBlock},
+      },
+      {expectedVersion: clean._version},
+    );
+
+    // 1. Browsing (`methodBlockRef` -> `currentSelectorBindings`) rejects it.
+    await assert.rejects(
+      methodBlockRef({images: runtime.images, imageId: 'app', classRef: kernel.integerClass, selector: '+'}),
+      /carries undeclared slot stray-undeclared-slot/,
+    );
+
+    // 2. Write planning (`defineMethods` -> `currentSelectorBindings`) rejects it without rewriting.
+    await assert.rejects(
+      defineMethods({
+        images: runtime.images,
+        compilation: runtime.compilation,
+        imageId: 'app',
+        lane: 'neutral',
+        classRef: kernel.integerClass,
+        methods: [READER_METHOD],
+      }),
+      /carries undeclared slot stray-undeclared-slot/,
+    );
+
+    // 3. Migration (`migrateMethodDictionary` -> `readLegacyEntries` -> `currentSelectorBindings`) rejects it before sealing.
+    await assert.rejects(
+      migrateMethodDictionary({images: runtime.images, imageId: 'app', behaviorRef: kernel.integerClass}),
+      /carries undeclared slot stray-undeclared-slot/,
+    );
+    const afterMigrationAttempt = await runtime.images.getObject('app', dictionaryRef.objectId);
+    assert.equal(afterMigrationAttempt.metadata?.[SEAL_METADATA_KEY], undefined, 'must not seal a corrupt legacy dictionary');
+
+    // 4. Kernel adoption (`isLegacyMethodDictionary` -> `currentSelectorBindings`) refuses to adopt a squatter with an undeclared slot.
+    const emptyShape = await runtime.images.putShape('app', {id: 'stray-squat-shape', slots: []});
+    const squatter = await runtime.images.putObject('app', {
+      id: 'smalltalk/class/StrayPoint/methods',
+      shape: objectRef('app', emptyShape.id),
+      slots: {},
+      metadata: {smalltalk: 'method-dictionary'},
+    });
+    await runtime.images.backend.put(
+      'image:app:objects',
+      squatter.id,
+      {
+        ...squatter,
+        slots: {'stray-undeclared-slot': plusBlock},
+      },
+      {expectedVersion: squatter._version},
+    );
+    await assert.rejects(
+      defineClass({images: runtime.images, imageId: 'app', name: 'StrayPoint'}),
+      (error) => error.name === 'SmalltalkKernelConflictError',
+      'kernel adoption must refuse a legacy dictionary carrying an undeclared slot',
+    );
+  });
+});

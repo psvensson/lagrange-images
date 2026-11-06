@@ -1,4 +1,4 @@
-import {ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
+import {assertMethodLane, ensureNamedClass, ensureSmalltalkShape, methodBlockRef} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
 import {resolveGlobal} from './smalltalk-globals.js';
@@ -18,7 +18,7 @@ const READ_STREAM_CLASS_METHODS = Object.freeze([
 
 async function installSmalltalkReadStreamProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   if (!images || typeof images.getObject !== 'function') throw new TypeError('images service is required');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   for (const [classRef, selector] of [

@@ -16,7 +16,27 @@ export * from './symmetric-smalltalk-semantic.js';
 export * from './symmetric-smalltalk-tokenizer.js';
 export {createDefaultLanguagePlatform};
 export * from './smalltalk-kernel.js';
-export * from './smalltalk-class-builder.js';
+export {
+  smalltalkClassObjectId,
+  SmalltalkMethodDictionaryContentionError,
+  SmalltalkMethodLaneError,
+  SmalltalkMethodRedefinitionError,
+  SmalltalkSealedMethodDictionaryError,
+  SmalltalkStaleMethodPositionError,
+  defineClass,
+  defineMethods,
+  definePolyglotMethodBridge,
+  polyglotMethodBridgeDescriptor,
+  reconcileMethods,
+  ensureBlock,
+  ensureClassFromDeclaration,
+  ensureNamedClass,
+  ensureSmalltalkShape,
+  methodBindings,
+  methodBlockRef,
+  methodSource,
+  ensureCodeArtifact,
+} from './smalltalk-class-builder.js';
 export * from './smalltalk-browse.js';
 export * from './smalltalk-method-position-resource.js';
 export * from './smalltalk-control-flow.js';

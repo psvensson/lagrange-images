@@ -1,6 +1,6 @@
 import {objectRef, textValue} from '../value/index.js';
 import {findSmalltalkKernel} from './smalltalk-kernel.js';
-import {defineMethods} from './smalltalk-class-builder.js';
+import {assertMethodLane, defineMethods} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {
   SMALLTALK_KERNEL_PRIMITIVE_V1,
@@ -94,7 +94,7 @@ async function installSmalltalkTextByteArrayProtocol({images, compilation, image
   if (!images || typeof images.getObject !== 'function') {
     throw new TypeError('images service is required');
   }
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 

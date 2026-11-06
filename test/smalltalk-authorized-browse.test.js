@@ -114,17 +114,71 @@ async function declareNativeClasses(runtime) {
 // Nothing that is a storage-layout fact may appear anywhere in a description, at any depth.
 // Behavior slot ids, MethodDictionary representation, instance-Shape ids and the backend version
 // are each spelled out rather than approximated, so a future field that leaks one goes red here.
-const FORBIDDEN_IN_DESCRIPTION = [
+//
+// Unambiguous storage prefixes/forms are checked across the entire serialized description; bare
+// English words (`buckets`, `tally`, `oop`, `JSON`, `cuis`, `Cuis`) are checked after redacting
+// caller-controlled identifiers (class name, selector names, declared instance-variable names,
+// retained method source, and the `<ClassName>` / `/method/<base64url>` segments of native refs) so
+// legitimate user names like `buckets`, `tally`, `asJSON` or base64url segments containing `oop`
+// never trigger false-positive storage-leak failures (bead lagrange-images-jtz.4).
+const FORBIDDEN_UNAMBIGUOUS_IN_DESCRIPTION = [
   '_version',
-  'behavior-name', 'behavior-superclass', 'behavior-methods', 'behavior-instance-shape',
-  'method-dictionary-tally', 'method-dictionary-shape', 'selector:', 'buckets', 'tally',
+  'behavior-name', 'behavior-superclass', 'behavior-methods', 'behavior-instance-shape', 'behavior-',
+  'method-dictionary-tally', 'method-dictionary-shape', 'method-dictionary', 'selector:',
   'instance-shape', 'instance-slot', '/methods',
+  'cuis-class/', 'cuis-method/', 'gitblob',
 ];
 
+const FORBIDDEN_STRUCTURAL_TOKENS = [
+  ...FORBIDDEN_UNAMBIGUOUS_IN_DESCRIPTION,
+  'buckets', 'tally', 'oop', 'JSON', 'cuis', 'Cuis',
+];
+
+function redactCallerControlledRef(ref) {
+  if (!ref || typeof ref !== 'object' || typeof ref.objectId !== 'string') return ref;
+  const redactedObjectId = ref.objectId.replace(
+    /^smalltalk\/(class|metaclass)\/[A-Za-z_][A-Za-z0-9_]*(\/method\/[A-Za-z0-9_-]+)?$/,
+    (_match, kind, methodPart) => `smalltalk/${kind}/<class>${methodPart ? '/method/<selector>' : ''}`,
+  );
+  return {...ref, objectId: redactedObjectId};
+}
+
+function stripCallerControlledDescriptionText(description) {
+  if (!description || typeof description !== 'object') return description;
+  const clone = structuredClone(description);
+  if (typeof clone.name === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(clone.name)) {
+    clone.name = '<class>';
+  }
+  if (typeof clone.selector === 'string' && !clone.selector.startsWith('selector:')) {
+    clone.selector = '<selector>';
+  }
+  if (Array.isArray(clone.selectors)) {
+    clone.selectors = clone.selectors.map((s) => (
+      typeof s === 'string' && !s.startsWith('selector:') ? '<selector>' : s
+    ));
+  }
+  if (typeof clone.source === 'string') {
+    clone.source = '<source>';
+  }
+  if (clone.layout && typeof clone.layout === 'object' && Array.isArray(clone.layout.instanceVariables)) {
+    clone.layout.instanceVariables = clone.layout.instanceVariables.map((v) => (
+      typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v) ? '<ivar>' : v
+    ));
+  }
+  for (const refKey of ['class', 'superclass', 'classSide', 'method']) {
+    if (clone[refKey]) clone[refKey] = redactCallerControlledRef(clone[refKey]);
+  }
+  return clone;
+}
+
 function assertNoStorageLayout(description, label) {
-  const text = JSON.stringify(description);
-  for (const token of FORBIDDEN_IN_DESCRIPTION) {
-    assert.equal(text.includes(token), false, `${label} must not expose ${token}: ${text}`);
+  const rawText = JSON.stringify(description);
+  for (const token of FORBIDDEN_UNAMBIGUOUS_IN_DESCRIPTION) {
+    assert.equal(rawText.includes(token), false, `${label} must not expose ${token}: ${rawText}`);
+  }
+  const structuralText = JSON.stringify(stripCallerControlledDescriptionText(description));
+  for (const token of FORBIDDEN_STRUCTURAL_TOKENS) {
+    assert.equal(structuralText.includes(token), false, `${label} must not expose ${token}: ${rawText}`);
   }
 }
 
@@ -796,6 +850,74 @@ test('a missing, cross-image, dangling or non-Metaclass behavior edge is reporte
 
       // Restore before next arm.
       await rewriteBehaviorEdge(targetRecord, targetRecord.behavior);
+    }
+  });
+});
+
+test('the no-storage-layout scan accepts caller-controlled names containing buckets/tally/oop/JSON while still rejecting every real storage or Cuis-identity leak', async () => {
+  await withImage(async (runtime) => {
+    const declared = await ensureClassFromDeclaration({
+      images: runtime.images,
+      imageId: 'app',
+      name: 'JSONBucketTallyOop',
+      instanceVariables: ['buckets', 'tally', 'oopValue'],
+    });
+    await defineMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef: declared.classRef,
+      retainSource: true,
+      methods: [
+        {selector: 'buckets', source: '[ ^buckets ]'},
+        {selector: 'tally', source: '[ ^tally ]'},
+        {selector: 'asJSONWithOop', source: '[ ^oopValue ]'},
+      ],
+    });
+
+    const classDescription = await authorizedDescribeSmalltalkClass({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: declared.classRef,
+      require: requireFor(runtime, [readGrant('app', declared.classRef.objectId)]),
+    });
+    assertNoStorageLayout(classDescription, 'class with buckets/tally/oop/JSON names');
+
+    const methodDescription = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: declared.classRef,
+      selector: 'asJSONWithOop',
+      require: requireFor(runtime, [
+        readGrant('app', declared.classRef.objectId),
+        methodPositionGrant('app', declared.classRef, 'asJSONWithOop'),
+      ]),
+    });
+    assertNoStorageLayout(methodDescription, 'method with buckets/tally/oop/JSON names');
+    // Also accepts an encoded method id whose base64url segment happens to contain "oop".
+    assertNoStorageLayout({
+      ...methodDescription,
+      method: objectRef('app', `${declared.classRef.objectId}/method/oop_segment_test`),
+    }, 'method ref with oop in encoded selector id');
+
+    // Falsification: every real storage-layout or Cuis-identity leak still fails the scan.
+    for (const [label, leaked] of [
+      ['Behavior slot id', {...classDescription, leakedSlot: 'behavior-methods'}],
+      ['MethodDictionary field buckets', {...classDescription, buckets: []}],
+      ['MethodDictionary field tally', {...classDescription, tally: 3}],
+      ['MethodDictionary object id', {...classDescription, classSide: objectRef('app', 'smalltalk/class/Foo/methods')}],
+      ['backend _version', {...classDescription, _version: 1}],
+      ['instance-Shape id', {...classDescription, layout: {...classDescription.layout, shape: 'instance-shape'}}],
+      ['raw instance-slot id', {...classDescription, layout: {...classDescription.layout, instanceVariables: ['instance-slot:buckets']}}],
+      ['Cuis semantic class identity', {...classDescription, class: objectRef('app', 'cuis-class/JSON/Json')}],
+      ['Cuis semantic method identity', {...methodDescription, method: objectRef('app', 'cuis-method/JSON/Json/instance/readFrom:')}],
+      ['Cuis provenance leak', {...classDescription, provenance: {package: 'JSON', oop: 42}}],
+    ]) {
+      assert.throws(
+        () => assertNoStorageLayout(leaked, label),
+        /must not expose/,
+        `${label} must still fail the scan`,
+      );
     }
   });
 });

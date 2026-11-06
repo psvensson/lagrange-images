@@ -228,6 +228,13 @@ class SmalltalkMethodLaneError extends TypeError {
 const METHOD_LANES = Object.freeze(['neutral', 'wasm']);
 const isMethodLane = (lane) => METHOD_LANES.includes(lane);
 
+function assertMethodLane(lane) {
+  if (!isMethodLane(lane)) {
+    throw new TypeError(`unknown method lane: ${lane}`);
+  }
+  return lane;
+}
+
 // The execution lane a native method revision was compiled in — the ONE question bead
 // lagrange-images-it3 exists to give an owner.
 //
@@ -566,11 +573,12 @@ function validateProgramTree(program, imageId, representation = methodRepresenta
 // Those are consistent, not contradictory: the invariant is that this reader never ACCEPTS what
 // dispatch would reject, not that the two refuse identically.
 //
-// STILL A SEPARATE IMPLEMENTATION, and named here rather than left to be discovered: the migration
-// reader (`smalltalk-method-dictionary-migration.js`) reads all of a legacy dictionary's bindings
-// too, and `isLegacyMethodDictionary` (`smalltalk-kernel.js`) validates the shape of one. Their
-// rules now MATCH this reader's, but they are not this function, so "one reader" is a claim about
-// what the browse seam and the write planner share, not yet about the whole file.
+// ONE READER ACROSS ALL FOUR CALLERS (bead lagrange-images-jtz.6): the browse seam
+// (`selectorBindings` -> `methodBindings`/`methodBlockRef`), the write planner (`readMethodBindings`),
+// the migration reader (`readLegacyEntries` in `smalltalk-method-dictionary-migration.js`), and the
+// kernel's legacy adoption check (`isLegacyMethodDictionary` in `smalltalk-kernel.js`) all call this
+// function. The no-undeclared-slots invariant is a general current-binding rule enforced here so
+// every reader reaches the same verdict on a legacy record with a stray slot.
 async function currentSelectorBindings({images, dictionaryRef, record, nilRef}) {
   if (isMethodDictionary(record)) {
     const table = validateMethodDictionary(record, dictionaryRef, nilRef);
@@ -582,10 +590,16 @@ async function currentSelectorBindings({images, dictionaryRef, record, nilRef}) 
   // to ask for, because this answers what the class binds.
   const shape = await images.getShape(record.shape.imageId, record.shape.objectId);
   if (!shape) throw new TypeError(`method dictionary shape not found: ${record.shape.objectId}`);
-  assertUniqueSelectorShape(shape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
+  const label = `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`;
+  assertUniqueSelectorShape(shape, label);
+  const declared = new Set(shape.slots.map(({id}) => id));
+  for (const slotId of Object.keys(record.slots ?? {})) {
+    if (!declared.has(slotId)) {
+      throw new TypeError(`${label} carries undeclared slot ${slotId}`);
+    }
+  }
   const bindings = new Map();
   for (const {id, name} of shape.slots) {
-    const label = `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`;
     // ONE rule set, not one per representation. The hashed branch has always required a non-empty
     // selector and a LOCAL method ref (`validateMethodDictionary`), and so does the migration
     // reader; the legacy branch here required neither, which left the same asymmetry one field
@@ -593,7 +607,7 @@ async function currentSelectorBindings({images, dictionaryRef, record, nilRef}) 
     if (typeof name !== 'string' || name.length === 0) {
       throw new TypeError(`${label} selector must be non-empty text`);
     }
-    const method = record.slots[id];
+    const method = record.slots?.[id];
     if (!isObjectRef(method)) {
       throw new TypeError(`${label} slot for ${name} must contain an unpinned Block ref`);
     }
@@ -916,13 +930,10 @@ async function installMethods({
   allowRedefinition,
   operation,
 } = {}) {
-  // Caller-owned input, and deliberately still a bare TypeError with its existing wording: ten
-  // sibling protocol installers spell this same check, and renaming one of them is a separate
-  // cleanup. `SmalltalkMethodLaneError` answers a different question — what lane an ALREADY
-  // INSTALLED revision is in — which no caller supplied.
-  if (requestedLane !== undefined && !isMethodLane(requestedLane)) {
-    throw new TypeError(`unknown method lane: ${requestedLane}`);
-  }
+  // Caller-owned input, validated through the single `assertMethodLane` owner shared across all
+  // protocol installers (bead lagrange-images-29b). `SmalltalkMethodLaneError` answers a different
+  // question — what lane an ALREADY INSTALLED revision is in — which no caller supplied.
+  if (requestedLane !== undefined) assertMethodLane(requestedLane);
   requiredText(imageId, 'image id');
   if (!Array.isArray(methods) || methods.length === 0) throw new TypeError('methods must be a non-empty array');
   // Caller-supplied input first, before anything is read: a malformed or mixed expectation is a
@@ -1712,12 +1723,16 @@ async function methodSource({images, imageId, blockRef} = {}) {
 }
 
 export {
+  METHOD_LANES,
+  assertMethodLane,
+  isMethodLane,
   smalltalkClassObjectId,
   SmalltalkMethodDictionaryContentionError,
   SmalltalkMethodLaneError,
   SmalltalkMethodRedefinitionError,
   SmalltalkSealedMethodDictionaryError,
   SmalltalkStaleMethodPositionError,
+  currentSelectorBindings,
   defineClass,
   defineMethods,
   definePolyglotMethodBridge,

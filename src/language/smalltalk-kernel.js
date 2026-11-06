@@ -8,6 +8,7 @@ import {
   methodDictionaryRecordFields,
 } from './smalltalk-method-dictionary.js';
 import {ensureMethodDictionaryShape} from './smalltalk-method-dictionary-migration.js';
+import {currentSelectorBindings} from './smalltalk-class-builder.js';
 import {SYMMETRIC_SMALLTALK_ID} from './symmetric-smalltalk.js';
 
 // The Symmetric Smalltalk kernel: the durable object graph ADR 0044 dispatches against.
@@ -198,22 +199,19 @@ async function isLegacyMethodDictionary(service, imageId, record) {
   // *label*, which hides no ref and is exactly what metadata is for.
   if (record.metadata?.smalltalk !== 'method-dictionary') return false;
   if (!isObjectRef(record.shape)) return false;
-  const shape = await service.getShape(record.shape.imageId, record.shape.objectId);
-  if (!shape) return false;
+  // Delegate structural, selector-uniqueness, undeclared-slot and local-Block-ref validation to the
+  // class builder's single `currentSelectorBindings` owner (bead lagrange-images-jtz.6).
   try {
-    assertUniqueSelectorShape(shape, `method dictionary ${imageId}/${record.id}`);
+    await currentSelectorBindings({
+      images: service,
+      dictionaryRef: objectRef(imageId, record.id),
+      record,
+      nilRef: null,
+    });
+    return true;
   } catch {
     return false;
   }
-  // Every declared selector slot must hold a local unpinned Block ref, and the record must hold
-  // nothing else — the same contract the legacy dispatcher reads.
-  const declared = new Set(shape.slots.map(({id}) => id));
-  if (Object.keys(record.slots ?? {}).some((slotId) => !declared.has(slotId))) return false;
-  for (const {id: slotId} of shape.slots) {
-    const method = record.slots?.[slotId];
-    if (!isObjectRef(method) || method.imageId !== imageId) return false;
-  }
-  return true;
 }
 
 async function emptyMethodDictionaryRequest(service, imageId, id, metadata, nilRef) {

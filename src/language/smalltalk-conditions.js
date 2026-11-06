@@ -1,5 +1,5 @@
 import {objectRef, textValue} from '../value/index.js';
-import {defineMethods, ensureBlock, ensureCodeArtifact, ensureNamedClass} from './smalltalk-class-builder.js';
+import {assertMethodLane, defineMethods, ensureBlock, ensureCodeArtifact, ensureNamedClass} from './smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './smalltalk-instance-variables.js';
 import {ensureObject, ensureShape, findSmalltalkKernel, isLocalRef} from './smalltalk-kernel.js';
 import {
@@ -117,7 +117,7 @@ const applyPrimitive = (blockId, args) => ({
 
 async function installSmalltalkConditionProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 
@@ -282,7 +282,7 @@ async function findSmalltalkBlockUnwindProtocol({images, imageId} = {}) {
 // `ZeroDivide` from `1 // 0` already carries its message.
 async function installSmalltalkExceptionAccessors({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const exceptionClass = objectRef(imageId, 'smalltalk/class/Exception');

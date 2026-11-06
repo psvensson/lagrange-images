@@ -1,6 +1,7 @@
 import {SHAPE_INDEXED} from '../object/model.js';
 import {objectRef, textValue} from '../value/index.js';
 import {
+  assertMethodLane,
   defineMethods,
   ensureBlock,
   ensureCodeArtifact,
@@ -119,7 +120,7 @@ async function installPrimitiveBlock({images, imageId, primitive}) {
 // Dictionary-private helper.
 async function installSmalltalkEqualityProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 
@@ -191,7 +192,7 @@ async function installSmalltalkEqualityProtocol({images, compilation, imageId, l
 
 async function installSmalltalkDictionaryProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   requiredText(imageId, 'image id');
-  if (lane !== 'neutral' && lane !== 'wasm') throw new TypeError(`unknown method lane: ${lane}`);
+  assertMethodLane(lane);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
 

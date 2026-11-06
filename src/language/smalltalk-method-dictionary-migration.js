@@ -3,10 +3,10 @@ import {ensureObject, ensureShape} from '../graph/ensure-records.js';
 import {SHAPE_INDEXED} from '../object/model.js';
 import {
   SmalltalkKernelConflictError,
-  assertUniqueSelectorShape,
   findSmalltalkKernel,
   readBehavior,
 } from './smalltalk-kernel.js';
+import {currentSelectorBindings} from './smalltalk-class-builder.js';
 import {
   METHOD_DICTIONARY_SHAPE_ID,
   METHOD_DICTIONARY_SHAPE_SLOTS,
@@ -55,32 +55,12 @@ async function ensureMethodDictionaryShape(images, imageId) {
   return shape;
 }
 
-// The legacy representation, read exactly as ADR 0044 dispatch reads it — including the selector
-// uniqueness invariant, because migrating a corrupt dictionary would launder the corruption into a
-// format that no longer records how it happened.
+// The legacy representation, read through the single shared `currentSelectorBindings` owner
+// (bead lagrange-images-jtz.6) so migration, browsing, write planning and kernel adoption enforce
+// the exact same rule set before the seal.
 async function readLegacyEntries(images, dictionaryRef, record) {
-  const shape = await images.getShape(record.shape.imageId, record.shape.objectId);
-  if (!shape) throw new TypeError(`method dictionary shape not found: ${record.shape.objectId}`);
-  assertUniqueSelectorShape(shape, `method dictionary ${dictionaryRef.imageId}/${dictionaryRef.objectId}`);
-  // The *target* representation's constraints are checked here, before the seal. A foreign method
-  // ref is impossible to migrate, and that is knowable in step 1 — discovering it after sealing and
-  // writing the target would stall the class for a reason that could have been reported first.
-  return shape.slots.map((slot) => {
-    const method = record.slots[slot.id];
-    if (!isObjectRef(method)) {
-      throw new TypeError(`method slot for ${slot.name} must contain an unpinned Block ref`);
-    }
-    if (method.imageId !== record.imageId) {
-      throw new TypeError(
-        `method ${slot.name} refers to ${method.imageId}/${method.objectId}, which is not local to `
-        + `${record.imageId}; a hashed method dictionary holds only local Block refs`,
-      );
-    }
-    if (typeof slot.name !== 'string' || slot.name.length === 0) {
-      throw new TypeError('a method dictionary selector must be non-empty text');
-    }
-    return [textValue(slot.name), method];
-  });
+  const bindings = await currentSelectorBindings({images, dictionaryRef, record, nilRef: null});
+  return [...bindings.entries()].map(([selector, method]) => [textValue(selector), method]);
 }
 
 // Ensure-exact-or-create at the deterministic target. A retry after a committed-but-unacknowledged
