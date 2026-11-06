@@ -45,7 +45,7 @@ function describeReceiver(self) {
   return isObjectRef(self) ? `${self.imageId}/${self.objectId}` : `a ${self.kind} Value`;
 }
 
-async function superSend({images, activation, context, primitive}) {
+async function superSend({images, activation, context, primitive, validationCache = null}) {
   // ADR 0050 decision 5b's envelope. A super send is meaningful only inside a method activation:
   // without a frame there is no defining Behavior to start above, so this fails closed rather than
   // guessing one from the receiver.
@@ -85,6 +85,7 @@ async function superSend({images, activation, context, primitive}) {
     selector,
     nilRef: kernel.nil,
     receiverDescription,
+    validationCache,
   });
 
   // Same distinction the dispatcher keeps: a selector that resolved to a Block ref which does not

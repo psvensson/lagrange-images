@@ -575,6 +575,74 @@ test('the super primitive restates intra-image locality on the defining Behavior
   });
 });
 
+// ADR 0049 decision 5a + lagrange-images-r81z: a super send must consult the runtime's shared
+// MethodDictionaryValidationCache so whole-table validation happens once per MethodDictionary
+// `_version` across ordinary and super sends, and invalidates immediately when `_version` advances.
+test('super sends share the runtime MethodDictionaryValidationCache with ordinary dispatch and invalidate on _version', async () => {
+  await withRuntime(async (runtime, options) => {
+    const parent = await declare(runtime, 'CachedParent');
+    const child = await declare(runtime, 'CachedChild', parent.classRef);
+    await defineMethodsFromSource({
+      ...options, classRef: parent.classRef, methods: [{selector: 'step', source: '[ ^ 41 ]'}],
+    });
+    await defineMethodsFromSource({
+      ...options, classRef: child.classRef, methods: [{selector: 'step', source: '[ ^ super step + 1 ]'}],
+    });
+
+    const parentInstance = await instanceOf(runtime, 'cached-parent-instance', parent.classRef);
+    const childInstance = await instanceOf(runtime, 'cached-child-instance', child.classRef);
+    const parentMethodsId = `${parent.classRef.objectId}/methods`;
+
+    let indexedReads = 0;
+    const originalGetObject = runtime.images.getObject.bind(runtime.images);
+    runtime.images.getObject = async (imageId, objectId) => {
+      const record = await originalGetObject(imageId, objectId);
+      if (!record || imageId !== IMAGE || objectId !== parentMethodsId) return record;
+      return new Proxy(record, {
+        get(target, prop, receiver) {
+          if (prop === 'indexed') indexedReads += 1;
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+    };
+
+    // 1. Ordinary send to Parent warms the runtime's validationCache for Parent/methods@_version.
+    assert.deepEqual(
+      await evaluate(runtime, 'warm-parent-cache', '[ :p | p step ]', [parentInstance]),
+      integerValue(41),
+    );
+    assert.ok(indexedReads > 0, 'initial validation reads the MethodDictionary indexed table');
+
+    // 2. Subsequent super send from Child hits the same validationCache without re-validating
+    // Parent/methods while its _version is unchanged.
+    indexedReads = 0;
+    assert.deepEqual(
+      await evaluate(runtime, 'super-hits-cache-1', '[ :c | c step ]', [childInstance]),
+      integerValue(42),
+    );
+    assert.deepEqual(
+      await evaluate(runtime, 'super-hits-cache-2', '[ :c | c step ]', [childInstance]),
+      integerValue(42),
+    );
+    assert.equal(
+      indexedReads,
+      0,
+      'super sends reuse the validated MethodDictionary table for the same _version',
+    );
+
+    // 3. Updating Parent/methods advances its _version, invalidating the cache entry on the next super send.
+    await reconcileMethodsFromSource({
+      ...options, classRef: parent.classRef, methods: [{selector: 'step', source: '[ ^ 99 ]'}],
+    });
+    indexedReads = 0;
+    assert.deepEqual(
+      await evaluate(runtime, 'super-after-version-bump', '[ :c | c step ]', [childInstance]),
+      integerValue(100),
+    );
+    assert.ok(indexedReads > 0, 'a new MethodDictionary _version forces re-validation on the next super send');
+  });
+});
+
 // --- ownership ------------------------------------------------------------------------------------------
 
 // The architectural condition, checked structurally because the behavioural tests above cannot see

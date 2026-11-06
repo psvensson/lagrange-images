@@ -24,6 +24,7 @@ import {
 } from './foreign-runtime/index.js';
 import {ImageService} from './image/graph-image-service.js';
 import {
+  MethodDictionaryValidationCache,
   SYMMETRIC_SMALLTALK_ID,
   createDefaultLanguagePlatform,
   createSymmetricSmalltalkDispatcher,
@@ -95,12 +96,19 @@ async function createRuntime(options = {}) {
     bindings: foreignRuntimeDefinitionBindings,
   });
 
+  // ADR 0049 decision 5a. Shared across the runtime's Symmetric Smalltalk dispatcher and its
+  // kernel-primitive executor so `super` sends and ordinary sends validate a MethodDictionary
+  // once per `_version` rather than once per `super` send.
+  const smalltalkValidationCache = new MethodDictionaryValidationCache();
   const dispatchers = new DispatchRegistry();
   for (const [languageId, dispatcher] of Object.entries(options.dispatchers ?? {})) {
     dispatchers.register(languageId, dispatcher);
   }
   if (!dispatchers.has(SYMMETRIC_SMALLTALK_ID)) {
-    dispatchers.register(SYMMETRIC_SMALLTALK_ID, createSymmetricSmalltalkDispatcher());
+    dispatchers.register(
+      SYMMETRIC_SMALLTALK_ID,
+      createSymmetricSmalltalkDispatcher({validationCache: smalltalkValidationCache}),
+    );
   }
   const invocations = new InvocationService({images, dispatchers});
 
@@ -139,11 +147,12 @@ async function createRuntime(options = {}) {
   if (!codeExecutors.has(SMALLTALK_KERNEL_PRIMITIVE_V1)) {
     codeExecutors.register(
       SMALLTALK_KERNEL_PRIMITIVE_V1,
-      createSmalltalkKernelPrimitiveV1Executor(
+      createSmalltalkKernelPrimitiveV1Executor({
         // Object identity is runtime machinery rather than durable class semantics, so it is
         // injectable — a test has to be able to force a collision.
-        options.smalltalkObjectIds === undefined ? {} : {newObjectId: options.smalltalkObjectIds},
-      ),
+        ...(options.smalltalkObjectIds === undefined ? {} : {newObjectId: options.smalltalkObjectIds}),
+        validationCache: smalltalkValidationCache,
+      }),
     );
   }
   // The authority service is a control-plane surface: the embedder may issue and revoke

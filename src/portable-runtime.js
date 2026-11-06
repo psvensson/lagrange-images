@@ -128,6 +128,7 @@ import {authorizedImportCuisPackage} from './language/smalltalk-authorized-impor
 import {createDefaultLanguagePlatform} from './language/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './language/symmetric-smalltalk.js';
 import {createSymmetricSmalltalkDispatcher} from './language/symmetric-smalltalk-dispatcher.js';
+import {MethodDictionaryValidationCache} from './language/smalltalk-lookup.js';
 import {installCallableInterfaceV2} from './callable/interface-v2-artifacts.js';
 import {packCompositeValue, unpackCompositeValue} from './callable/composite-codec.js';
 import {normalizeTypeDeclarations} from './callable/type-grammar.js';
@@ -232,12 +233,16 @@ async function createRuntimeCore(options = {}, {registerExtraCodeExecutors} = {}
   }
   const compilation = new CompilationService({images, compilers: codeCompilers, groupCompilers});
 
+  const smalltalkValidationCache = new MethodDictionaryValidationCache();
   const dispatchers = new DispatchRegistry();
   for (const [languageId, dispatcher] of Object.entries(options.dispatchers ?? {})) {
     dispatchers.register(languageId, dispatcher);
   }
   if (!dispatchers.has(SYMMETRIC_SMALLTALK_ID)) {
-    dispatchers.register(SYMMETRIC_SMALLTALK_ID, createSymmetricSmalltalkDispatcher());
+    dispatchers.register(
+      SYMMETRIC_SMALLTALK_ID,
+      createSymmetricSmalltalkDispatcher({validationCache: smalltalkValidationCache}),
+    );
   }
   const invocations = new InvocationService({images, dispatchers});
 
@@ -258,9 +263,10 @@ async function createRuntimeCore(options = {}, {registerExtraCodeExecutors} = {}
   if (!codeExecutors.has(SMALLTALK_KERNEL_PRIMITIVE_V1)) {
     codeExecutors.register(
       SMALLTALK_KERNEL_PRIMITIVE_V1,
-      createSmalltalkKernelPrimitiveV1Executor(
-        options.smalltalkObjectIds === undefined ? {} : {newObjectId: options.smalltalkObjectIds},
-      ),
+      createSmalltalkKernelPrimitiveV1Executor({
+        ...(options.smalltalkObjectIds === undefined ? {} : {newObjectId: options.smalltalkObjectIds}),
+        validationCache: smalltalkValidationCache,
+      }),
     );
   }
 

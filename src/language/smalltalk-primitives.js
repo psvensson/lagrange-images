@@ -13,6 +13,7 @@ import {
   requireSendMessage,
 } from './smalltalk-primitive-support.js';
 import {SmalltalkSuperFrameMissingError, superSend} from './smalltalk-primitives-super.js';
+import {MethodDictionaryValidationCache} from './smalltalk-lookup.js';
 import {
   SmalltalkIndexedBoundsError,
   SmalltalkNotIndexedError,
@@ -102,10 +103,14 @@ const LOOP_PRIMITIVES = Object.freeze({
 function createSmalltalkKernelPrimitiveV1Executor({
   newObjectId = randomUUID,
   maxIdentityAttempts = 8,
+  validationCache = new MethodDictionaryValidationCache(),
 } = {}) {
   if (typeof newObjectId !== 'function') throw new TypeError('newObjectId must be a function');
   if (!Number.isInteger(maxIdentityAttempts) || maxIdentityAttempts < 1) {
     throw new TypeError('maxIdentityAttempts must be a positive integer');
+  }
+  if (validationCache !== null && typeof validationCache?.read !== 'function') {
+    throw new TypeError('validationCache must implement read(record, ref, nilRef) or be null');
   }
   return Object.freeze({
     async execute({activation, code}, context) {
@@ -161,7 +166,7 @@ function createSmalltalkKernelPrimitiveV1Executor({
       // arguments are the selector plus however many the forwarded message takes, so the
       // `[value, second, third]` destructuring the switch relies on does not describe it.
       if (primitive === SMALLTALK_PRIMITIVE.SUPER_SEND) {
-        return await superSend({images, activation, context, primitive});
+        return await superSend({images, activation, context, primitive, validationCache});
       }
       if (primitive === SMALLTALK_PRIMITIVE.CONDITION_SIGNAL) {
         return await conditionSignal({images, primitiveImage, activation, context, primitive});

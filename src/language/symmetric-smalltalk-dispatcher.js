@@ -74,11 +74,15 @@ function resolution(block, effectiveReceiver, frame = null) {
   });
 }
 
-function createSymmetricSmalltalkDispatcher() {
-  // Per dispatcher, so it lives and dies with the runtime that owns it rather than leaking between
-  // images or across tests. Transient runtime state: never durable, never a Value, and correct to
-  // drop at any moment (ADR 0049 decision 5a).
-  const validationCache = new MethodDictionaryValidationCache();
+function createSymmetricSmalltalkDispatcher({
+  // Per dispatcher/runtime, so it lives and dies with the runtime that owns it rather than leaking
+  // between images or across tests. Transient runtime state: never durable, never a Value, and
+  // correct to drop at any moment (ADR 0049 decision 5a).
+  validationCache = new MethodDictionaryValidationCache(),
+} = {}) {
+  if (validationCache !== null && typeof validationCache?.read !== 'function') {
+    throw new TypeError('validationCache must implement read(record, ref, nilRef) or be null');
+  }
   return Object.freeze({
     languageId: SYMMETRIC_SMALLTALK_ID,
 
