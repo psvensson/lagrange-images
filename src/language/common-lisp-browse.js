@@ -3,7 +3,9 @@ import {objectRef} from '../value/index.js';
 import {
   COMMON_LISP_NAMESPACE_ID,
   listCommonLispNamespaceBindings,
+  readCommonLispClassDefinition,
   readCommonLispFunctionDefinition,
+  readCommonLispGenericDefinition,
   readCommonLispMacroDefinition,
   readCommonLispStructDefinition,
   readCommonLispVariableDefinition,
@@ -189,6 +191,52 @@ async function authorizedDescribeCommonLispDefinition({
         copier: def.copier,
         slots: def.slots,
         localSlots: def.localSlots,
+      });
+    }
+    case COMMON_LISP_DEFINITION_KIND.CLASS: {
+      const def = await readCommonLispClassDefinition({
+        images,
+        imageId,
+        name: canonicalName,
+        namespaceId,
+      });
+      if (!def) {
+        throw new TypeError(
+          `Common Lisp namespace ${imageId}/${namespaceId} does not define class ${canonicalName}`,
+        );
+      }
+      return Object.freeze({
+        format: COMMON_LISP_DEFINITION_DESCRIPTION_V1,
+        namespace: namespaceRef,
+        kind: COMMON_LISP_DEFINITION_KIND.CLASS,
+        name: def.name,
+        class: def.classRef,
+        className: def.className,
+        superclasses: def.superclasses,
+        cpl: def.cpl,
+        slots: def.slots,
+        localSlots: def.localSlots,
+      });
+    }
+    case COMMON_LISP_DEFINITION_KIND.GENERIC: {
+      const def = await readCommonLispGenericDefinition({
+        images,
+        imageId,
+        name: canonicalName,
+        namespaceId,
+      });
+      if (!def) {
+        throw new TypeError(
+          `Common Lisp namespace ${imageId}/${namespaceId} does not define generic ${canonicalName}`,
+        );
+      }
+      return Object.freeze({
+        format: COMMON_LISP_DEFINITION_DESCRIPTION_V1,
+        namespace: namespaceRef,
+        kind: COMMON_LISP_DEFINITION_KIND.GENERIC,
+        name: def.name,
+        parameters: def.parameters,
+        methods: def.methods,
       });
     }
     case COMMON_LISP_DEFINITION_KIND.VARIABLE: {
