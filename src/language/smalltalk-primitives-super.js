@@ -50,7 +50,9 @@ async function superSend({images, activation, context, primitive}) {
   // without a frame there is no defining Behavior to start above, so this fails closed rather than
   // guessing one from the receiver.
   const frame = context?.invocationFrame ?? null;
-  if (!frame) throw new SmalltalkSuperFrameMissingError(primitive);
+  if (!frame || !Object.hasOwn(frame, 'self') || !Object.hasOwn(frame, 'definingBehavior')) {
+    throw new SmalltalkSuperFrameMissingError(primitive);
+  }
 
   // The compiler emits the selector as a Text literal and the message's own arguments after it, so
   // one primitive serves unary, binary and keyword super sends.

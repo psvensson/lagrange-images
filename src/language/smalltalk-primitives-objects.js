@@ -350,7 +350,9 @@ function sameValueRef(left, right) {
 
 async function resolveSlotAccess({images, primitiveImage, primitive, target, slotIdValue, context}) {
   const frame = context?.invocationFrame ?? null;
-  if (!frame) throw new SmalltalkSlotFrameMissingError(primitive);
+  if (!frame || !Object.hasOwn(frame, 'self') || !Object.hasOwn(frame, 'definingBehavior')) {
+    throw new SmalltalkSlotFrameMissingError(primitive);
+  }
   if (slotIdValue?.kind !== VALUE_KIND.TEXT || slotIdValue.value.length === 0) {
     throw new SmalltalkSlotAccessError(primitive, 'a slot id must be non-empty text');
   }
