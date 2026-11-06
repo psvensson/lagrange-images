@@ -317,13 +317,64 @@ function methodBrowseRequire(runtime, classRef, selector) {
 }
 
 // Nothing about a native description may name the Cuis origin, and nothing may name storage.
+// Unambiguous prefixes/forms are checked across the entire serialized description; bare words
+// (`oop`, `JSON`, `cuis`, `Cuis`, `buckets`, `tally`) are checked after redacting caller-controlled
+// identifiers and `/method/<base64url>` segments (bead lagrange-images-jtz.4).
+const FORBIDDEN_UNAMBIGUOUS_IN_NATIVE_DESCRIPTION = [
+  'cuis-class/', 'cuis-method/', 'cuis-package/', 'smalltalk/cuis-', 'gitblob',
+  '_version', 'behavior-', 'method-dictionary', 'instance-shape', 'instance-slot', 'selector:', '/methods',
+];
+
+const FORBIDDEN_STRUCTURAL_IN_NATIVE_DESCRIPTION = [
+  ...FORBIDDEN_UNAMBIGUOUS_IN_NATIVE_DESCRIPTION,
+  'cuis', 'Cuis', 'JSON', 'oop', 'buckets', 'tally',
+];
+
+function redactCallerControlledNativeRef(ref) {
+  if (!ref || typeof ref !== 'object' || typeof ref.objectId !== 'string') return ref;
+  const redactedObjectId = ref.objectId.replace(
+    /^smalltalk\/(class|metaclass)\/[A-Za-z_][A-Za-z0-9_]*(\/method\/[A-Za-z0-9_-]+)?$/,
+    (_match, kind, methodPart) => `smalltalk/${kind}/<class>${methodPart ? '/method/<selector>' : ''}`,
+  );
+  return {...ref, objectId: redactedObjectId};
+}
+
+function stripCallerControlledNativeDescriptionText(description) {
+  if (!description || typeof description !== 'object') return description;
+  const clone = structuredClone(description);
+  if (typeof clone.name === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(clone.name)) {
+    clone.name = '<class>';
+  }
+  if (typeof clone.selector === 'string' && !clone.selector.startsWith('selector:')) {
+    clone.selector = '<selector>';
+  }
+  if (Array.isArray(clone.selectors)) {
+    clone.selectors = clone.selectors.map((s) => (
+      typeof s === 'string' && !s.startsWith('selector:') ? '<selector>' : s
+    ));
+  }
+  if (typeof clone.source === 'string') {
+    clone.source = '<source>';
+  }
+  if (clone.layout && typeof clone.layout === 'object' && Array.isArray(clone.layout.instanceVariables)) {
+    clone.layout.instanceVariables = clone.layout.instanceVariables.map((v) => (
+      typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v) ? '<ivar>' : v
+    ));
+  }
+  for (const refKey of ['class', 'superclass', 'classSide', 'method']) {
+    if (clone[refKey]) clone[refKey] = redactCallerControlledNativeRef(clone[refKey]);
+  }
+  return clone;
+}
+
 function assertOriginNeutralNativeDescription(description, label) {
-  const text = JSON.stringify(description);
-  for (const token of [
-    'cuis', 'Cuis', 'JSON', 'gitblob', 'oop',
-    '_version', 'behavior-', 'method-dictionary', 'instance-shape', 'instance-slot', 'selector:',
-  ]) {
-    assert.equal(text.includes(token), false, `${label} must not carry ${token}: ${text}`);
+  const rawText = JSON.stringify(description);
+  for (const token of FORBIDDEN_UNAMBIGUOUS_IN_NATIVE_DESCRIPTION) {
+    assert.equal(rawText.includes(token), false, `${label} must not carry ${token}: ${rawText}`);
+  }
+  const structuralText = JSON.stringify(stripCallerControlledNativeDescriptionText(description));
+  for (const token of FORBIDDEN_STRUCTURAL_IN_NATIVE_DESCRIPTION) {
+    assert.equal(structuralText.includes(token), false, `${label} must not carry ${token}: ${rawText}`);
   }
 }
 
