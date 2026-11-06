@@ -148,6 +148,7 @@ class ClosurePromoter {
         : {}),
       metadata: {...record.metadata},
     };
+    this.#arena.imagesViewFor?.(this.#images)?.invalidateObject?.(ref.imageId, durableObjectId);
     await ensureObject(this.#images, ref.imageId, desired);
   }
 

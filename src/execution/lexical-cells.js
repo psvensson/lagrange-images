@@ -357,6 +357,7 @@ function arenaImagesView(images, arena) {
   if (cachedView) return cachedView;
   const view = Object.create(images);
   const immutableDurable = new TupleMap(3);
+  const durableObjects = new TupleMap(2);
   const protocols = new TupleMap(2);
   const readImmutableDurable = async (kind, imageId, objectId, durable) => {
     const key = [kind, imageId, objectId];
@@ -370,6 +371,9 @@ function arenaImagesView(images, arena) {
   view.cacheProtocol = (protocol, imageId, value) => {
     protocols.set([protocol, imageId], value);
     return value;
+  };
+  view.invalidateObject = (imageId, objectId) => {
+    durableObjects.delete([imageId, objectId]);
   };
   // Durable fallback is never reached for a reserved id, because decision 5b forbids a durable
   // record from taking one. A reserved id absent from this arena is therefore an *expired*
@@ -427,7 +431,12 @@ function arenaImagesView(images, arena) {
       return Object.freeze({...record, id: objectId});
     }
     if (isTransientObjectId(objectId)) throw new ExpiredClosureInstanceError(imageId, objectId);
-    return await images.getObject(imageId, objectId);
+    const key = [imageId, objectId];
+    const cached = durableObjects.get(key);
+    if (cached) return cached;
+    const loaded = await images.getObject(imageId, objectId);
+    if (loaded) durableObjects.set(key, loaded);
+    return loaded;
   };
   // A write naming a reserved id is a write to an object in this arena. `basicNew`'s whole point is
   // that the id is minted transient and the record lives here — so the write updates the arena.
@@ -455,6 +464,7 @@ function arenaImagesView(images, arena) {
         // through the same central operation first. Within one execution the only writer is this
         // execution, so the read-then-write CAS cannot race here.
         const durableId = promoted.ref.objectId;
+        durableObjects.delete([imageId, durableId]);
         const current = await images.getObject(imageId, durableId);
         if (current) {
           const promoteValue = arena.postPromotionPromoter
@@ -463,7 +473,7 @@ function arenaImagesView(images, arena) {
           for (const [slotId, value] of Object.entries(record.slots)) {
             slots[slotId] = await promoteValue(value);
           }
-          await images.putObject(imageId, {
+          const saved = await images.putObject(imageId, {
             id: durableId,
             shape: record.shape,
             behavior: record.behavior,
@@ -473,12 +483,18 @@ function arenaImagesView(images, arena) {
               : {}),
             metadata: record.metadata,
           }, {expectedVersion: current._version});
+          if (saved?.id) durableObjects.set([imageId, saved.id], saved);
         }
       }
       return record;
     }
-    if (typeof record?.id === 'string') protocols.delete([record.id, imageId]);
-    return await images.putObject(imageId, record, options);
+    if (typeof record?.id === 'string') {
+      protocols.delete([record.id, imageId]);
+      durableObjects.delete([imageId, record.id]);
+    }
+    const saved = await images.putObject(imageId, record, options);
+    if (saved?.id) durableObjects.set([imageId, saved.id], saved);
+    return saved;
   };
   return arena.cacheImagesView ? arena.cacheImagesView(images, view) : view;
 }
