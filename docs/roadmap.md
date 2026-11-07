@@ -392,18 +392,18 @@ Inspecting, editing and navigating imported structures belongs to Lagrange Objec
 
 Keep generic work only when it directly supports the native-import application closure or another shipping path:
 
-- [ ] package/archive importer conventions with explicit immutable dependency artifacts;
+- [x] package/archive importer conventions with explicit immutable dependency artifacts (`LAGRANGE_PACKAGE_ARCHIVE_V1`, `PACKAGE_ARCHIVE_IMPORT_RECEIPT_V1`, `createPackageArchiveManifest`, `putPackageArchiveArtifact`, and `importPackageArchive` in `src/code/package-archive.js`, proven in `test/toolchain-durable-derivation-package-archive.test.js`);
 - [x] git/private-registry dependency import conventions (`GIT_DEPENDENCY_SPEC_V1`, `normalizeGitDependencySpec`, `normalizeGitDependencyList`, and `exportProjectFileProjection` / `importProjectFileProjection` in `src/project/file-projection.js`, proven in `test/project-file-projection.test.js`);
-- [ ] indexed durable lookup for derivation keys;
+- [x] indexed durable lookup for derivation keys (`TOOLCHAIN_DERIVATION_INDEX_SHAPE_ID`, `TOOLCHAIN_DERIVATION_INDEX_V1`, `toolchainDerivationIndexObjectId`, `readToolchainDerivationIndexEntry`, and `rebuildToolchainDerivationIndex` in `src/toolchain/toolchain-service.js`, proven in `test/toolchain-durable-derivation-package-archive.test.js`);
 - [x] cross-install content-addressed reuse with truthful installation provenance (`PROJECT_INSTALLATION_PROVENANCE_V1`, `upgradeManagedProjectRelease`, `authorizedUpgradeManagedProjectRelease`, `installManagedProjectRelease({reuseExistingInstallations: true})`, `readManagedProjectInstallationState`, and `listManagedProjectInstallations` in `src/project/managed-installation.js` and `src/project/installation-state.js`, proven in `test/managed-project-upgrade.test.js`).
 
 ### Rust
 
 Rust remains the mature existing-compiler -> WASM path:
 
-- [ ] standard package importer built on explicit artifact/dependency semantics when a real Project needs it;
+- [x] standard package importer built on explicit artifact/dependency semantics when a real Project needs it (`importPackageArchive` in `src/code/package-archive.js`, proven in `test/toolchain-durable-derivation-package-archive.test.js`);
 - [ ] Lagrange Rust SDK/crate for explicit host calls under concrete pressure;
-- [ ] portable precompiled WASM/Component dependency reuse.
+- [x] portable precompiled WASM/Component dependency reuse (`PRECOMPILED_WASM_REUSE_RECEIPT_V1` and `reusePrecompiledWasmArtifact` in `src/code/package-archive.js`, proven in `test/toolchain-durable-derivation-package-archive.test.js`).
 
 ### Common Lisp
 
