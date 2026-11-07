@@ -395,7 +395,7 @@ Keep generic work only when it directly supports the native-import application c
 - [ ] package/archive importer conventions with explicit immutable dependency artifacts;
 - [ ] git/private-registry dependency import conventions;
 - [ ] indexed durable lookup for derivation keys;
-- [ ] cross-install content-addressed reuse with truthful installation provenance.
+- [x] cross-install content-addressed reuse with truthful installation provenance (`PROJECT_INSTALLATION_PROVENANCE_V1`, `upgradeManagedProjectRelease`, `authorizedUpgradeManagedProjectRelease`, `installManagedProjectRelease({reuseExistingInstallations: true})`, `readManagedProjectInstallationState`, and `listManagedProjectInstallations` in `src/project/managed-installation.js` and `src/project/installation-state.js`, proven in `test/managed-project-upgrade.test.js`).
 
 ### Rust
 

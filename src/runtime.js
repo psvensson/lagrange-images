@@ -231,6 +231,15 @@ export {
 export {PlacementPolicy} from './graph/placement.js';
 export {RemoteRecordResolver} from './graph/remote-resolution.js';
 export {
+  GRAPH_BUNDLE_V1,
+  contentIdentityForBundle,
+  exportGraphBundle,
+  exportGraphBundleWithSourceMap,
+  extractSubBundleFromBundle,
+  importGraphBundle,
+  prepareGraphBundleImport,
+} from './graph/bundle.js';
+export {
   GRAPH_BUNDLE_DIFF_V1,
   IMAGE_RECORD_DIFF_V1,
   diffGraphBundles,
