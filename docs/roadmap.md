@@ -433,10 +433,10 @@ transport, membership, replication or consensus:
 
 - [x] object locator and placement policy (`src/graph/locator.js`, `src/graph/placement.js`, `src/graph/remote-resolution.js`);
 - [x] local vs remote call semantics (`dispatchSend`, `dispatchApply`, `selectExecutionNode`, `selectBlockExecutionNode`, `relocateBlockClosure` in `src/graph/placement.js`, proven in `test/distributed-callable-placement.test.js`);
-- [ ] Lagrange WASM placement;
+- [x] Lagrange WASM placement (`WASM_PLACEMENT_RECEIPT_V1` and `relocateWasmArtifactClosure` in `src/graph/placement.js`, moving WASM callable Blocks and their transitive `wasm-function/*` + `wasm-module/*` + `wasm-binary/v1` closure for zero-remote-read execution, proven in `test/distributed-recovery-idempotency-wasm.test.js`);
 - [x] distributed routing for native Blocks and explicitly retained foreign/component boundaries (`selectBlockExecutionNode`, `dispatchApply`, and `relocateBlockClosure` in `src/graph/placement.js`, proven in `test/distributed-callable-placement.test.js`);
-- [ ] explicit failure/retry/idempotency semantics;
-- [ ] durable deployment/reconciliation contract for intentionally foreign runtime definitions;
+- [x] explicit failure/retry/idempotency semantics (`idempotencyKey` operation deduplication, `PlacementIdempotencyConflictError`, durable relocation replay convergence, and `retry` with locator invalidation in `src/graph/placement.js`, proven in `test/distributed-recovery-idempotency-wasm.test.js`);
+- [x] durable deployment/reconciliation contract for intentionally foreign runtime definitions (`FOREIGN_RUNTIME_PLACEMENT_RECEIPT_V1` and `reconcileForeignRuntimePlacement` in `src/graph/placement.js`, proven in `test/distributed-recovery-idempotency-wasm.test.js`);
 - [ ] measured `ctx.call()` / compute-near-object wins using the imported application as a realistic workload.
 
 **Cross-project convergence boundary (design direction, not implemented):**
@@ -462,7 +462,7 @@ Authority remains transient execution context. Project structure must not imply 
 The native-import path depends on the image graph becoming the authoritative application store:
 
 - [ ] real Lagrange process-restart durability proof;
-- [ ] multi-node failure/recovery durability tests;
+- [x] multi-node failure/recovery durability tests (`PLACEMENT_RECOVERY_REPORT_V1` and `reconcileInterruptedRelocations` in `src/graph/placement.js`, healing interrupted relocations and split-brain state across peer backends, proven in `test/distributed-recovery-idempotency-wasm.test.js`);
 - [x] logical snapshot/revision frontiers beyond the first `GraphImageService.frontier()` seam (`createBranch`, `getBranch`, `listBranches`, `advanceBranch`, `deleteBranch`, `forkImageFromFrontier`, `forkImageFromBranch`, `diffBranches`, and `mergeBranches` in `src/graph/branches.js`, proven in `test/branches-working-frontier.test.js`);
 - [x] revision-aware reads (`reconstructImageRecordsAtFrontier` and `diffProjectAtFrontiers` in `src/graph/diff.js` and `src/project/diff.js`, proven in `test/image-project-diff.test.js`);
 - [x] indexed graph reachability and derivation lookup (`buildImageGraphIndex`, `computeReachableImageClosure`, `findOutgoingReferences`, `findIncomingReferences`, `findDerivedArtifacts`, `findArtifactSources`, `findArtifactDependents`, and `findArtifactsByLogicalPath` in `src/graph/reachability.js`, proven in `test/graph-reachability-gc.test.js`);
