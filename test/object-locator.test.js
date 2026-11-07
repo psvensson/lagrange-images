@@ -221,12 +221,31 @@ test('PlacementPolicy relocates an object across separate backends with per-obje
     const afterMove = await placement.inspectResidency(ref);
     assert.equal(afterMove.node, 'node-a');
     assert.equal(afterMove.kind, PER_OBJECT_RESIDENCY);
+    assert.equal(await placement.selectExecutionNode(ref), 'node-a');
+
+    imagesA.remoteResolution.resetStats();
+    imagesB.remoteResolution.resetStats();
 
     // Both nodes resolve the relocated object at its unchanged (imageId, objectId) identity.
     const readFromB = await imagesB.getObject('app', 'cell-1');
     const readFromA = await imagesA.getObject('app', 'cell-1');
     assert.equal(readFromB.slots.count.value, '10');
     assert.equal(readFromA.slots.count.value, '10');
+    assert.equal(
+      imagesB.remoteResolution.stats().perObjectRecordReads,
+      1,
+      'reading relocated object from node B requires one per-object remote read',
+    );
+    assert.equal(
+      imagesA.remoteResolution.stats().perObjectRecordReads,
+      0,
+      'reading relocated object on resident node A requires zero remote per-object reads',
+    );
+    assert.equal(
+      imagesA.remoteResolution.stats().localRecordReads,
+      1,
+      'reading relocated object on resident node A resolves locally',
+    );
 
     // Mutating the relocated object from node B updates the resident copy on node A.
     const updated = await imagesB.putObject('app', {
@@ -235,12 +254,13 @@ test('PlacementPolicy relocates an object across separate backends with per-obje
       slots: {count: integerValue(25)},
     }, {expectedVersion: readFromB._version});
     assert.equal(updated.slots.count.value, '25');
+    assert.equal(imagesB.remoteResolution.stats().perObjectRecordWrites, 1);
     assert.equal((await imagesA.getObject('app', 'cell-1')).slots.count.value, '25');
     assert.equal((await imagesB.getObject('app', 'cell-1')).slots.count.value, '25');
 
     // Relocating back to node B restores whole-image residency on node B without identity loss.
-    const movedBack = await placement.relocateObject({
-      ref,
+    const [movedBack] = await placement.relocateObjects({
+      refs: [ref],
       fromNode: 'node-a',
       toNode: 'node-b',
     });
@@ -248,6 +268,7 @@ test('PlacementPolicy relocates an object across separate backends with per-obje
     const afterBack = await placement.inspectResidency(ref);
     assert.equal(afterBack.node, 'node-b');
     assert.equal(afterBack.kind, WHOLE_IMAGE_RESIDENCY);
+    assert.equal(await placement.selectExecutionNode(ref), 'node-b');
     assert.equal((await imagesB.getObject('app', 'cell-1')).slots.count.value, '25');
     assert.equal((await imagesA.getObject('app', 'cell-1')).slots.count.value, '25');
   } finally {

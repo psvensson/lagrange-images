@@ -165,6 +165,74 @@ test('M6.3-M6.6: PlacementPolicy and ObjectLocator execute unchanged Life across
 
     await sendBAfterRestart(model, 'nextState');
     assert.equal(await readStateAfterRestart(), FROZEN_STATES[2], 'M6.6: after relocating cells back to node B, nextState advances S1 -> S2 (S0)');
+
+    // --- 6. Compute-near-object execution & cross-node round-trip measurement:
+    // Relocate the blinker data closure (`model`, `cells`, `cells elements`) to node A,
+    // then compare compute-far-from-object (executing `nextState` on node B) against
+    // compute-near-object (`PlacementPolicy.dispatchSend` routing `nextState` to node A where `model` resides).
+    const currentCellsRef = await sendBAfterRestart(model, 'cells');
+    const cellsElementsRef = await sendBAfterRestart(currentCellsRef, 'elements');
+    const blinkerClosureRefs = [model, currentCellsRef, cellsElementsRef];
+
+    const closureReceipts = await restartedPlacement.relocateObjects({
+      refs: blinkerClosureRefs,
+      fromNode: 'node-b',
+      toNode: 'node-a',
+    });
+    assert.equal(closureReceipts.length, 3);
+    assert.equal(await restartedPlacement.selectExecutionNode(model), 'node-a');
+    assert.equal(await restartedPlacement.selectExecutionNode(currentCellsRef), 'node-a');
+    assert.equal(await restartedPlacement.selectExecutionNode(cellsElementsRef), 'node-a');
+
+    // 6a. Compute-far-from-object: execute `model nextState` on node B while the blinker closure resides on node A.
+    nodeB.images.remoteResolution.resetStats();
+    nodeA.images.remoteResolution.resetStats();
+    await sendBAfterRestart(model, 'nextState');
+    const farStatsB = nodeB.images.remoteResolution.stats();
+    const farStatsA = nodeA.images.remoteResolution.stats();
+    assert.ok(
+      farStatsB.perObjectRecordReads > 0,
+      `expected compute-far-from-object to perform cross-node per-object reads, got ${farStatsB.perObjectRecordReads}`,
+    );
+    assert.ok(
+      farStatsB.perObjectRecordWrites > 0,
+      `expected compute-far-from-object to perform cross-node per-object writes, got ${farStatsB.perObjectRecordWrites}`,
+    );
+    assert.equal(farStatsA.localRecordWrites, 0);
+    assert.equal(await readStateAfterRestart(), FROZEN_STATES[1], 'compute-far-from-object advances S0 -> S1');
+
+    // 6b. Compute-near-object: dispatch `model nextState` from node B through PlacementPolicy so execution runs on node A.
+    nodeB.images.remoteResolution.resetStats();
+    nodeA.images.remoteResolution.resetStats();
+    const nearDispatch = await restartedPlacement.dispatchSend({
+      fromNode: 'node-b',
+      receiver: model,
+      message: 'nextState',
+    });
+    const nearStatsA = nodeA.images.remoteResolution.stats();
+    const nearStatsB = nodeB.images.remoteResolution.stats();
+    assert.equal(nearDispatch.node, 'node-a');
+    assert.equal(nearDispatch.fromNode, 'node-b');
+    assert.equal(nearDispatch.routedRemotely, true);
+    assert.equal(
+      nearStatsA.perObjectRecordReads + nearStatsB.perObjectRecordReads,
+      0,
+      'compute-near-object eliminates all cross-node reads of the relocated blinker closure',
+    );
+    assert.equal(
+      nearStatsA.perObjectRecordWrites + nearStatsB.perObjectRecordWrites,
+      0,
+      'compute-near-object eliminates all cross-node writes to the relocated blinker closure',
+    );
+    assert.ok(
+      nearStatsA.localRecordWrites > 0,
+      `expected compute-near-object to mutate blinker state locally on node A, got ${nearStatsA.localRecordWrites}`,
+    );
+    assert.equal(
+      await readStateAfterRestart(),
+      FROZEN_STATES[2],
+      'compute-near-object produces identical S1 -> S2 (S0) transition with zero cross-node blinker data round-trips',
+    );
   } finally {
     await nodeA.close().catch(() => {});
     await nodeB.close().catch(() => {});
