@@ -265,6 +265,22 @@ export {
   findOutgoingReferences,
   planImageGarbageCollection,
 } from './graph/reachability.js';
+export {
+  BRANCH_HEAD_SHAPE_ID,
+  BranchConflictError,
+  IMAGE_BRANCH_DESCRIPTOR_V1,
+  advanceBranch,
+  branchObjectId,
+  createBranch,
+  deleteBranch,
+  diffBranches,
+  forkImageFromBranch,
+  forkImageFromFrontier,
+  getBranch,
+  isBranchHeadRecord,
+  listBranches,
+  mergeBranches,
+} from './graph/branches.js';
 export {ImageService};
 export * from './execution/executor.js';
 export * from './execution/model.js';

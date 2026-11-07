@@ -145,7 +145,31 @@ function mergeKeyValueMapThreeWay(baseMap = {}, leftMap = {}, rightMap = {}) {
   };
 }
 
-function mergeIndexedArrayThreeWay(baseIndexed, leftIndexed, rightIndexed) {
+function mergeObjectRefSetThreeWay(baseIndexed = [], leftIndexed = [], rightIndexed = []) {
+  const toMap = (arr) => new Map(arr.map((ref) => [ref.objectId, ref]));
+  const baseMap = toMap(baseIndexed);
+  const leftMap = toMap(leftIndexed);
+  const rightMap = toMap(rightIndexed);
+  const allIds = [
+    ...new Set([...baseMap.keys(), ...leftMap.keys(), ...rightMap.keys()]),
+  ].sort(compareText);
+  const merged = [];
+  for (const objectId of allIds) {
+    const inBase = baseMap.has(objectId);
+    const inLeft = leftMap.has(objectId);
+    const inRight = rightMap.has(objectId);
+    if (!inBase) {
+      if (inLeft || inRight) {
+        merged.push(canonicalClone(leftMap.get(objectId) ?? rightMap.get(objectId)));
+      }
+    } else if (inLeft && inRight) {
+      merged.push(canonicalClone(leftMap.get(objectId)));
+    }
+  }
+  return {merged: Object.freeze(merged), conflict: null};
+}
+
+function mergeIndexedArrayThreeWay(baseIndexed, leftIndexed, rightIndexed, {asObjectRefSet = false} = {}) {
   const leftSameAsBase = canonicalJson(leftIndexed) === canonicalJson(baseIndexed);
   const rightSameAsBase = canonicalJson(rightIndexed) === canonicalJson(baseIndexed);
   const leftSameAsRight = canonicalJson(leftIndexed) === canonicalJson(rightIndexed);
@@ -155,6 +179,18 @@ function mergeIndexedArrayThreeWay(baseIndexed, leftIndexed, rightIndexed) {
   }
   if (rightSameAsBase || leftSameAsRight) {
     return {merged: leftIndexed ? canonicalClone(leftIndexed) : undefined, conflict: null};
+  }
+
+  if (
+    asObjectRefSet
+    && Array.isArray(baseIndexed)
+    && Array.isArray(leftIndexed)
+    && Array.isArray(rightIndexed)
+    && baseIndexed.every(isObjectRef)
+    && leftIndexed.every(isObjectRef)
+    && rightIndexed.every(isObjectRef)
+  ) {
+    return mergeObjectRefSetThreeWay(baseIndexed, leftIndexed, rightIndexed);
   }
 
   if (
@@ -243,7 +279,11 @@ function mergeObjectRecordThreeWay(base, left, right) {
     right.behavior ?? null,
   );
   const slotsResult = mergeKeyValueMapThreeWay(base.slots ?? {}, left.slots ?? {}, right.slots ?? {});
-  const indexedResult = mergeIndexedArrayThreeWay(base.indexed, left.indexed, right.indexed);
+  const isProjectLinkageSet =
+    isObjectRef(base.shape) && base.shape.objectId === 'lagrange-project/project/v1';
+  const indexedResult = mergeIndexedArrayThreeWay(base.indexed, left.indexed, right.indexed, {
+    asObjectRefSet: isProjectLinkageSet,
+  });
   const metadataResult = mergeKeyValueMapThreeWay(
     base.metadata ?? {},
     left.metadata ?? {},

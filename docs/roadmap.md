@@ -463,7 +463,7 @@ The native-import path depends on the image graph becoming the authoritative app
 
 - [ ] real Lagrange process-restart durability proof;
 - [ ] multi-node failure/recovery durability tests;
-- [ ] logical snapshot/revision frontiers beyond the first `GraphImageService.frontier()` seam;
+- [x] logical snapshot/revision frontiers beyond the first `GraphImageService.frontier()` seam (`createBranch`, `getBranch`, `listBranches`, `advanceBranch`, `deleteBranch`, `forkImageFromFrontier`, `forkImageFromBranch`, `diffBranches`, and `mergeBranches` in `src/graph/branches.js`, proven in `test/branches-working-frontier.test.js`);
 - [x] revision-aware reads (`reconstructImageRecordsAtFrontier` and `diffProjectAtFrontiers` in `src/graph/diff.js` and `src/project/diff.js`, proven in `test/image-project-diff.test.js`);
 - [x] indexed graph reachability and derivation lookup (`buildImageGraphIndex`, `computeReachableImageClosure`, `findOutgoingReferences`, `findIncomingReferences`, `findDerivedArtifacts`, `findArtifactSources`, `findArtifactDependents`, and `findArtifactsByLogicalPath` in `src/graph/reachability.js`, proven in `test/graph-reachability-gc.test.js`);
 - [x] garbage-collection rules respecting history and pinned refs (`discoverDefaultImageRoots`, `planImageGarbageCollection`, `collectUnreachableImageRecords`, and `ImageService.sweepRecords` in `src/graph/reachability.js` and `src/image/graph-image-service.js`, proven in `test/graph-reachability-gc.test.js`);
@@ -483,7 +483,7 @@ Project remains image-level because it is useful without a graphical environment
 - [ ] use Projects/releases as the complete closure for the M5 imported application;
 - [ ] code + notes + tests + data + work items;
 - [ ] nested/related Project and namespace conventions;
-- [ ] branch/working-frontier semantics;
+- [x] branch/working-frontier semantics (`src/graph/branches.js` and `src/project/branches.js`: `createBranch`, `advanceBranch`, `forkImageFromBranch`, `diffBranches`, `mergeBranches`, `diffProjectBranches`, `mergeProjectBranches`, and authorized branch seams, proven in `test/branches-working-frontier.test.js`);
 - [x] object/Project diff representation (`src/graph/diff.js` and `src/project/diff.js`: `diffImageRecords`, `diffGraphBundles`, `diffProjectDescriptors`, `diffProjectReleases`, `authorizedDiffProjects`, and `diffProjectAtFrontiers`, proven in `test/image-project-diff.test.js`);
 - [x] merge semantics and conflict data model (`src/graph/merge.js` and `src/project/merge.js`: `mergeImageRecords`, `mergeImageFrontiers`, `applyImageMerge`, `mergeProjectDescriptors`, `mergeProjectReleases`, `mergeProjectAtFrontiers`, and `authorizedMergeProjects`, proven in `test/image-project-merge.test.js`);
 - [ ] Git/file import/export as projection rather than canonical storage;
@@ -498,7 +498,7 @@ Lagrange Object Environment owns Project browsers, import/progress interaction, 
 Project collaboration and imported-application evolution may expose generic primitives that should be reusable outside either concern:
 
 - [x] graph/frontier diffs independent of one Project UI (`diffImageRecords`, `diffImageFrontiers`, and `diffGraphBundles` in `src/graph/diff.js`, proven in `test/image-project-diff.test.js`);
-- [ ] branch/working-frontier primitives useful to headless clients;
+- [x] branch/working-frontier primitives useful to headless clients (`createBranch`, `getBranch`, `listBranches`, `advanceBranch`, `deleteBranch`, `forkImageFromFrontier`, `forkImageFromBranch`, `diffBranches`, `mergeBranches`, `authorizedCreateBranch`, `authorizedReadBranch`, `authorizedAdvanceBranch`, `authorizedDiffBranches`, `authorizedMergeBranches`, `diffProjectBranches`, `mergeProjectBranches`, and `authorizedDiffProjectBranches` in `src/graph/branches.js` and `src/project/branches.js`, proven in `test/branches-working-frontier.test.js`);
 - [x] merge/conflict primitives that stay language/UI neutral (`mergeImageRecords`, `mergeImageFrontiers`, `applyImageMerge`, and `MERGE_CONFLICT_KINDS` in `src/graph/merge.js`, proven in `test/image-project-merge.test.js`);
 - [x] Shape/class evolution primitives only when a real imported application requires them (`buildShapeSlotMigrationPlan`, `migrateObjectRecordToShape`, `planImageShapeMigration`, `migrateImageObjectsToShape` in `src/object/migration.js` and `evolveSmalltalkClassShape` in `src/language/smalltalk-class-builder.js`, proven in `test/shape-object-migration.test.js`).
 
