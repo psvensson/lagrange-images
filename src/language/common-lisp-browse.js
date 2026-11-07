@@ -3,11 +3,13 @@ import {
   OBJECT_WRITE_OPERATION,
   objectResource,
 } from '../authority/object-resource.js';
-import {objectRef} from '../value/index.js';
+import {VALUE_KIND, isObjectRef, objectRef} from '../value/index.js';
 import {
   COMMON_LISP_NAMESPACE_ID,
+  COMMON_LISP_SYSTEM_V0,
   installCommonLispProgram,
   installCommonLispSystem,
+  installCommonLispSystemFromArtifact,
   listCommonLispNamespaceBindings,
   parseCommonLispDefsystem,
   readCommonLispClassDefinition,
@@ -460,6 +462,104 @@ async function authorizedInstallCommonLispSystem({
   });
 }
 
+async function authorizeSystemArtifactGraph({
+  images,
+  imageId,
+  namespaceId,
+  artifactId,
+  require,
+  visited = new Set(),
+}) {
+  if (visited.has(artifactId)) return;
+  visited.add(artifactId);
+
+  require(readDemand(imageId, artifactId));
+
+  const artifact = await images.getCodeArtifact(imageId, artifactId);
+  if (!artifact || artifact.representation !== COMMON_LISP_SYSTEM_V0 || artifact.content?.kind !== VALUE_KIND.TEXT) {
+    throw new TypeError(`CodeArtifact ${imageId}/${artifactId} is not a ${COMMON_LISP_SYSTEM_V0} artifact`);
+  }
+  const rawSysDef = JSON.parse(artifact.content.value);
+  const sysName = requiredText(rawSysDef?.name, 'Common Lisp system name').toUpperCase();
+  require({
+    operation: COMMON_LISP_DEFINITION_WRITE_OPERATION,
+    resource: commonLispDefinitionResource(imageId, COMMON_LISP_DEFINITION_KIND.SYSTEM, sysName, {namespaceId}),
+  });
+
+  for (const dep of artifact.dependencies ?? []) {
+    const role = typeof dep?.role === 'string' ? dep.role : '';
+    const depRef = dep?.artifact;
+    if (!isObjectRef(depRef) || depRef.imageId !== imageId) continue;
+    if (role.startsWith('system:')) {
+      await authorizeSystemArtifactGraph({
+        images,
+        imageId,
+        namespaceId,
+        artifactId: depRef.objectId,
+        require,
+        visited,
+      });
+    } else if (role.startsWith('component:')) {
+      require(readDemand(imageId, depRef.objectId));
+    }
+  }
+}
+
+async function authorizedInstallCommonLispSystemFromArtifact({
+  images,
+  compilation = null,
+  runtime = null,
+  imageId,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+  systemArtifact,
+  lane = 'neutral',
+  require,
+} = {}) {
+  requiredText(imageId, 'imageId');
+  requiredText(namespaceId, 'namespaceId');
+  const artifactId = typeof systemArtifact === 'string'
+    ? systemArtifact
+    : isObjectRef(systemArtifact)
+      ? systemArtifact.objectId
+      : '';
+  requiredText(artifactId, 'authorizedInstallCommonLispSystemFromArtifact systemArtifact');
+  if (isObjectRef(systemArtifact) && systemArtifact.imageId !== imageId) {
+    throw new TypeError(
+      `Common Lisp system artifact ${systemArtifact.imageId}/${artifactId} does not belong to image ${imageId}`,
+    );
+  }
+  assertRequire(require, 'authorizedInstallCommonLispSystemFromArtifact');
+
+  require(writeDemand(imageId, namespaceId));
+
+  const effectiveImages = images ?? runtime?.images;
+  await authorizeSystemArtifactGraph({
+    images: effectiveImages,
+    imageId,
+    namespaceId,
+    artifactId,
+    require,
+  });
+
+  const installed = await installCommonLispSystemFromArtifact({
+    images: effectiveImages,
+    compilation: compilation ?? runtime?.compilation ?? null,
+    runtime,
+    imageId,
+    systemArtifact: objectRef(imageId, artifactId),
+    lane,
+  });
+
+  return Object.freeze({
+    installed: true,
+    namespace: objectRef(imageId, namespaceId),
+    system: installed.system.name,
+    version: installed.system.version,
+    dependsOn: installed.system.dependsOn,
+    loadOrder: installed.loadOrder,
+  });
+}
+
 async function authorizedReplaceCommonLispDefinition({
   images,
   compilation = null,
@@ -532,5 +632,6 @@ export {
   authorizedDescribeCommonLispNamespace,
   authorizedInstallCommonLispProgram,
   authorizedInstallCommonLispSystem,
+  authorizedInstallCommonLispSystemFromArtifact,
   authorizedReplaceCommonLispDefinition,
 };
