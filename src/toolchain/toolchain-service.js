@@ -1,13 +1,32 @@
 import {TupleMap, TupleSet} from '../support/tuple-map.js';
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {normalizeDerivationKeyMaterial} from '../compilation/derivation-cache.js';
 import {normalizeArtifactDependencies, normalizeLogicalPath} from '../execution/model.js';
-import {normalizeMetadata} from '../object/model.js';
-import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
+import {SHAPE_INDEXED, normalizeMetadata} from '../object/model.js';
+import {canonicalizeValue, isObjectRef, objectRef, textValue} from '../value/index.js';
 import {createToolchainDerivationDescriptor} from './derivation-cache.js';
 import {ToolchainProviderRegistry, normalizeProviderId} from './provider-registry.js';
 
 const TOOLCHAIN_PROVIDER_PROTOCOL_V0 = 'lagrange-toolchain-provider/v0';
+const TOOLCHAIN_DERIVATION_INDEX_SHAPE_ID = 'lagrange-toolchain/derivation-index-shape/v1';
+const TOOLCHAIN_DERIVATION_INDEX_V1 = 'lagrange-toolchain-derivation-index/v1';
+
+const INDEX_SLOT = Object.freeze({
+  providerId: 'toolchain-index-provider-id',
+  toolchainIdentity: 'toolchain-index-identity',
+  derivationKey: 'toolchain-index-derivation-key',
+  entriesJson: 'toolchain-index-entries-json',
+});
+
+function toolchainDerivationIndexObjectId({providerId, toolchainIdentity, derivationKey} = {}) {
+  const pid = requiredText(providerId, 'providerId');
+  const tid = requiredText(toolchainIdentity, 'toolchainIdentity');
+  const dkey = requiredText(derivationKey, 'derivationKey');
+  const digest = createHash('sha256')
+    .update(JSON.stringify([TOOLCHAIN_DERIVATION_INDEX_V1, pid, tid, dkey]))
+    .digest('hex');
+  return `lagrange-toolchain/derivation-index/v1/${digest}`;
+}
 
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be a non-empty string`);
@@ -202,6 +221,205 @@ function requestedOutputIdsMatch(candidate, requestedOutputIds) {
   return Object.freeze({matches: true, unknownName: null});
 }
 
+function supportsDurableIndexObjects(images) {
+  return (
+    images
+    && typeof images.getObject === 'function'
+    && typeof images.putObject === 'function'
+    && typeof images.getShape === 'function'
+    && typeof images.putShape === 'function'
+  );
+}
+
+async function ensureToolchainDerivationIndexShape(images, imageId) {
+  const existing = await images.getShape(imageId, TOOLCHAIN_DERIVATION_INDEX_SHAPE_ID);
+  if (!existing) {
+    await images.putShape(imageId, {
+      id: TOOLCHAIN_DERIVATION_INDEX_SHAPE_ID,
+      slots: [
+        {id: INDEX_SLOT.providerId, name: 'providerId'},
+        {id: INDEX_SLOT.toolchainIdentity, name: 'toolchainIdentity'},
+        {id: INDEX_SLOT.derivationKey, name: 'derivationKey'},
+        {id: INDEX_SLOT.entriesJson, name: 'entriesJson'},
+      ],
+      indexed: SHAPE_INDEXED.VALUES,
+    });
+  }
+  return objectRef(imageId, TOOLCHAIN_DERIVATION_INDEX_SHAPE_ID);
+}
+
+async function readToolchainDerivationIndexEntry({
+  images,
+  imageId,
+  providerId,
+  toolchainIdentity,
+  derivationKey,
+} = {}) {
+  if (!supportsDurableIndexObjects(images)) return null;
+  const objectId = toolchainDerivationIndexObjectId({
+    providerId,
+    toolchainIdentity,
+    derivationKey,
+  });
+  const record = await images.getObject(imageId, objectId);
+  if (!record || record.shape?.objectId !== TOOLCHAIN_DERIVATION_INDEX_SHAPE_ID) {
+    return null;
+  }
+  const rawJson = record.slots?.[INDEX_SLOT.entriesJson]?.value;
+  if (typeof rawJson !== 'string') return null;
+  let results;
+  try {
+    results = JSON.parse(rawJson);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(results)) return null;
+  return deepFreeze({
+    format: TOOLCHAIN_DERIVATION_INDEX_V1,
+    objectId,
+    imageId,
+    providerId: record.slots?.[INDEX_SLOT.providerId]?.value ?? providerId,
+    toolchainIdentity: record.slots?.[INDEX_SLOT.toolchainIdentity]?.value ?? toolchainIdentity,
+    derivationKey: record.slots?.[INDEX_SLOT.derivationKey]?.value ?? derivationKey,
+    results,
+    referencedArtifacts: [...(record.indexed ?? [])],
+  });
+}
+
+async function recordToolchainDerivationIndexResult({
+  images,
+  imageId,
+  providerId,
+  toolchainIdentity,
+  derivationKey,
+  resultId,
+  storedOutputs,
+}) {
+  if (!supportsDurableIndexObjects(images)) return null;
+  const shapeRef = await ensureToolchainDerivationIndexShape(images, imageId);
+  const objectId = toolchainDerivationIndexObjectId({
+    providerId,
+    toolchainIdentity,
+    derivationKey,
+  });
+  const existing = await images.getObject(imageId, objectId);
+  let results = [];
+  if (existing && typeof existing.slots?.[INDEX_SLOT.entriesJson]?.value === 'string') {
+    try {
+      const parsed = JSON.parse(existing.slots[INDEX_SLOT.entriesJson].value);
+      if (Array.isArray(parsed)) results = parsed.filter((r) => r?.resultId !== resultId);
+    } catch {
+      results = [];
+    }
+  }
+  results.push({
+    resultId,
+    outputs: storedOutputs.map((out, index) => ({
+      name: out.name,
+      index,
+      artifactId: out.artifact.id,
+    })),
+  });
+  results.sort((a, b) => (a.resultId < b.resultId ? -1 : a.resultId > b.resultId ? 1 : 0));
+
+  const indexedRefs = [];
+  const seenIds = new Set();
+  for (const res of results) {
+    for (const out of res.outputs ?? []) {
+      if (typeof out.artifactId === 'string' && !seenIds.has(out.artifactId)) {
+        seenIds.add(out.artifactId);
+        indexedRefs.push(objectRef(imageId, out.artifactId));
+      }
+    }
+  }
+
+  await images.putObject(
+    imageId,
+    {
+      id: objectId,
+      shape: shapeRef,
+      behavior: null,
+      slots: {
+        [INDEX_SLOT.providerId]: textValue(providerId),
+        [INDEX_SLOT.toolchainIdentity]: textValue(toolchainIdentity),
+        [INDEX_SLOT.derivationKey]: textValue(derivationKey),
+        [INDEX_SLOT.entriesJson]: textValue(JSON.stringify(results)),
+      },
+      indexed: indexedRefs,
+      metadata: {toolchain: 'derivation-index'},
+    },
+    existing ? {expectedVersion: existing._version} : {expectedVersion: 0},
+  );
+  return objectId;
+}
+
+async function rebuildToolchainDerivationIndex({images, imageId} = {}) {
+  requiredText(imageId, 'imageId');
+  if (typeof images?.listCodeArtifacts !== 'function') {
+    throw new TypeError('rebuildToolchainDerivationIndex requires images.listCodeArtifacts');
+  }
+  const artifacts = await images.listCodeArtifacts(imageId);
+  const byTuple = new Map();
+  for (const artifact of artifacts) {
+    const meta = artifact.metadata ?? {};
+    if (
+      typeof meta.toolchainProviderId !== 'string'
+      || typeof meta.toolchainIdentity !== 'string'
+      || meta.toolchainProtocol !== TOOLCHAIN_PROVIDER_PROTOCOL_V0
+      || typeof meta.toolchainDerivationKey !== 'string'
+      || typeof meta.toolchainResultId !== 'string'
+    ) {
+      continue;
+    }
+    const tupleKey = JSON.stringify([
+      meta.toolchainProviderId,
+      meta.toolchainIdentity,
+      meta.toolchainDerivationKey,
+    ]);
+    let groupMap = byTuple.get(tupleKey);
+    if (!groupMap) {
+      groupMap = {
+        providerId: meta.toolchainProviderId,
+        toolchainIdentity: meta.toolchainIdentity,
+        derivationKey: meta.toolchainDerivationKey,
+        results: new Map(),
+      };
+      byTuple.set(tupleKey, groupMap);
+    }
+    const list = groupMap.results.get(meta.toolchainResultId) ?? [];
+    list.push(artifact);
+    groupMap.results.set(meta.toolchainResultId, list);
+  }
+
+  const indexedObjectIds = [];
+  for (const entry of byTuple.values()) {
+    for (const [resultId, groupArtifacts] of entry.results.entries()) {
+      const provenance = groupArtifacts[0]?.derivedFrom ?? [];
+      const candidate = completeCachedResult(groupArtifacts, provenance);
+      if (!candidate) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const objId = await recordToolchainDerivationIndexResult({
+        images,
+        imageId,
+        providerId: entry.providerId,
+        toolchainIdentity: entry.toolchainIdentity,
+        derivationKey: entry.derivationKey,
+        resultId,
+        storedOutputs: candidate.outputs,
+      });
+      if (objId && !indexedObjectIds.includes(objId)) {
+        indexedObjectIds.push(objId);
+      }
+    }
+  }
+  return deepFreeze({
+    format: TOOLCHAIN_DERIVATION_INDEX_V1,
+    imageId,
+    indexedCount: indexedObjectIds.length,
+    indexObjectIds: indexedObjectIds,
+  });
+}
+
 async function findReusableToolchainResult({
   images,
   imageId,
@@ -211,6 +429,39 @@ async function findReusableToolchainResult({
   provenance,
   requestedOutputIds,
 }) {
+  let unknownName = null;
+
+  // 1. O(1) indexed durable lookup in the image before scanning listCodeArtifacts
+  const indexEntry = await readToolchainDerivationIndexEntry({
+    images,
+    imageId,
+    providerId,
+    toolchainIdentity,
+    derivationKey,
+  });
+  if (indexEntry && indexEntry.results.length > 0) {
+    for (const res of indexEntry.results) {
+      const groupArtifacts = [];
+      let missing = false;
+      for (const out of res.outputs ?? []) {
+        // eslint-disable-next-line no-await-in-loop
+        const art = await images.getCodeArtifact(imageId, out.artifactId);
+        if (!art) {
+          missing = true;
+          break;
+        }
+        groupArtifacts.push(art);
+      }
+      if (missing) continue;
+      const candidate = completeCachedResult(groupArtifacts, provenance);
+      if (!candidate) continue;
+      const match = requestedOutputIdsMatch(candidate, requestedOutputIds);
+      if (match.matches) return candidate;
+      if (match.unknownName !== null) unknownName = match.unknownName;
+    }
+  }
+
+  // 2. Fallback to listCodeArtifacts for unindexed / manually seeded artifacts
   if (typeof images.listCodeArtifacts !== 'function') {
     throw new TypeError('toolchain result reuse requires images.listCodeArtifacts');
   }
@@ -228,7 +479,6 @@ async function findReusableToolchainResult({
     groups.set(metadata.toolchainResultId, group);
   }
 
-  let unknownName = null;
   for (const resultId of [...groups.keys()].sort()) {
     const candidate = completeCachedResult(groups.get(resultId), provenance);
     if (!candidate) continue;
@@ -368,6 +618,18 @@ class ToolchainService {
       storedOutputs.push(Object.freeze({name: output.name, artifact}));
     }
 
+    if (descriptor && resultId) {
+      await recordToolchainDerivationIndexResult({
+        images: this.images,
+        imageId: outputImageId,
+        providerId: id,
+        toolchainIdentity: descriptor.toolchainIdentity,
+        derivationKey: descriptor.derivationKey,
+        resultId,
+        storedOutputs,
+      });
+    }
+
     return Object.freeze({
       providerId: id,
       toolchainIdentity: provider.identity,
@@ -382,11 +644,16 @@ class ToolchainService {
 }
 
 export {
+  TOOLCHAIN_DERIVATION_INDEX_SHAPE_ID,
+  TOOLCHAIN_DERIVATION_INDEX_V1,
   TOOLCHAIN_PROVIDER_PROTOCOL_V0,
   ToolchainService,
   completeCachedResult,
   findReusableToolchainResult,
   normalizeProviderResult,
+  readToolchainDerivationIndexEntry,
+  rebuildToolchainDerivationIndex,
   resolveArtifactGraph,
   toolchainArtifactSnapshot,
+  toolchainDerivationIndexObjectId,
 };
