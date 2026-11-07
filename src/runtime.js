@@ -296,6 +296,14 @@ export {
   listBranches,
   mergeBranches,
 } from './graph/branches.js';
+export {
+  MUTABLE_DOMAIN_CLOSURE_V1,
+  PARTITION_BENCHMARK_REPORT_V1,
+  WORKLOAD_BENCHMARK_REPORT_V1,
+  discoverMutableDomainClosure,
+  evaluateImagePartitioningAndIndexing,
+  measureComputeNearObjectWorkload,
+} from './graph/workload-benchmark.js';
 export {ImageService};
 export * from './execution/executor.js';
 export * from './execution/model.js';

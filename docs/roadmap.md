@@ -437,7 +437,7 @@ transport, membership, replication or consensus:
 - [x] distributed routing for native Blocks and explicitly retained foreign/component boundaries (`selectBlockExecutionNode`, `dispatchApply`, and `relocateBlockClosure` in `src/graph/placement.js`, proven in `test/distributed-callable-placement.test.js`);
 - [x] explicit failure/retry/idempotency semantics (`idempotencyKey` operation deduplication, `PlacementIdempotencyConflictError`, durable relocation replay convergence, and `retry` with locator invalidation in `src/graph/placement.js`, proven in `test/distributed-recovery-idempotency-wasm.test.js`);
 - [x] durable deployment/reconciliation contract for intentionally foreign runtime definitions (`FOREIGN_RUNTIME_PLACEMENT_RECEIPT_V1` and `reconcileForeignRuntimePlacement` in `src/graph/placement.js`, proven in `test/distributed-recovery-idempotency-wasm.test.js`);
-- [ ] measured `ctx.call()` / compute-near-object wins using the imported application as a realistic workload.
+- [x] measured `ctx.call()` / compute-near-object wins using the imported application as a realistic workload (`WORKLOAD_BENCHMARK_REPORT_V1`, `MUTABLE_DOMAIN_CLOSURE_V1`, `discoverMutableDomainClosure`, and `measureComputeNearObjectWorkload` in `src/graph/workload-benchmark.js`, proven on the M5 Life workload in `test/m5-project-closure-workload-benchmark.test.js`).
 
 **Cross-project convergence boundary (design direction, not implemented):**
 M6 must consume Lagrange's existing distributed invocation and host-capability
@@ -468,7 +468,7 @@ The native-import path depends on the image graph becoming the authoritative app
 - [x] indexed graph reachability and derivation lookup (`buildImageGraphIndex`, `computeReachableImageClosure`, `findOutgoingReferences`, `findIncomingReferences`, `findDerivedArtifacts`, `findArtifactSources`, `findArtifactDependents`, and `findArtifactsByLogicalPath` in `src/graph/reachability.js`, proven in `test/graph-reachability-gc.test.js`);
 - [x] garbage-collection rules respecting history and pinned refs (`discoverDefaultImageRoots`, `planImageGarbageCollection`, `collectUnreachableImageRecords`, and `ImageService.sweepRecords` in `src/graph/reachability.js` and `src/image/graph-image-service.js`, proven in `test/graph-reachability-gc.test.js`);
 - [x] object migration between immutable Shapes when real imported class evolution requires it (`src/object/migration.js`, `evolveSmalltalkClassShape` in `src/language/smalltalk-class-builder.js`, and Common Lisp `defstruct` / CLOS `defclass` shape evolution in `src/language/common-lisp.js`, proven in `test/shape-object-migration.test.js`);
-- [ ] measure partitioning/index choices on large application images.
+- [x] measure partitioning/index choices on large application images (`PARTITION_BENCHMARK_REPORT_V1` and `evaluateImagePartitioningAndIndexing` in `src/graph/workload-benchmark.js`, proven on the full native M5 Life application image in `test/m5-project-closure-workload-benchmark.test.js`).
 
 Already established: generic graph bundle export/import (ADR 0074), portable Project release materialization (ADR 0075) and durable managed Project installation/recovery (ADR 0076).
 
@@ -480,7 +480,7 @@ Project remains image-level because it is useful without a graphical environment
 - [x] first-class package/binary/component/runtime relationships;
 - [x] manifest/lock/runtime-image artifacts as Project members;
 - [x] mixed native/foreign implementation Projects and portable managed install/recovery;
-- [ ] use Projects/releases as the complete closure for the M5 imported application;
+- [x] use Projects/releases as the complete closure for the M5 imported application (`captureCurrentGraphProjectRelease` -> `installManagedProjectRelease` packaging M5 Life code, semantic export, Project notes, work items, and in-image test cases into one portable release closure, proven in `test/m5-project-closure-workload-benchmark.test.js`);
 - [x] code + notes + tests + data + work items (`PROJECT_MEMBER_ROLES`, `classifyProjectMembers`, `createProjectNote`, `readProjectNote`, `createProjectWorkItem`, `readProjectWorkItem`, `updateProjectWorkItem`, `listProjectWorkItems`, `createProjectTestCase`, `runProjectTests`, and `authorizedRunProjectTests` in `src/project/conventions.js`, proven in `test/project-conventions-tests-work-items.test.js`);
 - [x] nested/related Project and namespace conventions (`PROJECT_GRAPH_V1`, `addSubprojectMember`, `addRelatedProjectMember`, `addProjectNamespaceMember`, `resolveNestedProjectGraph`, and `authorizedResolveNestedProjectGraph` in `src/project/conventions.js`, proven in `test/project-conventions-tests-work-items.test.js`);
 - [x] branch/working-frontier semantics (`src/graph/branches.js` and `src/project/branches.js`: `createBranch`, `advanceBranch`, `forkImageFromBranch`, `diffBranches`, `mergeBranches`, `diffProjectBranches`, `mergeProjectBranches`, and authorized branch seams, proven in `test/branches-working-frontier.test.js`);

@@ -286,18 +286,21 @@ async function createProjectNote({
   });
 }
 
-async function readProjectNote({images, imageId, projectId, noteId} = {}) {
+async function readProjectNote({images, imageId, projectId = null, noteId = null, objectId = null} = {}) {
   requiredText(imageId, 'imageId');
-  requiredText(projectId, 'projectId');
-  requiredText(noteId, 'noteId');
-  const id = projectNoteObjectId(projectId, noteId);
+  const id = objectId
+    ? requiredText(objectId, 'objectId')
+    : projectNoteObjectId(requiredText(projectId, 'projectId'), requiredText(noteId, 'noteId'));
   const record = await images.getObject(imageId, id);
-  if (!record || record.shape?.objectId !== PROJECT_NOTE_SHAPE_ID) {
+  if (
+    !record
+    || (record.shape?.objectId !== PROJECT_NOTE_SHAPE_ID && record.slots?.[NOTE_SLOT.noteId] === undefined)
+  ) {
     return null;
   }
   return deepFreeze({
-    noteId: record.slots[NOTE_SLOT.noteId]?.value ?? noteId,
-    projectId: record.slots[NOTE_SLOT.projectId]?.value ?? projectId,
+    noteId: record.slots[NOTE_SLOT.noteId]?.value ?? noteId ?? id,
+    projectId: record.slots[NOTE_SLOT.projectId]?.value ?? projectId ?? '',
     title: record.slots[NOTE_SLOT.title]?.value ?? '',
     body: record.slots[NOTE_SLOT.body]?.value ?? '',
     tags: (record.indexed ?? []).map((v) => v.value),
@@ -383,18 +386,21 @@ async function createProjectWorkItem({
   return readProjectWorkItem({images, imageId, projectId, workItemId});
 }
 
-async function readProjectWorkItem({images, imageId, projectId, workItemId} = {}) {
+async function readProjectWorkItem({images, imageId, projectId = null, workItemId = null, objectId = null} = {}) {
   requiredText(imageId, 'imageId');
-  requiredText(projectId, 'projectId');
-  requiredText(workItemId, 'workItemId');
-  const id = projectWorkItemObjectId(projectId, workItemId);
+  const id = objectId
+    ? requiredText(objectId, 'objectId')
+    : projectWorkItemObjectId(requiredText(projectId, 'projectId'), requiredText(workItemId, 'workItemId'));
   const record = await images.getObject(imageId, id);
-  if (!record || record.shape?.objectId !== PROJECT_WORK_ITEM_SHAPE_ID) {
+  if (
+    !record
+    || (record.shape?.objectId !== PROJECT_WORK_ITEM_SHAPE_ID && record.slots?.[WORK_ITEM_SLOT.workItemId] === undefined)
+  ) {
     return null;
   }
   return deepFreeze({
-    workItemId: record.slots[WORK_ITEM_SLOT.workItemId]?.value ?? workItemId,
-    projectId: record.slots[WORK_ITEM_SLOT.projectId]?.value ?? projectId,
+    workItemId: record.slots[WORK_ITEM_SLOT.workItemId]?.value ?? workItemId ?? id,
+    projectId: record.slots[WORK_ITEM_SLOT.projectId]?.value ?? projectId ?? '',
     title: record.slots[WORK_ITEM_SLOT.title]?.value ?? '',
     description: record.slots[WORK_ITEM_SLOT.description]?.value ?? '',
     status: record.slots[WORK_ITEM_SLOT.status]?.value ?? 'open',
@@ -819,7 +825,10 @@ async function executeSingleTestTarget({
   }
 
   // Case 1: Durable ProjectTestCase descriptor object
-  if (record.kind === 'object' && record.shape?.objectId === PROJECT_TEST_CASE_SHAPE_ID) {
+  if (
+    record.kind === 'object'
+    && (record.shape?.objectId === PROJECT_TEST_CASE_SHAPE_ID || record.slots?.[TEST_CASE_SLOT.target] !== undefined)
+  ) {
     const innerTarget = record.slots[TEST_CASE_SLOT.target];
     const lang = record.slots[TEST_CASE_SLOT.languageId]?.value || defaultLanguageId;
     const selector = record.slots[TEST_CASE_SLOT.selector]?.value || '';
