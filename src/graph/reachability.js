@@ -48,19 +48,19 @@ function isIntrinsicRootRecord(record, {imageRootObjectId = null, preserveSystem
   if (typeof id !== 'string' || id.length === 0) return false;
   if (imageRootObjectId && id === imageRootObjectId) return true;
 
-  // Intrinsic system shapes for Smalltalk, Common Lisp, and Projects.
+  // Intrinsic versioned system/protocol shapes (e.g. `<domain>/<name>/v1`).
   if (
     preserveSystemShapes &&
     record.kind === 'shape' &&
     (id.startsWith('smalltalk/') ||
-      id.startsWith('common-lisp/') ||
       id.startsWith('lagrange-project/') ||
-      id.startsWith('lagrange-project-installation/'))
+      id.startsWith('lagrange-project-installation/') ||
+      (id.includes('/') && /\/v\d+$/.test(id)))
   ) {
     return true;
   }
 
-  // Symmetric Smalltalk kernel, global namespace, interned symbols/characters, and behaviors.
+  // Kernel, global namespace, interned symbols/characters, and behaviors.
   if (
     id === 'smalltalk-kernel/v1' ||
     id === 'smalltalk/kernel' ||
@@ -73,7 +73,8 @@ function isIntrinsicRootRecord(record, {imageRootObjectId = null, preserveSystem
     id === 'smalltalk/symbol-table' ||
     id === 'smalltalk/subclasses' ||
     id.startsWith('smalltalk/symbol/') ||
-    id.startsWith('smalltalk/char/')
+    id.startsWith('smalltalk/char/') ||
+    id.endsWith('/namespace/v1')
   ) {
     return true;
   }
@@ -99,18 +100,19 @@ function isIntrinsicRootRecord(record, {imageRootObjectId = null, preserveSystem
     return true;
   }
 
-  // Common Lisp namespace, sentinels, and system descriptors.
+  // Generic namespace objects, sentinels, and system descriptors.
   if (
-    id === 'common-lisp/namespace/v1' ||
-    id === 'common-lisp/hash-table-tombstone/v1' ||
-    id === 'common-lisp/unsupplied/v1' ||
-    id === 'common-lisp/nil' ||
-    id === 'common-lisp/t'
+    record.kind === 'object' &&
+    (record.shape?.objectId === 'smalltalk/global-namespace-shape/v2' ||
+      record.shape?.objectId === 'smalltalk/global-namespace-shape/v1')
   ) {
     return true;
   }
-  const clMeta = record.metadata?.commonLisp;
-  if (clMeta === 'sentinel' || clMeta === 'defsystem') {
+  if (
+    record.metadata &&
+    typeof record.metadata === 'object' &&
+    Object.values(record.metadata).some((val) => val === 'sentinel' || val === 'defsystem')
+  ) {
     return true;
   }
 
