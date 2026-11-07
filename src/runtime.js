@@ -237,6 +237,15 @@ export {
   normalizeRecordForDiff,
   reconstructImageRecordsAtFrontier,
 } from './graph/diff.js';
+export {
+  IMAGE_RECORD_MERGE_V1,
+  MERGE_CONFLICT_KINDS,
+  MergeConflictError,
+  applyImageMerge,
+  mergeImageFrontiers,
+  mergeImageRecords,
+  rehomeRecordToImage,
+} from './graph/merge.js';
 export {ImageService};
 export * from './execution/executor.js';
 export * from './execution/model.js';

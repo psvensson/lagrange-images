@@ -6,3 +6,4 @@ export * from './release-installation.js';
 export * from './installation-state.js';
 export * from './managed-installation.js';
 export * from './diff.js';
+export * from './merge.js';

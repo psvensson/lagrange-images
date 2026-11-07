@@ -485,9 +485,9 @@ Project remains image-level because it is useful without a graphical environment
 - [ ] nested/related Project and namespace conventions;
 - [ ] branch/working-frontier semantics;
 - [x] object/Project diff representation (`src/graph/diff.js` and `src/project/diff.js`: `diffImageRecords`, `diffGraphBundles`, `diffProjectDescriptors`, `diffProjectReleases`, `authorizedDiffProjects`, and `diffProjectAtFrontiers`, proven in `test/image-project-diff.test.js`);
-- [ ] merge semantics and conflict data model;
+- [x] merge semantics and conflict data model (`src/graph/merge.js` and `src/project/merge.js`: `mergeImageRecords`, `mergeImageFrontiers`, `applyImageMerge`, `mergeProjectDescriptors`, `mergeProjectReleases`, `mergeProjectAtFrontiers`, and `authorizedMergeProjects`, proven in `test/image-project-merge.test.js`);
 - [ ] Git/file import/export as projection rather than canonical storage;
-- [ ] multi-author conflict API/data, without prescribing UI.
+- [x] multi-author conflict API/data, without prescribing UI (`MERGE_CONFLICT_KINDS`, `PROJECT_MERGE_CONFLICT_KINDS`, `MergeConflictError`, and structured conflict resolution in `src/graph/merge.js` and `src/project/merge.js`);
 
 Project membership remains organization, not authority.
 
@@ -499,7 +499,7 @@ Project collaboration and imported-application evolution may expose generic prim
 
 - [x] graph/frontier diffs independent of one Project UI (`diffImageRecords`, `diffImageFrontiers`, and `diffGraphBundles` in `src/graph/diff.js`, proven in `test/image-project-diff.test.js`);
 - [ ] branch/working-frontier primitives useful to headless clients;
-- [ ] merge/conflict primitives that stay language/UI neutral;
+- [x] merge/conflict primitives that stay language/UI neutral (`mergeImageRecords`, `mergeImageFrontiers`, `applyImageMerge`, and `MERGE_CONFLICT_KINDS` in `src/graph/merge.js`, proven in `test/image-project-merge.test.js`);
 - [ ] Shape/class evolution primitives only when a real imported application requires them.
 
 Do not move semantic state into the UI merely because the first pressure came from a UI. Do not add a storage-level Project record kind merely because Project is image-level; ordinary objects/refs remain the default.
