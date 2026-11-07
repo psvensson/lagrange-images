@@ -73,7 +73,33 @@ async function putWithHistory(backend, {
   });
 }
 
-// --- atomic heterogeneous record creation (bead lagrange-images-595) ----------
+async function writeRecordWithResidency(service, imageId, record, {expectedVersion, at}) {
+  if (
+    typeof service.locator?.hasPeers === 'function' &&
+    service.locator.hasPeers() &&
+    typeof service.remoteResolution?.writeRecordAt === 'function'
+  ) {
+    assertNoTransientIdentity(records(imageId), record.id, record, {keyIsObjectId: true});
+    const ref = objectRef(imageId, record.id);
+    const residency = await service.locator.locate(ref);
+    if (!residency) throw new TypeError(`image not found: ${imageId}`);
+    return await service.remoteResolution.writeRecordAt(ref, residency, {
+      value: record,
+      expectedVersion,
+      stream: history(imageId),
+      event: (saved) => putEventForRecord(saved, at),
+    });
+  }
+  return await putWithHistory(service.backend, {
+    collection: records(imageId),
+    keyIsObjectId: true,
+    key: record.id,
+    value: record,
+    expectedVersion,
+    stream: history(imageId),
+    event: (saved) => putEventForRecord(saved, at),
+  });
+}
 //
 // ONE owner for "N durable records + N history events -> one backend transaction".
 // Both the existing single-record put paths and the heterogeneous batch route
@@ -297,16 +323,7 @@ class ImageService {
     // so the single-record path and the heterogeneous batch can never drift apart.
     const shape = prepareCandidateRecord('shape', imageId, input, {at, mintId: randomUUID});
     await validateCandidateRecord(shape, {resolve: () => null, resolveKind: () => null, existing: null});
-    const stored = await putWithHistory(this.backend, {
-      collection: records(imageId),
-      keyIsObjectId: true,
-      key: shape.id,
-      value: shape,
-      expectedVersion: 0,
-      stream: history(imageId),
-      event: (saved) => putEventForRecord(saved, at),
-    });
-    return stored;
+    return await writeRecordWithResidency(this, imageId, shape, {expectedVersion: 0, at});
   }
 
   async getRecord(imageId, recordId) {
@@ -421,32 +438,7 @@ class ImageService {
       resolveKind: async (ref) => (await this.getRecord(ref.imageId, ref.objectId))?.kind ?? null,
       existing: null,
     });
-    if (
-      typeof this.locator.hasPeers === 'function' &&
-      this.locator.hasPeers() &&
-      typeof this.remoteResolution.writeRecordAt === 'function'
-    ) {
-      assertNoTransientIdentity(records(imageId), object.id, object, {keyIsObjectId: true});
-      const ref = objectRef(imageId, object.id);
-      const residency = await this.locator.locate(ref);
-      if (!residency) throw new TypeError(`image not found: ${imageId}`);
-      return await this.remoteResolution.writeRecordAt(ref, residency, {
-        value: object,
-        expectedVersion,
-        stream: history(imageId),
-        event: (saved) => putEventForRecord(saved, at),
-      });
-    }
-    const stored = await putWithHistory(this.backend, {
-      collection: records(imageId),
-      keyIsObjectId: true,
-      key: object.id,
-      value: object,
-      expectedVersion,
-      stream: history(imageId),
-      event: (saved) => putEventForRecord(saved, at),
-    });
-    return stored;
+    return await writeRecordWithResidency(this, imageId, object, {expectedVersion, at});
   }
 
   // ADR 0067. N create specs, one transaction, all-or-none. Each element goes through the same
@@ -572,16 +564,7 @@ class ImageService {
       resolveKind: async (ref) => (await this.getRecord(ref.imageId, ref.objectId))?.kind ?? null,
       existing: null,
     });
-    const stored = await putWithHistory(this.backend, {
-      collection: records(imageId),
-      keyIsObjectId: true,
-      key: artifact.id,
-      value: artifact,
-      expectedVersion: 0,
-      stream: history(imageId),
-      event: (saved) => putEventForRecord(saved, at),
-    });
-    return stored;
+    return await writeRecordWithResidency(this, imageId, artifact, {expectedVersion: 0, at});
   }
 
   async getCodeArtifact(imageId, artifactId) {
@@ -603,16 +586,10 @@ class ImageService {
       resolveKind: async (ref) => (await this.getRecord(ref.imageId, ref.objectId))?.kind ?? null,
       existing: current,
     });
-    const stored = await putWithHistory(this.backend, {
-      collection: records(imageId),
-      keyIsObjectId: true,
-      key: environment.id,
-      value: environment,
+    return await writeRecordWithResidency(this, imageId, environment, {
       expectedVersion: expectedVersion ?? current?._version ?? 0,
-      stream: history(imageId),
-      event: (saved) => putEventForRecord(saved, at),
+      at,
     });
-    return stored;
   }
 
   async getLexicalEnvironment(imageId, environmentId) {
@@ -633,16 +610,7 @@ class ImageService {
       resolveKind: async (ref) => (await this.getRecord(ref.imageId, ref.objectId))?.kind ?? null,
       existing: null,
     });
-    const stored = await putWithHistory(this.backend, {
-      collection: records(imageId),
-      keyIsObjectId: true,
-      key: block.id,
-      value: block,
-      expectedVersion: 0,
-      stream: history(imageId),
-      event: (saved) => putEventForRecord(saved, at),
-    });
-    return stored;
+    return await writeRecordWithResidency(this, imageId, block, {expectedVersion: 0, at});
   }
 
   async getBlock(imageId, blockId) {

@@ -432,9 +432,9 @@ remote resolution as an interaction owner over Lagrange's routing — and fixes 
 transport, membership, replication or consensus:
 
 - [x] object locator and placement policy (`src/graph/locator.js`, `src/graph/placement.js`, `src/graph/remote-resolution.js`);
-- [ ] local vs remote call semantics;
+- [x] local vs remote call semantics (`dispatchSend`, `dispatchApply`, `selectExecutionNode`, `selectBlockExecutionNode`, `relocateBlockClosure` in `src/graph/placement.js`, proven in `test/distributed-callable-placement.test.js`);
 - [ ] Lagrange WASM placement;
-- [ ] distributed routing for native Blocks and explicitly retained foreign/component boundaries;
+- [x] distributed routing for native Blocks and explicitly retained foreign/component boundaries (`selectBlockExecutionNode`, `dispatchApply`, and `relocateBlockClosure` in `src/graph/placement.js`, proven in `test/distributed-callable-placement.test.js`);
 - [ ] explicit failure/retry/idempotency semantics;
 - [ ] durable deployment/reconciliation contract for intentionally foreign runtime definitions;
 - [ ] measured `ctx.call()` / compute-near-object wins using the imported application as a realistic workload.
