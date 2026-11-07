@@ -238,6 +238,14 @@ class PlacementPolicy {
     return this;
   }
 
+  getNodeRuntime(nodeId) {
+    return this.#nodes.get(nodeId)?.runtime ?? null;
+  }
+
+  listNodes() {
+    return [...this.#nodes.keys()];
+  }
+
   async #readLiveRecord(ref) {
     if (!isObjectRef(ref)) return null;
     const liveMatches = [];

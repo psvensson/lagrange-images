@@ -8,3 +8,4 @@ export * from './diff.js';
 export * from './merge.js';
 export * from './reachability.js';
 export * from './branches.js';
+export * from './workload-benchmark.js';
