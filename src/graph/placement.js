@@ -1,6 +1,6 @@
 import {assertBackend, assertBackendTransaction} from '../backend/backend-contract.js';
 import {IMAGE_COLLECTION, history, records} from '../image/storage-layout.js';
-import {isObjectRef} from '../value/scalars.js';
+import {isObjectRef, textValue} from '../value/scalars.js';
 import {PER_OBJECT_RESIDENCY, RELOCATED_RECORD_KIND, WHOLE_IMAGE_RESIDENCY} from './locator.js';
 
 function assertNodeId(nodeId, label = 'nodeId') {
@@ -41,6 +41,7 @@ class PlacementPolicy {
     assertNodeId(nodeId);
     const backend = assertBackend(target?.backend ?? target);
     const locator = target?.locator ?? target?.images?.locator ?? null;
+    const runtime = target?.invocations && target?.executor ? target : null;
     if (locator) {
       this.registerLocator(locator);
     }
@@ -49,8 +50,62 @@ class PlacementPolicy {
       existing.locator?.registerPeer?.(nodeId, backend);
       locator?.registerPeer?.(existingId, existing.backend);
     }
-    this.#nodes.set(nodeId, {nodeId, backend, locator});
+    this.#nodes.set(nodeId, {nodeId, backend, locator, runtime});
     return this;
+  }
+
+  async selectExecutionNode(ref) {
+    if (!isObjectRef(ref)) throw new TypeError('selectExecutionNode requires an ObjectRef');
+    const residency = await this.inspectResidency(ref);
+    if (!residency) {
+      throw new TypeError(`unable to locate resident node for ${ref.imageId}/${ref.objectId}`);
+    }
+    return residency.node;
+  }
+
+  async dispatchSend({
+    fromNode = null,
+    receiver,
+    message,
+    arguments: args = [],
+    languageId = 'symmetric-smalltalk',
+    dispatchImage = undefined,
+  } = {}) {
+    if (!isObjectRef(receiver)) throw new TypeError('dispatchSend requires an ObjectRef receiver');
+    if (fromNode !== null) assertNodeId(fromNode, 'fromNode');
+    const targetNodeId = await this.selectExecutionNode(receiver);
+    const target = this.#nodes.get(targetNodeId);
+    if (!target?.runtime) {
+      throw new TypeError(`node ${targetNodeId} has no registered execution runtime`);
+    }
+    const selectorValue = typeof message === 'string' ? textValue(message) : message;
+    const activation = await target.runtime.invocations.sendMessage(
+      {
+        receiver,
+        message: selectorValue,
+        arguments: args,
+        languageId,
+      },
+      {dispatchImage: dispatchImage ?? receiver.imageId},
+    );
+    const value = await target.runtime.executor.execute(activation);
+    return Object.freeze({
+      node: targetNodeId,
+      fromNode,
+      routedRemotely: fromNode !== null && fromNode !== targetNodeId,
+      value,
+    });
+  }
+
+  async relocateObjects({refs, fromNode, toNode} = {}) {
+    if (!Array.isArray(refs) || refs.length === 0) {
+      throw new TypeError('relocateObjects requires a non-empty array of ObjectRefs');
+    }
+    const receipts = [];
+    for (const ref of refs) {
+      receipts.push(await this.relocateObject({ref, fromNode, toNode}));
+    }
+    return Object.freeze(receipts);
   }
 
   async inspectResidency(ref) {

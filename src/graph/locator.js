@@ -6,15 +6,17 @@ const WHOLE_IMAGE_RESIDENCY = 'whole-image/v1';
 const PER_OBJECT_RESIDENCY = 'per-object/v1';
 const RELOCATED_RECORD_KIND = 'relocated';
 const backendByResidency = new WeakMap();
+const remoteByResidency = new WeakMap();
 
 class ObjectResidency {
-  constructor({backend, imageId, kind = WHOLE_IMAGE_RESIDENCY, objectId = undefined}) {
+  constructor({backend, imageId, kind = WHOLE_IMAGE_RESIDENCY, objectId = undefined, remote = false}) {
     this.kind = kind;
     this.imageId = imageId;
     if (kind === PER_OBJECT_RESIDENCY) {
       this.objectId = objectId;
     }
     backendByResidency.set(this, backend);
+    remoteByResidency.set(this, Boolean(remote));
     Object.freeze(this);
   }
 }
@@ -23,6 +25,10 @@ function backendForResidency(residency) {
   const backend = backendByResidency.get(residency);
   if (!backend) throw new TypeError('object residency did not come from the object locator');
   return backend;
+}
+
+function isRemoteResidency(residency) {
+  return Boolean(remoteByResidency.get(residency));
 }
 
 class ObjectLocator {
@@ -94,7 +100,12 @@ class ObjectLocator {
     for (const [, peerBackend] of this.#peers.entries()) {
       const peerImage = await peerBackend.get(IMAGE_COLLECTION, imageId);
       if (peerImage) {
-        const residency = new ObjectResidency({backend: peerBackend, imageId, kind: WHOLE_IMAGE_RESIDENCY});
+        const residency = new ObjectResidency({
+          backend: peerBackend,
+          imageId,
+          kind: WHOLE_IMAGE_RESIDENCY,
+          remote: peerBackend !== this.backend,
+        });
         this.#residencies.set(imageId, residency);
         return residency;
       }
@@ -129,6 +140,7 @@ class ObjectLocator {
               imageId: ref.imageId,
               kind: PER_OBJECT_RESIDENCY,
               objectId: ref.objectId,
+              remote: peerBackend !== this.backend,
             });
             this.#objectResidencies.set(key, residency);
             return residency;
@@ -145,6 +157,7 @@ class ObjectLocator {
           imageId: ref.imageId,
           kind: PER_OBJECT_RESIDENCY,
           objectId: ref.objectId,
+          remote: false,
         });
         this.#objectResidencies.set(key, residency);
         return residency;
@@ -163,6 +176,7 @@ class ObjectLocator {
           imageId: ref.imageId,
           kind: PER_OBJECT_RESIDENCY,
           objectId: ref.objectId,
+          remote: peerBackend !== this.backend,
         });
         this.#objectResidencies.set(key, residency);
         return residency;
@@ -179,4 +193,5 @@ export {
   RELOCATED_RECORD_KIND,
   WHOLE_IMAGE_RESIDENCY,
   backendForResidency,
+  isRemoteResidency,
 };

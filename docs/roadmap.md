@@ -371,7 +371,7 @@ M6.3-M6.6 across two independent SQLite-backed `LagrangeBackend` nodes in
 - [x] run the same M5 application with application objects placed across Lagrange nodes (`test/cuis-life-m6-distributed-acceptance.test.js`: `cells` relocated to node A while `model`, classes and WASM methods remain on node B; survives full two-node SQLite restart and relocates back to node B without identity loss);
 - [x] keep placement/routing entirely out of the Cuis importer and application semantics (the exact same installed Life image runs all-local and split across nodes without rebuild or reimport);
 - [x] prove generic Lagrange owners decide object location and execution placement (`ObjectLocator`, `PlacementPolicy`, and `RemoteRecordResolver`);
-- [ ] measure useful compute-near-object/distributed behavior without rewriting the application as a hand-authored distributed program.
+- [x] measure useful compute-near-object/distributed behavior without rewriting the application as a hand-authored distributed program (`PlacementPolicy.selectExecutionNode` and `PlacementPolicy.dispatchSend` route `LifeModel>>nextState` to the node where the blinker data closure resides, eliminating cross-node per-object reads and writes while producing identical `FROZEN_STATES` transitions in `test/cuis-life-m6-distributed-acceptance.test.js`).
 
 ### Support work, not parallel goals
 

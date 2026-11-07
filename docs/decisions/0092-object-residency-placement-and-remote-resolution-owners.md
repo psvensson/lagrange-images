@@ -74,7 +74,10 @@ node, partition or replica handle on the residency value.
 ### 2. Placement is a separate generic owner, never consulted by a language
 
 **Placement policy** (`PlacementPolicy` in `src/graph/placement.js`) decides where a record is
-placed and when a record moves (`relocateObject({ref, fromNode, toNode})`, `inspectResidency(ref)`).
+placed, when a record moves (`relocateObject({ref, fromNode, toNode})`,
+`relocateObjects({refs, fromNode, toNode})`, `inspectResidency(ref)`), and which node executes an
+object-rooted message send (`selectExecutionNode(ref)`,
+`dispatchSend({fromNode, receiver, message, arguments, languageId})`).
 When `relocateObject` moves an object record from `fromNode` to `toNode`, it preserves the exact
 `(imageId, objectId)` identity, writes the object record to `toNode`'s backend with an `object.put`
 history event, and atomically replaces `fromNode`'s copy at its current `_version` with a durable
@@ -84,15 +87,18 @@ never an argument of a send, a slot, a Value, a class or an import; language per
 importers cannot observe it.
 
 Residency and placement are two owners on purpose: one answers "where is it" (`ObjectLocator`), the
-other "where should it be" (`PlacementPolicy`); the M6.5 restart proof verifies that both identity
-and per-object placement survive a full two-node runtime restart from durable SQLite state alone.
+other "where should it be and where should work for it run" (`PlacementPolicy`); the M6.5 restart
+proof verifies that both identity and per-object placement survive a full two-node runtime restart
+from durable SQLite state alone.
 
 ### 3. Remote resolution is an interaction owner over Lagrange routing, and Images never owns transport
 
 The arrow **Images runtime -> a record resident on another node** has one owner: **remote
 resolution** (`src/graph/remote-resolution.js`). It translates a read or write of a ref whose
 located residency points to another node's backend session (`resolveAt(ref, residency)`,
-`resolveImageAt(imageId, residency)`, `writeRecordAt(ref, residency, ...)`), and it owns the error
+`resolveImageAt(imageId, residency)`, `writeRecordAt(ref, residency, ...)`), exposes round-trip
+telemetry (`stats()`, `resetStats()`) distinguishing local vs cross-node and per-object vs
+whole-image reads/writes via `isRemoteResidency(residency)`, and owns the error
 mapping, read idempotency, and the rule that authority is checked at the executing runtime and never
 cached in durable state. `GraphImageService.getImage`, `GraphImageService.getRecord` and
 `GraphImageService.putObject` delegate through `ObjectLocator` and `RemoteRecordResolver`.
@@ -106,12 +112,18 @@ shared Lagrange server** (`LagrangeBackend` with `ownsRuntime: false`), where re
 durability and "remote" is a different runtime reading and mutating the same partitioned store.
 Placement across separately composed backends waits for Lagrange routing of Images' requests.
 
-### 4. Execution placement is deferred
+### 4. Compute-near-object execution placement
 
-Where a send RUNS is a later, measured question (roadmap section 6, "compute-near-object"). The
-first M6 vertical proves residency and remote resolution only; a send still executes on the runtime
-that received it and resolves its receiver's record remotely. Nothing here decides Lagrange WASM
-placement.
+`PlacementPolicy.selectExecutionNode(ref)` and
+`PlacementPolicy.dispatchSend({fromNode, receiver, message, arguments, languageId})` route a
+message send to the registered node runtime where `receiver` is currently resident. The M6
+distributed Life acceptance witness (`test/cuis-life-m6-distributed-acceptance.test.js`) proves
+that relocating the blinker data closure (`model`, `cells`, `cells elements`) to node A and
+dispatching `model nextState` via `PlacementPolicy.dispatchSend` eliminates all cross-node reads
+and writes of the relocated blinker objects (`perObjectRecordReads === 0`,
+`perObjectRecordWrites === 0`, `localRecordWrites > 0` on node A) while producing identical
+`FROZEN_STATES` transitions without rewriting `LifeModel>>nextState`. Nothing here decides
+Lagrange WASM placement.
 
 ### 5. Ownership map and proof discipline
 
