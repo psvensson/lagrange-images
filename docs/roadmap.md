@@ -464,7 +464,7 @@ The native-import path depends on the image graph becoming the authoritative app
 - [ ] real Lagrange process-restart durability proof;
 - [ ] multi-node failure/recovery durability tests;
 - [ ] logical snapshot/revision frontiers beyond the first `GraphImageService.frontier()` seam;
-- [ ] revision-aware reads;
+- [x] revision-aware reads (`reconstructImageRecordsAtFrontier` and `diffProjectAtFrontiers` in `src/graph/diff.js` and `src/project/diff.js`, proven in `test/image-project-diff.test.js`);
 - [ ] indexed graph reachability and derivation lookup;
 - [ ] garbage-collection rules respecting history and pinned refs;
 - [ ] object migration between immutable Shapes when real imported class evolution requires it;
@@ -484,7 +484,7 @@ Project remains image-level because it is useful without a graphical environment
 - [ ] code + notes + tests + data + work items;
 - [ ] nested/related Project and namespace conventions;
 - [ ] branch/working-frontier semantics;
-- [ ] object/Project diff representation;
+- [x] object/Project diff representation (`src/graph/diff.js` and `src/project/diff.js`: `diffImageRecords`, `diffGraphBundles`, `diffProjectDescriptors`, `diffProjectReleases`, `authorizedDiffProjects`, and `diffProjectAtFrontiers`, proven in `test/image-project-diff.test.js`);
 - [ ] merge semantics and conflict data model;
 - [ ] Git/file import/export as projection rather than canonical storage;
 - [ ] multi-author conflict API/data, without prescribing UI.
@@ -497,7 +497,7 @@ Lagrange Object Environment owns Project browsers, import/progress interaction, 
 
 Project collaboration and imported-application evolution may expose generic primitives that should be reusable outside either concern:
 
-- [ ] graph/frontier diffs independent of one Project UI;
+- [x] graph/frontier diffs independent of one Project UI (`diffImageRecords`, `diffImageFrontiers`, and `diffGraphBundles` in `src/graph/diff.js`, proven in `test/image-project-diff.test.js`);
 - [ ] branch/working-frontier primitives useful to headless clients;
 - [ ] merge/conflict primitives that stay language/UI neutral;
 - [ ] Shape/class evolution primitives only when a real imported application requires them.

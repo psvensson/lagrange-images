@@ -143,6 +143,18 @@ import {
   createProject,
   projectObjectId,
 } from './project/working-state.js';
+import {
+  diffGraphBundles,
+  diffImageFrontiers,
+  diffImageRecords,
+  reconstructImageRecordsAtFrontier,
+} from './graph/diff.js';
+import {
+  authorizedDiffProjects,
+  diffProjectAtFrontiers,
+  diffProjectDescriptors,
+  diffProjectReleases,
+} from './project/diff.js';
 
 // The portable code-executor registry: neutral expression + the image lanes +
 // (via composition) the Smalltalk kernel primitive. It deliberately omits the
@@ -386,4 +398,13 @@ export {
   // The authorized Cuis native IMPORT seam (ADR 0094, Object Environment E4): the exact owner
   // function from src/language/smalltalk-authorized-import.js; its error classes stay internal.
   authorizedImportCuisPackage,
+  // Language- and UI-neutral graph/frontier and Project structural diff seams (bead lagrange-images-oh35).
+  diffImageRecords,
+  diffImageFrontiers,
+  diffGraphBundles,
+  reconstructImageRecordsAtFrontier,
+  diffProjectDescriptors,
+  diffProjectReleases,
+  authorizedDiffProjects,
+  diffProjectAtFrontiers,
 };
