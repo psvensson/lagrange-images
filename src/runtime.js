@@ -45,7 +45,13 @@ try {
 async function createRuntime(options = {}) {
   const backend = await createBackend(options.backend ?? {});
   await backend.start();
-  const images = new ImageService({backend, clock: options.clock});
+  const images = new ImageService({
+    backend,
+    clock: options.clock,
+    locator: options.locator,
+    remoteResolution: options.remoteResolution,
+    peers: options.peers,
+  });
   const languages = createDefaultLanguagePlatform();
 
   const codeCompilers = createDefaultCodeCompilerRegistry();
@@ -214,6 +220,14 @@ export * from './code/index.js';
 export * from './compilation/index.js';
 export * from './dispatch/invocation-service.js';
 export * from './foreign-runtime/index.js';
+export {
+  ObjectLocator,
+  PER_OBJECT_RESIDENCY,
+  WHOLE_IMAGE_RESIDENCY,
+  backendForResidency,
+} from './graph/locator.js';
+export {PlacementPolicy} from './graph/placement.js';
+export {RemoteRecordResolver} from './graph/remote-resolution.js';
 export {ImageService};
 export * from './execution/executor.js';
 export * from './execution/model.js';

@@ -1,6 +1,6 @@
 import {uuid as randomUUID} from '../support/default-crypto.js';
 import {assertBackend, assertBackendTransaction} from '../backend/backend-contract.js';
-import {ObjectLocator} from '../graph/locator.js';
+import {ObjectLocator, RELOCATED_RECORD_KIND} from '../graph/locator.js';
 import {RemoteRecordResolver} from '../graph/remote-resolution.js';
 import {assertObjectMatchesShape, createObjectRecord, createShapeRecord, normalizeMetadata} from '../object/index.js';
 import {
@@ -237,10 +237,10 @@ async function validateCandidateRecord(candidate, {resolve, resolveKind, existin
 }
 
 class ImageService {
-  constructor({backend, clock = () => new Date(), locator = null, remoteResolution = null} = {}) {
+  constructor({backend, clock = () => new Date(), locator = null, remoteResolution = null, peers = undefined} = {}) {
     this.backend = assertBackend(backend);
     this.clock = clock;
-    this.locator = locator ?? new ObjectLocator({backend: this.backend});
+    this.locator = locator ?? new ObjectLocator({backend: this.backend, peers});
     this.remoteResolution = remoteResolution ?? new RemoteRecordResolver();
     if (typeof this.locator?.locate !== 'function') {
       throw new TypeError('locator must provide locate(ref)');
@@ -272,8 +272,18 @@ class ImageService {
 
   async getImage(imageId) {
     const image = await this.backend.get(IMAGE_COLLECTION, imageId);
-    if (!image) throw new TypeError(`image not found: ${imageId}`);
-    return image;
+    if (image) return image;
+    if (
+      typeof this.locator.locateImage === 'function' &&
+      typeof this.remoteResolution.resolveImageAt === 'function'
+    ) {
+      const residency = await this.locator.locateImage(imageId);
+      if (residency) {
+        const remote = await this.remoteResolution.resolveImageAt(imageId, residency);
+        if (remote) return remote;
+      }
+    }
+    throw new TypeError(`image not found: ${imageId}`);
   }
 
   async listImages() {
@@ -321,7 +331,17 @@ class ImageService {
 
   async listRecords(imageId) {
     await this.getImage(imageId);
-    return (await this.backend.scan(records(imageId))).map(({value}) => value);
+    const entries = await this.backend.scan(records(imageId));
+    const results = [];
+    for (const {value} of entries) {
+      if (value?.kind === RELOCATED_RECORD_KIND) {
+        const resolved = await this.getRecord(imageId, value.id);
+        if (resolved) results.push(resolved);
+      } else {
+        results.push(value);
+      }
+    }
+    return results;
   }
 
   async listShapes(imageId) {
@@ -337,6 +357,22 @@ class ImageService {
       resolveKind: async (ref) => (await this.getRecord(ref.imageId, ref.objectId))?.kind ?? null,
       existing: null,
     });
+    if (
+      typeof this.locator.hasPeers === 'function' &&
+      this.locator.hasPeers() &&
+      typeof this.remoteResolution.writeRecordAt === 'function'
+    ) {
+      assertNoTransientIdentity(records(imageId), object.id, object, {keyIsObjectId: true});
+      const ref = objectRef(imageId, object.id);
+      const residency = await this.locator.locate(ref);
+      if (!residency) throw new TypeError(`image not found: ${imageId}`);
+      return await this.remoteResolution.writeRecordAt(ref, residency, {
+        value: object,
+        expectedVersion,
+        stream: history(imageId),
+        event: (saved) => putEventForRecord(saved, at),
+      });
+    }
     const stored = await putWithHistory(this.backend, {
       collection: records(imageId),
       keyIsObjectId: true,

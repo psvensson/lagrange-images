@@ -1,3 +1,6 @@
 export * from './provision.js';
 export * from './references.js';
 export * from './bundle.js';
+export * from './locator.js';
+export * from './placement.js';
+export * from './remote-resolution.js';
