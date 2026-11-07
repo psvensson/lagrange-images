@@ -276,7 +276,7 @@ function orderedLocalIds(bundle) {
   return Object.keys(bundle.records).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
 }
 
-async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) {
+async function exportGraphBundleInternal({images, roots, referencePolicy, crypto, includeSourceMap = false} = {}) {
   if (!images || typeof images.getRecord !== 'function') fail('images must be a GraphImageService');
   if (!roots || typeof roots !== 'object' || Array.isArray(roots)) fail('roots must be a map of root key -> ObjectRef');
   const rootEntries = Object.entries(roots);
@@ -294,6 +294,7 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
   if (typeof policy.classify !== 'function') fail('referencePolicy must supply classify(ref)');
 
   const sourceToLocal = new TupleMap(2);        // [imageId, objectId] -> localId (visited/dedup only)
+  const localToSourceRef = {};                  // localId -> source ObjectRef (when includeSourceMap is true)
   const unpinnedExternalToKey = new TupleMap(2); // [imageId, objectId] -> externalKey (dedup only)
   const pinnedExternalToKey = new TupleMap(3);   // [imageId, objectId, revision] -> externalKey (dedup only)
   const records = {};                  // localId -> canonical portable record
@@ -306,10 +307,6 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
   // Classify one enumerated ref and return its portable edge token.
   function edgeToken(ref, ownerLocalId) {
     if (isPinnedRef(ref)) {
-      // Pinned historical ref: ALWAYS external by construction; no policy may
-      // internalize it. The exact pin is the external requirement. The dedup key is
-      // the exact 3-tuple — the revision is a distinct part, so two pins whose
-      // concatenations would collide stay distinct.
       const identity = [ref.imageId, ref.objectId, ref.revision];
       let externalKey = pinnedExternalToKey.get(identity);
       if (externalKey === undefined) {
@@ -325,11 +322,8 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
       }
       return {kind: 'external-ref', externalKey};
     }
-    // Unpinned ref: the caller policy decides internal vs external.
     const decision = policy.classify(ref);
     if (decision === 'internal') {
-      // Look up (assigning if first encounter) the local id. The BFS drives the
-      // ASSIGNMENT ORDER via referencesOfRecord; this only resolves the id.
       return {kind: 'local-ref', localId: assignLocalId(ref)};
     }
     if (decision === 'external') {
@@ -348,15 +342,9 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
       return {kind: 'external-ref', externalKey};
     }
     fail(`referencePolicy.classify must return 'internal' or 'external', got ${JSON.stringify(decision)}`, {ownerLocalId});
-    return undefined; // unreachable
+    return undefined;
   }
 
-  // Generic recursive projection: strip source/runtime provenance and rewrite
-  // every ref Value through edgeToken. Non-ref Values are reused in their canonical
-  // form. No record-kind serializer registry; one structural transform for every
-  // kind. `enqueue` is called (in first-encounter order) for every INTERNAL ref so
-  // the BFS discovers targets; the traversal ORDER is then driven by the edge owner
-  // (see the BFS loop below), not by this projection's key order.
   function projectValue(value, ctx) {
     if (isReference(value)) {
       ctx.rewritten += 1;
@@ -371,10 +359,6 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
     return value ?? null;
   }
 
-  // The semantic record fields minus source/runtime provenance (ADR 0074 §4):
-  // id, imageId, _version, updatedAt, metadata are stripped. `kind` is preserved.
-  // The projection only REWRITES refs and counts them; local-id ASSIGNMENT order is
-  // driven separately by the BFS through referencesOfRecord (the edge owner).
   function projectRecord(record, ownerLocalId) {
     const ctx = {ownerLocalId, rewritten: 0};
     const out = {kind: record.kind};
@@ -387,8 +371,6 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
     return {projected: out, rewritten: ctx.rewritten};
   }
 
-  // Assign (or reuse) the local id for an unpinned internal ref, in the order the
-  // caller (the BFS, driven by referencesOfRecord) presents it.
   function assignLocalId(ref) {
     const identity = [ref.imageId, ref.objectId];
     let localId = sourceToLocal.get(identity);
@@ -396,46 +378,37 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
       localId = `r${nextLocal}`;
       nextLocal += 1;
       sourceToLocal.set(identity, localId);
+      if (includeSourceMap) {
+        localToSourceRef[localId] = objectRef(ref.imageId, ref.objectId);
+      }
     }
     return localId;
   }
 
-  // Seed the BFS with the roots (canonical key order).
   for (const [rootKey, ref] of sortedRoots) {
     const localId = assignLocalId(ref);
     rootLocalIds[rootKey] = localId;
     queue.push({localId, ref});
   }
 
-  // Breadth-first closure. Each record is projected exactly once (first encounter);
-  // a shared target reuses its already-assigned localId; a cycle resolves to an
-  // already-assigned localId, so traversal terminates.
-  const projected = new Set(); // localId already projected
+  const projected = new Set();
   while (queue.length > 0) {
     const {localId, ref} = queue.shift();
-    if (projected.has(localId)) continue; // already projected (shared/cyclic)
-    // Read through the graph owner. A genuinely missing required internal record is
-    // an explicit export failure, never a silent omission.
+    if (projected.has(localId)) continue;
     // eslint-disable-next-line no-await-in-loop
     const record = await images.getRecord(ref.imageId, ref.objectId);
     if (!record) {
       fail(`graph bundle export failed: required internal record is missing: ${ref.imageId}/${ref.objectId}`, {localId});
     }
-    // TRAVERSAL ORDER IS OWNED BY THE EDGE OWNER. Discover this record's outgoing
-    // edges in referencesOfRecord order and assign/enqueue internal targets in THAT
-    // order — never in the projection's key order and never sorted by source ref.
     const ownedRefs = referencesOfRecord(record);
     const internalInEdgeOrder = [];
     for (const edgeRef of ownedRefs) {
-      if (isPinnedRef(edgeRef)) continue; // pinned refs are external; not traversed
+      if (isPinnedRef(edgeRef)) continue;
       if (policy.classify(edgeRef) === 'internal') {
         const targetLocalId = assignLocalId(edgeRef);
         internalInEdgeOrder.push({localId: targetLocalId, ref: edgeRef});
       }
     }
-    // Executable guard: the projection must rewrite exactly the refs the edge owner
-    // enumerates. A mismatch means the projection and the edge owner disagree — a
-    // bug to repair in the responsible owner, not to paper over here.
     const result = projectRecord(record, localId);
     if (ownedRefs.length !== result.rewritten) {
       fail(
@@ -445,7 +418,6 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
     }
     records[localId] = result.projected;
     projected.add(localId);
-    // Enqueue internal targets in edge-owner order for breadth-first discovery.
     for (const target of internalInEdgeOrder) queue.push(target);
   }
 
@@ -456,12 +428,79 @@ async function exportGraphBundle({images, roots, referencePolicy, crypto} = {}) 
     externals,
   };
 
-  // Post-assembly self-check through the SAME validation owner the importer gates
-  // on. A correct exporter never trips it; if a future exporter change emits an
-  // invalid bundle, it fails here at the source rather than at a distant import.
   assertGraphBundleV1(bundle);
+  const contentIdentity = contentIdentityForBundle(bundle, {crypto});
+  if (includeSourceMap) {
+    return {bundle, contentIdentity, localToSourceRef: Object.freeze(localToSourceRef)};
+  }
+  return {bundle, contentIdentity};
+}
 
-  return {bundle, contentIdentity: contentIdentityForBundle(bundle, {crypto})};
+async function exportGraphBundle(options = {}) {
+  return await exportGraphBundleInternal({...options, includeSourceMap: false});
+}
+
+async function exportGraphBundleWithSourceMap(options = {}) {
+  return await exportGraphBundleInternal({...options, includeSourceMap: true});
+}
+
+async function extractSubBundleFromBundle({bundle, rootLocalId, rootKey = 'root', crypto} = {}) {
+  assertGraphBundleV1(bundle);
+  if (typeof rootLocalId !== 'string' || !Object.hasOwn(bundle.records, rootLocalId)) {
+    throw new TypeError(`rootLocalId ${JSON.stringify(rootLocalId)} is not present in bundle.records`);
+  }
+  const VIRTUAL_IMAGE = 'bundle-virtual';
+  const virtualTargetRefs = {};
+  for (const localId of Object.keys(bundle.records)) {
+    virtualTargetRefs[localId] = objectRef(VIRTUAL_IMAGE, localId);
+  }
+  const virtualExternalRefs = {};
+  for (const [extKey, desc] of Object.entries(bundle.externals)) {
+    virtualExternalRefs[extKey] = objectRef(desc.imageId, desc.objectId);
+  }
+  const virtualImages = {
+    async getRecord(_img, localId) {
+      const entry = bundle.records[localId];
+      if (!entry) return null;
+      const {kind, ...portableFields} = entry;
+      const rewritten = rewritePortableValue(portableFields, virtualTargetRefs, virtualExternalRefs);
+      return {
+        kind,
+        id: localId,
+        imageId: VIRTUAL_IMAGE,
+        updatedAt: '1970-01-01T00:00:00.000Z',
+        metadata: {},
+        ...(kind === 'object' ? {behavior: rewritten.behavior ?? null, slots: rewritten.slots ?? {}} : {}),
+        ...(kind === 'shape' ? {slots: rewritten.slots ?? []} : {}),
+        ...(kind === 'code-artifact'
+          ? {
+              languageId: rewritten.languageId ?? null,
+              logicalPath: rewritten.logicalPath ?? null,
+              dependencies: rewritten.dependencies ?? [],
+              derivedFrom: rewritten.derivedFrom ?? [],
+            }
+          : {}),
+        ...(kind === 'lexical-environment' ? {parent: rewritten.parent ?? null, bindings: rewritten.bindings ?? {}} : {}),
+        ...(kind === 'block' ? {environment: rewritten.environment ?? null} : {}),
+        ...rewritten,
+      };
+    },
+  };
+  const exported = await exportGraphBundleWithSourceMap({
+    images: virtualImages,
+    roots: {[rootKey]: objectRef(VIRTUAL_IMAGE, rootLocalId)},
+    referencePolicy: {classify: (ref) => (ref.imageId === VIRTUAL_IMAGE ? 'internal' : 'external')},
+    crypto,
+  });
+  const subLocalToBundleLocal = {};
+  for (const [subLocalId, srcRef] of Object.entries(exported.localToSourceRef)) {
+    subLocalToBundleLocal[subLocalId] = srcRef.objectId;
+  }
+  return Object.freeze({
+    bundle: exported.bundle,
+    contentIdentity: exported.contentIdentity,
+    subLocalToBundleLocal: Object.freeze(subLocalToBundleLocal),
+  });
 }
 
 // --- IMPORT: portable graph bundle -> fresh target-Image graph (ADR 0074 §H) -----
@@ -507,7 +546,15 @@ function deepFreeze(value) {
 // rewriting for BOTH standalone and managed installation. The returned record
 // inputs may be appended to another owner-created batch, but never reinterpreted,
 // filtered, reordered or rewritten.
-async function prepareGraphBundleImport({images, targetImageId, bundle, externalBindings = {}, expectedContentIdentity, crypto} = {}) {
+async function prepareGraphBundleImport({
+  images,
+  targetImageId,
+  bundle,
+  externalBindings = {},
+  expectedContentIdentity,
+  preboundLocalRefs = {},
+  crypto,
+} = {}) {
   if (!images || typeof images.getRecord !== 'function') importFail('images must be a GraphImageService');
   if (typeof targetImageId !== 'string' || targetImageId.length === 0) importFail('targetImageId must be non-empty text');
 
@@ -550,10 +597,6 @@ async function prepareGraphBundleImport({images, targetImageId, bundle, external
     const descriptor = bundle.externals[externalKey];
     const binding = canonicalizeValue(externalBindings[externalKey]);
     if (descriptor.pinned) {
-      // A pinned external is a historical requirement; the exact provided
-      // PinnedRef is preserved faithfully. Historical readability/retention is a
-      // separate owner — getRecord must NOT be used to pretend the pinned
-      // revision is verified.
       if (!isPinnedRef(binding)) {
         importFail(`pinned external ${externalKey} must bind to a PinnedRef`);
       }
@@ -561,7 +604,6 @@ async function prepareGraphBundleImport({images, targetImageId, bundle, external
       if (!isObjectRef(binding)) {
         importFail(`unpinned external ${externalKey} must bind to an unpinned ObjectRef`);
       }
-      // The bound target must actually exist BEFORE any creation.
       let target;
       try {
         // eslint-disable-next-line no-await-in-loop
@@ -576,29 +618,46 @@ async function prepareGraphBundleImport({images, targetImageId, bundle, external
     resolvedBindings[externalKey] = binding;
   }
 
-  // (6) Mint ALL target identities FIRST, in canonical localId order. Cycles and
-  // shared refs require every fresh target identity to exist conceptually before
-  // any portable record is rewritten. Target ids are freshly minted uuids from the
-  // active crypto provider — NEVER derived from localId, source ObjectId,
-  // contentIdentity or root key. The map is transient import state only.
+  const preboundKeys = Object.keys(preboundLocalRefs ?? {});
+  const resolvedPrebound = {};
+  for (const localId of preboundKeys) {
+    if (!Object.hasOwn(bundle.records, localId)) {
+      importFail(`unknown prebound localId: ${JSON.stringify(localId)}`);
+    }
+    const ref = canonicalizeValue(preboundLocalRefs[localId]);
+    if (!isObjectRef(ref) || ref.imageId !== targetImageId) {
+      importFail(`prebound localId ${localId} must bind to an unpinned ObjectRef in targetImageId ${targetImageId}`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const existing = await images.getRecord(ref.imageId, ref.objectId);
+    if (!existing) {
+      importFail(`prebound localId ${localId} target does not exist: ${ref.imageId}/${ref.objectId}`);
+    }
+    resolvedPrebound[localId] = ref;
+  }
+
+  // (6) Mint ALL target identities FIRST, in canonical localId order (or reuse
+  // prebound content-addressed target refs).
   const activeCrypto = crypto ?? getDefaultCryptoProvider();
   const localIds = orderedLocalIds(bundle);
   const targetRefs = {};
   for (const localId of localIds) {
-    targetRefs[localId] = objectRef(targetImageId, activeCrypto.uuid());
+    targetRefs[localId] = Object.hasOwn(resolvedPrebound, localId)
+      ? resolvedPrebound[localId]
+      : objectRef(targetImageId, activeCrypto.uuid());
   }
 
-  // (7) Rewrite every record generically, in canonical localId order. One
-  // structural transform for every kind; {kind, ...portableFields} becomes
-  // {kind, id: freshId, ...rewrittenFields} — the createRecords input shape.
-  const recordInputs = localIds.map((localId) => {
-    const {kind, ...portableFields} = bundle.records[localId];
-    return {
-      kind,
-      id: targetRefs[localId].objectId,
-      ...rewritePortableValue(portableFields, targetRefs, resolvedBindings),
-    };
-  });
+  // (7) Rewrite every non-prebound record generically, in canonical localId order.
+  const recordInputs = localIds
+    .filter((localId) => !Object.hasOwn(resolvedPrebound, localId))
+    .map((localId) => {
+      const {kind, ...portableFields} = bundle.records[localId];
+      return {
+        kind,
+        id: targetRefs[localId].objectId,
+        ...rewritePortableValue(portableFields, targetRefs, resolvedBindings),
+      };
+    });
 
   // Expose only semantic roots. The complete localId -> target ref table is
   // transient implementation state and is not persisted or returned.
@@ -644,6 +703,8 @@ export {
   contentIdentityForBundle,
   defaultReferencePolicy,
   exportGraphBundle,
+  exportGraphBundleWithSourceMap,
+  extractSubBundleFromBundle,
   importGraphBundle,
   prepareGraphBundleImport,
 };

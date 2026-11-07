@@ -118,10 +118,7 @@ function deepFreeze(value) {
   return value;
 }
 
-function materializeInstallationRecords({installation, crypto} = {}) {
-  // The Project model remains the semantic owner. This normalization validates
-  // the caller's descriptor and supplies canonical member order; the translator
-  // only maps that canonical meaning to ordinary record specs.
+function materializeInstallationSnapshotRecords({installation, provenance = null, crypto} = {}) {
   const normalized = normalizeProjectInstallation(installation);
   const activeCrypto = crypto ?? getDefaultCryptoProvider();
   if (!activeCrypto || typeof activeCrypto.uuid !== 'function') {
@@ -150,14 +147,32 @@ function materializeInstallationRecords({installation, crypto} = {}) {
       [SLOT.releaseId]: textValue(normalized.releaseId),
     },
     indexed: memberRecords.map(({id}) => objectRef(normalized.targetImageId, id)),
+    ...(provenance !== null && provenance !== undefined ? {metadata: {provenance}} : {}),
   };
+  return deepFreeze({
+    memberRecords,
+    snapshot,
+    snapshotRef: objectRef(normalized.targetImageId, snapshotId),
+  });
+}
+
+function materializeInstallationRecords({installation, provenance = null, crypto} = {}) {
+  // The Project model remains the semantic owner. This normalization validates
+  // the caller's descriptor and supplies canonical member order; the translator
+  // only maps that canonical meaning to ordinary record specs.
+  const normalized = normalizeProjectInstallation(installation);
+  const {memberRecords, snapshot, snapshotRef} = materializeInstallationSnapshotRecords({
+    installation: normalized,
+    provenance,
+    crypto,
+  });
   const head = {
     kind: 'object',
     id: installationHeadObjectId(normalized.projectId),
     shape: objectRef(normalized.targetImageId, PROJECT_INSTALLATION_HEAD_SHAPE_ID),
     slots: {
       [SLOT.projectId]: textValue(normalized.projectId),
-      [SLOT.snapshot]: objectRef(normalized.targetImageId, snapshotId),
+      [SLOT.snapshot]: snapshotRef,
     },
   };
   return deepFreeze([...memberRecords, snapshot, head]);
@@ -212,7 +227,7 @@ function requireStoredRef(value, label, targetImageId) {
   return normalized;
 }
 
-async function readManagedProjectInstallation({images, targetImageId, projectId} = {}) {
+async function readManagedProjectInstallationState({images, targetImageId, projectId} = {}) {
   requireImages(images, ['getRecord']);
   requiredText(targetImageId, 'targetImageId');
   requiredText(projectId, 'projectId');
@@ -266,8 +281,9 @@ async function readManagedProjectInstallation({images, targetImageId, projectId}
     });
   }
 
+  let installation;
   try {
-    return normalizeProjectInstallation({
+    installation = normalizeProjectInstallation({
       format: PROJECT_INSTALLATION_V1,
       projectId: headProjectId,
       releaseId,
@@ -277,6 +293,44 @@ async function readManagedProjectInstallation({images, targetImageId, projectId}
   } catch (cause) {
     fail(`Project installation state is invalid: ${cause.message}`, {cause});
   }
+
+  const provenance =
+    snapshot.metadata?.provenance !== undefined && snapshot.metadata?.provenance !== null
+      ? deepFreeze(structuredClone(snapshot.metadata.provenance))
+      : null;
+
+  return Object.freeze({
+    installation,
+    descriptor: installation,
+    headId: head.id,
+    headVersion: head._version ?? null,
+    snapshotId: snapshot.id,
+    provenance,
+  });
+}
+
+async function readManagedProjectInstallation({images, targetImageId, projectId} = {}) {
+  const state = await readManagedProjectInstallationState({images, targetImageId, projectId});
+  return state ? state.installation : null;
+}
+
+async function listManagedProjectInstallations({images, targetImageId} = {}) {
+  requireImages(images, ['getRecord', 'listObjects']);
+  requiredText(targetImageId, 'targetImageId');
+  const objects = await images.listObjects(targetImageId);
+  const installations = [];
+  for (const obj of objects) {
+    if (isObjectRef(obj.shape) && obj.shape.objectId === PROJECT_INSTALLATION_HEAD_SHAPE_ID) {
+      const projectId = obj.slots?.[SLOT.projectId]?.value;
+      if (typeof projectId === 'string' && projectId.length > 0 && obj.id === installationHeadObjectId(projectId)) {
+        // eslint-disable-next-line no-await-in-loop
+        const inst = await readManagedProjectInstallation({images, targetImageId, projectId});
+        if (inst) installations.push(inst);
+      }
+    }
+  }
+  installations.sort((a, b) => (a.projectId < b.projectId ? -1 : a.projectId > b.projectId ? 1 : 0));
+  return Object.freeze(installations);
 }
 
 export {
@@ -286,6 +340,9 @@ export {
   ProjectInstallationStateError,
   ensureInstallationShapes,
   installationHeadObjectId,
+  listManagedProjectInstallations,
   materializeInstallationRecords,
+  materializeInstallationSnapshotRecords,
   readManagedProjectInstallation,
+  readManagedProjectInstallationState,
 };
