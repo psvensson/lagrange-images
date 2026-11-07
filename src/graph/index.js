@@ -5,3 +5,4 @@ export * from './locator.js';
 export * from './placement.js';
 export * from './remote-resolution.js';
 export * from './diff.js';
+export * from './merge.js';
