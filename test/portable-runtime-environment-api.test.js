@@ -202,10 +202,22 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // 148 after the language-neutral immutable Shape object migration owner (src/object/migration.js,
   // bead lagrange-images-f0qq), composed only from existing portable object and value owners with
   // no node:* dependency.
-  assert.equal(modules.length, 148, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), the authorized Cuis native import seam, the in-image Common Lisp personality, the three M6.3 residency/locator/remote-resolution owners, the two Common Lisp browsing/definition-resource owners, the two graph/Project structural diff owners, and the immutable Shape object migration owner');
+  // 155 after the collaborative Project, branch, merge, reachability/GC and package-archive owners
+  // (src/graph/merge.js, src/graph/branches.js, src/graph/reachability.js, src/project/merge.js,
+  // src/project/branches.js, src/project/conventions.js and src/code/package-archive.js, bead
+  // lagrange-images-1ebw), composed only from existing portable graph, project, code, object,
+  // authority, value and support owners with no node:* dependency.
+  assert.equal(modules.length, 155, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), the authorized Cuis native import seam, the in-image Common Lisp personality, the three M6.3 residency/locator/remote-resolution owners, the two Common Lisp browsing/definition-resource owners, the two graph/Project structural diff owners, the immutable Shape object migration owner, and the seven collaborative branch/merge/reachability/Project-conventions/package-archive owners');
   assert.ok(paths.includes('src/object/migration.js'));
   assert.ok(paths.includes('src/graph/diff.js'));
+  assert.ok(paths.includes('src/graph/merge.js'));
+  assert.ok(paths.includes('src/graph/branches.js'));
+  assert.ok(paths.includes('src/graph/reachability.js'));
   assert.ok(paths.includes('src/project/diff.js'));
+  assert.ok(paths.includes('src/project/merge.js'));
+  assert.ok(paths.includes('src/project/branches.js'));
+  assert.ok(paths.includes('src/project/conventions.js'));
+  assert.ok(paths.includes('src/code/package-archive.js'));
   assert.ok(paths.includes('src/image/storage-layout.js'));
   assert.ok(paths.includes('src/graph/locator.js'));
   assert.ok(paths.includes('src/graph/remote-resolution.js'));
@@ -235,18 +247,21 @@ test('the bounded public seam does not broaden the portable static closure', () 
   assert.ok(paths.includes('src/language/smalltalk-array2d.js'));
   assert.ok(paths.includes('src/language/smalltalk-interval.js'));
   assert.ok(paths.includes('src/language/smalltalk-active-model.js'));
-  // The Project modules the seam carries are exactly the working-state and model owners plus the
-  // managed release install/recovery owners (installation-state, managed-installation and the
-  // graph release materializer they compose, bead lagrange-images-hygu). The broad Project barrel,
-  // the capture coordinator and the unmanaged release installer stay out.
+  // The Project modules the seam carries are the working-state, model, diff, merge, branches,
+  // conventions and managed release install/recovery owners (installation-state,
+  // managed-installation and the graph release materializer they compose). The broad Project
+  // barrel, the capture coordinator and the unmanaged release installer stay out.
   assert.deepEqual(projectPaths, [
+    'src/project/branches.js',
+    'src/project/conventions.js',
     'src/project/diff.js',
     'src/project/graph-release-materialization.js',
     'src/project/installation-state.js',
     'src/project/managed-installation.js',
+    'src/project/merge.js',
     'src/project/model.js',
     'src/project/working-state.js',
-  ], 'the bounded seam carries the working-state, model, diff and managed-installation owners, never the Project barrel, the capture coordinator or the unmanaged installer');
+  ], 'the bounded seam carries the working-state, model, diff, merge, branches, conventions and managed-installation owners, never the Project barrel, the capture coordinator or the unmanaged installer');
   assert.ok(!paths.includes('src/project/index.js'));
   assert.ok(!paths.includes('src/project/release-capture.js'));
   assert.ok(!paths.includes('src/project/release-installation.js'));
