@@ -228,7 +228,13 @@ export {
   WHOLE_IMAGE_RESIDENCY,
   backendForResidency,
 } from './graph/locator.js';
-export {PlacementPolicy} from './graph/placement.js';
+export {
+  FOREIGN_RUNTIME_PLACEMENT_RECEIPT_V1,
+  PLACEMENT_RECOVERY_REPORT_V1,
+  PlacementIdempotencyConflictError,
+  PlacementPolicy,
+  WASM_PLACEMENT_RECEIPT_V1,
+} from './graph/placement.js';
 export {RemoteRecordResolver} from './graph/remote-resolution.js';
 export {
   GRAPH_BUNDLE_V1,

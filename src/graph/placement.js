@@ -1,7 +1,7 @@
 import {assertBackend, assertBackendTransaction} from '../backend/backend-contract.js';
 import {IMAGE_COLLECTION, history, records} from '../image/storage-layout.js';
 import {referencesOfValue} from '../value/index.js';
-import {isObjectRef, textValue} from '../value/scalars.js';
+import {isObjectRef, objectRef, textValue} from '../value/scalars.js';
 import {
   PER_OBJECT_RESIDENCY,
   RELOCATED_RECORD_KIND,
@@ -15,6 +15,26 @@ const RELOCATABLE_RECORD_KINDS = new Set([
   'lexical-environment',
   'code-artifact',
 ]);
+
+const PLACEMENT_RECOVERY_REPORT_V1 = 'lagrange-placement-recovery-report/v1';
+const FOREIGN_RUNTIME_PLACEMENT_RECEIPT_V1 = 'lagrange-foreign-runtime-placement-receipt/v1';
+const WASM_PLACEMENT_RECEIPT_V1 = 'lagrange-wasm-placement-receipt/v1';
+
+class PlacementIdempotencyConflictError extends TypeError {
+  constructor(idempotencyKey, detail) {
+    super(`Placement idempotency conflict for key ${JSON.stringify(idempotencyKey)}: ${detail}`);
+    this.name = 'PlacementIdempotencyConflictError';
+    this.idempotencyKey = idempotencyKey;
+  }
+}
+
+function normalizeOptionalIdempotencyKey(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError('idempotencyKey must be a non-empty string when provided');
+  }
+  return value;
+}
 
 function assertNodeId(nodeId, label = 'nodeId') {
   if (typeof nodeId !== 'string' || nodeId.length === 0) {
@@ -124,7 +144,13 @@ function buildRelocatedCandidateRecord(current, at) {
   }
 }
 
-function buildTargetPutHistoryEvent(saved, at) {
+function buildTargetPutHistoryEvent(saved, at, relocationMeta = null) {
+  const extra = relocationMeta
+    ? {
+        relocatedFrom: relocationMeta.fromNode,
+        relocatedTo: relocationMeta.toNode,
+      }
+    : {};
   switch (saved.kind) {
     case 'object':
       return {
@@ -133,6 +159,7 @@ function buildTargetPutHistoryEvent(saved, at) {
         objectId: saved.id,
         objectVersion: saved._version,
         object: structuredClone(saved),
+        ...extra,
       };
     case 'block':
       return {
@@ -141,6 +168,7 @@ function buildTargetPutHistoryEvent(saved, at) {
         blockId: saved.id,
         blockVersion: saved._version,
         block: structuredClone(saved),
+        ...extra,
       };
     case 'lexical-environment':
       return {
@@ -149,6 +177,7 @@ function buildTargetPutHistoryEvent(saved, at) {
         environmentId: saved.id,
         environmentVersion: saved._version,
         environment: structuredClone(saved),
+        ...extra,
       };
     case 'code-artifact':
       return {
@@ -157,6 +186,7 @@ function buildTargetPutHistoryEvent(saved, at) {
         artifactId: saved.id,
         artifactVersion: saved._version,
         artifact: structuredClone(saved),
+        ...extra,
       };
     default:
       throw new TypeError(`unsupported record kind for history event: ${saved.kind}`);
@@ -166,6 +196,7 @@ function buildTargetPutHistoryEvent(saved, at) {
 class PlacementPolicy {
   #nodes = new Map();
   #locators = new Set();
+  #idempotencyReceipts = new Map();
 
   constructor({nodes = {}, locators = [], clock = () => new Date()} = {}) {
     this.clock = clock;
@@ -368,6 +399,50 @@ class PlacementPolicy {
     return blockResidency.node;
   }
 
+  #checkIdempotency(idempotencyKey, signature) {
+    const key = normalizeOptionalIdempotencyKey(idempotencyKey);
+    if (!key) return null;
+    const existing = this.#idempotencyReceipts.get(key);
+    if (!existing) return null;
+    if (existing.signature !== signature) {
+      throw new PlacementIdempotencyConflictError(
+        key,
+        `reused with different operation parameters (${existing.signature} vs ${signature})`,
+      );
+    }
+    return Object.freeze({...existing.receipt, replayed: true});
+  }
+
+  #recordIdempotency(idempotencyKey, signature, receipt) {
+    const key = normalizeOptionalIdempotencyKey(idempotencyKey);
+    if (!key) return receipt;
+    this.#idempotencyReceipts.set(key, {signature, receipt});
+    return receipt;
+  }
+
+  async #executeWithRetry(retryOptions, refsToInvalidate, fn) {
+    const maxAttempts = Number.isInteger(retryOptions?.maxAttempts) && retryOptions.maxAttempts >= 1
+      ? retryOptions.maxAttempts
+      : 1;
+    let lastError;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const result = await fn(attempt);
+        return {result, attempts: attempt};
+      } catch (err) {
+        lastError = err;
+        if (attempt >= maxAttempts) throw err;
+        for (const locator of this.#locators) {
+          for (const ref of refsToInvalidate ?? []) {
+            if (isObjectRef(ref)) locator.invalidate?.(ref);
+          }
+        }
+      }
+    }
+    throw lastError;
+  }
+
   async dispatchSend({
     fromNode = null,
     receiver,
@@ -375,31 +450,56 @@ class PlacementPolicy {
     arguments: args = [],
     languageId = 'symmetric-smalltalk',
     dispatchImage = undefined,
+    idempotencyKey = null,
+    retry = null,
   } = {}) {
     if (!isObjectRef(receiver)) throw new TypeError('dispatchSend requires an ObjectRef receiver');
     if (fromNode !== null) assertNodeId(fromNode, 'fromNode');
-    const targetNodeId = await this.selectExecutionNode(receiver);
-    const target = this.#nodes.get(targetNodeId);
-    if (!target?.runtime) {
-      throw new TypeError(`node ${targetNodeId} has no registered execution runtime`);
-    }
     const selectorValue = typeof message === 'string' ? textValue(message) : message;
-    const activation = await target.runtime.invocations.sendMessage(
-      {
-        receiver,
-        message: selectorValue,
-        arguments: args,
-        languageId,
-      },
-      {dispatchImage: dispatchImage ?? receiver.imageId},
-    );
-    const value = await target.runtime.executor.execute(activation);
-    return Object.freeze({
-      node: targetNodeId,
+    const signature = JSON.stringify({
+      op: 'dispatchSend',
       fromNode,
-      routedRemotely: fromNode !== null && fromNode !== targetNodeId,
-      value,
+      receiver,
+      message: selectorValue,
+      args,
+      languageId,
+      dispatchImage: dispatchImage ?? receiver.imageId,
     });
+    const replayed = this.#checkIdempotency(idempotencyKey, signature);
+    if (replayed) return replayed;
+
+    const {result, attempts} = await this.#executeWithRetry(
+      retry,
+      [receiver, ...args.flatMap((a) => referencesOfValue(a))],
+      async () => {
+        const targetNodeId = await this.selectExecutionNode(receiver);
+        const target = this.#nodes.get(targetNodeId);
+        if (!target?.runtime) {
+          throw new TypeError(`node ${targetNodeId} has no registered execution runtime`);
+        }
+        const activation = await target.runtime.invocations.sendMessage(
+          {
+            receiver,
+            message: selectorValue,
+            arguments: args,
+            languageId,
+          },
+          {dispatchImage: dispatchImage ?? receiver.imageId},
+        );
+        const value = await target.runtime.executor.execute(activation);
+        return {targetNodeId, value};
+      },
+    );
+
+    const receipt = Object.freeze({
+      node: result.targetNodeId,
+      fromNode,
+      routedRemotely: fromNode !== null && fromNode !== result.targetNodeId,
+      value: result.value,
+      attempts,
+      replayed: false,
+    });
+    return this.#recordIdempotency(idempotencyKey, signature, receipt);
   }
 
   async dispatchApply({
@@ -407,50 +507,127 @@ class PlacementPolicy {
     block,
     arguments: args = [],
     targetObject = null,
+    idempotencyKey = null,
+    retry = null,
   } = {}) {
     if (!isObjectRef(block)) throw new TypeError('dispatchApply requires an ObjectRef block');
     if (fromNode !== null) assertNodeId(fromNode, 'fromNode');
     if (!Array.isArray(args)) {
       throw new TypeError('dispatchApply arguments must be an array');
     }
-    const targetNodeId = await this.selectBlockExecutionNode(block, {
-      arguments: args,
+    const signature = JSON.stringify({
+      op: 'dispatchApply',
+      fromNode,
+      block,
+      args,
       targetObject,
     });
-    const target = this.#nodes.get(targetNodeId);
-    if (!target?.runtime) {
-      throw new TypeError(`node ${targetNodeId} has no registered execution runtime`);
-    }
-    const activation = await target.runtime.invocations.invokeBlock(block, args);
-    const value = await target.runtime.executor.execute(activation);
-    return Object.freeze({
-      node: targetNodeId,
+    const replayed = this.#checkIdempotency(idempotencyKey, signature);
+    if (replayed) return replayed;
+
+    const {result, attempts} = await this.#executeWithRetry(
+      retry,
+      [block, targetObject, ...args.flatMap((a) => referencesOfValue(a))],
+      async () => {
+        const targetNodeId = await this.selectBlockExecutionNode(block, {
+          arguments: args,
+          targetObject,
+        });
+        const target = this.#nodes.get(targetNodeId);
+        if (!target?.runtime) {
+          throw new TypeError(`node ${targetNodeId} has no registered execution runtime`);
+        }
+        const activation = await target.runtime.invocations.invokeBlock(block, args);
+        const value = await target.runtime.executor.execute(activation);
+        return {targetNodeId, value};
+      },
+    );
+
+    const receipt = Object.freeze({
+      node: result.targetNodeId,
       fromNode,
-      routedRemotely: fromNode !== null && fromNode !== targetNodeId,
-      value,
+      routedRemotely: fromNode !== null && fromNode !== result.targetNodeId,
+      value: result.value,
+      attempts,
+      replayed: false,
     });
+    return this.#recordIdempotency(idempotencyKey, signature, receipt);
   }
 
-  async relocateObjects({refs, fromNode, toNode} = {}) {
+  async relocateObjects({refs, fromNode, toNode, idempotencyKey = null} = {}) {
     if (!Array.isArray(refs) || refs.length === 0) {
       throw new TypeError('relocateObjects requires a non-empty array of ObjectRefs');
     }
+    const signature = JSON.stringify({op: 'relocateObjects', refs, fromNode, toNode});
+    const replayed = this.#checkIdempotency(idempotencyKey, signature);
+    if (replayed) return Object.freeze(replayed.receipts);
     const receipts = [];
     for (const ref of refs) {
-      receipts.push(await this.relocateObject({ref, fromNode, toNode}));
+      receipts.push(
+        await this.relocateObject({
+          ref,
+          fromNode,
+          toNode,
+          idempotent: idempotencyKey !== null,
+        }),
+      );
     }
-    return Object.freeze(receipts);
+    const frozen = Object.freeze(receipts);
+    if (idempotencyKey !== null) {
+      this.#recordIdempotency(idempotencyKey, signature, {receipts: frozen});
+    }
+    return frozen;
   }
 
-  async relocateRecords({refs, fromNode, toNode} = {}) {
+  async relocateRecords({refs, fromNode, toNode, idempotencyKey = null, idempotent = false} = {}) {
     if (!Array.isArray(refs) || refs.length === 0) {
       throw new TypeError('relocateRecords requires a non-empty array of ObjectRefs');
     }
+    const signature = JSON.stringify({op: 'relocateRecords', refs, fromNode, toNode});
+    const replayed = this.#checkIdempotency(idempotencyKey, signature);
+    if (replayed) return Object.freeze(replayed.receipts);
     const receipts = [];
     for (const ref of refs) {
-      receipts.push(await this.relocateRecord({ref, fromNode, toNode}));
+      receipts.push(
+        await this.relocateRecord({
+          ref,
+          fromNode,
+          toNode,
+          idempotent: idempotent || idempotencyKey !== null,
+        }),
+      );
     }
-    return Object.freeze(receipts);
+    const frozen = Object.freeze(receipts);
+    if (idempotencyKey !== null) {
+      this.#recordIdempotency(idempotencyKey, signature, {receipts: frozen});
+    }
+    return frozen;
+  }
+
+  async #collectCodeArtifactDependencyClosureOnNode(backend, rootArtifactRef, addRefFn) {
+    const queue = [rootArtifactRef];
+    const visited = new Set();
+    while (queue.length > 0) {
+      const currRef = queue.shift();
+      if (!isObjectRef(currRef)) continue;
+      const key = `${currRef.imageId}\0${currRef.objectId}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+
+      // eslint-disable-next-line no-await-in-loop
+      const artRec = await addRefFn(currRef, new Set(['code-artifact']));
+      if (!artRec) continue;
+      for (const dep of artRec.dependencies ?? []) {
+        if (isObjectRef(dep?.artifact)) {
+          queue.push(dep.artifact);
+        }
+      }
+      for (const srcRef of artRec.derivedFrom ?? []) {
+        if (isObjectRef(srcRef)) {
+          queue.push(srcRef);
+        }
+      }
+    }
   }
 
   async relocateBlockClosure({
@@ -458,7 +635,9 @@ class PlacementPolicy {
     fromNode,
     toNode,
     includeCodeArtifact = false,
+    includeCodeArtifactClosure = false,
     includeCapturedObjects = false,
+    idempotencyKey = null,
   } = {}) {
     if (!isObjectRef(block)) {
       throw new TypeError('relocateBlockClosure requires an ObjectRef block');
@@ -468,6 +647,17 @@ class PlacementPolicy {
     if (fromNode === toNode) {
       throw new TypeError('relocateBlockClosure requires distinct fromNode and toNode');
     }
+    const signature = JSON.stringify({
+      op: 'relocateBlockClosure',
+      block,
+      fromNode,
+      toNode,
+      includeCodeArtifact,
+      includeCodeArtifactClosure,
+      includeCapturedObjects,
+    });
+    const replayed = this.#checkIdempotency(idempotencyKey, signature);
+    if (replayed) return replayed;
 
     const source = this.#nodes.get(fromNode);
     if (!source) throw new TypeError(`unknown source node: ${fromNode}`);
@@ -501,7 +691,13 @@ class PlacementPolicy {
 
     await addRefIfResidentOnFromNode(block, new Set(['block']));
 
-    if (includeCodeArtifact && isObjectRef(blockRecord.code)) {
+    if (includeCodeArtifactClosure && isObjectRef(blockRecord.code)) {
+      await this.#collectCodeArtifactDependencyClosureOnNode(
+        source.backend,
+        blockRecord.code,
+        addRefIfResidentOnFromNode,
+      );
+    } else if (includeCodeArtifact && isObjectRef(blockRecord.code)) {
       await addRefIfResidentOnFromNode(blockRecord.code, new Set(['code-artifact']));
     }
 
@@ -526,13 +722,407 @@ class PlacementPolicy {
       refs: refsToMove,
       fromNode,
       toNode,
+      idempotent: idempotencyKey !== null,
     });
-    return Object.freeze({
+    const receipt = Object.freeze({
       block,
       fromNode,
       toNode,
       relocatedRefs: Object.freeze(refsToMove),
       receipts,
+      replayed: false,
+    });
+    return this.#recordIdempotency(idempotencyKey, signature, receipt);
+  }
+
+  async relocateWasmArtifactClosure({
+    target,
+    fromNode,
+    toNode,
+    includeCapturedObjects = false,
+    idempotencyKey = null,
+  } = {}) {
+    if (!isObjectRef(target)) {
+      throw new TypeError('relocateWasmArtifactClosure requires an ObjectRef target (Block or CodeArtifact)');
+    }
+    assertNodeId(fromNode, 'fromNode');
+    assertNodeId(toNode, 'toNode');
+    if (fromNode === toNode) {
+      throw new TypeError('relocateWasmArtifactClosure requires distinct fromNode and toNode');
+    }
+    const signature = JSON.stringify({
+      op: 'relocateWasmArtifactClosure',
+      target,
+      fromNode,
+      toNode,
+      includeCapturedObjects,
+    });
+    const replayed = this.#checkIdempotency(idempotencyKey, signature);
+    if (replayed) return replayed;
+
+    const source = this.#nodes.get(fromNode);
+    if (!source) throw new TypeError(`unknown source node: ${fromNode}`);
+    const rootRec = await source.backend.get(records(target.imageId), target.objectId);
+    if (!rootRec || rootRec.kind === RELOCATED_RECORD_KIND || rootRec.kind === SWEPT_RECORD_KIND) {
+      throw new TypeError(`WASM target not resident on ${fromNode}: ${target.imageId}/${target.objectId}`);
+    }
+
+    if (rootRec.kind === 'block') {
+      const moved = await this.relocateBlockClosure({
+        block: target,
+        fromNode,
+        toNode,
+        includeCodeArtifact: true,
+        includeCodeArtifactClosure: true,
+        includeCapturedObjects,
+      });
+      const receipt = Object.freeze({
+        format: WASM_PLACEMENT_RECEIPT_V1,
+        target,
+        targetKind: 'block',
+        fromNode,
+        toNode,
+        relocatedRefs: moved.relocatedRefs,
+        receipts: moved.receipts,
+        replayed: false,
+      });
+      return this.#recordIdempotency(idempotencyKey, signature, receipt);
+    }
+
+    if (rootRec.kind !== 'code-artifact') {
+      throw new TypeError(
+        `relocateWasmArtifactClosure requires a block or code-artifact record, got ${rootRec.kind}`,
+      );
+    }
+
+    const refsToMove = [];
+    const seenKeys = new Set();
+    const addRefIfResidentOnFromNode = async (ref, allowedKinds) => {
+      if (!isObjectRef(ref)) return null;
+      const key = `${ref.imageId}\0${ref.objectId}`;
+      if (seenKeys.has(key)) return null;
+      const rec = await source.backend.get(records(ref.imageId), ref.objectId);
+      if (
+        !rec ||
+        rec.kind === RELOCATED_RECORD_KIND ||
+        rec.kind === SWEPT_RECORD_KIND ||
+        !allowedKinds.has(rec.kind)
+      ) {
+        return null;
+      }
+      seenKeys.add(key);
+      refsToMove.push(ref);
+      return rec;
+    };
+
+    await this.#collectCodeArtifactDependencyClosureOnNode(
+      source.backend,
+      target,
+      addRefIfResidentOnFromNode,
+    );
+
+    const receipts = await this.relocateRecords({
+      refs: refsToMove,
+      fromNode,
+      toNode,
+      idempotent: idempotencyKey !== null,
+    });
+    const receipt = Object.freeze({
+      format: WASM_PLACEMENT_RECEIPT_V1,
+      target,
+      targetKind: 'code-artifact',
+      fromNode,
+      toNode,
+      relocatedRefs: Object.freeze(refsToMove),
+      receipts,
+      replayed: false,
+    });
+    return this.#recordIdempotency(idempotencyKey, signature, receipt);
+  }
+
+  async reconcileForeignRuntimePlacement({
+    definitionOrBlock,
+    preferredNode = null,
+    idempotencyKey = null,
+  } = {}) {
+    if (!isObjectRef(definitionOrBlock)) {
+      throw new TypeError('reconcileForeignRuntimePlacement requires an ObjectRef definitionOrBlock');
+    }
+    if (preferredNode !== null) assertNodeId(preferredNode, 'preferredNode');
+    const signature = JSON.stringify({
+      op: 'reconcileForeignRuntimePlacement',
+      definitionOrBlock,
+      preferredNode,
+    });
+    const replayed = this.#checkIdempotency(idempotencyKey, signature);
+    if (replayed) return replayed;
+
+    const rootMatch = await this.#readLiveRecord(definitionOrBlock);
+    if (!rootMatch) {
+      throw new TypeError(
+        `foreign runtime target not found on any registered node: ${definitionOrBlock.imageId}/${definitionOrBlock.objectId}`,
+      );
+    }
+
+    const closureEntries = [];
+    const seenKeys = new Set();
+    const visitRef = async (ref) => {
+      if (!isObjectRef(ref)) return null;
+      const key = `${ref.imageId}\0${ref.objectId}`;
+      if (seenKeys.has(key)) {
+        return closureEntries.find((e) => `${e.ref.imageId}\0${e.ref.objectId}` === key) ?? null;
+      }
+      const match = await this.#readLiveRecord(ref);
+      if (!match) return null;
+      seenKeys.add(key);
+      const entry = {ref, nodeId: match.nodeId, record: match.record};
+      closureEntries.push(entry);
+
+      if (match.record.kind === 'block') {
+        if (isObjectRef(match.record.code)) await visitRef(match.record.code);
+        if (isObjectRef(match.record.environment)) await visitRef(match.record.environment);
+      } else if (match.record.kind === 'lexical-environment') {
+        if (isObjectRef(match.record.parent)) await visitRef(match.record.parent);
+      } else if (match.record.kind === 'code-artifact') {
+        for (const dep of match.record.dependencies ?? []) {
+          if (isObjectRef(dep?.artifact)) {
+            // eslint-disable-next-line no-await-in-loop
+            await visitRef(dep.artifact);
+          }
+        }
+      }
+      return entry;
+    };
+
+    const rootEntry = await visitRef(definitionOrBlock);
+    let definitionEntry = null;
+    if (rootEntry.record.kind === 'code-artifact') {
+      const runtimeDefDep = (rootEntry.record.dependencies ?? []).find(
+        (d) => d?.role === 'runtime-definition' && isObjectRef(d?.artifact),
+      );
+      if (runtimeDefDep) {
+        definitionEntry = await visitRef(runtimeDefDep.artifact);
+      } else {
+        definitionEntry = rootEntry;
+      }
+    } else if (rootEntry.record.kind === 'block' && isObjectRef(rootEntry.record.code)) {
+      const codeEntry = await visitRef(rootEntry.record.code);
+      const runtimeDefDep = (codeEntry?.record?.dependencies ?? []).find(
+        (d) => d?.role === 'runtime-definition' && isObjectRef(d?.artifact),
+      );
+      definitionEntry = runtimeDefDep ? await visitRef(runtimeDefDep.artifact) : codeEntry;
+    }
+
+    if (!definitionEntry || definitionEntry.record.kind !== 'code-artifact') {
+      throw new TypeError(
+        `unable to resolve foreign runtime definition CodeArtifact from ${definitionOrBlock.imageId}/${definitionOrBlock.objectId}`,
+      );
+    }
+
+    const representation = definitionEntry.record.representation;
+    let resolvedProviderId = null;
+    const capableNodes = [];
+    for (const [nodeId, nodeInfo] of this.#nodes.entries()) {
+      const bindings = nodeInfo.runtime?.foreignRuntimeDefinitionBindings;
+      const providers = nodeInfo.runtime?.foreignRuntimeProviders;
+      if (bindings && typeof bindings.has === 'function' && bindings.has(representation)) {
+        const pid = bindings.get(representation);
+        if (!providers || typeof providers.has !== 'function' || providers.has(pid)) {
+          capableNodes.push(nodeId);
+          if (resolvedProviderId === null) resolvedProviderId = pid;
+        }
+      }
+    }
+
+    let selectedNode;
+    if (preferredNode !== null) {
+      if (capableNodes.length > 0 && !capableNodes.includes(preferredNode)) {
+        throw new TypeError(
+          `preferredNode ${preferredNode} does not have a registered provider for ${representation}`,
+        );
+      }
+      selectedNode = preferredNode;
+    } else if (capableNodes.length > 0) {
+      selectedNode = capableNodes.includes(definitionEntry.nodeId)
+        ? definitionEntry.nodeId
+        : capableNodes[0];
+    } else {
+      selectedNode = definitionEntry.nodeId;
+    }
+
+    const relocatedRefs = [];
+    const receipts = [];
+    for (const entry of closureEntries) {
+      if (entry.nodeId === selectedNode) continue;
+      if (entry.record.kind === 'object' && isSystemInfrastructureObject(entry.record)) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const r = await this.relocateRecord({
+        ref: entry.ref,
+        fromNode: entry.nodeId,
+        toNode: selectedNode,
+        idempotent: true,
+      });
+      relocatedRefs.push(entry.ref);
+      receipts.push(r);
+    }
+
+    const receipt = Object.freeze({
+      format: FOREIGN_RUNTIME_PLACEMENT_RECEIPT_V1,
+      definitionRef: definitionEntry.ref,
+      representation,
+      providerId: resolvedProviderId,
+      capableNodes: Object.freeze(capableNodes),
+      selectedNode,
+      relocatedRefs: Object.freeze(relocatedRefs),
+      receipts: Object.freeze(receipts),
+      replayed: false,
+    });
+    return this.#recordIdempotency(idempotencyKey, signature, receipt);
+  }
+
+  async reconcileInterruptedRelocations({imageId = null, refs = null} = {}) {
+    const candidatePairs = new Map(); // `${imageId}\0${objectId}` -> {imageId, objectId}
+    if (Array.isArray(refs) && refs.length > 0) {
+      for (const ref of refs) {
+        if (!isObjectRef(ref)) {
+          throw new TypeError('reconcileInterruptedRelocations refs must be ObjectRefs');
+        }
+        candidatePairs.set(`${ref.imageId}\0${ref.objectId}`, {
+          imageId: ref.imageId,
+          objectId: ref.objectId,
+        });
+      }
+    } else {
+      const imageIds = new Set();
+      if (typeof imageId === 'string' && imageId.length > 0) {
+        imageIds.add(imageId);
+      } else {
+        for (const {backend} of this.#nodes.values()) {
+          if (typeof backend.scan === 'function') {
+            // eslint-disable-next-line no-await-in-loop
+            const imgs = await backend.scan(IMAGE_COLLECTION);
+            for (const entry of imgs ?? []) {
+              const id = entry?.value?.id ?? entry?.key ?? entry?.id;
+              if (id) imageIds.add(id);
+            }
+          }
+        }
+      }
+      for (const imgId of imageIds) {
+        for (const {backend} of this.#nodes.values()) {
+          if (typeof backend.scan === 'function') {
+            // eslint-disable-next-line no-await-in-loop
+            const recs = await backend.scan(records(imgId));
+            for (const entry of recs ?? []) {
+              const id = entry?.value?.id ?? entry?.key ?? entry?.id;
+              if (id) {
+                candidatePairs.set(`${imgId}\0${id}`, {
+                  imageId: imgId,
+                  objectId: id,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    const healed = [];
+    const at = this.clock().toISOString();
+
+    for (const {imageId: imgId, objectId: objId} of candidatePairs.values()) {
+      const liveHolders = [];
+      for (const [nodeId, {backend}] of this.#nodes.entries()) {
+        // eslint-disable-next-line no-await-in-loop
+        const rec = await backend.get(records(imgId), objId);
+        if (rec && rec.kind !== RELOCATED_RECORD_KIND && rec.kind !== SWEPT_RECORD_KIND) {
+          liveHolders.push({nodeId, backend, record: rec});
+        }
+      }
+      if (liveHolders.length <= 1) continue;
+
+      // Determine authoritative target node vs interrupted source node(s)
+      // 1. Check history events for explicit relocatedFrom / relocatedTo provenance
+      let chosenTarget = null;
+      let chosenFrom = null;
+      for (const holder of liveHolders) {
+        if (typeof holder.backend.readStream === 'function') {
+          // eslint-disable-next-line no-await-in-loop
+          const events = await holder.backend.readStream(history(imgId));
+          for (let i = events.length - 1; i >= 0; i -= 1) {
+            const ev = events[i]?.value ?? events[i];
+            const evId = ev?.objectId ?? ev?.blockId ?? ev?.environmentId ?? ev?.artifactId;
+            if (evId === objId && ev?.relocatedTo === holder.nodeId && ev?.relocatedFrom) {
+              chosenTarget = holder;
+              chosenFrom = ev.relocatedFrom;
+              break;
+            }
+          }
+        }
+        if (chosenTarget) break;
+      }
+
+      // 2. Fallback to latest updatedAt timestamp among live holders
+      if (!chosenTarget) {
+        const sorted = [...liveHolders].sort((a, b) => {
+          const tA = a.record.updatedAt ?? '';
+          const tB = b.record.updatedAt ?? '';
+          return tB.localeCompare(tA) || a.nodeId.localeCompare(b.nodeId);
+        });
+        chosenTarget = sorted[0];
+      }
+
+      const staleHolders = liveHolders.filter((h) => h.nodeId !== chosenTarget.nodeId);
+      for (const stale of staleHolders) {
+        const tombstone = {
+          kind: RELOCATED_RECORD_KIND,
+          id: objId,
+          imageId: imgId,
+          recordKind: stale.record.kind,
+          node: chosenTarget.nodeId,
+          fromNode: stale.nodeId,
+          relocatedAt: at,
+        };
+        // eslint-disable-next-line no-await-in-loop
+        await stale.backend.transaction(async (txCandidate) => {
+          const transaction = assertBackendTransaction(txCandidate);
+          const savedTombstone = await transaction.put(records(imgId), objId, tombstone, {
+            expectedVersion: stale.record._version,
+          });
+          await transaction.append(history(imgId), {
+            type: stale.record.kind === 'object' ? 'object.relocated' : 'record.relocated',
+            at,
+            objectId: objId,
+            recordId: objId,
+            recordKind: stale.record.kind,
+            fromNode: stale.nodeId,
+            toNode: chosenTarget.nodeId,
+            relocationVersion: savedTombstone._version,
+            reconciledInterruptedRelocation: true,
+          });
+        });
+
+        const ref = objectRef(imgId, objId);
+        for (const locator of this.#locators) {
+          locator.invalidate?.(ref);
+        }
+
+        healed.push(
+          Object.freeze({
+            ref,
+            recordKind: chosenTarget.record.kind,
+            fromNode: chosenFrom ?? stale.nodeId,
+            toNode: chosenTarget.nodeId,
+            targetVersion: chosenTarget.record._version,
+          }),
+        );
+      }
+    }
+
+    return Object.freeze({
+      format: PLACEMENT_RECOVERY_REPORT_V1,
+      healedCount: healed.length,
+      healed: Object.freeze(healed),
     });
   }
 
@@ -551,7 +1141,14 @@ class PlacementPolicy {
     });
   }
 
-  async #relocateRecordInternal({ref, fromNode, toNode, requireObjectOnly}) {
+  async #relocateRecordInternal({
+    ref,
+    fromNode,
+    toNode,
+    requireObjectOnly,
+    idempotencyKey = null,
+    idempotent = false,
+  }) {
     if (!isObjectRef(ref)) {
       throw new TypeError(`${requireObjectOnly ? 'relocateObject' : 'relocateRecord'} requires an ObjectRef`);
     }
@@ -562,12 +1159,46 @@ class PlacementPolicy {
         `${requireObjectOnly ? 'relocateObject' : 'relocateRecord'} requires distinct fromNode and toNode`,
       );
     }
+    const signature = JSON.stringify({
+      op: requireObjectOnly ? 'relocateObject' : 'relocateRecord',
+      ref,
+      fromNode,
+      toNode,
+    });
+    const replayed = this.#checkIdempotency(idempotencyKey, signature);
+    if (replayed) return replayed;
+
     const source = this.#nodes.get(fromNode);
     if (!source) throw new TypeError(`unknown source node: ${fromNode}`);
     const target = this.#nodes.get(toNode);
     if (!target) throw new TypeError(`unknown target node: ${toNode}`);
 
     const current = await source.backend.get(records(ref.imageId), ref.objectId);
+    const existingTarget = await target.backend.get(records(ref.imageId), ref.objectId);
+
+    // Durable idempotent convergence: if source already holds a relocated marker pointing to toNode
+    // and toNode holds the live record, converge when idempotent / idempotencyKey is enabled.
+    if (
+      (idempotent || idempotencyKey !== null) &&
+      current?.kind === RELOCATED_RECORD_KIND &&
+      current.node === toNode &&
+      existingTarget &&
+      existingTarget.kind !== RELOCATED_RECORD_KIND &&
+      existingTarget.kind !== SWEPT_RECORD_KIND
+    ) {
+      const targetHasImage = Boolean(await target.backend.get(IMAGE_COLLECTION, ref.imageId));
+      const convergedReceipt = Object.freeze({
+        ref,
+        recordKind: existingTarget.kind,
+        fromNode,
+        toNode,
+        version: existingTarget._version,
+        residencyKind: targetHasImage ? WHOLE_IMAGE_RESIDENCY : PER_OBJECT_RESIDENCY,
+        replayed: true,
+      });
+      return this.#recordIdempotency(idempotencyKey, signature, convergedReceipt);
+    }
+
     if (!current || current.kind === RELOCATED_RECORD_KIND || current.kind === SWEPT_RECORD_KIND) {
       throw new TypeError(`object not resident on ${fromNode}: ${ref.imageId}/${ref.objectId}`);
     }
@@ -582,7 +1213,6 @@ class PlacementPolicy {
       );
     }
 
-    const existingTarget = await target.backend.get(records(ref.imageId), ref.objectId);
     if (
       existingTarget &&
       existingTarget.kind !== RELOCATED_RECORD_KIND &&
@@ -599,7 +1229,10 @@ class PlacementPolicy {
       const saved = await transaction.put(records(ref.imageId), ref.objectId, candidate, {
         expectedVersion: existingTarget ? existingTarget._version : 0,
       });
-      await transaction.append(history(ref.imageId), buildTargetPutHistoryEvent(saved, at));
+      await transaction.append(
+        history(ref.imageId),
+        buildTargetPutHistoryEvent(saved, at, {fromNode, toNode}),
+      );
       return saved;
     });
 
@@ -651,33 +1284,45 @@ class PlacementPolicy {
     }
 
     const targetHasImage = Boolean(await target.backend.get(IMAGE_COLLECTION, ref.imageId));
-    return Object.freeze({
+    const receipt = Object.freeze({
       ref,
       recordKind: current.kind,
       fromNode,
       toNode,
       version: storedTarget._version,
       residencyKind: targetHasImage ? WHOLE_IMAGE_RESIDENCY : PER_OBJECT_RESIDENCY,
+      replayed: false,
     });
+    return this.#recordIdempotency(idempotencyKey, signature, receipt);
   }
 
-  async relocateObject({ref, fromNode, toNode} = {}) {
+  async relocateObject({ref, fromNode, toNode, idempotencyKey = null, idempotent = false} = {}) {
     return await this.#relocateRecordInternal({
       ref,
       fromNode,
       toNode,
       requireObjectOnly: true,
+      idempotencyKey,
+      idempotent,
     });
   }
 
-  async relocateRecord({ref, fromNode, toNode} = {}) {
+  async relocateRecord({ref, fromNode, toNode, idempotencyKey = null, idempotent = false} = {}) {
     return await this.#relocateRecordInternal({
       ref,
       fromNode,
       toNode,
       requireObjectOnly: false,
+      idempotencyKey,
+      idempotent,
     });
   }
 }
 
-export {PlacementPolicy};
+export {
+  FOREIGN_RUNTIME_PLACEMENT_RECEIPT_V1,
+  PLACEMENT_RECOVERY_REPORT_V1,
+  PlacementIdempotencyConflictError,
+  PlacementPolicy,
+  WASM_PLACEMENT_RECEIPT_V1,
+};
