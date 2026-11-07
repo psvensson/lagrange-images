@@ -15,6 +15,7 @@ import {
   installCommonLispProgram,
   installCommonLispRuntime,
   installCommonLispSystem,
+  installCommonLispSystemFromArtifact,
   integerValue,
   objectRef,
   parseCommonLispDefsystem,
@@ -24,6 +25,7 @@ import {
   symbolObjectId,
   textValue,
 } from '../src/runtime.js';
+import {exportGraphBundle, importGraphBundle} from '../src/graph/bundle.js';
 
 async function withRuntime(fn) {
   const runtime = await createRuntime({backend: {mode: 'mock'}});
@@ -1254,6 +1256,50 @@ for (const lane of ['neutral', 'wasm']) {
 
       assert.deepEqual(installedSys.loadOrder, ['pkg', 'shapes/base', 'shapes/metrics', 'report']);
       assert.ok(installedSys.dependentSystems['CL-MATH-BASE']);
+      assert.deepEqual(
+        Object.keys(installedSys.componentArtifacts),
+        ['pkg', 'shapes/base', 'shapes/metrics', 'report'],
+      );
+      const sysArtifactRecord = await runtime.images.getCodeArtifact('app', installedSys.artifact.objectId);
+      assert.deepEqual(
+        sysArtifactRecord.dependencies.map((d) => d.role),
+        [
+          'system:CL-MATH-BASE',
+          'component:pkg',
+          'component:shapes/base',
+          'component:shapes/metrics',
+          'component:report',
+        ],
+      );
+
+      // Export the system CodeArtifact closure into a clean image and recover the entire multi-system .asd from the imported artifact alone
+      await runtime.images.createImage({id: 'recovered-sys', name: 'Recovered System'});
+      const {bundle} = await exportGraphBundle({
+        images: runtime.images,
+        roots: {geometrySys: installedSys.artifact},
+      });
+      const imported = await importGraphBundle({
+        images: runtime.images,
+        targetImageId: 'recovered-sys',
+        bundle,
+      });
+      const recoveredSys = await installCommonLispSystemFromArtifact({
+        runtime,
+        imageId: 'recovered-sys',
+        systemArtifact: imported.roots.geometrySys,
+        lane,
+      });
+      assert.equal(recoveredSys.system.name, 'CL-GEOMETRY-APP');
+      assert.deepEqual(recoveredSys.loadOrder, ['pkg', 'shapes/base', 'shapes/metrics', 'report']);
+      assert.deepEqual(
+        await evaluateCommonLispSource({
+          runtime,
+          imageId: 'recovered-sys',
+          lane,
+          source: '(cl-geometry-app:describe-rect 3 4 10)',
+        }),
+        textValue('3x4@10=>120'),
+      );
 
       const sysMeta = await readCommonLispSystemDefinition({
         images: runtime.images,

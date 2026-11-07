@@ -18,16 +18,19 @@ import {
   authorizedDescribeSmalltalkClass,
   authorizedInstallCommonLispProgram,
   authorizedInstallCommonLispSystem,
+  authorizedInstallCommonLispSystemFromArtifact,
   authorizedReplaceCommonLispDefinition,
   commonLispDefinitionResource,
   createRuntime,
   evaluateCommonLispSource,
   installCommonLispProgram,
+  installCommonLispSystem,
   integerValue,
   objectRef,
   objectResource,
   textValue,
 } from '../src/runtime.js';
+import {exportGraphBundle, importGraphBundle} from '../src/graph/bundle.js';
 import {createPortableRuntime} from '../src/portable-runtime.js';
 import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
 import {createNodeSourceReader} from '../src/portable-artifact/node-source-reader.js';
@@ -751,6 +754,89 @@ test('authorizedInstallCommonLispProgram, authorizedInstallCommonLispSystem, and
         source: '(summarize-entry 41)',
       }),
       textValue('total=42'),
+    );
+
+    // 7. authorizedInstallCommonLispSystemFromArtifact enforces authority before existence and recovers from imported bundle
+    const exportedSystem = await installCommonLispSystem({
+      runtime,
+      imageId: 'app',
+      asdSource: `
+        (defsystem :portable-ledger
+          :description "Portable ledger system"
+          :version "1.0.0"
+          :serial t
+          :components
+          ((:file "calc")
+           (:file "fmt")))
+      `,
+      files: {
+        'calc.lisp': '(defun ledger-calc (n) (* n 10))',
+        'fmt.lisp': '(defun ledger-fmt (n) (format nil "val=~D" (ledger-calc n)))',
+      },
+    });
+    await runtime.images.createImage({id: 'target-cl'});
+    const {bundle} = await exportGraphBundle({
+      images: runtime.images,
+      roots: {ledger: exportedSystem.artifact},
+    });
+    const imported = await importGraphBundle({
+      images: runtime.images,
+      targetImageId: 'target-cl',
+      bundle,
+    });
+    const targetSysRef = imported.roots.ledger;
+    const targetSysRecord = await runtime.images.getCodeArtifact('target-cl', targetSysRef.objectId);
+
+    // Denied caller without object/read on systemArtifact performs zero backend reads
+    let artifactReads = 0;
+    const origGetTarget = runtime.backend.get.bind(runtime.backend);
+    runtime.backend.get = async (collection, key) => {
+      artifactReads += 1;
+      return await origGetTarget(collection, key);
+    };
+    try {
+      await assert.rejects(
+        authorizedInstallCommonLispSystemFromArtifact({
+          runtime,
+          imageId: 'target-cl',
+          systemArtifact: targetSysRef,
+          require: requireFor(runtime, [namespaceWriteGrant('target-cl')]),
+        }),
+        {name: 'AuthorityError'},
+      );
+      assert.equal(artifactReads, 0, 'missing object/read on systemArtifact must perform zero backend reads');
+    } finally {
+      runtime.backend.get = origGetTarget;
+    }
+
+    const artifactGrants = [
+      namespaceWriteGrant('target-cl'),
+      {operation: OBJECT_READ_OPERATION, resource: objectResource('target-cl', targetSysRef.objectId)},
+      ...targetSysRecord.dependencies.map((d) => ({
+        operation: OBJECT_READ_OPERATION,
+        resource: objectResource('target-cl', d.artifact.objectId),
+      })),
+      definitionWriteGrant('target-cl', COMMON_LISP_DEFINITION_KIND.SYSTEM, 'portable-ledger'),
+    ];
+    const fromArtifactReceipt = await authorizedInstallCommonLispSystemFromArtifact({
+      runtime,
+      imageId: 'target-cl',
+      systemArtifact: targetSysRef,
+      require: requireFor(runtime, artifactGrants),
+    });
+    assert.equal(fromArtifactReceipt.installed, true);
+    assert.equal(fromArtifactReceipt.system, 'PORTABLE-LEDGER');
+    assert.equal(fromArtifactReceipt.version, '1.0.0');
+    assert.deepEqual(fromArtifactReceipt.loadOrder, ['calc', 'fmt']);
+    assertNoStorageLayout(fromArtifactReceipt, 'system artifact install receipt');
+
+    assert.deepEqual(
+      await evaluateCommonLispSource({
+        runtime,
+        imageId: 'target-cl',
+        source: '(ledger-fmt 7)',
+      }),
+      textValue('val=70'),
     );
   });
 });

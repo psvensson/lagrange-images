@@ -876,6 +876,13 @@ function commonLispSystemArtifactId(name, serialized = null) {
   return serialized ? `${base}/${base64urlEncode(utf8Encode(serialized))}` : base;
 }
 
+function commonLispSystemComponentArtifactId(systemName, componentPath, sourceText = null) {
+  const canonical = requiredText(systemName, 'Common Lisp system name').toUpperCase();
+  const pathPart = requiredText(componentPath, 'Common Lisp system component path');
+  const base = `common-lisp/system-component/${base64urlEncode(utf8Encode(`${canonical}:${pathPart}`))}`;
+  return sourceText ? `${base}/${base64urlEncode(utf8Encode(sourceText))}` : base;
+}
+
 function commonLispSignatureBindingId(name) {
   const canonical = requiredText(name, 'Common Lisp function signature name').toUpperCase();
   return `common-lisp/signature-binding/${base64urlEncode(utf8Encode(canonical))}`;
@@ -9672,6 +9679,7 @@ async function installCommonLispSystem({
   systems = {},
   systemName = null,
   lane = 'neutral',
+  _parsedSysDef = null,
   _visiting = new Set(),
   _installed = new Map(),
 } = {}) {
@@ -9687,7 +9695,7 @@ async function installCommonLispSystem({
     lane,
   });
 
-  const sysDef = parseCommonLispDefsystem(asdSource, {systemName});
+  const sysDef = _parsedSysDef ?? parseCommonLispDefsystem(asdSource, {systemName});
   if (_installed.has(sysDef.name)) {
     return _installed.get(sysDef.name);
   }
@@ -9697,12 +9705,20 @@ async function installCommonLispSystem({
   _visiting.add(sysDef.name);
 
   const dependentSystems = {};
+  const artifactDependencies = [];
   for (const depName of sysDef.dependsOn) {
     if (_visiting.has(depName)) {
       throw new SyntaxError(`cyclic Common Lisp system dependency involving ${depName}`);
     }
     if (_installed.has(depName)) {
-      dependentSystems[depName] = _installed.get(depName);
+      const depInstalled = _installed.get(depName);
+      dependentSystems[depName] = depInstalled;
+      if (depInstalled?.artifact) {
+        artifactDependencies.push({
+          role: `system:${depName}`,
+          artifact: depInstalled.artifact,
+        });
+      }
       continue;
     }
     const depSpec = lookupDependencySystemSpec(systems, depName);
@@ -9727,25 +9743,55 @@ async function installCommonLispSystem({
         _installed,
       });
       dependentSystems[depName] = depResult;
+      artifactDependencies.push({
+        role: `system:${depName}`,
+        artifact: depResult.artifact,
+      });
       continue;
     }
-    const existingInImage = await readCommonLispSystemDefinition({
+    const existingEntry = await readCommonLispSystemBindingRecord({
       images: effectiveImages,
       imageId,
       name: depName,
     });
-    if (!existingInImage) {
+    if (!existingEntry) {
       throw new SyntaxError(`Common Lisp system ${sysDef.name} depends on unknown system ${depName}`);
     }
-    dependentSystems[depName] = existingInImage;
+    dependentSystems[depName] = existingEntry.definition;
+    artifactDependencies.push({
+      role: `system:${depName}`,
+      artifact: existingEntry.artifactRef,
+    });
   }
 
   const programs = {};
+  const componentArtifacts = {};
   for (const componentPath of sysDef.loadOrder) {
     const fileSource = lookupComponentFileSource(files, componentPath);
     if (fileSource === null) {
       throw new SyntaxError(`Common Lisp system ${sysDef.name} missing source file for component ${componentPath}`);
     }
+    const sourceText = typeof fileSource === 'string'
+      ? fileSource
+      : fileSource.map(formatCommonLispForm).join('\n');
+    const componentArtifact = await ensureCodeArtifact(effectiveImages, imageId, {
+      id: commonLispSystemComponentArtifactId(sysDef.name, componentPath, sourceText),
+      languageId: COMMON_LISP_ID,
+      representation: COMMON_LISP_SOURCE_V0,
+      logicalPath: `${componentPath}.lisp`,
+      content: textValue(sourceText),
+      metadata: {
+        commonLisp: 'system-component',
+        systemName: sysDef.name,
+        componentPath,
+      },
+    });
+    const componentRef = objectRef(imageId, componentArtifact.id);
+    componentArtifacts[componentPath] = componentRef;
+    artifactDependencies.push({
+      role: `component:${componentPath}`,
+      artifact: componentRef,
+    });
     const progResult = await installCommonLispProgram({
       images: effectiveImages,
       compilation: effectiveCompilation,
@@ -9779,6 +9825,7 @@ async function installCommonLispSystem({
     languageId: COMMON_LISP_ID,
     representation: COMMON_LISP_SYSTEM_V0,
     content: textValue(serialized),
+    dependencies: artifactDependencies,
     metadata: {commonLisp: 'defsystem', systemName: sysDef.name},
   });
   const bindingRef = await ensureGlobalBindingInNamespace({
@@ -9794,6 +9841,7 @@ async function installCommonLispSystem({
   const result = Object.freeze({
     system: sysDef,
     artifact: objectRef(imageId, artifact.id),
+    componentArtifacts: Object.freeze(componentArtifacts),
     bindingRef,
     loadOrder: sysDef.loadOrder,
     programs: Object.freeze(programs),
@@ -9803,7 +9851,112 @@ async function installCommonLispSystem({
   return result;
 }
 
-async function readCommonLispSystemDefinition({
+async function installCommonLispSystemFromArtifact({
+  images,
+  compilation = null,
+  runtime = null,
+  imageId,
+  systemArtifact,
+  lane = 'neutral',
+  _visiting = new Set(),
+  _installed = new Map(),
+} = {}) {
+  const effectiveImages = images ?? runtime?.images;
+  const effectiveCompilation = resolveCompilation(effectiveImages, compilation ?? runtime?.compilation ?? null);
+  requiredText(imageId, 'image id');
+  assertMethodLane(lane);
+
+  const artifactId = typeof systemArtifact === 'string'
+    ? systemArtifact
+    : isObjectRef(systemArtifact)
+      ? systemArtifact.objectId
+      : '';
+  requiredText(artifactId, 'Common Lisp system artifact id');
+  if (isObjectRef(systemArtifact) && systemArtifact.imageId !== imageId) {
+    throw new TypeError(`Common Lisp system artifact ${systemArtifact.imageId}/${artifactId} does not belong to image ${imageId}`);
+  }
+
+  const artifact = await effectiveImages.getCodeArtifact(imageId, artifactId);
+  if (!artifact || artifact.representation !== COMMON_LISP_SYSTEM_V0 || artifact.content?.kind !== VALUE_KIND.TEXT) {
+    throw new TypeError(`CodeArtifact ${imageId}/${artifactId} is not a ${COMMON_LISP_SYSTEM_V0} artifact`);
+  }
+
+  const rawSysDef = JSON.parse(artifact.content.value);
+  const sysDef = Object.freeze({
+    name: requiredText(rawSysDef?.name, 'Common Lisp system name').toUpperCase(),
+    spelling: rawSysDef?.spelling ?? rawSysDef?.name,
+    description: rawSysDef?.description ?? null,
+    version: rawSysDef?.version ?? null,
+    serial: Boolean(rawSysDef?.serial),
+    dependsOn: Object.freeze([...(rawSysDef?.dependsOn ?? [])]),
+    components: Object.freeze([...(rawSysDef?.components ?? [])]),
+    loadOrder: Object.freeze([...(rawSysDef?.loadOrder ?? [])]),
+  });
+
+  if (_installed.has(sysDef.name)) {
+    return _installed.get(sysDef.name);
+  }
+  if (_visiting.has(sysDef.name)) {
+    throw new SyntaxError(`cyclic Common Lisp system dependency involving ${sysDef.name}`);
+  }
+
+  const depSystemRefs = new Map();
+  const files = {};
+  for (const dep of artifact.dependencies ?? []) {
+    const role = typeof dep?.role === 'string' ? dep.role : '';
+    const depRef = dep?.artifact;
+    if (!isObjectRef(depRef) || depRef.imageId !== imageId) continue;
+    if (role.startsWith('system:')) {
+      const depName = role.slice('system:'.length).toUpperCase();
+      if (depName.length > 0) {
+        depSystemRefs.set(depName, depRef);
+      }
+    } else if (role.startsWith('component:')) {
+      const componentPath = role.slice('component:'.length);
+      const compArtifact = await effectiveImages.getCodeArtifact(imageId, depRef.objectId);
+      if (!compArtifact || compArtifact.representation !== COMMON_LISP_SOURCE_V0 || compArtifact.content?.kind !== VALUE_KIND.TEXT) {
+        throw new TypeError(
+          `Common Lisp system ${sysDef.name} component ${componentPath} artifact ${imageId}/${depRef.objectId} is not a ${COMMON_LISP_SOURCE_V0} artifact`,
+        );
+      }
+      files[componentPath] = compArtifact.content.value;
+    }
+  }
+
+  _visiting.add(sysDef.name);
+  for (const depName of sysDef.dependsOn) {
+    if (_visiting.has(depName)) {
+      throw new SyntaxError(`cyclic Common Lisp system dependency involving ${depName}`);
+    }
+    if (!_installed.has(depName) && depSystemRefs.has(depName)) {
+      await installCommonLispSystemFromArtifact({
+        images: effectiveImages,
+        compilation: effectiveCompilation,
+        runtime,
+        imageId,
+        systemArtifact: depSystemRefs.get(depName),
+        lane,
+        _visiting,
+        _installed,
+      });
+    }
+  }
+  _visiting.delete(sysDef.name);
+
+  return await installCommonLispSystem({
+    images: effectiveImages,
+    compilation: effectiveCompilation,
+    runtime,
+    imageId,
+    _parsedSysDef: sysDef,
+    files,
+    lane,
+    _visiting,
+    _installed,
+  });
+}
+
+async function readCommonLispSystemBindingRecord({
   images,
   imageId,
   name,
@@ -9825,7 +9978,7 @@ async function readCommonLispSystemDefinition({
     );
   }
   const parsed = JSON.parse(val.value);
-  return Object.freeze({
+  const definition = Object.freeze({
     name: canonical,
     description: parsed.description ?? null,
     version: parsed.version ?? null,
@@ -9834,6 +9987,17 @@ async function readCommonLispSystemDefinition({
     components: Object.freeze([...(parsed.components ?? [])]),
     loadOrder: Object.freeze([...(parsed.loadOrder ?? [])]),
   });
+  return Object.freeze({
+    definition,
+    serialized: val.value,
+    artifactRef: objectRef(imageId, commonLispSystemArtifactId(canonical, val.value)),
+    bindingRef,
+  });
+}
+
+async function readCommonLispSystemDefinition(options = {}) {
+  const entry = await readCommonLispSystemBindingRecord(options);
+  return entry ? entry.definition : null;
 }
 
 export {
@@ -9873,6 +10037,7 @@ export {
   commonLispStructBindingId,
   commonLispSystemArtifactId,
   commonLispSystemBindingId,
+  commonLispSystemComponentArtifactId,
   commonLispVariableBindingId,
   compileCommonLispBlock,
   compileCommonLispSemanticProgram,
@@ -9883,6 +10048,7 @@ export {
   installCommonLispProgram,
   installCommonLispRuntime,
   installCommonLispSystem,
+  installCommonLispSystemFromArtifact,
   listCommonLispNamespaceBindings,
   macroexpand1CommonLispForm,
   macroexpandCommonLispForm,
