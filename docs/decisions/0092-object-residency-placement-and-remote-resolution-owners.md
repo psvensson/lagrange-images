@@ -1,17 +1,17 @@
 # ADR 0092: Object residency, placement and remote resolution are generic Images owners over Lagrange routing
 
-Status: accepted — whole-image locator and shared-server resolution candidates are implemented and proven across two attached runtimes over a shared SQL application server (`test/object-locator.test.js`); real Lagrange shared-server Life acceptance remains open (`lagrange-images-0pxf.4`)
+Status: accepted — `ObjectLocator` (`whole-image/v1` + `per-object/v1`), `PlacementPolicy` (`src/graph/placement.js`), and `RemoteRecordResolver` (`resolveAt`, `resolveImageAt`, `writeRecordAt`) are implemented and proven across both shared-server and two-node SQLite `LagrangeBackend` runtimes (`test/object-locator.test.js`, `test/cuis-life-m6-distributed-acceptance.test.js`); real Lagrange shared-server Life acceptance remains open (`lagrange-images-0pxf.4`)
 
 **Decides WHERE the generic owners M6 needs live and WHAT each may own.** ADR 0085 M6 asks whether the exact M5 application runs unchanged when its ordinary objects
 are placed across Lagrange nodes, with no placement or routing logic in the application, the Cuis
 importer or the Cuis personality. The M6.1 census (bead `lagrange-images-0pxf.2`) found that
 residency and placement have no owner at all and that resolution, routing and execution placement
 have single-node owners only. The M6.2 witness (bead `lagrange-images-0pxf.3`,
-`test/cuis-life-m6-two-node-red.test.js`) then measured the refusals those gaps produce. M6.3
-(`lagrange-images-0pxf.4`) adds the first candidate owners: the whole-image object locator
-(`src/graph/locator.js`) and the shared-server remote record resolver
-(`src/graph/remote-resolution.js`), keeping the boundary fixed so that the repair does not become
-a second distribution system inside Images.
+`test/cuis-life-m6-two-node-red.test.js`) then measured the refusals those gaps produce. M6.3-M6.6
+(`lagrange-images-0pxf.4`, `lagrange-images-0pxf.12`) implement the generic owners: the object
+locator (`src/graph/locator.js`), the placement policy owner (`src/graph/placement.js`), and the
+remote record resolver (`src/graph/remote-resolution.js`), keeping the boundary fixed so that the
+repair does not become a second distribution system inside Images.
 
 ## Context
 
@@ -61,35 +61,41 @@ generic owner, the **object locator** (`src/graph/locator.js`). It answers, for 
 ref, where the record can be read and written. Identity `(imageId, objectId)` is unchanged by
 residency; a moved record is the same record.
 
-The first form of residency is **whole-image**: an image resides where its backend session does.
-That is exactly what the M6.2 refusals describe ("image not found" is a residency answer given by
-accident), so the first owner makes the accidental answer explicit rather than inventing a finer
-one. `ObjectLocator.locate(ref)` checks the image record in the shared backend session and returns
-`{placementKind: 'whole-image', imageId, collection, key}`. Per-object residency is deferred until
-whole-image residency is green across two nodes.
+The first form of residency is **whole-image** (`WHOLE_IMAGE_RESIDENCY = 'whole-image/v1'`): an
+image resides where its backend session does. That is exactly what the M6.2 refusals describe
+("image not found" is a residency answer given by accident), so the first owner makes the
+accidental answer explicit rather than inventing a finer one. When peer node backends are registered
+with `ObjectLocator` (`peers` / `registerPeer`), `ObjectLocator.locate(ref)` also resolves
+**per-object residency** (`PER_OBJECT_RESIDENCY = 'per-object/v1'`) from durable relocation markers
+(`{kind: 'relocated', id, imageId, node}`) stored in the per-image record collection, returning an
+opaque `ObjectResidency` (`{kind: 'per-object/v1', imageId, objectId}`) without exposing any backend,
+node, partition or replica handle on the residency value.
 
 ### 2. Placement is a separate generic owner, never consulted by a language
 
-**Placement policy** decides where a NEW record is created and when, if ever, a record moves. It
-is a generic owner (planned; its locus is decided with the first placement that is not "the image
-it belongs to"). Placement is never an argument of a send, a slot, a Value, a class or an import;
-language personalities and importers cannot observe it. If a feature seems to need the Cuis
-importer to know where a class will live, the boundary is wrong.
+**Placement policy** (`PlacementPolicy` in `src/graph/placement.js`) decides where a record is
+placed and when a record moves (`relocateObject({ref, fromNode, toNode})`, `inspectResidency(ref)`).
+When `relocateObject` moves an object record from `fromNode` to `toNode`, it preserves the exact
+`(imageId, objectId)` identity, writes the object record to `toNode`'s backend with an `object.put`
+history event, and atomically replaces `fromNode`'s copy at its current `_version` with a durable
+`{kind: 'relocated', id, imageId, node: toNode}` marker (`object.relocated` history event) while
+refusing any relocation that would create duplicate live object records across nodes. Placement is
+never an argument of a send, a slot, a Value, a class or an import; language personalities and
+importers cannot observe it.
 
-Residency and placement are two owners on purpose: one answers "where is it", the other "where
-should it be"; the M6.5 restart falsifier records them separately because objects moving is not
-identity loss.
+Residency and placement are two owners on purpose: one answers "where is it" (`ObjectLocator`), the
+other "where should it be" (`PlacementPolicy`); the M6.5 restart proof verifies that both identity
+and per-object placement survive a full two-node runtime restart from durable SQLite state alone.
 
 ### 3. Remote resolution is an interaction owner over Lagrange routing, and Images never owns transport
 
 The arrow **Images runtime -> a record resident on another node** has one owner: **remote
-resolution** (`src/graph/remote-resolution.js`). It translates a read or a dispatch of a ref that
-the local composed backend does not hold into a request that Lagrange routes to the node holding
-it, and it owns the error mapping (the M6.2 refusals become classified remote errors that name the
-ref and the missing residency, never a raw transport failure), read idempotency, and the rule that
-authority is re-checked at the resolving node and never carried. `GraphImageService.getRecord`
-delegates record reads through `ObjectLocator.locate(ref)` and
-`RemoteRecordResolver.resolveAt(ref, residency)`.
+resolution** (`src/graph/remote-resolution.js`). It translates a read or write of a ref whose
+located residency points to another node's backend session (`resolveAt(ref, residency)`,
+`resolveImageAt(imageId, residency)`, `writeRecordAt(ref, residency, ...)`), and it owns the error
+mapping, read idempotency, and the rule that authority is checked at the executing runtime and never
+cached in durable state. `GraphImageService.getImage`, `GraphImageService.getRecord` and
+`GraphImageService.putObject` delegate through `ObjectLocator` and `RemoteRecordResolver`.
 
 Images does **not** implement transport, membership, replication or consensus. Those are Lagrange's
 (ADR 0033's placement of the durable backend below Images stands). An Images-side RPC, gossip or

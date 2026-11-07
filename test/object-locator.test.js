@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {MockBackend} from '../src/backend/mock-backend.js';
-import {ObjectLocator, WHOLE_IMAGE_RESIDENCY} from '../src/graph/locator.js';
+import {ObjectLocator, PER_OBJECT_RESIDENCY, WHOLE_IMAGE_RESIDENCY} from '../src/graph/locator.js';
+import {PlacementPolicy} from '../src/graph/placement.js';
 import {RemoteRecordResolver} from '../src/graph/remote-resolution.js';
 import {ImageService} from '../src/image/graph-image-service.js';
 import {records} from '../src/image/storage-layout.js';
@@ -159,6 +160,99 @@ test('execution-scoped arenaImagesView memoizes durable object reads and invalid
     assert.equal(objectReads, 3);
   } finally {
     await backend.stop();
+  }
+});
+
+test('PlacementPolicy relocates an object across separate backends with per-object residency, routes reads and writes, prevents duplicate live records, and relocates back', async () => {
+  const backendB = new MockBackend();
+  const backendA = new MockBackend();
+  await backendB.start();
+  await backendA.start();
+  try {
+    const imagesB = new ImageService({backend: backendB});
+    const imagesA = new ImageService({backend: backendA});
+    await imagesB.createImage({id: 'app'});
+    const shape = await imagesB.putShape('app', {
+      id: 'cell-shape',
+      slots: [{id: 'count', name: 'count'}],
+    });
+    const created = await imagesB.putObject('app', {
+      id: 'cell-1',
+      shape: objectRef('app', shape.id),
+      slots: {count: integerValue(10)},
+    });
+
+    const placement = new PlacementPolicy({
+      nodes: {
+        'node-b': imagesB,
+        'node-a': imagesA,
+      },
+    });
+    const ref = objectRef('app', 'cell-1');
+
+    const before = await placement.inspectResidency(ref);
+    assert.deepEqual(before, {
+      imageId: 'app',
+      objectId: 'cell-1',
+      node: 'node-b',
+      kind: WHOLE_IMAGE_RESIDENCY,
+      version: created._version,
+    });
+
+    const moved = await placement.relocateObject({
+      ref,
+      fromNode: 'node-b',
+      toNode: 'node-a',
+    });
+    assert.equal(moved.residencyKind, PER_OBJECT_RESIDENCY);
+    assert.equal(moved.fromNode, 'node-b');
+    assert.equal(moved.toNode, 'node-a');
+
+    const residencyOnB = await imagesB.locator.locate(ref);
+    assert.equal(residencyOnB.kind, PER_OBJECT_RESIDENCY);
+    assert.deepEqual(
+      Object.keys(residencyOnB).sort(),
+      ['imageId', 'kind', 'objectId'],
+      'per-object residency remains opaque and exposes no backend or node address',
+    );
+    const residencyOnA = await imagesA.locator.locate(ref);
+    assert.equal(residencyOnA.kind, PER_OBJECT_RESIDENCY);
+
+    const afterMove = await placement.inspectResidency(ref);
+    assert.equal(afterMove.node, 'node-a');
+    assert.equal(afterMove.kind, PER_OBJECT_RESIDENCY);
+
+    // Both nodes resolve the relocated object at its unchanged (imageId, objectId) identity.
+    const readFromB = await imagesB.getObject('app', 'cell-1');
+    const readFromA = await imagesA.getObject('app', 'cell-1');
+    assert.equal(readFromB.slots.count.value, '10');
+    assert.equal(readFromA.slots.count.value, '10');
+
+    // Mutating the relocated object from node B updates the resident copy on node A.
+    const updated = await imagesB.putObject('app', {
+      id: 'cell-1',
+      shape: objectRef('app', shape.id),
+      slots: {count: integerValue(25)},
+    }, {expectedVersion: readFromB._version});
+    assert.equal(updated.slots.count.value, '25');
+    assert.equal((await imagesA.getObject('app', 'cell-1')).slots.count.value, '25');
+    assert.equal((await imagesB.getObject('app', 'cell-1')).slots.count.value, '25');
+
+    // Relocating back to node B restores whole-image residency on node B without identity loss.
+    const movedBack = await placement.relocateObject({
+      ref,
+      fromNode: 'node-a',
+      toNode: 'node-b',
+    });
+    assert.equal(movedBack.residencyKind, WHOLE_IMAGE_RESIDENCY);
+    const afterBack = await placement.inspectResidency(ref);
+    assert.equal(afterBack.node, 'node-b');
+    assert.equal(afterBack.kind, WHOLE_IMAGE_RESIDENCY);
+    assert.equal((await imagesB.getObject('app', 'cell-1')).slots.count.value, '25');
+    assert.equal((await imagesA.getObject('app', 'cell-1')).slots.count.value, '25');
+  } finally {
+    await backendA.stop();
+    await backendB.stop();
   }
 });
 

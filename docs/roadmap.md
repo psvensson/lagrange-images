@@ -361,12 +361,16 @@ existing owner — node A refuses the image scope (`image not found`), its objec
 record's layout edge (`shape not found`), and no backend or image operation can release the record
 from B — and once the record is relocated as raw evidence the unchanged oracle fails on B at the
 receiver lookup (`Symmetric Smalltalk receiver not found`) while node A, holding the record alone,
-fails at the Behavior lookup. The missing owners are generic (residency, placement, remote
-resolution); ADR 0092 decides where they live before M6.3 repairs the first one.
+fails at the Behavior lookup. ADR 0092 and bead `lagrange-images-0pxf.12` implemented the generic
+owners (`ObjectLocator` with `whole-image/v1` and `per-object/v1`, `PlacementPolicy` in
+`src/graph/placement.js`, and `RemoteRecordResolver` in `src/graph/remote-resolution.js`) and proved
+M6.3-M6.6 across two independent SQLite-backed `LagrangeBackend` nodes in
+`test/cuis-life-m6-distributed-acceptance.test.js` (while `lagrange-images-0pxf.4` tracks the real
+`lagrange-server` shared-server phase budget):
 
-- [ ] run the same M5 application with application objects placed across Lagrange nodes;
-- [ ] keep placement/routing entirely out of the Cuis importer and application semantics;
-- [ ] prove generic Lagrange owners decide object location and execution placement;
+- [x] run the same M5 application with application objects placed across Lagrange nodes (`test/cuis-life-m6-distributed-acceptance.test.js`: `cells` relocated to node A while `model`, classes and WASM methods remain on node B; survives full two-node SQLite restart and relocates back to node B without identity loss);
+- [x] keep placement/routing entirely out of the Cuis importer and application semantics (the exact same installed Life image runs all-local and split across nodes without rebuild or reimport);
+- [x] prove generic Lagrange owners decide object location and execution placement (`ObjectLocator`, `PlacementPolicy`, and `RemoteRecordResolver`);
 - [ ] measure useful compute-near-object/distributed behavior without rewriting the application as a hand-authored distributed program.
 
 ### Support work, not parallel goals
@@ -427,7 +431,7 @@ them — the object locator (residency, whole-image first), a separate placement
 remote resolution as an interaction owner over Lagrange's routing — and fixes that Images never owns
 transport, membership, replication or consensus:
 
-- [ ] object locator and placement policy;
+- [x] object locator and placement policy (`src/graph/locator.js`, `src/graph/placement.js`, `src/graph/remote-resolution.js`);
 - [ ] local vs remote call semantics;
 - [ ] Lagrange WASM placement;
 - [ ] distributed routing for native Blocks and explicitly retained foreign/component boundaries;

@@ -211,7 +211,13 @@ function createPortableCodeExecutorRegistry({
 async function createRuntimeCore(options = {}, {registerExtraCodeExecutors} = {}) {
   const backend = await createBackend(options.backend ?? {mode: 'mock'});
   await backend.start();
-  const images = new ImageService({backend, clock: options.clock});
+  const images = new ImageService({
+    backend,
+    clock: options.clock,
+    locator: options.locator,
+    remoteResolution: options.remoteResolution,
+    peers: options.peers,
+  });
   const languages = createDefaultLanguagePlatform();
 
   // Image-native compilation: the same default registries and the same embedder options the Node
