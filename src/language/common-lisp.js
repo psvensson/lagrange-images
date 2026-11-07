@@ -86,6 +86,8 @@ const COMMON_LISP_GENERIC_V0 = 'common-lisp/generic-v0';
 const COMMON_LISP_PACKAGE_V0 = 'common-lisp/package-v0';
 const COMMON_LISP_SYSTEM_V0 = 'common-lisp/system-v0';
 const COMMON_LISP_SIGNATURE_V0 = 'common-lisp/signature-v0';
+const COMMON_LISP_SETF_V0 = 'common-lisp/setf-v0';
+const COMMON_LISP_READER_MACRO_V0 = 'common-lisp/reader-macro-v0';
 const COMMON_LISP_NAMESPACE_ID = 'common-lisp/namespace/v1';
 const CONS_CLASS_NAME = 'Cons';
 const CONS_SHAPE_ID = 'smalltalk/cons-instance-shape/v1';
@@ -220,11 +222,42 @@ const RUNTIME_FUNCTION_BY_NAME = Object.freeze({
   'CODE-CHAR': RUNTIME_BLOCK_IDS.CODE_CHAR,
   '%MAKE-HASH-TABLE': RUNTIME_BLOCK_IDS.MAKE_HASH_TABLE,
   GETHASH: RUNTIME_BLOCK_IDS.GETHASH,
+  '%GETHASH-RAW': RUNTIME_BLOCK_IDS.GETHASH,
   '%SET-GETHASH': RUNTIME_BLOCK_IDS.SET_GETHASH,
   REMHASH: RUNTIME_BLOCK_IDS.REMHASH,
 });
 
 const STANDARD_LIBRARY_SOURCE = `
+(defvar %mv-list '%single-value)
+(defvar %mv-primary nil)
+
+(defun %values (vals)
+  (setq %mv-list vals)
+  (setq %mv-primary (car vals))
+  (car vals))
+
+(defun values-list (vals)
+  (%values vals))
+
+(defun %capture-mv (thunk)
+  (setq %mv-list '%single-value)
+  (setq %mv-primary nil)
+  (let ((primary (funcall thunk)))
+    (let ((vals (if (and (not (eq %mv-list '%single-value))
+                         (eql primary %mv-primary))
+                    %mv-list
+                    (list primary))))
+      (setq %mv-list '%single-value)
+      (setq %mv-primary nil)
+      vals)))
+
+(defun %gethash-with-mv (key table default)
+  (let* ((sentinel (%unsupplied))
+         (raw (%gethash-raw key table sentinel)))
+    (if (eq raw sentinel)
+        (%values (list default nil))
+        (%values (list raw t)))))
+
 (defun second (list) (car (cdr list)))
 (defun third (list) (car (cdr (cdr list))))
 (defun caar (x) (car (car x)))
@@ -469,8 +502,11 @@ const STANDARD_LIBRARY_SOURCE = `
       ((= len 1) (funcall fn (car args)))
       ((= len 2) (funcall fn (car args) (cadr args)))
       ((= len 3) (funcall fn (car args) (cadr args) (third args)))
-      ((= len 4) (funcall fn (car args) (cadr args) (third args) (car (cdr (cddr args)))))
-      (t (funcall fn (car args) (cadr args) (third args) (car (cdr (cddr args))) (car (cddr (cddr args))))))))
+      ((= len 4) (funcall fn (car args) (cadr args) (third args) (nth 3 args)))
+      ((= len 5) (funcall fn (car args) (cadr args) (third args) (nth 3 args) (nth 4 args)))
+      ((= len 6) (funcall fn (car args) (cadr args) (third args) (nth 3 args) (nth 4 args) (nth 5 args)))
+      ((= len 7) (funcall fn (car args) (cadr args) (third args) (nth 3 args) (nth 4 args) (nth 5 args) (nth 6 args)))
+      (t (funcall fn (car args) (cadr args) (third args) (nth 3 args) (nth 4 args) (nth 5 args) (nth 6 args) (nth 7 args))))))
 
 (defun find-restart (name)
   (let ((entry (assoc name %active-restarts)))
@@ -894,10 +930,52 @@ function commonLispSignatureArtifactId(name, serialized = null) {
   return serialized ? `${base}/${base64urlEncode(utf8Encode(serialized))}` : base;
 }
 
+function commonLispSetfBindingId(name) {
+  const canonical = requiredText(name, 'Common Lisp setf expander name').toUpperCase();
+  return `common-lisp/setf-binding/${base64urlEncode(utf8Encode(canonical))}`;
+}
+
+function commonLispSetfArtifactId(name, serialized = null) {
+  const canonical = requiredText(name, 'Common Lisp setf expander name').toUpperCase();
+  const base = `common-lisp/setf/${base64urlEncode(utf8Encode(canonical))}`;
+  return serialized ? `${base}/${base64urlEncode(utf8Encode(serialized))}` : base;
+}
+
+function commonLispReaderMacroBindingId(key) {
+  const canonical = requiredText(key, 'Common Lisp reader macro key');
+  return `common-lisp/reader-macro-binding/${base64urlEncode(utf8Encode(canonical))}`;
+}
+
+function commonLispReaderMacroArtifactId(key, serialized = null) {
+  const canonical = requiredText(key, 'Common Lisp reader macro key');
+  const base = `common-lisp/reader-macro/${base64urlEncode(utf8Encode(canonical))}`;
+  return serialized ? `${base}/${base64urlEncode(utf8Encode(serialized))}` : base;
+}
+
 function commonLispFunctionBlockId(name, revisionKey = null) {
   const canonical = requiredText(name, 'Common Lisp function name').toUpperCase();
   const base = `common-lisp/function/${base64urlEncode(utf8Encode(canonical))}`;
   return revisionKey ? `${base}/rev/${revisionKey}` : base;
+}
+
+function parseSetfFunctionName(node) {
+  if (
+    node?.kind === 'list'
+    && node.elements.length === 2
+    && node.elements[0]?.kind === 'symbol'
+    && stripPackagePrefix(node.elements[0].name) === 'SETF'
+    && node.elements[1]?.kind === 'symbol'
+    && !isNilSymbol(node.elements[1])
+    && !isTSymbol(node.elements[1])
+    && !node.elements[1].keyword
+  ) {
+    return node.elements[1].name;
+  }
+  return null;
+}
+
+function canonicalSetfFunctionName(readerName) {
+  return `%SETF-FN:${String(readerName).toUpperCase()}`;
 }
 
 // -----------------------------------------------------------------------------
@@ -1190,87 +1268,656 @@ function expandQuasiquote(form) {
   return acc;
 }
 
-function readCommonLispSource(source) {
-  const tokens = tokenizeCommonLispSource(source);
-  let cursor = 0;
+function makeCharAstNode(chOrCodePoint) {
+  const cp = typeof chOrCodePoint === 'number'
+    ? chOrCodePoint
+    : String(chOrCodePoint).codePointAt(0);
+  return makeListNode([
+    makeSymbolNode('CODE-CHAR'),
+    Object.freeze({kind: 'integer', value: String(cp)}),
+  ]);
+}
 
-  function readForm() {
-    if (cursor >= tokens.length) {
-      throw new SyntaxError('unexpected end of Common Lisp input');
+function extractCharFromAst(node) {
+  if (!node || typeof node !== 'object') return null;
+  if (node.kind === 'char') {
+    const cp = Number(node.codePoint ?? node.value);
+    return {char: String.fromCodePoint(cp), codePoint: cp};
+  }
+  if (
+    node.kind === 'list'
+    && node.elements.length === 2
+    && node.elements[0]?.kind === 'symbol'
+    && stripPackagePrefix(node.elements[0].name) === 'CODE-CHAR'
+    && node.elements[1]?.kind === 'integer'
+  ) {
+    const cp = Number(node.elements[1].value);
+    return {char: String.fromCodePoint(cp), codePoint: cp};
+  }
+  if (node.kind === 'string' && node.value.length === 1) {
+    return {char: node.value, codePoint: node.value.codePointAt(0)};
+  }
+  return null;
+}
+
+function requireCharStringFromAst(node, context = 'character') {
+  const info = extractCharFromAst(node);
+  if (!info) {
+    throw new SyntaxError(`expected a Common Lisp ${context}`);
+  }
+  return info.char;
+}
+
+function createCommonLispReadtable(initialReaderMacros = {}) {
+  const macroCharacters = new Map();
+  const dispatchMacroCharacters = new Map();
+  dispatchMacroCharacters.set('#', new Map());
+  const table = {
+    macroCharacters,
+    dispatchMacroCharacters,
+  };
+  if (initialReaderMacros instanceof Map) {
+    for (const entry of initialReaderMacros.values()) {
+      registerReaderMacroDescriptorInTable(table, entry);
     }
-    const token = tokens[cursor];
-    cursor += 1;
+  } else if (initialReaderMacros && typeof initialReaderMacros === 'object') {
+    for (const entry of Object.values(initialReaderMacros)) {
+      registerReaderMacroDescriptorInTable(table, entry);
+    }
+  }
+  return table;
+}
 
-    switch (token.type) {
-      case 'integer':
-        return Object.freeze({kind: 'integer', value: token.value});
-      case 'string':
-        return Object.freeze({kind: 'string', value: token.value});
-      case 'char':
-        return makeListNode([
-          makeSymbolNode('CODE-CHAR'),
-          Object.freeze({kind: 'integer', value: token.value}),
-        ]);
-      case 'symbol':
-        return makeSymbolNode(token.name, {spelling: token.spelling, keyword: token.keyword});
-      case '\'':
-        return makeListNode([makeSymbolNode('QUOTE'), readForm()]);
-      case '#\'':
-        return makeListNode([makeSymbolNode('FUNCTION'), readForm()]);
-      case '`':
-        return expandQuasiquote(readForm());
-      case ',':
-        return Object.freeze({kind: 'unquote', expr: readForm()});
-      case ',@':
-        return Object.freeze({kind: 'unquote-splicing', expr: readForm()});
-      case '#(': {
-        const elements = [];
-        while (cursor < tokens.length && tokens[cursor].type !== ')') {
-          elements.push(makeListNode([makeSymbolNode('QUOTE'), readForm()]));
-        }
-        if (cursor >= tokens.length || tokens[cursor].type !== ')') {
-          throw new SyntaxError('unterminated #(...) vector literal in Common Lisp source');
-        }
-        cursor += 1;
-        return makeListNode([makeSymbolNode('VECTOR'), ...elements]);
+function registerReaderMacroDescriptorInTable(table, descriptor) {
+  if (!descriptor || typeof descriptor !== 'object') return;
+  if (descriptor.kind === 'macro-char' || descriptor.kind === 'closing-delimiter') {
+    const ch = descriptor.char ?? String.fromCodePoint(Number(descriptor.codePoint));
+    table.macroCharacters.set(ch, descriptor);
+  } else if (descriptor.kind === 'dispatch-macro-char') {
+    const disp = descriptor.dispChar ?? '#';
+    const sub = String(descriptor.subChar).toUpperCase();
+    if (!table.dispatchMacroCharacters.has(disp)) {
+      table.dispatchMacroCharacters.set(disp, new Map());
+    }
+    table.dispatchMacroCharacters.get(disp).set(sub, descriptor);
+  }
+}
+
+function isClosingParenGetMacroCharacterForm(form) {
+  if (
+    form?.kind === 'list'
+    && form.elements.length >= 2
+    && form.elements[0]?.kind === 'symbol'
+    && stripPackagePrefix(form.elements[0].name) === 'GET-MACRO-CHARACTER'
+  ) {
+    const chInfo = extractCharFromAst(form.elements[1]);
+    return Boolean(chInfo && chInfo.char === ')');
+  }
+  return false;
+}
+
+function parseTopLevelReaderMacroForm(form, macroContext = null) {
+  if (form?.kind !== 'list' || form.elements.length < 3 || form.elements[0]?.kind !== 'symbol') {
+    return null;
+  }
+  const headName = stripPackagePrefix(form.elements[0].name);
+  const snapshotFunctions = {};
+  if (macroContext?.userFunctions instanceof Map) {
+    for (const [fnName, fnDef] of macroContext.userFunctions.entries()) {
+      snapshotFunctions[fnName] = fnDef;
+    }
+  }
+  if (headName === 'SET-MACRO-CHARACTER') {
+    const [, charForm, handlerForm, nonTermForm] = form.elements;
+    const chInfo = extractCharFromAst(charForm);
+    if (!chInfo) {
+      throw new SyntaxError('Common Lisp SET-MACRO-CHARACTER requires a character designator');
+    }
+    const key = `CHAR:${chInfo.codePoint}`;
+    if (isClosingParenGetMacroCharacterForm(handlerForm)) {
+      return Object.freeze({
+        kind: 'closing-delimiter',
+        key,
+        char: chInfo.char,
+        codePoint: chInfo.codePoint,
+        nonTerminatingP: false,
+        handlerForm: null,
+        helperFunctions: snapshotFunctions,
+      });
+    }
+    return Object.freeze({
+      kind: 'macro-char',
+      key,
+      char: chInfo.char,
+      codePoint: chInfo.codePoint,
+      nonTerminatingP: Boolean(nonTermForm && !isNilSymbol(nonTermForm)),
+      handlerForm,
+      helperFunctions: snapshotFunctions,
+    });
+  }
+  if (headName === 'SET-DISPATCH-MACRO-CHARACTER') {
+    if (form.elements.length < 4) {
+      throw new SyntaxError('Common Lisp SET-DISPATCH-MACRO-CHARACTER requires disp-char, sub-char, and handler');
+    }
+    const [, dispCharForm, subCharForm, handlerForm] = form.elements;
+    const dispInfo = extractCharFromAst(dispCharForm);
+    const subInfo = extractCharFromAst(subCharForm);
+    if (!dispInfo || !subInfo) {
+      throw new SyntaxError('Common Lisp SET-DISPATCH-MACRO-CHARACTER requires character designators');
+    }
+    const subUpper = subInfo.char.toUpperCase();
+    const key = `DISP:${dispInfo.codePoint}:${subUpper.codePointAt(0)}`;
+    return Object.freeze({
+      kind: 'dispatch-macro-char',
+      key,
+      dispChar: dispInfo.char,
+      dispCodePoint: dispInfo.codePoint,
+      subChar: subUpper,
+      subCodePoint: subUpper.codePointAt(0),
+      nonTerminatingP: false,
+      handlerForm,
+      helperFunctions: snapshotFunctions,
+    });
+  }
+  return null;
+}
+
+function invokeReaderMacroHandler(descriptor, argNodes, macroContext) {
+  if (descriptor.kind === 'closing-delimiter') {
+    throw new SyntaxError(`unexpected ${descriptor.char} in Common Lisp source`);
+  }
+  if (typeof descriptor.handler === 'function') {
+    return descriptor.handler(...argNodes);
+  }
+  if (descriptor.helperFunctions && macroContext?.userFunctions instanceof Map) {
+    for (const [fnName, fnDef] of Object.entries(descriptor.helperFunctions)) {
+      if (!macroContext.userFunctions.has(fnName)) {
+        macroContext.userFunctions.set(fnName, fnDef);
       }
-      case '(': {
+    }
+  }
+  const env = new Map();
+  let fnForm = descriptor.handlerForm;
+  if (
+    fnForm?.kind === 'list'
+    && fnForm.elements.length === 2
+    && fnForm.elements[0]?.kind === 'symbol'
+    && (fnForm.elements[0].name === 'FUNCTION' || fnForm.elements[0].name === 'QUOTE')
+  ) {
+    fnForm = fnForm.elements[1];
+  }
+  if (fnForm?.kind === 'symbol') {
+    return evalMacroCallByName(fnForm.name, argNodes, env, macroContext);
+  }
+  const closure = evalMacroForm(fnForm, env, macroContext);
+  if (closure && typeof closure.invoke === 'function') {
+    return closure.invoke(argNodes);
+  }
+  throw new SyntaxError('invalid Common Lisp reader macro handler function');
+}
+
+function applyTopLevelReaderMacroRegistrations(form, readtable, macroContext) {
+  if (!form || form.kind !== 'list' || form.elements.length === 0 || form.elements[0]?.kind !== 'symbol') {
+    return;
+  }
+  const headName = stripPackagePrefix(form.elements[0].name);
+  if (headName === 'PROGN' || headName === 'EVAL-WHEN') {
+    const startIdx = headName === 'EVAL-WHEN' ? 2 : 1;
+    for (let i = startIdx; i < form.elements.length; i += 1) {
+      applyTopLevelReaderMacroRegistrations(form.elements[i], readtable, macroContext);
+    }
+    return;
+  }
+  if (headName === 'DEFMACRO' && form.elements.length >= 3 && form.elements[1]?.kind === 'symbol') {
+    const defmacro = parseTopLevelDefmacro(form);
+    if (defmacro && macroContext?.userMacros instanceof Map) {
+      macroContext.userMacros.set(defmacro.name, defmacro);
+    }
+    return;
+  }
+  if (headName === 'DEFUN' && form.elements.length >= 3 && form.elements[1]?.kind === 'symbol') {
+    if (macroContext?.userFunctions instanceof Map) {
+      macroContext.userFunctions.set(form.elements[1].name, {
+        name: form.elements[1].name,
+        lambdaList: form.elements[2],
+        bodyForms: form.elements.slice(3),
+      });
+    }
+    return;
+  }
+  const rm = parseTopLevelReaderMacroForm(form, macroContext);
+  if (rm) {
+    registerReaderMacroDescriptorInTable(readtable, rm);
+    if (macroContext?.readerMacros instanceof Map) {
+      macroContext.readerMacros.set(rm.key, rm);
+    }
+  }
+}
+
+function parseCharacterSpecCodePoint(charSpec) {
+  if (charSpec.length === 1) {
+    return charSpec.codePointAt(0);
+  }
+  const upper = charSpec.toUpperCase();
+  if (upper === 'SPACE') return 32;
+  if (upper === 'NEWLINE' || upper === 'LINEFEED') return 10;
+  if (upper === 'TAB') return 9;
+  if (upper === 'RETURN') return 13;
+  if (upper === 'NULL' || upper === 'NUL') return 0;
+  if (upper === 'BACKSPACE') return 8;
+  if (upper === 'PAGE') return 12;
+  if (upper === 'ESCAPE' || upper === 'ESC') return 27;
+  throw new SyntaxError(`unknown Common Lisp character name: #\\${charSpec}`);
+}
+
+function readCommonLispSource(source, options = {}) {
+  if (typeof source !== 'string') {
+    throw new SyntaxError('Common Lisp source must be a string');
+  }
+  const macroContext = options?.userMacros instanceof Map
+    ? options
+    : options?.macroContext?.userMacros instanceof Map
+      ? options.macroContext
+      : createMacroContext(options);
+  const readtable = options?.readtable
+    ?? macroContext.readtable
+    ?? createCommonLispReadtable(options?.readerMacros ?? macroContext.readerMacros ?? {});
+  macroContext.readtable = readtable;
+
+  let index = 0;
+  const length = source.length;
+  const unreadStack = [];
+  const activeDelimiters = new Set();
+
+  function peekRawChar() {
+    if (unreadStack.length > 0) return unreadStack[unreadStack.length - 1];
+    return index < length ? source[index] : undefined;
+  }
+
+  function peekSecondRawChar() {
+    if (unreadStack.length >= 2) return unreadStack[unreadStack.length - 2];
+    if (unreadStack.length === 1) return index < length ? source[index] : undefined;
+    return index + 1 < length ? source[index + 1] : undefined;
+  }
+
+  function readRawChar() {
+    if (unreadStack.length > 0) return unreadStack.pop();
+    if (index >= length) return undefined;
+    const ch = source[index];
+    index += 1;
+    return ch;
+  }
+
+  function unreadChar(ch) {
+    unreadStack.push(ch);
+  }
+
+  function isStreamDelimiter(ch) {
+    if (isDelimiter(ch) || activeDelimiters.has(ch)) return true;
+    const macroEntry = readtable.macroCharacters.get(ch);
+    if (macroEntry && !macroEntry.nonTerminatingP) return true;
+    return false;
+  }
+
+  function skipWhitespaceAndComments() {
+    while (peekRawChar() !== undefined) {
+      const ch = peekRawChar();
+      if (isWhitespace(ch)) {
+        readRawChar();
+        continue;
+      }
+      if (ch === ';') {
+        while (peekRawChar() !== undefined && peekRawChar() !== '\n') {
+          readRawChar();
+        }
+        continue;
+      }
+      if (ch === '#' && peekSecondRawChar() === '|') {
+        readRawChar();
+        readRawChar();
+        let depth = 1;
+        while (peekRawChar() !== undefined && depth > 0) {
+          const c1 = readRawChar();
+          if (c1 === '#' && peekRawChar() === '|') {
+            readRawChar();
+            depth += 1;
+          } else if (c1 === '|' && peekRawChar() === '#') {
+            readRawChar();
+            depth -= 1;
+          }
+        }
+        if (depth > 0) {
+          throw new SyntaxError('unterminated Common Lisp #| ... |# block comment');
+        }
+        continue;
+      }
+      break;
+    }
+  }
+
+  const streamAstNode = Object.freeze({
+    kind: 'reader-stream',
+    readRawChar,
+    peekRawChar,
+    unreadChar,
+    skipWhitespaceAndComments,
+    readForm(opts) {
+      return readFormInternal(opts);
+    },
+    readDelimitedList(delimChar) {
+      return readDelimitedListInternal(delimChar);
+    },
+  });
+
+  function readDelimitedListInternal(delimChar) {
+    const hadDelim = activeDelimiters.has(delimChar);
+    activeDelimiters.add(delimChar);
+    const prevStream = macroContext.activeReaderStream;
+    macroContext.activeReaderStream = streamAstNode;
+    try {
+      const elements = [];
+      for (;;) {
+        skipWhitespaceAndComments();
+        const ch = peekRawChar();
+        if (ch === undefined) {
+          throw new SyntaxError(`unterminated Common Lisp delimited list waiting for ${delimChar}`);
+        }
+        if (ch === delimChar) {
+          readRawChar();
+          return makeListNode(elements);
+        }
+        const item = readFormInternal({allowDotToken: false});
+        if (item?.kind === 'macro-no-values') continue;
+        elements.push(item);
+      }
+    } finally {
+      if (!hadDelim) activeDelimiters.delete(delimChar);
+      macroContext.activeReaderStream = prevStream;
+    }
+  }
+
+  function readSymbolOrNumberToken() {
+    let rawChars = '';
+    let canonicalChars = '';
+    let hasEscape = false;
+    while (peekRawChar() !== undefined && !isStreamDelimiter(peekRawChar())) {
+      const cur = readRawChar();
+      if (cur === '|') {
+        hasEscape = true;
+        let closedPipe = false;
+        while (peekRawChar() !== undefined) {
+          const pc = readRawChar();
+          if (pc === '|') {
+            closedPipe = true;
+            break;
+          }
+          if (pc === '\\') {
+            const esc = readRawChar();
+            if (esc === undefined) {
+              throw new SyntaxError('unterminated pipe escape in Common Lisp symbol');
+            }
+            rawChars += esc;
+            canonicalChars += esc;
+          } else {
+            rawChars += pc;
+            canonicalChars += pc;
+          }
+        }
+        if (!closedPipe) {
+          throw new SyntaxError('unterminated |...| symbol in Common Lisp source');
+        }
+      } else if (cur === '\\') {
+        hasEscape = true;
+        const esc = readRawChar();
+        if (esc === undefined) {
+          throw new SyntaxError('unterminated character escape in Common Lisp symbol');
+        }
+        rawChars += esc;
+        canonicalChars += esc;
+      } else {
+        rawChars += cur;
+        canonicalChars += cur.toUpperCase();
+      }
+    }
+    return {rawChars, canonicalChars, hasEscape};
+  }
+
+  function readFormInternal({eofErrorP = true, eofValue = NIL_NODE, allowDotToken = false} = {}) {
+    for (;;) {
+      skipWhitespaceAndComments();
+      const ch = peekRawChar();
+      if (ch === undefined) {
+        if (eofErrorP) {
+          throw new SyntaxError('unexpected end of Common Lisp input');
+        }
+        return eofValue;
+      }
+
+      if (readtable.macroCharacters.has(ch)) {
+        readRawChar();
+        const entry = readtable.macroCharacters.get(ch);
+        const prevStream = macroContext.activeReaderStream;
+        macroContext.activeReaderStream = streamAstNode;
+        try {
+          const result = invokeReaderMacroHandler(
+            entry,
+            [streamAstNode, makeCharAstNode(ch)],
+            macroContext,
+          );
+          if (result?.kind === 'macro-no-values') continue;
+          return result;
+        } finally {
+          macroContext.activeReaderStream = prevStream;
+        }
+      }
+
+      if (readtable.dispatchMacroCharacters.has(ch)) {
+        const dispChar = readRawChar();
+        let numDigits = '';
+        while (peekRawChar() !== undefined && /^[0-9]$/.test(peekRawChar())) {
+          numDigits += readRawChar();
+        }
+        const infixArg = numDigits.length > 0 ? makeIntNode(BigInt(numDigits)) : NIL_NODE;
+        const subCh = readRawChar();
+        if (subCh === undefined) {
+          throw new SyntaxError(`unexpected end of Common Lisp input after ${dispChar}`);
+        }
+        const dispMap = readtable.dispatchMacroCharacters.get(dispChar);
+        if (dispMap && dispMap.has(subCh.toUpperCase())) {
+          const dispEntry = dispMap.get(subCh.toUpperCase());
+          const prevStream = macroContext.activeReaderStream;
+          macroContext.activeReaderStream = streamAstNode;
+          try {
+            const result = invokeReaderMacroHandler(
+              dispEntry,
+              [streamAstNode, makeCharAstNode(subCh), infixArg],
+              macroContext,
+            );
+            if (result?.kind === 'macro-no-values') continue;
+            return result;
+          } finally {
+            macroContext.activeReaderStream = prevStream;
+          }
+        }
+
+        if (dispChar === '#') {
+          if (subCh === '\'') {
+            return makeListNode([makeSymbolNode('FUNCTION'), readFormInternal()]);
+          }
+          if (subCh === '(') {
+            const elements = [];
+            for (;;) {
+              skipWhitespaceAndComments();
+              const nextCh = peekRawChar();
+              if (nextCh === undefined) {
+                throw new SyntaxError('unterminated #(...) vector literal in Common Lisp source');
+              }
+              if (nextCh === ')') {
+                readRawChar();
+                break;
+              }
+              elements.push(makeListNode([makeSymbolNode('QUOTE'), readFormInternal()]));
+            }
+            return makeListNode([makeSymbolNode('VECTOR'), ...elements]);
+          }
+          if (subCh === ':') {
+            let rawChars = '';
+            let canonicalChars = '';
+            while (peekRawChar() !== undefined && !isStreamDelimiter(peekRawChar())) {
+              const c = readRawChar();
+              rawChars += c;
+              canonicalChars += c.toUpperCase();
+            }
+            if (canonicalChars.length === 0) {
+              throw new SyntaxError('invalid Common Lisp #: uninterned symbol literal');
+            }
+            return makeSymbolNode(canonicalChars, {spelling: rawChars, keyword: false});
+          }
+          if (subCh === '\\') {
+            const firstChar = readRawChar();
+            if (firstChar === undefined) {
+              throw new SyntaxError('unterminated #\\ character literal in Common Lisp source');
+            }
+            let restChars = '';
+            while (peekRawChar() !== undefined && !isStreamDelimiter(peekRawChar())) {
+              restChars += readRawChar();
+            }
+            const codePoint = parseCharacterSpecCodePoint(firstChar + restChars);
+            return makeCharAstNode(codePoint);
+          }
+          if (/^[xXbBoO]$/.test(subCh)) {
+            const radixChar = subCh.toLowerCase();
+            const prefix = radixChar === 'x' ? '0x' : radixChar === 'b' ? '0b' : '0o';
+            let sign = 1n;
+            if (peekRawChar() === '+' || peekRawChar() === '-') {
+              if (readRawChar() === '-') sign = -1n;
+            }
+            let digits = '';
+            while (peekRawChar() !== undefined && !isStreamDelimiter(peekRawChar())) {
+              digits += readRawChar();
+            }
+            if (digits.length === 0) {
+              throw new SyntaxError(`invalid Common Lisp #${radixChar} integer literal`);
+            }
+            let parsed;
+            try {
+              parsed = sign * BigInt(`${prefix}${digits}`);
+            } catch (error) {
+              throw new SyntaxError(`invalid Common Lisp #${radixChar}${digits} integer literal`, {cause: error});
+            }
+            return Object.freeze({kind: 'integer', value: parsed.toString(10)});
+          }
+        }
+        throw new SyntaxError(`unknown Common Lisp dispatch character: ${dispChar}${numDigits}${subCh}`);
+      }
+
+      if (ch === '\'') {
+        readRawChar();
+        return makeListNode([makeSymbolNode('QUOTE'), readFormInternal()]);
+      }
+      if (ch === '`') {
+        readRawChar();
+        return expandQuasiquote(readFormInternal());
+      }
+      if (ch === ',') {
+        readRawChar();
+        if (peekRawChar() === '@') {
+          readRawChar();
+          return Object.freeze({kind: 'unquote-splicing', expr: readFormInternal()});
+        }
+        return Object.freeze({kind: 'unquote', expr: readFormInternal()});
+      }
+      if (ch === '"') {
+        readRawChar();
+        let chars = '';
+        let closed = false;
+        while (peekRawChar() !== undefined) {
+          const cur = readRawChar();
+          if (cur === '"') {
+            closed = true;
+            break;
+          }
+          if (cur === '\\') {
+            const esc = readRawChar();
+            if (esc === undefined) {
+              throw new SyntaxError('unterminated string escape in Common Lisp source');
+            }
+            if (esc === 'n') chars += '\n';
+            else if (esc === 't') chars += '\t';
+            else if (esc === 'r') chars += '\r';
+            else chars += esc;
+          } else {
+            chars += cur;
+          }
+        }
+        if (!closed) {
+          throw new SyntaxError('unterminated string literal in Common Lisp source');
+        }
+        return Object.freeze({kind: 'string', value: chars});
+      }
+      if (ch === '(') {
+        readRawChar();
         const elements = [];
         let dottedTail = null;
-        while (cursor < tokens.length && tokens[cursor].type !== ')') {
-          if (tokens[cursor].type === '.') {
+        for (;;) {
+          skipWhitespaceAndComments();
+          const nextCh = peekRawChar();
+          if (nextCh === undefined) {
+            throw new SyntaxError('unterminated list in Common Lisp source');
+          }
+          if (nextCh === ')') {
+            readRawChar();
+            break;
+          }
+          const item = readFormInternal({allowDotToken: true});
+          if (item?.kind === 'macro-no-values') continue;
+          if (item?.kind === 'dot-token') {
             if (elements.length === 0) {
               throw new SyntaxError('Common Lisp dotted pair cannot begin with .');
             }
-            cursor += 1;
-            dottedTail = readForm();
-            if (cursor >= tokens.length || tokens[cursor].type !== ')') {
+            dottedTail = readFormInternal({allowDotToken: false});
+            skipWhitespaceAndComments();
+            if (peekRawChar() !== ')') {
               throw new SyntaxError('Common Lisp dotted pair must have exactly one form after .');
             }
+            readRawChar();
             break;
           }
-          elements.push(readForm());
+          elements.push(item);
         }
-        if (cursor >= tokens.length || tokens[cursor].type !== ')') {
-          throw new SyntaxError('unterminated list in Common Lisp source');
-        }
-        cursor += 1;
         return makeListNode(elements, dottedTail);
       }
-      case ')':
-      case '.':
-        throw new SyntaxError(`unexpected ${token.type} in Common Lisp source`);
-      default:
-        throw new SyntaxError(`unknown Common Lisp token: ${token.type}`);
+      if (ch === ')') {
+        readRawChar();
+        throw new SyntaxError('unexpected ) in Common Lisp source');
+      }
+
+      const {rawChars, canonicalChars, hasEscape} = readSymbolOrNumberToken();
+      if (!hasEscape && rawChars === '.') {
+        if (allowDotToken) {
+          return Object.freeze({kind: 'dot-token'});
+        }
+        throw new SyntaxError('unexpected . in Common Lisp source');
+      }
+      if (!hasEscape && /^[+-]?[0-9]+$/.test(rawChars)) {
+        return Object.freeze({kind: 'integer', value: BigInt(rawChars).toString(10)});
+      }
+      const isKeyword = canonicalChars.startsWith(':') && canonicalChars.length > 1;
+      const spelling = isKeyword ? rawChars.slice(1) : rawChars;
+      return makeSymbolNode(canonicalChars, {spelling, keyword: isKeyword});
     }
   }
 
   const forms = [];
-  while (cursor < tokens.length) {
-    const form = readForm();
+  for (;;) {
+    skipWhitespaceAndComments();
+    if (peekRawChar() === undefined) break;
+    const form = readFormInternal({eofErrorP: false, eofValue: null});
+    if (form === null || form?.kind === 'macro-no-values') continue;
     if (form.kind === 'unquote' || form.kind === 'unquote-splicing') {
       throw new SyntaxError('Common Lisp unquote (, or ,@) outside backquote');
     }
+    applyTopLevelReaderMacroRegistrations(form, readtable, macroContext);
     forms.push(form);
   }
   return Object.freeze(forms);
@@ -1504,7 +2151,18 @@ function stripPackagePrefix(rawName) {
   return s;
 }
 
-function createMacroContext({macros = {}, structs = {}, classes = {}, functionSignatures = {}} = {}) {
+function createMacroContext({
+  macros = {},
+  structs = {},
+  classes = {},
+  functionSignatures = {},
+  setfExpanders = {},
+  readerMacros = {},
+  userFunctions = {},
+  localSetfFunctions = new Set(),
+  readtable = null,
+  activeReaderStream = null,
+} = {}) {
   const userMacros = new Map();
   for (const [k, v] of Object.entries(macros)) {
     userMacros.set(k.toUpperCase(), v);
@@ -1527,12 +2185,26 @@ function createMacroContext({macros = {}, structs = {}, classes = {}, functionSi
   for (const [k, v] of Object.entries(functionSignatures)) {
     sigMap.set(k.toUpperCase(), v);
   }
+  const setfMap = new Map();
+  for (const [k, v] of Object.entries(setfExpanders)) {
+    setfMap.set(k.toUpperCase(), v);
+  }
+  const fnMap = new Map();
+  for (const [k, v] of Object.entries(userFunctions)) {
+    fnMap.set(k.toUpperCase(), v);
+  }
+  const effectiveReadtable = readtable ?? createCommonLispReadtable(readerMacros);
   let gensymCounter = 0;
   return {
     userMacros,
     structs: structMap,
     classes: classMap,
     functionSignatures: sigMap,
+    setfExpanders: setfMap,
+    userFunctions: fnMap,
+    localSetfFunctions: localSetfFunctions instanceof Set ? new Set(localSetfFunctions) : new Set(),
+    readtable: effectiveReadtable,
+    activeReaderStream,
     freshGensym(prefix = 'G') {
       gensymCounter += 1;
       const clean = String(prefix).toUpperCase().replace(/[^A-Z0-9_]/g, '_');
@@ -1612,11 +2284,11 @@ function buildDestructuringLetBindings(patternForm, valueForm, ctx, outBindings)
   }
 }
 
-function normalizeFunctionDefinition(name, paramForm, bodyForms, ctx) {
+function normalizeFunctionDefinition(name, paramForm, bodyForms, ctx, blockName = name) {
   const parsed = parseLambdaList(paramForm);
   let wrappedBody = [...bodyForms];
-  if (name && containsReturnFrom(wrappedBody, name)) {
-    wrappedBody = [makeListNode([makeSymbolNode('BLOCK'), makeSymbolNode(name), ...wrappedBody])];
+  if (blockName && containsReturnFrom(wrappedBody, blockName)) {
+    wrappedBody = [makeListNode([makeSymbolNode('BLOCK'), makeSymbolNode(blockName), ...wrappedBody])];
   }
   if (parsed.isSimple) {
     const paramNames = parsed.required.map((p) => p.name);
@@ -1851,6 +2523,8 @@ function evalMacroForm(form, env, ctx) {
   }
 
   switch (head.name) {
+    case 'DECLARE':
+      return NIL_NODE;
     case 'QUOTE':
       return args[0] ?? NIL_NODE;
     case 'PROGN':
@@ -1953,6 +2627,45 @@ function evalMacroForm(form, env, ctx) {
       bindMacroLambdaList(patternForm, listElems, childEnv, ctx);
       return evalMacroSequence(bodyForms, childEnv, ctx);
     }
+    case 'FLET':
+    case 'LABELS': {
+      const [defsForm, ...bodyForms] = args;
+      const defs = isNilSymbol(defsForm) ? [] : defsForm?.kind === 'list' ? defsForm.elements : [];
+      const childEnv = new Map(env);
+      const closureEnv = head.name === 'LABELS' ? childEnv : env;
+      for (const def of defs) {
+        if (def?.kind === 'list' && def.elements.length >= 2 && def.elements[0]?.kind === 'symbol') {
+          const [fnSym, paramForm, ...fnBody] = def.elements;
+          childEnv.set(fnSym.name, {
+            kind: 'macro-closure',
+            invoke(callArgs) {
+              const callEnv = new Map(closureEnv);
+              bindMacroLambdaList(paramForm, callArgs, callEnv, ctx);
+              return evalMacroSequence(fnBody, callEnv, ctx);
+            },
+          });
+        }
+      }
+      return evalMacroSequence(bodyForms, childEnv, ctx);
+    }
+    case 'BLOCK': {
+      const [blockSym, ...bodyForms] = args;
+      const blockName = blockSym?.kind === 'symbol' ? blockSym.name : 'NIL';
+      try {
+        return evalMacroSequence(bodyForms, env, ctx);
+      } catch (err) {
+        if (err && err.__clMacroReturnFrom && err.blockName === blockName) {
+          return err.value;
+        }
+        throw err;
+      }
+    }
+    case 'RETURN-FROM': {
+      const [blockSym, valForm = NIL_NODE] = args;
+      const blockName = blockSym?.kind === 'symbol' ? blockSym.name : 'NIL';
+      const value = evalMacroForm(valForm, env, ctx);
+      throw {__clMacroReturnFrom: true, blockName, value};
+    }
     case 'LAMBDA': {
       const [paramForm, ...bodyForms] = args;
       return {
@@ -1968,6 +2681,17 @@ function evalMacroForm(form, env, ctx) {
       const target = args[0];
       if (target?.kind === 'list' && target.elements[0]?.name === 'LAMBDA') {
         return evalMacroForm(target, env, ctx);
+      }
+      const setfReader = parseSetfFunctionName(target);
+      if (setfReader) {
+        const canonName = canonicalSetfFunctionName(setfReader);
+        if (env.has(canonName)) return env.get(canonName);
+        return {
+          kind: 'macro-closure',
+          invoke(callArgs) {
+            return evalMacroCallByName(canonName, callArgs, env, ctx);
+          },
+        };
       }
       if (target?.kind === 'symbol') {
         if (env.has(target.name)) return env.get(target.name);
@@ -1999,6 +2723,19 @@ function evalMacroCallByName(name, evalArgs, env, ctx) {
       return fn.invoke(evalArgs);
     }
   }
+  if (ctx?.userFunctions?.has(name)) {
+    const fnDef = ctx.userFunctions.get(name);
+    const callEnv = new Map();
+    bindMacroLambdaList(fnDef.lambdaList ?? fnDef.paramListForm ?? fnDef.paramForm, evalArgs, callEnv, ctx);
+    try {
+      return evalMacroSequence(fnDef.bodyForms, callEnv, ctx);
+    } catch (err) {
+      if (err && err.__clMacroReturnFrom && (err.blockName === name || err.blockName === fnDef.blockName)) {
+        return err.value;
+      }
+      throw err;
+    }
+  }
   switch (name) {
     case 'GENSYM': {
       const prefix = evalArgs[0]?.kind === 'string'
@@ -2008,10 +2745,29 @@ function evalMacroCallByName(name, evalArgs, env, ctx) {
           : 'G';
       return ctx.freshGensym(prefix);
     }
+    case 'VALUES': {
+      if (evalArgs.length === 0) {
+        return {kind: 'macro-no-values', values: []};
+      }
+      return evalArgs[0];
+    }
+    case '%VALUES':
+    case 'VALUES-LIST': {
+      const listArg = evalArgs[0];
+      if (!listArg || isNilSymbol(listArg) || (listArg.kind === 'list' && listArg.elements.length === 0)) {
+        return {kind: 'macro-no-values', values: []};
+      }
+      if (listArg.kind === 'list') {
+        return listArg.elements[0] ?? NIL_NODE;
+      }
+      return listArg;
+    }
     case 'CONS':
       return astCons(evalArgs[0], evalArgs[1]);
     case 'LIST':
       return makeListNode(evalArgs);
+    case 'VECTOR':
+      return makeListNode([makeSymbolNode('VECTOR'), ...evalArgs]);
     case 'LIST*': {
       if (evalArgs.length === 1) return evalArgs[0];
       let acc = evalArgs[evalArgs.length - 1];
@@ -2055,19 +2811,40 @@ function evalMacroCallByName(name, evalArgs, env, ctx) {
       if (seq?.kind === 'string') return makeIntNode(BigInt(seq.value.length));
       throw new SyntaxError('LENGTH in macro expansion expected a list or string');
     }
+    case 'SUBSEQ': {
+      const seq = evalArgs[0];
+      const start = Number(evalArgs[1]?.value ?? 0);
+      const end = evalArgs.length >= 3 && !isNilSymbol(evalArgs[2]) ? Number(evalArgs[2].value) : undefined;
+      if (seq?.kind === 'string') {
+        return Object.freeze({kind: 'string', value: seq.value.slice(start, end)});
+      }
+      if (isNilSymbol(seq)) return NIL_NODE;
+      if (seq?.kind === 'list') {
+        return makeListNode(seq.elements.slice(start, end));
+      }
+      throw new SyntaxError('SUBSEQ in macro expansion expected a list or string');
+    }
     case 'REVERSE': {
       const seq = evalArgs[0];
       if (isNilSymbol(seq)) return NIL_NODE;
       if (seq?.kind === 'list') return makeListNode([...seq.elements].reverse());
-      throw new SyntaxError('REVERSE in macro expansion expected a list');
+      if (seq?.kind === 'string') {
+        return Object.freeze({kind: 'string', value: [...seq.value].reverse().join('')});
+      }
+      throw new SyntaxError('REVERSE in macro expansion expected a list or string');
     }
     case 'MAPCAR': {
       const [fnObj, listArg] = evalArgs;
       if (isNilSymbol(listArg)) return NIL_NODE;
-      if (listArg?.kind !== 'list' || typeof fnObj?.invoke !== 'function') {
-        throw new SyntaxError('MAPCAR in macro expansion requires a function and a list');
+      if (listArg?.kind !== 'list') {
+        throw new SyntaxError('MAPCAR in macro expansion requires a list');
       }
-      return makeListNode(listArg.elements.map((el) => fnObj.invoke([el])));
+      const invokeOne = (el) => {
+        if (typeof fnObj?.invoke === 'function') return fnObj.invoke([el]);
+        if (fnObj?.kind === 'symbol') return evalMacroCallByName(fnObj.name, [el], env, ctx);
+        throw new SyntaxError('MAPCAR in macro expansion requires a function');
+      };
+      return makeListNode(listArg.elements.map(invokeOne));
     }
     case 'FUNCALL': {
       const [fnObj, ...callArgs] = evalArgs;
@@ -2075,7 +2852,8 @@ function evalMacroCallByName(name, evalArgs, env, ctx) {
       if (fnObj?.kind === 'symbol') return evalMacroCallByName(fnObj.name, callArgs, env, ctx);
       throw new SyntaxError('invalid FUNCALL target in macro expansion');
     }
-    case 'APPLY': {
+    case 'APPLY':
+    case '%APPLY-LIST': {
       const [fnObj, ...rest] = evalArgs;
       const last = rest[rest.length - 1];
       const tailElems = isNilSymbol(last) ? [] : last?.kind === 'list' ? last.elements : [];
@@ -2102,6 +2880,40 @@ function evalMacroCallByName(name, evalArgs, env, ctx) {
       return astBool(evalArgs[0]?.kind === 'integer');
     case 'STRINGP':
       return astBool(evalArgs[0]?.kind === 'string');
+    case 'CHARACTERP': {
+      return astBool(Boolean(extractCharFromAst(evalArgs[0])));
+    }
+    case 'CODE-CHAR': {
+      const code = Number(evalArgs[0]?.value ?? 0);
+      return makeCharAstNode(String.fromCodePoint(code));
+    }
+    case 'CHAR-CODE': {
+      const info = extractCharFromAst(evalArgs[0]);
+      if (!info) throw new SyntaxError('CHAR-CODE in macro expansion requires a character');
+      return makeIntNode(BigInt(info.codePoint));
+    }
+    case 'CHAR=': {
+      const ch1 = extractCharFromAst(evalArgs[0]);
+      const ch2 = extractCharFromAst(evalArgs[1]);
+      return astBool(Boolean(ch1 && ch2 && ch1.codePoint === ch2.codePoint));
+    }
+    case 'CHAR': {
+      const str = evalArgs[0];
+      const idx = Number(evalArgs[1]?.value ?? 0);
+      if (str?.kind !== 'string' || idx < 0 || idx >= str.value.length) {
+        throw new SyntaxError('CHAR in macro/reader expansion out of bounds');
+      }
+      return makeCharAstNode(str.value[idx]);
+    }
+    case '%STRING-APPEND': {
+      const s1 = evalArgs[0]?.kind === 'string' ? evalArgs[0].value : '';
+      const s2 = evalArgs[1]?.kind === 'string' ? evalArgs[1].value : '';
+      return Object.freeze({kind: 'string', value: `${s1}${s2}`});
+    }
+    case 'PARSE-INTEGER': {
+      const str = evalArgs[0]?.kind === 'string' ? evalArgs[0].value.trim() : '';
+      return makeIntNode(BigInt(str));
+    }
     case 'EQ':
     case 'EQL':
     case 'EQUAL':
@@ -2142,12 +2954,131 @@ function evalMacroCallByName(name, evalArgs, env, ctx) {
       const arg = evalArgs[0];
       if (arg?.kind === 'string') return arg;
       if (arg?.kind === 'symbol') return Object.freeze({kind: 'string', value: arg.name});
-      throw new SyntaxError(`${name} in macro expansion expected a symbol or string`);
+      const chInfo = extractCharFromAst(arg);
+      if (chInfo) {
+        return Object.freeze({kind: 'string', value: chInfo.char});
+      }
+      throw new SyntaxError(`${name} in macro expansion expected a symbol, string, or character`);
     }
     case 'INTERN': {
       const str = evalArgs[0];
       const text = str?.kind === 'string' ? str.value : str?.kind === 'symbol' ? str.name : '';
       return makeSymbolNode(text.toUpperCase(), {spelling: text});
+    }
+    case 'READ-CHAR': {
+      const s = (evalArgs[0]?.kind === 'reader-stream' ? evalArgs[0] : null) ?? ctx?.activeReaderStream;
+      if (!s) throw new SyntaxError('Common Lisp READ-CHAR requires an active reader stream');
+      const eofErrorP = evalArgs.length >= 2 ? !isNilSymbol(evalArgs[1]) : true;
+      const eofValue = evalArgs.length >= 3 ? evalArgs[2] : NIL_NODE;
+      const ch = s.readRawChar();
+      if (ch === undefined) {
+        if (eofErrorP) throw new SyntaxError('unexpected EOF in Common Lisp READ-CHAR');
+        return eofValue;
+      }
+      return makeCharAstNode(ch);
+    }
+    case 'PEEK-CHAR': {
+      const peekType = evalArgs[0] ?? NIL_NODE;
+      const s = (evalArgs[1]?.kind === 'reader-stream' ? evalArgs[1] : null)
+        ?? (evalArgs[0]?.kind === 'reader-stream' ? evalArgs[0] : null)
+        ?? ctx?.activeReaderStream;
+      if (!s) throw new SyntaxError('Common Lisp PEEK-CHAR requires an active reader stream');
+      const skipWs = isTSymbol(peekType);
+      const eofErrorP = evalArgs.length >= 3 ? !isNilSymbol(evalArgs[2]) : true;
+      const eofValue = evalArgs.length >= 4 ? evalArgs[3] : NIL_NODE;
+      if (skipWs) s.skipWhitespaceAndComments();
+      const ch = s.peekRawChar();
+      if (ch === undefined) {
+        if (eofErrorP) throw new SyntaxError('unexpected EOF in Common Lisp PEEK-CHAR');
+        return eofValue;
+      }
+      return makeCharAstNode(ch);
+    }
+    case 'UNREAD-CHAR': {
+      const ch = requireCharStringFromAst(evalArgs[0], 'UNREAD-CHAR argument');
+      const s = (evalArgs[1]?.kind === 'reader-stream' ? evalArgs[1] : null) ?? ctx?.activeReaderStream;
+      if (!s) throw new SyntaxError('Common Lisp UNREAD-CHAR requires an active reader stream');
+      s.unreadChar(ch);
+      return NIL_NODE;
+    }
+    case 'READ': {
+      const first = evalArgs[0];
+      if (first?.kind === 'string') {
+        const parsed = readCommonLispSource(first.value, {
+          readtable: ctx?.readtable,
+          macroContext: ctx,
+        });
+        return parsed[0] ?? NIL_NODE;
+      }
+      const s = (first?.kind === 'reader-stream' ? first : null) ?? ctx?.activeReaderStream;
+      if (!s) throw new SyntaxError('Common Lisp READ requires an active reader stream or string');
+      return s.readForm();
+    }
+    case 'READ-DELIMITED-LIST': {
+      const delimChar = requireCharStringFromAst(evalArgs[0], 'READ-DELIMITED-LIST delimiter');
+      const s = (evalArgs[1]?.kind === 'reader-stream' ? evalArgs[1] : null) ?? ctx?.activeReaderStream;
+      if (!s) throw new SyntaxError('Common Lisp READ-DELIMITED-LIST requires an active reader stream');
+      return s.readDelimitedList(delimChar);
+    }
+    case 'GET-MACRO-CHARACTER': {
+      const ch = requireCharStringFromAst(evalArgs[0], 'GET-MACRO-CHARACTER argument');
+      const entry = ctx?.readtable?.macroCharacters?.get(ch);
+      if (!entry) return NIL_NODE;
+      return T_NODE;
+    }
+    case 'GET-DISPATCH-MACRO-CHARACTER': {
+      const dispChar = requireCharStringFromAst(evalArgs[0], 'GET-DISPATCH-MACRO-CHARACTER disp-char');
+      const subChar = requireCharStringFromAst(evalArgs[1], 'GET-DISPATCH-MACRO-CHARACTER sub-char').toUpperCase();
+      const subMap = ctx?.readtable?.dispatchMacroCharacters?.get(dispChar);
+      const entry = subMap?.get(subChar);
+      if (!entry) return NIL_NODE;
+      return T_NODE;
+    }
+    case 'SET-MACRO-CHARACTER': {
+      const chInfo = extractCharFromAst(evalArgs[0]);
+      if (!chInfo) throw new SyntaxError('SET-MACRO-CHARACTER requires a character');
+      const fnArg = evalArgs[1];
+      const nonTerm = evalArgs.length >= 3 && !isNilSymbol(evalArgs[2]);
+      let handler = null;
+      if (typeof fnArg?.invoke === 'function') {
+        handler = (...a) => fnArg.invoke(a);
+      }
+      if (ctx?.readtable) {
+        ctx.readtable.macroCharacters.set(chInfo.char, {
+          kind: 'macro-char',
+          char: chInfo.char,
+          codePoint: chInfo.codePoint,
+          nonTerminatingP: nonTerm,
+          handler,
+          handlerForm: fnArg?.kind === 'symbol' ? makeListNode([makeSymbolNode('FUNCTION'), fnArg]) : null,
+        });
+      }
+      return T_NODE;
+    }
+    case 'SET-DISPATCH-MACRO-CHARACTER': {
+      const dispInfo = extractCharFromAst(evalArgs[0]);
+      const subInfo = extractCharFromAst(evalArgs[1]);
+      if (!dispInfo || !subInfo) throw new SyntaxError('SET-DISPATCH-MACRO-CHARACTER requires characters');
+      const subChar = subInfo.char.toUpperCase();
+      const fnArg = evalArgs[2];
+      let handler = null;
+      if (typeof fnArg?.invoke === 'function') {
+        handler = (...a) => fnArg.invoke(a);
+      }
+      if (ctx?.readtable) {
+        if (!ctx.readtable.dispatchMacroCharacters.has(dispInfo.char)) {
+          ctx.readtable.dispatchMacroCharacters.set(dispInfo.char, new Map());
+        }
+        ctx.readtable.dispatchMacroCharacters.get(dispInfo.char).set(subChar, {
+          kind: 'dispatch-macro-char',
+          dispChar: dispInfo.char,
+          subChar,
+          nonTerminatingP: false,
+          handler,
+          handlerForm: fnArg?.kind === 'symbol' ? makeListNode([makeSymbolNode('FUNCTION'), fnArg]) : null,
+        });
+      }
+      return T_NODE;
     }
     case 'MACROEXPAND-1':
       return macroexpand1CommonLispForm(evalArgs[0], ctx).form;
@@ -2281,6 +3212,102 @@ function expandSetfSingle(placeForm, valueForm, ctx) {
       ]);
     }
     default: {
+      if (ctx?.localSetfFunctions?.has(head.name)) {
+        const bindings = [];
+        const canonArgs = args.map((arg, idx) => {
+          if (isConstantPlaceArg(arg)) return arg;
+          const t = ctx.freshGensym(`SETF_ARG_${idx}`);
+          bindings.push(makeListNode([t, arg]));
+          return t;
+        });
+        const valTemp = isConstantPlaceArg(valueForm) && bindings.length === 0
+          ? valueForm
+          : ctx.freshGensym('SETF_VAL');
+        if (valTemp !== valueForm) {
+          bindings.push(makeListNode([valTemp, valueForm]));
+        }
+        const callExpr = makeListNode([
+          makeSymbolNode(canonicalSetfFunctionName(head.name)),
+          valTemp,
+          ...canonArgs,
+        ]);
+        return bindings.length === 0
+          ? callExpr
+          : makeListNode([makeSymbolNode('LET*'), makeListNode(bindings), callExpr]);
+      }
+
+      const setfExp = ctx?.setfExpanders?.get(head.name);
+      if (setfExp) {
+        if (setfExp.kind === 'setf-function') {
+          const bindings = [];
+          const canonArgs = args.map((arg, idx) => {
+            if (isConstantPlaceArg(arg)) return arg;
+            const t = ctx.freshGensym(`SETF_ARG_${idx}`);
+            bindings.push(makeListNode([t, arg]));
+            return t;
+          });
+          const valTemp = isConstantPlaceArg(valueForm) && bindings.length === 0
+            ? valueForm
+            : ctx.freshGensym('SETF_VAL');
+          if (valTemp !== valueForm) {
+            bindings.push(makeListNode([valTemp, valueForm]));
+          }
+          const callExpr = makeListNode([
+            makeSymbolNode(setfExp.writerFunctionName),
+            valTemp,
+            ...canonArgs,
+          ]);
+          return bindings.length === 0
+            ? callExpr
+            : makeListNode([makeSymbolNode('LET*'), makeListNode(bindings), callExpr]);
+        }
+        if (setfExp.kind === 'defsetf-short') {
+          const bindings = [];
+          const canonArgs = args.map((arg, idx) => {
+            if (isConstantPlaceArg(arg)) return arg;
+            const t = ctx.freshGensym(`SETF_ARG_${idx}`);
+            bindings.push(makeListNode([t, arg]));
+            return t;
+          });
+          const valTemp = isConstantPlaceArg(valueForm) && bindings.length === 0
+            ? valueForm
+            : ctx.freshGensym('SETF_VAL');
+          if (valTemp !== valueForm) {
+            bindings.push(makeListNode([valTemp, valueForm]));
+          }
+          const callExpr = makeListNode([
+            makeSymbolNode(setfExp.updateFn),
+            ...canonArgs,
+            valTemp,
+          ]);
+          return bindings.length === 0
+            ? callExpr
+            : makeListNode([makeSymbolNode('LET*'), makeListNode(bindings), callExpr]);
+        }
+        if (setfExp.kind === 'defsetf-long') {
+          const bindings = [];
+          const canonArgs = args.map((arg, idx) => {
+            if (isConstantPlaceArg(arg)) return arg;
+            const t = ctx.freshGensym(`SETF_ARG_${idx}`);
+            bindings.push(makeListNode([t, arg]));
+            return t;
+          });
+          const storeTemp = ctx.freshGensym('SETF_STORE');
+          bindings.push(makeListNode([storeTemp, valueForm]));
+          const env = new Map();
+          bindMacroLambdaList(setfExp.lambdaList, canonArgs, env, ctx);
+          for (let sIdx = 0; sIdx < setfExp.storeVars.length; sIdx += 1) {
+            env.set(setfExp.storeVars[sIdx], sIdx === 0 ? storeTemp : NIL_NODE);
+          }
+          const expandedBody = evalMacroSequence(setfExp.bodyForms, env, ctx);
+          return makeListNode([
+            makeSymbolNode('LET*'),
+            makeListNode(bindings),
+            expandedBody,
+          ]);
+        }
+      }
+
       // Check if place is a macro call first
       const expandedPlace = macroexpand1CommonLispForm(normalized, ctx);
       if (expandedPlace.expanded) {
@@ -2334,6 +3361,17 @@ function withGeneralizedPlace(placeForm, ctx, buildBody) {
     throw new SyntaxError('invalid Common Lisp generalized place');
   }
   const [head, ...args] = normalized.elements;
+  if (
+    !ctx?.localSetfFunctions?.has(head.name)
+    && !ctx?.setfExpanders?.has(head.name)
+    && head.name !== 'SLOT-VALUE'
+    && head.name !== 'SEND'
+  ) {
+    const expandedPlace = macroexpand1CommonLispForm(normalized, ctx);
+    if (expandedPlace.expanded) {
+      return withGeneralizedPlace(expandedPlace.form, ctx, buildBody);
+    }
+  }
   const bindings = [];
   const canonArgs = args.map((arg, idx) => {
     if (isConstantPlaceArg(arg)) return arg;
@@ -2902,6 +3940,206 @@ const BUILT_IN_MACROS = Object.freeze({
   },
   LOOP(args, ctx) {
     return expandLoopMacro(args, ctx);
+  },
+  VALUES(args) {
+    if (args.length === 0) {
+      return makeListNode([makeSymbolNode('%VALUES'), NIL_NODE]);
+    }
+    return makeListNode([
+      makeSymbolNode('%VALUES'),
+      makeListNode([makeSymbolNode('LIST'), ...args]),
+    ]);
+  },
+  'VALUES-LIST'(args) {
+    if (args.length !== 1) {
+      throw new SyntaxError('Common Lisp VALUES-LIST requires 1 list argument');
+    }
+    return makeListNode([makeSymbolNode('%VALUES'), args[0]]);
+  },
+  'MULTIPLE-VALUE-LIST'(args) {
+    if (args.length !== 1) {
+      throw new SyntaxError('Common Lisp MULTIPLE-VALUE-LIST requires 1 form');
+    }
+    return makeListNode([
+      makeSymbolNode('%CAPTURE-MV'),
+      makeListNode([makeSymbolNode('LAMBDA'), NIL_NODE, args[0]]),
+    ]);
+  },
+  'MULTIPLE-VALUE-BIND'(args, ctx) {
+    if (args.length < 2) {
+      throw new SyntaxError('Common Lisp MULTIPLE-VALUE-BIND requires a variable list and values-form');
+    }
+    const [varsForm, valuesForm, ...bodyForms] = args;
+    const varList = isNilSymbol(varsForm)
+      ? []
+      : varsForm?.kind === 'list'
+        ? varsForm.elements
+        : null;
+    if (!varList) {
+      throw new SyntaxError('Common Lisp MULTIPLE-VALUE-BIND variable list must be a list of symbols');
+    }
+    const mvTemp = ctx.freshGensym('MV_LIST');
+    const captureExpr = makeListNode([
+      makeSymbolNode('%CAPTURE-MV'),
+      makeListNode([makeSymbolNode('LAMBDA'), NIL_NODE, valuesForm]),
+    ]);
+    if (varList.length === 0) {
+      return makeListNode([makeSymbolNode('PROGN'), captureExpr, ...bodyForms]);
+    }
+    const bindings = [makeListNode([mvTemp, captureExpr])];
+    varList.forEach((varSym, idx) => {
+      if (varSym?.kind !== 'symbol' || isNilSymbol(varSym) || isTSymbol(varSym) || varSym.keyword) {
+        throw new SyntaxError('Common Lisp MULTIPLE-VALUE-BIND variables must be ordinary symbols');
+      }
+      let extractExpr;
+      if (idx === 0) {
+        extractExpr = makeListNode([makeSymbolNode('CAR'), mvTemp]);
+      } else if (idx === 1) {
+        extractExpr = makeListNode([makeSymbolNode('CADR'), mvTemp]);
+      } else if (idx === 2) {
+        extractExpr = makeListNode([makeSymbolNode('THIRD'), mvTemp]);
+      } else {
+        extractExpr = makeListNode([makeSymbolNode('NTH'), makeIntNode(BigInt(idx)), mvTemp]);
+      }
+      bindings.push(makeListNode([varSym, extractExpr]));
+    });
+    return makeListNode([
+      makeSymbolNode('LET*'),
+      makeListNode(bindings),
+      ...bodyForms,
+    ]);
+  },
+  'MULTIPLE-VALUE-CALL'(args, ctx) {
+    if (args.length < 1) {
+      throw new SyntaxError('Common Lisp MULTIPLE-VALUE-CALL requires a function form');
+    }
+    const [fnForm, ...valueForms] = args;
+    if (valueForms.length === 0) {
+      return makeListNode([makeSymbolNode('FUNCALL'), fnForm]);
+    }
+    const listForms = valueForms.map((vf) =>
+      makeListNode([
+        makeSymbolNode('%CAPTURE-MV'),
+        makeListNode([makeSymbolNode('LAMBDA'), NIL_NODE, vf]),
+      ]),
+    );
+    let combinedListExpr = listForms[listForms.length - 1];
+    for (let i = listForms.length - 2; i >= 0; i -= 1) {
+      combinedListExpr = makeListNode([makeSymbolNode('APPEND'), listForms[i], combinedListExpr]);
+    }
+    if (
+      fnForm?.kind === 'list' &&
+      fnForm.elements.length === 2 &&
+      fnForm.elements[0]?.kind === 'symbol' &&
+      (fnForm.elements[0].name === 'FUNCTION' || fnForm.elements[0].name === 'QUOTE') &&
+      fnForm.elements[1]?.kind === 'symbol'
+    ) {
+      const targetName = fnForm.elements[1].name;
+      if (targetName === 'LIST') {
+        return combinedListExpr;
+      }
+      if (targetName === 'VALUES') {
+        return makeListNode([makeSymbolNode('%VALUES'), combinedListExpr]);
+      }
+      if (targetName === '+') {
+        return makeListNode([
+          makeSymbolNode('REDUCE'),
+          makeListNode([makeSymbolNode('FUNCTION'), makeSymbolNode('+')]),
+          combinedListExpr,
+          makeIntNode(0n),
+        ]);
+      }
+      if (targetName === '*') {
+        return makeListNode([
+          makeSymbolNode('REDUCE'),
+          makeListNode([makeSymbolNode('FUNCTION'), makeSymbolNode('*')]),
+          combinedListExpr,
+          makeIntNode(1n),
+        ]);
+      }
+    }
+    const fnTemp = ctx.freshGensym('MVC_FN');
+    return makeListNode([
+      makeSymbolNode('LET'),
+      makeListNode([makeListNode([fnTemp, fnForm])]),
+      makeListNode([makeSymbolNode('%APPLY-LIST'), fnTemp, combinedListExpr]),
+    ]);
+  },
+  'NTH-VALUE'(args) {
+    if (args.length !== 2) {
+      throw new SyntaxError('Common Lisp NTH-VALUE requires an index and a form');
+    }
+    const [indexForm, valueForm] = args;
+    return makeListNode([
+      makeSymbolNode('NTH'),
+      indexForm,
+      makeListNode([
+        makeSymbolNode('%CAPTURE-MV'),
+        makeListNode([makeSymbolNode('LAMBDA'), NIL_NODE, valueForm]),
+      ]),
+    ]);
+  },
+  'MULTIPLE-VALUE-PROG1'(args, ctx) {
+    if (args.length < 1) {
+      throw new SyntaxError('Common Lisp MULTIPLE-VALUE-PROG1 requires at least 1 form');
+    }
+    if (args.length === 1) {
+      return args[0];
+    }
+    const [firstForm, ...restForms] = args;
+    const mvTemp = ctx.freshGensym('MVP1_LIST');
+    return makeListNode([
+      makeSymbolNode('LET'),
+      makeListNode([
+        makeListNode([
+          mvTemp,
+          makeListNode([
+            makeSymbolNode('%CAPTURE-MV'),
+            makeListNode([makeSymbolNode('LAMBDA'), NIL_NODE, firstForm]),
+          ]),
+        ]),
+      ]),
+      ...restForms,
+      makeListNode([makeSymbolNode('%VALUES'), mvTemp]),
+    ]);
+  },
+  'SET-MACRO-CHARACTER'(args) {
+    if (args.length < 2) {
+      throw new SyntaxError('Common Lisp SET-MACRO-CHARACTER requires a character and a function');
+    }
+    return T_NODE;
+  },
+  'SET-DISPATCH-MACRO-CHARACTER'(args) {
+    if (args.length < 3) {
+      throw new SyntaxError('Common Lisp SET-DISPATCH-MACRO-CHARACTER requires disp-char, sub-char, and function');
+    }
+    return T_NODE;
+  },
+  'GET-MACRO-CHARACTER'(args, ctx) {
+    if (args.length < 1) {
+      throw new SyntaxError('Common Lisp GET-MACRO-CHARACTER requires a character');
+    }
+    const ch = requireCharStringFromAst(args[0], 'GET-MACRO-CHARACTER argument');
+    const entry = ctx?.readtable?.macroCharacters?.get(ch);
+    if (!entry) {
+      return makeListNode([makeSymbolNode('VALUES'), NIL_NODE, NIL_NODE]);
+    }
+    return makeListNode([
+      makeSymbolNode('VALUES'),
+      T_NODE,
+      entry.nonTerminatingP ? T_NODE : NIL_NODE,
+    ]);
+  },
+  'GET-DISPATCH-MACRO-CHARACTER'(args, ctx) {
+    if (args.length < 2) {
+      throw new SyntaxError('Common Lisp GET-DISPATCH-MACRO-CHARACTER requires disp-char and sub-char');
+    }
+    const dispChar = requireCharStringFromAst(args[0], 'GET-DISPATCH-MACRO-CHARACTER disp-char');
+    const subChar = requireCharStringFromAst(args[1], 'GET-DISPATCH-MACRO-CHARACTER sub-char').toUpperCase();
+    const subMap = ctx?.readtable?.dispatchMacroCharacters?.get(dispChar);
+    const entry = subMap?.get(subChar);
+    if (!entry) return NIL_NODE;
+    return T_NODE;
   },
 });
 
@@ -3595,6 +4833,20 @@ function expandAllMacrosInForm(form, ctx, shadowedFunctions = new Set(), localSi
   switch (head.name) {
     case 'QUOTE':
       return form;
+    case 'FUNCTION': {
+      if (
+        args.length === 1 &&
+        args[0]?.kind === 'list' &&
+        args[0].elements[0]?.kind === 'symbol' &&
+        args[0].elements[0].name === 'LAMBDA'
+      ) {
+        return makeListNode([
+          head,
+          expandAllMacrosInForm(args[0], ctx, shadowedFunctions, localSignatures),
+        ]);
+      }
+      return form;
+    }
     case 'LET':
     case 'LET*': {
       const [bindingsForm, ...bodyForms] = args;
@@ -3629,36 +4881,62 @@ function expandAllMacrosInForm(form, ctx, shadowedFunctions = new Set(), localSi
       const defs = defsForm?.kind === 'list' ? defsForm.elements : [];
       const nextShadowed = new Set(shadowedFunctions);
       const nextSigs = new Map(localSignatures);
+      const addedSetfReaders = [];
       for (const def of defs) {
-        if (def?.kind === 'list' && def.elements[0]?.kind === 'symbol') {
-          nextShadowed.add(def.elements[0].name);
-          const parsed = parseLambdaList(def.elements[1] ?? NIL_NODE);
-          if (!parsed.isSimple) {
-            nextSigs.set(def.elements[0].name, {
-              name: def.elements[0].name,
-              requiredCount: parsed.required.length,
-              optionalCount: parsed.optional.length,
-              hasRestOrKey: Boolean(parsed.rest !== null || parsed.keys.length > 0),
-            });
-          } else {
-            nextSigs.delete(def.elements[0].name);
+        if (def?.kind === 'list') {
+          const setfReader = parseSetfFunctionName(def.elements[0]);
+          const fnName = setfReader
+            ? canonicalSetfFunctionName(setfReader)
+            : def.elements[0]?.kind === 'symbol'
+              ? def.elements[0].name
+              : null;
+          if (setfReader) {
+            addedSetfReaders.push(setfReader);
+          }
+          if (fnName) {
+            nextShadowed.add(fnName);
+            const parsed = parseLambdaList(def.elements[1] ?? NIL_NODE);
+            if (!parsed.isSimple) {
+              nextSigs.set(fnName, {
+                name: fnName,
+                requiredCount: parsed.required.length,
+                optionalCount: parsed.optional.length,
+                hasRestOrKey: Boolean(parsed.rest !== null || parsed.keys.length > 0),
+              });
+            } else {
+              nextSigs.delete(fnName);
+            }
           }
         }
+      }
+      const savedLocalSetf = new Set(ctx.localSetfFunctions ?? []);
+      if (head.name === 'LABELS') {
+        for (const r of addedSetfReaders) ctx.localSetfFunctions.add(r);
       }
       const defShadow = head.name === 'LABELS' ? nextShadowed : shadowedFunctions;
       const defSigs = head.name === 'LABELS' ? nextSigs : localSignatures;
       const expandedDefs = defs.map((def) => {
         if (def?.kind !== 'list' || def.elements.length < 2) return def;
-        const [fnSym, paramForm, ...fnBody] = def.elements;
+        const [rawFnSpec, paramForm, ...fnBody] = def.elements;
+        const setfReader = parseSetfFunctionName(rawFnSpec);
+        const fnSym = setfReader
+          ? makeSymbolNode(canonicalSetfFunctionName(setfReader))
+          : rawFnSpec;
+        const blockName = setfReader ?? fnSym.name;
         const expFnBody = fnBody.map((b) => expandAllMacrosInForm(b, ctx, defShadow, defSigs));
-        const norm = normalizeFunctionDefinition(fnSym.name, paramForm, expFnBody, ctx);
+        const norm = normalizeFunctionDefinition(fnSym.name, paramForm, expFnBody, ctx, blockName);
         return makeListNode([fnSym, norm.paramListForm, ...norm.bodyForms]);
       });
-      return makeListNode([
-        head,
-        makeListNode(expandedDefs),
-        ...bodyForms.map((b) => expandAllMacrosInForm(b, ctx, nextShadowed, nextSigs)),
-      ]);
+      for (const r of addedSetfReaders) ctx.localSetfFunctions.add(r);
+      try {
+        return makeListNode([
+          head,
+          makeListNode(expandedDefs),
+          ...bodyForms.map((b) => expandAllMacrosInForm(b, ctx, nextShadowed, nextSigs)),
+        ]);
+      } finally {
+        ctx.localSetfFunctions = savedLocalSetf;
+      }
     }
     case 'COND': {
       const expandedClauses = args.map((clause) => {
@@ -3777,8 +5055,13 @@ function collectMutatedVariables(form, mutated = new Set()) {
     if (head.name === 'LABELS') {
       const bindings = rest[0]?.kind === 'list' ? rest[0].elements : [];
       for (const b of bindings) {
-        if (b?.kind === 'list' && b.elements[0]?.kind === 'symbol') {
-          mutated.add(b.elements[0].name);
+        if (b?.kind === 'list') {
+          const setfReader = parseSetfFunctionName(b.elements[0]);
+          if (setfReader) {
+            mutated.add(canonicalSetfFunctionName(setfReader));
+          } else if (b.elements[0]?.kind === 'symbol') {
+            mutated.add(b.elements[0].name);
+          }
         }
       }
     }
@@ -3817,12 +5100,25 @@ function compileCommonLispSemanticProgram(rawForms, {
   structs = {},
   classes = {},
   functionSignatures = {},
+  setfExpanders = {},
+  readerMacros = {},
+  userFunctions = {},
+  readtable = null,
   alreadyExpanded = false,
 } = {}) {
   if (!Array.isArray(rawForms)) {
     throw new TypeError('compileCommonLispSemanticProgram forms must be an array');
   }
-  const macroContext = createMacroContext({macros, structs, classes, functionSignatures});
+  const macroContext = createMacroContext({
+    macros,
+    structs,
+    classes,
+    functionSignatures,
+    setfExpanders,
+    readerMacros,
+    userFunctions,
+    readtable,
+  });
   const forms = alreadyExpanded
     ? rawForms
     : rawForms.map((f) => expandAllMacrosInForm(f, macroContext));
@@ -4231,7 +5527,11 @@ function compileCommonLispSemanticProgram(rawForms, {
     };
   }
 
-  function compileFunctionRef(scope, target) {
+  function compileFunctionRef(scope, rawTarget) {
+    const setfReader = parseSetfFunctionName(rawTarget);
+    const target = setfReader
+      ? makeSymbolNode(canonicalSetfFunctionName(setfReader))
+      : rawTarget;
     if (target.kind === 'symbol') {
       const lexical = lookupLexical(scope, target.name);
       if (lexical) {
@@ -4807,11 +6107,38 @@ function compileCommonLispSemanticProgram(rawForms, {
         statements.push({op: 'binding', id: vecTemp.id});
         return {op: 'sequence', statements};
       }
+      case 'READ':
+      case 'READ-CHAR':
+      case 'PEEK-CHAR':
+      case 'UNREAD-CHAR':
+      case 'READ-DELIMITED-LIST': {
+        if (args.length === 0) return refNil(scope);
+        return {
+          op: 'sequence',
+          statements: [...args.map((a) => compileForm(scope, a)), refNil(scope)],
+        };
+      }
       case 'GETHASH': {
         if (args.length < 2 || args.length > 3) {
           throw new SyntaxError('Common Lisp GETHASH requires 2 or 3 arguments');
         }
         const defaultExpr = args.length === 3 ? compileForm(scope, args[2]) : refNil(scope);
+        if (fnBindingMap.has('%GETHASH-WITH-MV')) {
+          const mvHelperId = fnBindingMap.get('%GETHASH-WITH-MV');
+          globalBindingIdsUsed.add(mvHelperId);
+          const bindingExpr = requireRootCapture(scope, mvHelperId, '%GETHASH-WITH-MV');
+          return {
+            op: 'apply',
+            callee: {
+              op: 'send',
+              languageId: SYMMETRIC_SMALLTALK_ID,
+              receiver: bindingExpr,
+              message: textValue('value'),
+              arguments: [],
+            },
+            arguments: [compileForm(scope, args[0]), compileForm(scope, args[1]), defaultExpr],
+          };
+        }
         return {
           op: 'apply',
           callee: refRuntimeBlock(scope, RUNTIME_BLOCK_IDS.GETHASH, '$gethash'),
@@ -6673,7 +8000,7 @@ async function installCommonLispRuntime({
 
   // Install the Common Lisp standard library functions (if not already present)
   const ns = await findNamespace({images, imageId, namespaceId: COMMON_LISP_NAMESPACE_ID});
-  if (!ns?.entries.has('MAPCAR') || !ns?.entries.has('FORMAT')) {
+  if (!ns?.entries.has('MAPCAR') || !ns?.entries.has('FORMAT') || !ns?.entries.has('%CAPTURE-MV')) {
     await installCommonLispProgram({
       images,
       compilation: compiler,
@@ -6749,6 +8076,9 @@ async function collectCommonLispCompileContext({images, imageId}) {
   const packages = {};
   const systems = {};
   const functionSignatures = {};
+  const setfExpanders = {};
+  const readerMacros = {};
+  const userFunctions = {};
 
   for (const [name, bindingId] of Object.entries(globals)) {
     if (bindingId.startsWith('common-lisp/function-binding/')) {
@@ -6810,8 +8140,51 @@ async function collectCommonLispCompileContext({images, imageId}) {
         const parsed = JSON.parse(val.value);
         functionSignatures[parsed.name] = parsed;
       }
+    } else if (bindingId.startsWith('common-lisp/setf-binding/')) {
+      const record = await images.getObject(imageId, bindingId);
+      const val = record?.slots?.['global-binding-value'];
+      if (val?.kind === VALUE_KIND.TEXT) {
+        const parsed = JSON.parse(val.value);
+        setfExpanders[parsed.name] = parsed;
+      }
+    } else if (bindingId.startsWith('common-lisp/reader-macro-binding/')) {
+      const record = await images.getObject(imageId, bindingId);
+      const val = record?.slots?.['global-binding-value'];
+      if (val?.kind === VALUE_KIND.TEXT) {
+        const parsed = JSON.parse(val.value);
+        readerMacros[parsed.key] = parsed;
+      }
     }
   }
+
+  // When custom reader macros or defmacro helpers exist in the image, load user function ASTs
+  // so compile-time/read-time macro expansion can invoke previously defined helper functions.
+  if (Object.keys(readerMacros).length > 0 || Object.keys(macros).length > 0) {
+    for (const [fnName, bindingId] of Object.entries(functionBindings)) {
+      if (fnName.startsWith('%') || CL_SPECIAL_AND_STD_SYMBOLS.has(fnName)) continue;
+      const bindingRec = await images.getObject(imageId, bindingId);
+      const blockRef = bindingRec?.slots?.['global-binding-value'];
+      if (!isObjectRef(blockRef)) continue;
+      const srcArtifact = await images.getCodeArtifact(blockRef.imageId, `${blockRef.objectId}:source`);
+      if (srcArtifact?.content?.kind === VALUE_KIND.TEXT) {
+        try {
+          const parsedForms = readCommonLispSource(srcArtifact.content.value);
+          const defForm = parsedForms[0];
+          if (defForm?.kind === 'list' && defForm.elements[0]?.name === 'DEFUN' && defForm.elements.length >= 3) {
+            userFunctions[fnName] = {
+              name: fnName,
+              blockName: fnName,
+              paramForm: defForm.elements[2],
+              bodyForms: defForm.elements.slice(3),
+            };
+          }
+        } catch {
+          // Ignore unparseable helper source
+        }
+      }
+    }
+  }
+
   return {
     globals,
     functionBindings,
@@ -6823,6 +8196,9 @@ async function collectCommonLispCompileContext({images, imageId}) {
     packages,
     systems,
     functionSignatures,
+    setfExpanders,
+    readerMacros,
+    userFunctions,
   };
 }
 
@@ -6845,7 +8221,7 @@ async function installCommonLispBlock({
   assertMethodLane(lane);
   const compiler = resolveCompilation(images, compilation);
   const ctx = compileContext ?? (await collectCommonLispCompileContext({images, imageId}));
-  const forms = typeof source === 'string' ? readCommonLispSource(source) : source;
+  const forms = typeof source === 'string' ? readCommonLispSource(source, ctx) : source;
   const {
     syntax,
     semanticProgram,
@@ -6864,6 +8240,10 @@ async function installCommonLispBlock({
     structs: ctx.structs ?? {},
     classes: ctx.classes ?? {},
     functionSignatures: ctx.functionSignatures ?? {},
+    setfExpanders: ctx.setfExpanders ?? {},
+    readerMacros: ctx.readerMacros ?? {},
+    userFunctions: ctx.userFunctions ?? {},
+    readtable: ctx.readtable ?? null,
     alreadyExpanded,
   });
 
@@ -7004,30 +8384,94 @@ function parseTopLevelDefun(form, macroContext = createMacroContext()) {
   if (form.elements.length < 3) {
     throw new SyntaxError('Common Lisp DEFUN requires a name, parameter list, and body');
   }
-  const [, nameSym, paramForm, ...rawBodyForms] = form.elements;
-  if (nameSym?.kind !== 'symbol' || isNilSymbol(nameSym) || isTSymbol(nameSym) || nameSym.keyword) {
-    throw new SyntaxError('Common Lisp DEFUN name must be an ordinary symbol');
+  const [, nameSpec, paramForm, ...rawBodyForms] = form.elements;
+  const setfReader = parseSetfFunctionName(nameSpec);
+  let fnName;
+  let blockName;
+  let setfDescriptor = null;
+  if (setfReader) {
+    fnName = canonicalSetfFunctionName(setfReader);
+    blockName = setfReader;
+    setfDescriptor = Object.freeze({
+      name: setfReader,
+      kind: 'setf-function',
+      writerFunctionName: fnName,
+    });
+    macroContext.setfExpanders.set(setfReader, setfDescriptor);
+  } else if (nameSpec?.kind === 'symbol' && !isNilSymbol(nameSpec) && !isTSymbol(nameSpec) && !nameSpec.keyword) {
+    fnName = nameSpec.name;
+    blockName = nameSpec.name;
+  } else {
+    throw new SyntaxError('Common Lisp DEFUN name must be an ordinary symbol or (SETF <reader>)');
   }
   // Register self-signature in macroContext before expanding body so recursive calls with &optional/&key work
   const parsedParams = parseLambdaList(paramForm);
   let selfSig = null;
   if (!parsedParams.isSimple) {
     selfSig = Object.freeze({
-      name: nameSym.name,
+      name: fnName,
       requiredCount: parsedParams.required.length,
       optionalCount: parsedParams.optional.length,
       hasRestOrKey: Boolean(parsedParams.rest !== null || parsedParams.keys.length > 0),
     });
-    macroContext.functionSignatures.set(nameSym.name, selfSig);
+    macroContext.functionSignatures.set(fnName, selfSig);
   }
   const expandedBody = rawBodyForms.map((b) => expandAllMacrosInForm(b, macroContext));
-  const norm = normalizeFunctionDefinition(nameSym.name, paramForm, expandedBody, macroContext);
+  const norm = normalizeFunctionDefinition(fnName, paramForm, expandedBody, macroContext, blockName);
   return {
-    name: nameSym.name,
+    name: fnName,
+    blockName,
+    setfReader,
+    setfDescriptor,
     parameters: norm.paramNames,
     bodyForms: norm.bodyForms,
     signature: norm.signature,
   };
+}
+
+function parseTopLevelDefsetf(form) {
+  if (form?.kind !== 'list' || form.elements[0]?.kind !== 'symbol' || form.elements[0].name !== 'DEFSETF') {
+    return null;
+  }
+  if (form.elements.length < 3) {
+    throw new SyntaxError('Common Lisp DEFSETF requires an access-fn and an update-fn or expander specification');
+  }
+  const [, accessSym, third, ...rest] = form.elements;
+  if (accessSym?.kind !== 'symbol' || isNilSymbol(accessSym) || isTSymbol(accessSym) || accessSym.keyword) {
+    throw new SyntaxError('Common Lisp DEFSETF access-fn must be an ordinary symbol');
+  }
+  // Short form: (defsetf access-fn update-fn [documentation])
+  if (third?.kind === 'symbol' && !isNilSymbol(third)) {
+    return Object.freeze({
+      name: accessSym.name,
+      kind: 'defsetf-short',
+      updateFn: third.name,
+    });
+  }
+  // Long form: (defsetf access-fn (lambda-list...) (store-vars...) body...)
+  if (rest.length < 2) {
+    throw new SyntaxError('Common Lisp long-form DEFSETF requires (lambda-list) (store-vars) and body');
+  }
+  const [storeVarsForm, ...rawBodyForms] = rest;
+  const storeVarElems = isNilSymbol(storeVarsForm)
+    ? []
+    : storeVarsForm?.kind === 'list'
+      ? storeVarsForm.elements
+      : null;
+  if (!storeVarElems || storeVarElems.length === 0 || storeVarElems.some((s) => s?.kind !== 'symbol')) {
+    throw new SyntaxError('Common Lisp long-form DEFSETF requires a non-empty list of store variable symbols');
+  }
+  // Strip optional docstring if followed by at least one body form
+  const bodyForms = rawBodyForms.length > 1 && rawBodyForms[0]?.kind === 'string'
+    ? rawBodyForms.slice(1)
+    : rawBodyForms;
+  return Object.freeze({
+    name: accessSym.name,
+    kind: 'defsetf-long',
+    lambdaList: third,
+    storeVars: Object.freeze(storeVarElems.map((s) => s.name)),
+    bodyForms,
+  });
 }
 
 function parseTopLevelDefmacro(form) {
@@ -8062,14 +9506,15 @@ const CL_CORE_PACKAGES = new Set(['CL', 'COMMON-LISP', 'CL-USER', 'COMMON-LISP-U
 
 const CL_SPECIAL_AND_STD_SYMBOLS = new Set([
   'NIL', 'T', 'QUOTE', 'FUNCTION', 'PROGN', 'PROG1', 'PROG2', 'IF', 'COND', 'WHEN', 'UNLESS',
-  'LET', 'LET*', 'FLET', 'LABELS', 'LAMBDA', 'DEFUN', 'DEFMACRO', 'DEFSTRUCT', 'DEFCLASS',
+  'LET', 'LET*', 'FLET', 'LABELS', 'LAMBDA', 'DEFUN', 'DEFMACRO', 'DEFSETF', 'DEFSTRUCT', 'DEFCLASS',
   'DEFGENERIC', 'DEFMETHOD', 'DEFPACKAGE', 'IN-PACKAGE', 'DEFPARAMETER', 'DEFVAR',
   'SETQ', 'SETF', 'INCF', 'DECF', 'PUSH', 'POP', 'AND', 'OR', 'NOT', 'NULL', 'EQ', 'EQL', 'EQUAL',
   'CONS', 'CAR', 'CDR', 'FIRST', 'REST', 'SECOND', 'THIRD', 'NTH', 'NTHCDR', 'LAST', 'BUTLAST',
   'CAAR', 'CADR', 'CDAR', 'CDDR', 'RPLACA', 'RPLACD', 'CONSP', 'ATOM', 'LISTP', 'LIST', 'LIST*',
   'APPEND', 'REVERSE', 'LENGTH', 'SUBSEQ', 'ELT', 'COERCE', 'MAPCAR', 'MAPC', 'REMOVE-IF',
   'REMOVE-IF-NOT', 'REDUCE', 'EVERY', 'SOME', 'MEMBER', 'ASSOC', 'FUNCALL', 'APPLY', 'VALUES',
-  'MULTIPLE-VALUE-BIND', 'MULTIPLE-VALUE-LIST', 'VALUES-LIST', 'DESTRUCTURING-BIND',
+  'MULTIPLE-VALUE-BIND', 'MULTIPLE-VALUE-LIST', 'MULTIPLE-VALUE-CALL', 'NTH-VALUE',
+  'MULTIPLE-VALUE-PROG1', 'VALUES-LIST', 'DESTRUCTURING-BIND',
   'BLOCK', 'RETURN-FROM', 'RETURN', 'CATCH', 'THROW', 'UNWIND-PROTECT', 'HANDLER-CASE',
   'HANDLER-BIND', 'IGNORE-ERRORS', 'RESTART-CASE', 'FIND-RESTART', 'INVOKE-RESTART',
   'SIGNAL', 'ERROR', 'USE-VALUE', 'SEND', 'DOLIST', 'DOTIMES', 'LOOP', 'CASE', 'ECASE',
@@ -8083,6 +9528,9 @@ const CL_SPECIAL_AND_STD_SYMBOLS = new Set([
   'TYPEP', 'CALL-NEXT-METHOD', 'NEXT-METHOD-P', 'FORMAT', 'WITH-OUTPUT-TO-STRING',
   'MAKE-STRING-OUTPUT-STREAM', 'WRITE-STRING', 'WRITE-CHAR', 'TERPRI', 'PRINC', 'PRIN1',
   'GET-OUTPUT-STREAM-STRING', 'PRINC-TO-STRING', 'PRIN1-TO-STRING',
+  'SET-MACRO-CHARACTER', 'GET-MACRO-CHARACTER', 'SET-DISPATCH-MACRO-CHARACTER',
+  'GET-DISPATCH-MACRO-CHARACTER', 'READ-DELIMITED-LIST', 'READ', 'READ-CHAR', 'PEEK-CHAR',
+  'UNREAD-CHAR', 'PARSE-INTEGER',
   '&OPTIONAL', '&REST', '&BODY', '&KEY', 'OTHERWISE',
   ...BUILT_IN_MACROS ? Object.keys(BUILT_IN_MACROS) : [],
 ]);
@@ -8235,10 +9683,10 @@ async function installCommonLispProgram({
   }
 
   const kernel = await findSmalltalkKernel({images: effectiveImages, imageId});
-  const rawForms = typeof source === 'string' ? readCommonLispSource(source) : source;
   const compileContext = await collectCommonLispCompileContext({images: effectiveImages, imageId});
+  const rawForms = typeof source === 'string' ? readCommonLispSource(source, compileContext) : source;
 
-  // Expand any top-level DEFPACKAGE, IN-PACKAGE, DEFMACRO, DEFSTRUCT, DEFCLASS, DEFGENERIC, and DEFMETHOD
+  // Expand any top-level DEFPACKAGE, IN-PACKAGE, DEFMACRO, DEFSETF, DEFSTRUCT, DEFCLASS, DEFGENERIC, and DEFMETHOD
   // forms first so subsequent DEFUNs and expressions in the same program can use them immediately.
   const expandedTopForms = [];
   const macros = {};
@@ -8246,6 +9694,8 @@ async function installCommonLispProgram({
   const classes = {};
   const generics = {};
   const packages = {};
+  const setfExpanders = {};
+  const readerMacros = {};
   const touchedGenerics = new Set();
   let classesModified = false;
   let currentPackage = null;
@@ -8309,6 +9759,9 @@ async function installCommonLispProgram({
       rawForm?.kind === 'list'
       && rawForm.elements[0]?.kind === 'symbol'
       && rawForm.elements[0].name !== 'DEFMACRO'
+      && rawForm.elements[0].name !== 'DEFSETF'
+      && rawForm.elements[0].name !== 'SET-MACRO-CHARACTER'
+      && rawForm.elements[0].name !== 'SET-DISPATCH-MACRO-CHARACTER'
       && rawForm.elements[0].name !== 'DEFSTRUCT'
       && rawForm.elements[0].name !== 'DEFCLASS'
       && rawForm.elements[0].name !== 'DEFGENERIC'
@@ -8326,6 +9779,63 @@ async function installCommonLispProgram({
         queue.unshift(...rawForm.elements.slice(1).map((f) => ({__packageQualified: true, form: f})));
         continue;
       }
+    }
+
+    const rmDesc = parseTopLevelReaderMacroForm(rawForm);
+    if (rmDesc) {
+      const serialized = JSON.stringify(rmDesc);
+      await ensureCodeArtifact(effectiveImages, imageId, {
+        id: commonLispReaderMacroArtifactId(rmDesc.key, serialized),
+        languageId: COMMON_LISP_ID,
+        representation: COMMON_LISP_READER_MACRO_V0,
+        content: textValue(serialized),
+        metadata: {commonLisp: 'reader-macro', key: rmDesc.key},
+      });
+      await ensureGlobalBindingInNamespace({
+        images: effectiveImages,
+        imageId,
+        namespaceId: COMMON_LISP_NAMESPACE_ID,
+        name: `%READER-MACRO:${rmDesc.key}`,
+        bindingId: commonLispReaderMacroBindingId(rmDesc.key),
+        value: textValue(serialized),
+      });
+      compileContext.readerMacros[rmDesc.key] = rmDesc;
+      readerMacros[rmDesc.key] = rmDesc;
+      continue;
+    }
+
+    const defsetf = parseTopLevelDefsetf(rawForm);
+    if (defsetf) {
+      const serialized = JSON.stringify(defsetf);
+      await ensureCodeArtifact(effectiveImages, imageId, {
+        id: commonLispSetfArtifactId(defsetf.name, serialized),
+        languageId: COMMON_LISP_ID,
+        representation: COMMON_LISP_SETF_V0,
+        content: textValue(serialized),
+        metadata: {commonLisp: 'defsetf', accessFn: defsetf.name},
+      });
+      await ensureGlobalBindingInNamespace({
+        images: effectiveImages,
+        imageId,
+        namespaceId: COMMON_LISP_NAMESPACE_ID,
+        name: `%SETF:${defsetf.name}`,
+        bindingId: commonLispSetfBindingId(defsetf.name),
+        value: textValue(serialized),
+      });
+      if (defsetf.name.includes('::')) {
+        const [pkgPart, bare] = defsetf.name.split('::');
+        await ensureGlobalBindingInNamespace({
+          images: effectiveImages,
+          imageId,
+          namespaceId: commonLispPackageNamespaceId(pkgPart),
+          name: `%SETF:${bare}`,
+          bindingId: commonLispSetfBindingId(defsetf.name),
+          value: textValue(serialized),
+        });
+      }
+      compileContext.setfExpanders[defsetf.name] = defsetf;
+      setfExpanders[defsetf.name] = defsetf;
+      continue;
     }
 
     const defmacro = parseTopLevelDefmacro(rawForm);
@@ -8650,14 +10160,46 @@ async function installCommonLispProgram({
   const preExistingVariables = new Map();
   for (const form of expandedTopForms) {
     if (form?.kind === 'list' && form.elements[0]?.kind === 'symbol' && form.elements[0].name === 'DEFUN') {
-      const nameSym = form.elements[1];
+      const nameSpec = form.elements[1];
       const paramForm = form.elements[2] ?? NIL_NODE;
-      if (nameSym?.kind === 'symbol') {
-        const bindingId = commonLispFunctionBindingId(nameSym.name);
+      const setfReader = parseSetfFunctionName(nameSpec);
+      const fnName = setfReader
+        ? canonicalSetfFunctionName(setfReader)
+        : nameSpec?.kind === 'symbol'
+          ? nameSpec.name
+          : null;
+      if (setfReader && fnName) {
+        const setfDesc = Object.freeze({
+          name: setfReader,
+          kind: 'setf-function',
+          writerFunctionName: fnName,
+        });
+        const setfJson = JSON.stringify(setfDesc);
+        await ensureCodeArtifact(effectiveImages, imageId, {
+          id: commonLispSetfArtifactId(setfReader, setfJson),
+          languageId: COMMON_LISP_ID,
+          representation: COMMON_LISP_SETF_V0,
+          content: textValue(setfJson),
+          metadata: {commonLisp: 'setf-function', accessFn: setfReader},
+        });
+        await ensureGlobalBindingInNamespace({
+          images: effectiveImages,
+          imageId,
+          namespaceId: COMMON_LISP_NAMESPACE_ID,
+          name: `%SETF:${setfReader}`,
+          bindingId: commonLispSetfBindingId(setfReader),
+          value: textValue(setfJson),
+        });
+        compileContext.setfExpanders[setfReader] = setfDesc;
+        preMacroCtx.setfExpanders.set(setfReader, setfDesc);
+        setfExpanders[setfReader] = setfDesc;
+      }
+      if (fnName) {
+        const bindingId = commonLispFunctionBindingId(fnName);
         const existing = await resolveGlobal({
           images: effectiveImages,
           imageId,
-          name: nameSym.name,
+          name: fnName,
           namespaceId: COMMON_LISP_NAMESPACE_ID,
         });
         if (!existing) {
@@ -8665,51 +10207,51 @@ async function installCommonLispProgram({
             images: effectiveImages,
             imageId,
             namespaceId: COMMON_LISP_NAMESPACE_ID,
-            name: nameSym.name,
+            name: fnName,
             bindingId,
             value: kernel.nil,
           });
         }
-        compileContext.functionBindings[nameSym.name] = bindingId;
-        compileContext.globals[nameSym.name] = bindingId;
+        compileContext.functionBindings[fnName] = bindingId;
+        compileContext.globals[fnName] = bindingId;
 
         const parsedParams = parseLambdaList(paramForm);
         if (!parsedParams.isSimple) {
           const sig = Object.freeze({
-            name: nameSym.name,
+            name: fnName,
             requiredCount: parsedParams.required.length,
             optionalCount: parsedParams.optional.length,
             hasRestOrKey: Boolean(parsedParams.rest !== null || parsedParams.keys.length > 0),
           });
           const sigJson = JSON.stringify(sig);
           await ensureCodeArtifact(effectiveImages, imageId, {
-            id: commonLispSignatureArtifactId(nameSym.name, sigJson),
+            id: commonLispSignatureArtifactId(fnName, sigJson),
             languageId: COMMON_LISP_ID,
             representation: COMMON_LISP_SIGNATURE_V0,
             content: textValue(sigJson),
-            metadata: {commonLisp: 'signature', functionName: nameSym.name},
+            metadata: {commonLisp: 'signature', functionName: fnName},
           });
           await ensureGlobalBindingInNamespace({
             images: effectiveImages,
             imageId,
             namespaceId: COMMON_LISP_NAMESPACE_ID,
-            name: `%SIG:${nameSym.name}`,
-            bindingId: commonLispSignatureBindingId(nameSym.name),
+            name: `%SIG:${fnName}`,
+            bindingId: commonLispSignatureBindingId(fnName),
             value: textValue(sigJson),
           });
-          if (nameSym.name.includes('::') && !nameSym.name.startsWith('%')) {
-            const [pkgPart, bare] = nameSym.name.split('::');
+          if (fnName.includes('::') && !fnName.startsWith('%')) {
+            const [pkgPart, bare] = fnName.split('::');
             await ensureGlobalBindingInNamespace({
               images: effectiveImages,
               imageId,
               namespaceId: commonLispPackageNamespaceId(pkgPart),
               name: `%SIG:${bare}`,
-              bindingId: commonLispSignatureBindingId(nameSym.name),
+              bindingId: commonLispSignatureBindingId(fnName),
               value: textValue(sigJson),
             });
           }
-          compileContext.functionSignatures[nameSym.name] = sig;
-          preMacroCtx.functionSignatures.set(nameSym.name, sig);
+          compileContext.functionSignatures[fnName] = sig;
+          preMacroCtx.functionSignatures.set(fnName, sig);
         }
       }
       continue;
@@ -8798,6 +10340,18 @@ async function installCommonLispProgram({
         bindingRef,
         installed,
       });
+      if (!defun.name.startsWith('%') && form?.kind === 'list' && form.elements.length >= 3) {
+        try {
+          const parsedFn = normalizeFunctionDefinition(defun.name, form.elements[2], form.elements.slice(3), 'defun');
+          compileContext.userFunctions[defun.name] = parsedFn;
+          if (defun.name.includes('::')) {
+            const [, bare] = defun.name.split('::');
+            if (bare) compileContext.userFunctions[bare] = parsedFn;
+          }
+        } catch {
+          // ignore if complex parameter list
+        }
+      }
       continue;
     }
 
@@ -8890,6 +10444,8 @@ async function installCommonLispProgram({
     classes: Object.freeze(classes),
     generics: Object.freeze(generics),
     packages: Object.freeze(packages),
+    setfExpanders: Object.freeze(setfExpanders),
+    readerMacros: Object.freeze(readerMacros),
     expressions: Object.freeze(expressions),
     compileContext,
   });
@@ -8937,6 +10493,10 @@ async function evaluateCommonLispSource({
     if (pkgNames.length > 0) {
       return ensureInternedSymbol(runtime.images, imageId, pkgNames[pkgNames.length - 1]);
     }
+    const setfNames = Object.keys(programResult.setfExpanders ?? {});
+    if (setfNames.length > 0 && Object.keys(programResult.functions).length === 0) {
+      return ensureInternedSymbol(runtime.images, imageId, setfNames[setfNames.length - 1]);
+    }
     const fnNames = Object.keys(programResult.functions);
     if (fnNames.length > 0) {
       return programResult.functions[fnNames[fnNames.length - 1]].blockRef;
@@ -8944,6 +10504,9 @@ async function evaluateCommonLispSource({
     const varNames = Object.keys(programResult.variables);
     if (varNames.length > 0) {
       return programResult.variables[varNames[varNames.length - 1]].value;
+    }
+    if (Object.keys(programResult.readerMacros ?? {}).length > 0) {
+      return ensureInternedSymbol(runtime.images, imageId, 'T');
     }
     const kernel = await findSmalltalkKernel({images: runtime.images, imageId});
     return kernel.nil;
@@ -10012,6 +11575,8 @@ export {
   COMMON_LISP_MACRO_V0,
   COMMON_LISP_NAMESPACE_ID,
   COMMON_LISP_PACKAGE_V0,
+  COMMON_LISP_READER_MACRO_V0,
+  COMMON_LISP_SETF_V0,
   COMMON_LISP_SIGNATURE_V0,
   COMMON_LISP_SOURCE_V0,
   COMMON_LISP_STRUCT_V0,
@@ -10033,6 +11598,10 @@ export {
   commonLispPackageArtifactId,
   commonLispPackageBindingId,
   commonLispPackageNamespaceId,
+  commonLispReaderMacroArtifactId,
+  commonLispReaderMacroBindingId,
+  commonLispSetfArtifactId,
+  commonLispSetfBindingId,
   commonLispStructArtifactId,
   commonLispStructBindingId,
   commonLispSystemArtifactId,
