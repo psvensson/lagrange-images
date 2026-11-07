@@ -1,7 +1,7 @@
 # 0099. In-image Common Lisp subset compiler targeting `lagrange-code/v2` and neutral frames
 
 Status: implemented
-Proven by: test/common-lisp-in-image.test.js, test/steering-docs.test.js
+Proven by: test/common-lisp-in-image.test.js, test/common-lisp-authorized-browse.test.js, test/steering-docs.test.js
 
 ## Context
 
@@ -51,6 +51,11 @@ To make Common Lisp usable as an image-native language personality whose functio
    - Any variable proclaimed special via top-level `defvar` or `defparameter` (or locally declared via `(declare (special ...))`) dynamically rebinds its `GlobalBinding` in `let` and `let*`: initializers evaluate in the prior lexical/dynamic environment into temporary locals, previous values are captured into temporary locals, and `(unwind-protect ...)` sets the new values and restores the prior values in reverse order on both normal return and non-local exit (`return-from`, `error`/`handler-case`).
    - `defvar` preserves an already-bound variable's value on re-evaluation (and supports 1-argument `(defvar *x*)`), whereas `defparameter` requires an initial value form and always updates the binding.
    - `parseCommonLispDefsystem`, `installCommonLispSystem`, and `readCommonLispSystemDefinition` parse declarative ASDF `(defsystem ...)` / `(asdf:defsystem ...)` descriptors (`:description`, `:version`, `:serial`, `:depends-on`, and `:components` with `:file`/`:cl-source-file` and nested `:module`), validate and topologically sort system and component dependencies (refusing missing files, unknown components/systems, and cycles), install component files in topological load order, and persist the system definition as `common-lisp/system-v0` in `common-lisp/namespace/v1`.
+
+9. **Authorized Common Lisp browsing, program/system installation, and definition replacement seam (`src/language/common-lisp-browse.js`, `src/language/common-lisp-definition-resource.js`)**:
+   - `commonLispDefinitionResource(imageId, kind, name, {namespaceId})` provides an injective four-part base64url logical resource identifier across `function`, `macro`, `struct`, `class`, `generic`, `variable`, and `system` kinds, with read (`common-lisp-definition/read`) and write (`common-lisp-definition/write`) operations.
+   - `authorizedDescribeCommonLispNamespace` requires `object/read` on the namespace before reading; `authorizedDescribeCommonLispDefinition` requires `object/read` on the namespace and `common-lisp-definition/read` on the logical position before reading.
+   - `authorizedInstallCommonLispProgram` requires `object/write` on the target namespace before any read; `authorizedInstallCommonLispSystem` and `authorizedReplaceCommonLispDefinition` validate caller syntax first and require both `object/write` on the target namespace and `common-lisp-definition/write` on the logical definition position before any read, preventing existence oracles and isolating Lisp-2 function vs variable write grants.
 
 ## Consequences
 
