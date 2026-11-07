@@ -228,6 +228,15 @@ export {
 } from './graph/locator.js';
 export {PlacementPolicy} from './graph/placement.js';
 export {RemoteRecordResolver} from './graph/remote-resolution.js';
+export {
+  GRAPH_BUNDLE_DIFF_V1,
+  IMAGE_RECORD_DIFF_V1,
+  diffGraphBundles,
+  diffImageFrontiers,
+  diffImageRecords,
+  normalizeRecordForDiff,
+  reconstructImageRecordsAtFrontier,
+} from './graph/diff.js';
 export {ImageService};
 export * from './execution/executor.js';
 export * from './execution/model.js';
