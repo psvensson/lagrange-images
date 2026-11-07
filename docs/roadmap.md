@@ -481,8 +481,8 @@ Project remains image-level because it is useful without a graphical environment
 - [x] manifest/lock/runtime-image artifacts as Project members;
 - [x] mixed native/foreign implementation Projects and portable managed install/recovery;
 - [ ] use Projects/releases as the complete closure for the M5 imported application;
-- [ ] code + notes + tests + data + work items;
-- [ ] nested/related Project and namespace conventions;
+- [x] code + notes + tests + data + work items (`PROJECT_MEMBER_ROLES`, `classifyProjectMembers`, `createProjectNote`, `readProjectNote`, `createProjectWorkItem`, `readProjectWorkItem`, `updateProjectWorkItem`, `listProjectWorkItems`, `createProjectTestCase`, `runProjectTests`, and `authorizedRunProjectTests` in `src/project/conventions.js`, proven in `test/project-conventions-tests-work-items.test.js`);
+- [x] nested/related Project and namespace conventions (`PROJECT_GRAPH_V1`, `addSubprojectMember`, `addRelatedProjectMember`, `addProjectNamespaceMember`, `resolveNestedProjectGraph`, and `authorizedResolveNestedProjectGraph` in `src/project/conventions.js`, proven in `test/project-conventions-tests-work-items.test.js`);
 - [x] branch/working-frontier semantics (`src/graph/branches.js` and `src/project/branches.js`: `createBranch`, `advanceBranch`, `forkImageFromBranch`, `diffBranches`, `mergeBranches`, `diffProjectBranches`, `mergeProjectBranches`, and authorized branch seams, proven in `test/branches-working-frontier.test.js`);
 - [x] object/Project diff representation (`src/graph/diff.js` and `src/project/diff.js`: `diffImageRecords`, `diffGraphBundles`, `diffProjectDescriptors`, `diffProjectReleases`, `authorizedDiffProjects`, and `diffProjectAtFrontiers`, proven in `test/image-project-diff.test.js`);
 - [x] merge semantics and conflict data model (`src/graph/merge.js` and `src/project/merge.js`: `mergeImageRecords`, `mergeImageFrontiers`, `applyImageMerge`, `mergeProjectDescriptors`, `mergeProjectReleases`, `mergeProjectAtFrontiers`, and `authorizedMergeProjects`, proven in `test/image-project-merge.test.js`);
