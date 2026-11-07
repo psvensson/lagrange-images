@@ -409,10 +409,10 @@ Rust remains the mature existing-compiler -> WASM path:
 
 ADR 0084 completed the required neutrality proof: real SBCL executes through unchanged generic foreign-runtime/callable/release contracts. ADR 0099 implemented the in-image Common Lisp compiler and runtime (`src/language/common-lisp.js`) over `lagrange-code/v2` across both `neutral` and `wasm` lanes, with bidirectional Symmetric Smalltalk and polyglot Lisp/Smalltalk/WASM Project interop:
 
-- [ ] ASDF/package import and source closure (`defpackage` and `in-package` with `:use`/`:export` and package namespaces are in place; multi-file `.asd` import remains open);
+- [x] ASDF/package import and source closure (`defpackage` and `in-package` with `:use`/`:export` and package namespaces, plus declarative `.asd` / `defsystem` multi-file and multi-system topological import via `parseCommonLispDefsystem`, `installCommonLispSystem`, and `readCommonLispSystemDefinition` in `common-lisp/system-v0`);
 - [x] reader/macroexpansion representation (`common-lisp/source-v0`, `common-lisp/syntax-v0`, `common-lisp/macro-v0`, `defmacro`, `gensym`, `macroexpand-1`, `macroexpand`, extended `loop`, `format`);
 - [x] CLOS/native object mapping (`defstruct` and CLOS `defclass` with topological CPL and multiple inheritance, `defgeneric`, `defmethod` with `:around`/`:before`/primary/`:after`, `call-next-method`, `make-instance`, `slot-value`, `typep`, `class-of`, `class-name`, `type-of` backed by native Lagrange Shapes and Classes);
-- [ ] dynamic bindings and multiple values (`values`, `multiple-value-bind`, `multiple-value-list`, `values-list` are in place; general special-variable `let` dynamic unwinding remains open);
+- [x] dynamic bindings and multiple values (`values`, `multiple-value-bind`, `multiple-value-list`, `values-list`, plus `let`/`let*` dynamic special-variable binding and `unwind-protect` restoration for `defvar`/`defparameter` and `(declare (special ...))` variables);
 - [x] conditions/restarts (`unwind-protect`, `handler-case`, `handler-bind`, `ignore-errors`, `use-value`, `restart-case`, `find-restart`, `invoke-restart`, lexical `block`/`return-from` over the shared condition runtime);
 - [x] native semantic compilation where the proven import architecture genuinely applies (`compileCommonLispSemanticProgram` -> `lagrange-code/v2` -> `neutral-expression/v2` and `wasm-module/v2`/`wasm-function/v2`).
 

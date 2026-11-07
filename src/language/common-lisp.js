@@ -84,6 +84,7 @@ const COMMON_LISP_STRUCT_V0 = 'common-lisp/struct-v0';
 const COMMON_LISP_CLASS_V0 = 'common-lisp/class-v0';
 const COMMON_LISP_GENERIC_V0 = 'common-lisp/generic-v0';
 const COMMON_LISP_PACKAGE_V0 = 'common-lisp/package-v0';
+const COMMON_LISP_SYSTEM_V0 = 'common-lisp/system-v0';
 const COMMON_LISP_SIGNATURE_V0 = 'common-lisp/signature-v0';
 const COMMON_LISP_NAMESPACE_ID = 'common-lisp/namespace/v1';
 const CONS_CLASS_NAME = 'Cons';
@@ -862,6 +863,17 @@ function commonLispPackageArtifactId(name, serialized = null) {
 function commonLispPackageNamespaceId(name) {
   const canonical = requiredText(name, 'Common Lisp package name').toUpperCase();
   return `common-lisp/package-namespace/${base64urlEncode(utf8Encode(canonical))}`;
+}
+
+function commonLispSystemBindingId(name) {
+  const canonical = requiredText(name, 'Common Lisp system name').toUpperCase();
+  return `common-lisp/system-binding/${base64urlEncode(utf8Encode(canonical))}`;
+}
+
+function commonLispSystemArtifactId(name, serialized = null) {
+  const canonical = requiredText(name, 'Common Lisp system name').toUpperCase();
+  const base = `common-lisp/system/${base64urlEncode(utf8Encode(canonical))}`;
+  return serialized ? `${base}/${base64urlEncode(utf8Encode(serialized))}` : base;
 }
 
 function commonLispSignatureBindingId(name) {
@@ -3884,11 +3896,14 @@ function compileCommonLispSemanticProgram(rawForms, {
     return null;
   }
 
+  const specialVariablesDeclared = new Map();
+
   function createScope({parent = null, paramNames = []} = {}) {
     const scope = {
       parent,
       params: new Map(),
       locals: new Map(),
+      specialVars: new Set(),
       temporaries: [],
       captures: new Map(),
       entryStatements: [],
@@ -3972,10 +3987,32 @@ function compileCommonLispSemanticProgram(rawForms, {
     };
   }
 
+  function isSpecialInScope(scope, canonicalName) {
+    if (varBindingMap.has(canonicalName)) return true;
+    let cursor = scope;
+    while (cursor) {
+      if (cursor.specialVars?.has(canonicalName)) return true;
+      cursor = cursor.parent;
+    }
+    return false;
+  }
+
+  function ensureSpecialVariableBinding(canonicalName) {
+    if (!varBindingMap.has(canonicalName)) {
+      const id = commonLispVariableBindingId(canonicalName);
+      varBindingMap.set(canonicalName, id);
+      specialVariablesDeclared.set(canonicalName, id);
+    }
+    return varBindingMap.get(canonicalName);
+  }
+
   function lookupLexical(scope, canonicalName) {
     let cursor = scope;
     const crossedScopes = [];
     while (cursor) {
+      if (cursor.specialVars?.has(canonicalName)) {
+        return null;
+      }
       if (cursor.locals.has(canonicalName)) {
         const local = cursor.locals.get(canonicalName);
         if (crossedScopes.length === 0) {
@@ -4048,13 +4085,58 @@ function compileCommonLispSemanticProgram(rawForms, {
     throw new SyntaxError(`cannot quote unsupported Common Lisp form: ${JSON.stringify(form)}`);
   }
 
-  function compileSequence(scope, exprs) {
-    if (exprs.length === 0) return refNil(scope);
-    if (exprs.length === 1) return compileForm(scope, exprs[0]);
+  function extractBodyDeclarations(exprs) {
+    const declaredSpecials = new Set();
+    let idx = 0;
+    while (idx < exprs.length) {
+      const form = exprs[idx];
+      if (
+        form?.kind === 'list'
+        && form.elements[0]?.kind === 'symbol'
+        && form.elements[0].name === 'DECLARE'
+      ) {
+        for (let i = 1; i < form.elements.length; i += 1) {
+          const spec = form.elements[i];
+          if (spec?.kind === 'list' && spec.elements[0]?.kind === 'symbol') {
+            if (spec.elements[0].name === 'SPECIAL') {
+              for (let j = 1; j < spec.elements.length; j += 1) {
+                const sym = spec.elements[j];
+                if (sym?.kind === 'symbol' && !isNilSymbol(sym) && !isTSymbol(sym) && !sym.keyword) {
+                  declaredSpecials.add(sym.name);
+                  ensureSpecialVariableBinding(sym.name);
+                }
+              }
+            }
+          }
+        }
+        idx += 1;
+        continue;
+      }
+      break;
+    }
     return {
-      op: 'sequence',
-      statements: exprs.map((e) => compileForm(scope, e)),
+      declaredSpecials,
+      declareForms: exprs.slice(0, idx),
+      executableForms: exprs.slice(idx),
     };
+  }
+
+  function compileSequence(scope, exprs) {
+    const {declaredSpecials, executableForms} = extractBodyDeclarations(exprs);
+    const savedSpecials = new Set(scope.specialVars);
+    for (const s of declaredSpecials) {
+      scope.specialVars.add(s);
+    }
+    try {
+      if (executableForms.length === 0) return refNil(scope);
+      if (executableForms.length === 1) return compileForm(scope, executableForms[0]);
+      return {
+        op: 'sequence',
+        statements: executableForms.map((e) => compileForm(scope, e)),
+      };
+    } finally {
+      scope.specialVars = savedSpecials;
+    }
   }
 
   function isTBindingExpr(expr) {
@@ -4393,32 +4475,107 @@ function compileCommonLispSemanticProgram(rawForms, {
         if (bindingItems === null) throw new SyntaxError('Common Lisp LET bindings must be a list');
         if (bindingItems.length === 0) return compileSequence(scope, bodyForms);
 
+        const {declaredSpecials, executableForms} = extractBodyDeclarations(bodyForms);
+
         // Evaluate all initializers in the prior lexical visibility, then bind
         const evaluated = bindingItems.map((item) => {
           if (item.kind === 'symbol') {
-            return {name: item.name, initExpr: refNil(scope)};
+            if (isNilSymbol(item) || isTSymbol(item) || item.keyword) {
+              throw new SyntaxError('Common Lisp LET variable must be an ordinary symbol');
+            }
+            const isSpecial = isSpecialInScope(scope, item.name) || declaredSpecials.has(item.name);
+            if (isSpecial) ensureSpecialVariableBinding(item.name);
+            return {name: item.name, initExpr: refNil(scope), isSpecial};
           }
           if (item.kind === 'list' && (item.elements.length === 1 || item.elements.length === 2)) {
             const varSym = item.elements[0];
             if (varSym?.kind !== 'symbol' || isNilSymbol(varSym) || isTSymbol(varSym) || varSym.keyword) {
               throw new SyntaxError('Common Lisp LET variable must be an ordinary symbol');
             }
+            const isSpecial = isSpecialInScope(scope, varSym.name) || declaredSpecials.has(varSym.name);
+            if (isSpecial) ensureSpecialVariableBinding(varSym.name);
             const initExpr = item.elements.length === 2 ? compileForm(scope, item.elements[1]) : refNil(scope);
-            return {name: varSym.name, initExpr};
+            return {name: varSym.name, initExpr, isSpecial};
           }
           throw new SyntaxError('invalid Common Lisp LET binding specification');
         });
 
+        const hasSpecialBinding = evaluated.some((b) => b.isSpecial);
         const savedLocals = new Map(scope.locals);
-        const statements = [];
-        for (const {name, initExpr} of evaluated) {
-          const local = declareLocal(scope, name);
-          statements.push({op: 'binding-write', id: local.id, value: initExpr});
-          scope.locals.set(name, local);
+        const savedSpecials = new Set(scope.specialVars);
+        for (const s of declaredSpecials) {
+          scope.specialVars.add(s);
         }
-        const bodyExpr = compileSequence(scope, bodyForms);
-        scope.locals = savedLocals;
-        return {op: 'sequence', statements: [...statements, bodyExpr]};
+
+        try {
+          if (!hasSpecialBinding) {
+            const statements = [];
+            for (const {name, initExpr} of evaluated) {
+              const local = declareLocal(scope, name);
+              statements.push({op: 'binding-write', id: local.id, value: initExpr});
+              scope.locals.set(name, local);
+            }
+            const bodyExpr = compileSequence(scope, executableForms);
+            return {op: 'sequence', statements: [...statements, bodyExpr]};
+          }
+
+          const statements = [];
+          const specialEntries = [];
+          for (const {name, initExpr, isSpecial} of evaluated) {
+            if (!isSpecial) {
+              const local = declareLocal(scope, name);
+              statements.push({op: 'binding-write', id: local.id, value: initExpr});
+              scope.locals.set(name, local);
+            } else {
+              const bindingId = ensureSpecialVariableBinding(name);
+              globalBindingIdsUsed.add(bindingId);
+              const initSymName = `__CL_LET_INIT_${nextTempId + 1}__`;
+              const initLocal = declareLocal(scope, initSymName);
+              statements.push({op: 'binding-write', id: initLocal.id, value: initExpr});
+              scope.locals.set(initSymName, initLocal);
+
+              const oldSymName = `__CL_LET_OLD_${nextTempId + 1}__`;
+              const oldLocal = declareLocal(scope, oldSymName);
+              const bindingExpr = requireRootCapture(scope, bindingId, name);
+              statements.push({
+                op: 'binding-write',
+                id: oldLocal.id,
+                value: {
+                  op: 'send',
+                  languageId: SYMMETRIC_SMALLTALK_ID,
+                  receiver: bindingExpr,
+                  message: textValue('value'),
+                  arguments: [],
+                },
+              });
+              scope.locals.set(oldSymName, oldLocal);
+              scope.specialVars.add(name);
+              specialEntries.push({name, initSymName, oldSymName});
+            }
+          }
+
+          const setNewForms = specialEntries.map(({name, initSymName}) =>
+            makeListNode([makeSymbolNode('SETQ'), makeSymbolNode(name), makeSymbolNode(initSymName)]),
+          );
+          const restoreOldForms = [...specialEntries].reverse().map(({name, oldSymName}) =>
+            makeListNode([makeSymbolNode('SETQ'), makeSymbolNode(name), makeSymbolNode(oldSymName)]),
+          );
+          const protectedForm = makeListNode([
+            makeSymbolNode('PROGN'),
+            ...setNewForms,
+            ...(executableForms.length > 0 ? executableForms : [NIL_NODE]),
+          ]);
+          const unwindForm = makeListNode([
+            makeSymbolNode('UNWIND-PROTECT'),
+            protectedForm,
+            ...restoreOldForms,
+          ]);
+          const bodyExpr = compileForm(scope, unwindForm);
+          return {op: 'sequence', statements: [...statements, bodyExpr]};
+        } finally {
+          scope.locals = savedLocals;
+          scope.specialVars = savedSpecials;
+        }
       }
       case 'LET*': {
         if (args.length < 1) throw new SyntaxError('Common Lisp LET* requires a binding list');
@@ -4430,6 +4587,30 @@ function compileCommonLispSemanticProgram(rawForms, {
             : null;
         if (bindingItems === null) throw new SyntaxError('Common Lisp LET* bindings must be a list');
         if (bindingItems.length === 0) return compileSequence(scope, bodyForms);
+
+        const {declaredSpecials, declareForms, executableForms} = extractBodyDeclarations(bodyForms);
+        const hasAnySpecial = declaredSpecials.size > 0 || bindingItems.some((item) => {
+          const sym = item?.kind === 'symbol' ? item : item?.kind === 'list' ? item.elements[0] : null;
+          return sym?.kind === 'symbol' && (isSpecialInScope(scope, sym.name) || declaredSpecials.has(sym.name));
+        });
+
+        if (hasAnySpecial) {
+          let nested = makeListNode([
+            makeSymbolNode('LET'),
+            makeListNode([bindingItems[bindingItems.length - 1]]),
+            ...declareForms,
+            ...executableForms,
+          ]);
+          for (let i = bindingItems.length - 2; i >= 0; i -= 1) {
+            nested = makeListNode([
+              makeSymbolNode('LET'),
+              makeListNode([bindingItems[i]]),
+              ...declareForms,
+              nested,
+            ]);
+          }
+          return compileForm(scope, nested);
+        }
 
         const savedLocals = new Map(scope.locals);
         const statements = [];
@@ -4888,39 +5069,82 @@ function compileCommonLispSemanticProgram(rawForms, {
       case 'HANDLER-CASE': {
         if (args.length < 1) throw new SyntaxError('Common Lisp HANDLER-CASE requires a protected form');
         const [protectedForm, ...clauses] = args;
+        if (clauses.length === 0) return compileForm(scope, protectedForm);
         const emptyList = makeSymbolNode('NIL', {spelling: 'nil', keyword: false});
-        let currentExpr = compileForm(scope, protectedForm);
-        for (let i = clauses.length - 1; i >= 0; i -= 1) {
-          const clause = clauses[i];
-          if (clause?.kind !== 'list' || clause.elements.length < 2) {
-            throw new SyntaxError('Common Lisp HANDLER-CASE clause must be (type (var) body...)');
+        const thunkSymName = `__CL_HC_THUNK_${nextTempId + 1}__`;
+        const resSymName = `__CL_HC_RES_${nextTempId + 1}__`;
+        const savedLocals = new Map(scope.locals);
+        try {
+          const thunkLocal = declareLocal(scope, thunkSymName, {forceMutated: true});
+          const resLocal = declareLocal(scope, resSymName);
+          scope.locals.set(thunkSymName, thunkLocal);
+          scope.locals.set(resSymName, resLocal);
+
+          let currentExpr = compileForm(scope, protectedForm);
+          for (let i = clauses.length - 1; i >= 0; i -= 1) {
+            const clause = clauses[i];
+            if (clause?.kind !== 'list' || clause.elements.length < 2) {
+              throw new SyntaxError('Common Lisp HANDLER-CASE clause must be (type (var) body...)');
+            }
+            const [typeSym, varList, ...handlerBody] = clause.elements;
+            const conditionClassExpr = resolveConditionClassExpr(scope, typeSym);
+            const paramList = isNilSymbol(varList)
+              ? makeListNode([makeSymbolNode('IGNORED_CONDITION')])
+              : varList;
+            const setThunkBody = [
+              makeListNode([
+                makeSymbolNode('SETQ'),
+                makeSymbolNode(thunkSymName),
+                makeListNode([
+                  makeSymbolNode('LAMBDA'),
+                  emptyList,
+                  ...(handlerBody.length > 0 ? handlerBody : [emptyList]),
+                ]),
+              ]),
+              emptyList,
+            ];
+            const handlerBlock = compileLambdaExpr(scope, paramList, setThunkBody, 'handler_case');
+            const protectedBlock = compileLambdaExpr(
+              scope,
+              emptyList,
+              [protectedForm],
+              'handler_protected',
+            );
+            // Replace the inner body of protectedBlock with the already-wrapped currentExpr if nested
+            protectedBlock.program = Object.freeze({
+              ...protectedBlock.program,
+              body: i === clauses.length - 1 ? protectedBlock.program.body : currentExpr,
+            });
+            currentExpr = {
+              op: 'send',
+              languageId: SYMMETRIC_SMALLTALK_ID,
+              receiver: protectedBlock,
+              message: textValue('on:do:'),
+              arguments: [conditionClassExpr, handlerBlock],
+            };
           }
-          const [typeSym, varList, ...handlerBody] = clause.elements;
-          const conditionClassExpr = resolveConditionClassExpr(scope, typeSym);
-          const paramList = isNilSymbol(varList)
-            ? makeListNode([makeSymbolNode('IGNORED_CONDITION')])
-            : varList;
-          const handlerBlock = compileLambdaExpr(scope, paramList, handlerBody, 'handler_case');
-          const protectedBlock = compileLambdaExpr(
+
+          const followUpExpr = compileForm(
             scope,
-            emptyList,
-            [protectedForm],
-            'handler_protected',
+            makeListNode([
+              makeSymbolNode('IF'),
+              makeSymbolNode(thunkSymName),
+              makeListNode([makeSymbolNode('FUNCALL'), makeSymbolNode(thunkSymName)]),
+              makeSymbolNode(resSymName),
+            ]),
           );
-          // Replace the inner body of protectedBlock with the already-wrapped currentExpr if nested
-          protectedBlock.program = Object.freeze({
-            ...protectedBlock.program,
-            body: i === clauses.length - 1 ? protectedBlock.program.body : currentExpr,
-          });
-          currentExpr = {
-            op: 'send',
-            languageId: SYMMETRIC_SMALLTALK_ID,
-            receiver: protectedBlock,
-            message: textValue('on:do:'),
-            arguments: [conditionClassExpr, handlerBlock],
+
+          return {
+            op: 'sequence',
+            statements: [
+              {op: 'binding-write', id: thunkLocal.id, value: refNil(scope)},
+              {op: 'binding-write', id: resLocal.id, value: currentExpr},
+              followUpExpr,
+            ],
           };
+        } finally {
+          scope.locals = savedLocals;
         }
-        return currentExpr;
       }
       case 'HANDLER-BIND': {
         if (args.length < 1) throw new SyntaxError('Common Lisp HANDLER-BIND requires a binding list');
@@ -5054,6 +5278,7 @@ function compileCommonLispSemanticProgram(rawForms, {
     globalBindingIdsUsed: Object.freeze([...globalBindingIdsUsed]),
     runtimeBlocksUsed: Object.freeze([...runtimeBlocksUsed]),
     internedSymbolsUsed: Object.freeze([...internedSymbolsUsed]),
+    specialVariablesDeclared: Object.freeze(Object.fromEntries(specialVariablesDeclared)),
   });
 }
 
@@ -6515,6 +6740,7 @@ async function collectCommonLispCompileContext({images, imageId}) {
   const classes = {};
   const generics = {};
   const packages = {};
+  const systems = {};
   const functionSignatures = {};
 
   for (const [name, bindingId] of Object.entries(globals)) {
@@ -6563,6 +6789,13 @@ async function collectCommonLispCompileContext({images, imageId}) {
         const parsed = JSON.parse(val.value);
         packages[parsed.name] = parsed;
       }
+    } else if (bindingId.startsWith('common-lisp/system-binding/')) {
+      const record = await images.getObject(imageId, bindingId);
+      const val = record?.slots?.['global-binding-value'];
+      if (val?.kind === VALUE_KIND.TEXT) {
+        const parsed = JSON.parse(val.value);
+        systems[parsed.name] = parsed;
+      }
     } else if (bindingId.startsWith('common-lisp/signature-binding/')) {
       const record = await images.getObject(imageId, bindingId);
       const val = record?.slots?.['global-binding-value'];
@@ -6581,6 +6814,7 @@ async function collectCommonLispCompileContext({images, imageId}) {
     classes,
     generics,
     packages,
+    systems,
     functionSignatures,
   };
 }
@@ -6612,6 +6846,7 @@ async function installCommonLispBlock({
     globalBindingIdsUsed,
     runtimeBlocksUsed,
     internedSymbolsUsed,
+    specialVariablesDeclared,
   } = compileCommonLispSemanticProgram(forms, {
     parameters,
     captures,
@@ -6624,6 +6859,30 @@ async function installCommonLispBlock({
     functionSignatures: ctx.functionSignatures ?? {},
     alreadyExpanded,
   });
+
+  if (specialVariablesDeclared && Object.keys(specialVariablesDeclared).length > 0) {
+    const kernel = await findSmalltalkKernel({images, imageId});
+    for (const [varName, bindingId] of Object.entries(specialVariablesDeclared)) {
+      const existing = await resolveGlobal({
+        images,
+        imageId,
+        name: varName,
+        namespaceId: COMMON_LISP_NAMESPACE_ID,
+      });
+      if (!existing) {
+        await publishGlobal({
+          images,
+          imageId,
+          namespaceId: COMMON_LISP_NAMESPACE_ID,
+          name: varName,
+          bindingId,
+          value: kernel.nil,
+        });
+      }
+      ctx.variableBindings[varName] = bindingId;
+      ctx.globals[varName] = bindingId;
+    }
+  }
 
   // Ensure any quoted symbols referenced via symbol-intern have their Symbol protocol ready
   for (const symSpelling of internedSymbolsUsed) {
@@ -7931,12 +8190,16 @@ function parseTopLevelDefvar(form) {
     throw new SyntaxError(`Common Lisp ${form.elements[0].name} requires a variable name and optional initial value`);
   }
   const [headSym, nameSym, valueForm] = form.elements;
+  if (headSym.name === 'DEFPARAMETER' && form.elements.length < 3) {
+    throw new SyntaxError('Common Lisp DEFPARAMETER requires a variable name and initial value');
+  }
   if (nameSym?.kind !== 'symbol' || isNilSymbol(nameSym) || isTSymbol(nameSym) || nameSym.keyword) {
     throw new SyntaxError(`Common Lisp ${headSym.name} target must be an ordinary symbol`);
   }
   return {
     kind: headSym.name,
     name: nameSym.name,
+    hasValueForm: form.elements.length >= 3,
     valueForm: valueForm ?? makeSymbolNode('NIL', {spelling: 'nil', keyword: false}),
   };
 }
@@ -8377,6 +8640,7 @@ async function installCommonLispProgram({
   // Pre-seed all DEFUN (and their signatures) and DEFPARAMETER/DEFVAR global bindings so recursive
   // and mutually recursive functions can reference one another regardless of declaration order.
   const preMacroCtx = createMacroContext(compileContext);
+  const preExistingVariables = new Map();
   for (const form of expandedTopForms) {
     if (form?.kind === 'list' && form.elements[0]?.kind === 'symbol' && form.elements[0].name === 'DEFUN') {
       const nameSym = form.elements[1];
@@ -8426,7 +8690,7 @@ async function installCommonLispProgram({
             bindingId: commonLispSignatureBindingId(nameSym.name),
             value: textValue(sigJson),
           });
-          if (nameSym.name.includes('::')) {
+          if (nameSym.name.includes('::') && !nameSym.name.startsWith('%')) {
             const [pkgPart, bare] = nameSym.name.split('::');
             await ensureGlobalBindingInNamespace({
               images: effectiveImages,
@@ -8446,21 +8710,26 @@ async function installCommonLispProgram({
     const defvar = parseTopLevelDefvar(form);
     if (defvar) {
       const bindingId = commonLispVariableBindingId(defvar.name);
-      const existing = await resolveGlobal({
-        images: effectiveImages,
-        imageId,
-        name: defvar.name,
-        namespaceId: COMMON_LISP_NAMESPACE_ID,
-      });
-      if (!existing) {
-        await publishGlobal({
+      if (!preExistingVariables.has(defvar.name)) {
+        const existing = await resolveGlobal({
           images: effectiveImages,
           imageId,
-          namespaceId: COMMON_LISP_NAMESPACE_ID,
           name: defvar.name,
-          bindingId,
-          value: kernel.nil,
+          namespaceId: COMMON_LISP_NAMESPACE_ID,
         });
+        if (!existing) {
+          preExistingVariables.set(defvar.name, false);
+          await publishGlobal({
+            images: effectiveImages,
+            imageId,
+            namespaceId: COMMON_LISP_NAMESPACE_ID,
+            name: defvar.name,
+            bindingId,
+            value: kernel.nil,
+          });
+        } else {
+          preExistingVariables.set(defvar.name, true);
+        }
       }
       compileContext.variableBindings[defvar.name] = bindingId;
       compileContext.globals[defvar.name] = bindingId;
@@ -8470,6 +8739,7 @@ async function installCommonLispProgram({
   const functions = {};
   const variables = {};
   const expressions = [];
+  const initializedVariables = new Set();
 
   for (const form of expandedTopForms) {
     const defun = parseTopLevelDefun(form, createMacroContext(compileContext));
@@ -8502,7 +8772,7 @@ async function installCommonLispProgram({
         bindingId: commonLispFunctionBindingId(defun.name),
         value: blockRef,
       });
-      if (defun.name.includes('::')) {
+      if (defun.name.includes('::') && !defun.name.startsWith('%')) {
         const [pkgPart, bare] = defun.name.split('::');
         if (!bare.startsWith('%')) {
           await ensureGlobalBindingInNamespace({
@@ -8526,6 +8796,34 @@ async function installCommonLispProgram({
 
     const defvar = parseTopLevelDefvar(form);
     if (defvar) {
+      const bindingId = commonLispVariableBindingId(defvar.name);
+      const alreadyBound = Boolean(preExistingVariables.get(defvar.name)) || initializedVariables.has(defvar.name);
+      if (defvar.kind === 'DEFVAR' && (alreadyBound || !defvar.hasValueForm)) {
+        const existingRecord = await effectiveImages.getObject(imageId, bindingId);
+        const currentValue = existingRecord?.slots?.['global-binding-value'] ?? kernel.nil;
+        const bindingRef = objectRef(imageId, bindingId);
+        if (defvar.name.includes('::')) {
+          const [pkgPart, bare] = defvar.name.split('::');
+          await ensureGlobalBindingInNamespace({
+            images: effectiveImages,
+            imageId,
+            namespaceId: commonLispPackageNamespaceId(pkgPart),
+            name: bare,
+            bindingId,
+            value: currentValue,
+          });
+        }
+        if (defvar.hasValueForm) {
+          initializedVariables.add(defvar.name);
+        }
+        variables[defvar.name] = Object.freeze({
+          name: defvar.name,
+          bindingRef,
+          value: currentValue,
+        });
+        continue;
+      }
+
       let initValue = kernel.nil;
       if (runtime?.invocations && runtime?.executor) {
         const initBlock = await installCommonLispBlock({
@@ -8551,7 +8849,7 @@ async function installCommonLispProgram({
         imageId,
         namespaceId: COMMON_LISP_NAMESPACE_ID,
         name: defvar.name,
-        bindingId: commonLispVariableBindingId(defvar.name),
+        bindingId,
         value: initValue,
       });
       if (defvar.name.includes('::')) {
@@ -8561,10 +8859,11 @@ async function installCommonLispProgram({
           imageId,
           namespaceId: commonLispPackageNamespaceId(pkgPart),
           name: bare,
-          bindingId: commonLispVariableBindingId(defvar.name),
+          bindingId,
           value: initValue,
         });
       }
+      initializedVariables.add(defvar.name);
       variables[defvar.name] = Object.freeze({
         name: defvar.name,
         bindingRef,
@@ -9028,6 +9327,515 @@ async function readCommonLispVariableDefinition({
   });
 }
 
+function designatorSpellingAndName(node) {
+  if (!node) throw new SyntaxError('missing Common Lisp designator');
+  if (node.kind === 'string') {
+    return {spelling: node.value, name: node.value.toUpperCase()};
+  }
+  if (node.kind === 'symbol') {
+    const raw = node.spelling ?? node.name;
+    const stripped = raw.startsWith('#:')
+      ? raw.slice(2)
+      : raw.startsWith(':')
+        ? raw.slice(1)
+        : stripPackagePrefix(raw);
+    return {spelling: stripped.toLowerCase(), name: designatorName(node)};
+  }
+  if (
+    node.kind === 'list'
+    && node.elements.length === 2
+    && node.elements[0]?.kind === 'symbol'
+    && node.elements[0].name === 'QUOTE'
+    && node.elements[1]?.kind === 'symbol'
+  ) {
+    const sym = node.elements[1];
+    const stripped = stripPackagePrefix(sym.spelling ?? sym.name);
+    return {spelling: stripped.toLowerCase(), name: designatorName(node)};
+  }
+  throw new SyntaxError('invalid Common Lisp designator');
+}
+
+function parseDefsystemComponentTree(specsForm, {
+  systemName,
+  parentPath = '',
+  serial = false,
+} = {}) {
+  const rawSpecs = isNilSymbol(specsForm)
+    ? []
+    : specsForm?.kind === 'list'
+      ? specsForm.elements
+      : null;
+  if (!rawSpecs) {
+    throw new SyntaxError(`Common Lisp DEFSYSTEM ${systemName} :components must be a list`);
+  }
+
+  const parsedNodes = [];
+  let prevSiblingName = null;
+
+  for (const spec of rawSpecs) {
+    if (spec?.kind !== 'list' || spec.elements.length < 2 || spec.elements[0]?.kind !== 'symbol') {
+      throw new SyntaxError(`invalid component specification in Common Lisp DEFSYSTEM ${systemName}`);
+    }
+    const [kindSym, nameNode, ...plist] = spec.elements;
+    const kindKey = kindSym.name.startsWith(':')
+      ? kindSym.name
+      : `:${stripPackagePrefix(kindSym.name)}`;
+    const {spelling, name: canonicalName} = designatorSpellingAndName(nameNode);
+
+    let explicitPathname = null;
+    let moduleSerial = false;
+    let childComponentsForm = NIL_NODE;
+    const explicitDependsOn = [];
+
+    for (let i = 0; i + 1 < plist.length; i += 2) {
+      const optKeyNode = plist[i];
+      const optValNode = plist[i + 1];
+      if (optKeyNode?.kind !== 'symbol') continue;
+      const k = optKeyNode.name.startsWith(':')
+        ? optKeyNode.name
+        : `:${stripPackagePrefix(optKeyNode.name)}`;
+      if (k === ':PATHNAME' && optValNode?.kind === 'string') {
+        explicitPathname = optValNode.value;
+      } else if (k === ':SERIAL') {
+        moduleSerial = !isNilSymbol(optValNode);
+      } else if (k === ':COMPONENTS') {
+        childComponentsForm = optValNode;
+      } else if (k === ':DEPENDS-ON') {
+        const depItems = isNilSymbol(optValNode)
+          ? []
+          : optValNode?.kind === 'list'
+            ? optValNode.elements
+            : null;
+        if (!depItems) {
+          throw new SyntaxError(`Common Lisp DEFSYSTEM ${systemName} component ${canonicalName} :depends-on must be a list`);
+        }
+        for (const d of depItems) {
+          explicitDependsOn.push(designatorName(d));
+        }
+      }
+    }
+
+    if (serial && prevSiblingName && !explicitDependsOn.includes(prevSiblingName)) {
+      explicitDependsOn.unshift(prevSiblingName);
+    }
+    prevSiblingName = canonicalName;
+
+    const segment = explicitPathname ?? spelling;
+    const relPath = parentPath ? `${parentPath}/${segment}` : segment;
+
+    if (kindKey === ':FILE' || kindKey === ':CL-SOURCE-FILE') {
+      parsedNodes.push(
+        Object.freeze({
+          kind: 'file',
+          name: canonicalName,
+          spelling,
+          path: relPath,
+          dependsOn: Object.freeze(explicitDependsOn),
+        }),
+      );
+    } else if (kindKey === ':MODULE') {
+      const childTree = parseDefsystemComponentTree(childComponentsForm, {
+        systemName,
+        parentPath: relPath,
+        serial: moduleSerial,
+      });
+      parsedNodes.push(
+        Object.freeze({
+          kind: 'module',
+          name: canonicalName,
+          spelling,
+          path: relPath,
+          serial: moduleSerial,
+          dependsOn: Object.freeze(explicitDependsOn),
+          components: childTree,
+        }),
+      );
+    } else {
+      throw new SyntaxError(`unsupported component kind ${kindKey} in Common Lisp DEFSYSTEM ${systemName}`);
+    }
+  }
+
+  return Object.freeze(parsedNodes);
+}
+
+function resolveSystemComponentLoadOrder(systemName, componentTree) {
+  const leafByPath = new Map();
+  const leafOrder = [];
+  const leafDeps = new Map();
+
+  function collectLeaves(nodes) {
+    const siblingMap = new Map();
+    for (const node of nodes) {
+      if (siblingMap.has(node.name)) {
+        throw new SyntaxError(`duplicate component ${node.name} in Common Lisp DEFSYSTEM ${systemName}`);
+      }
+      if (node.kind === 'file') {
+        leafByPath.set(node.path, node);
+        leafOrder.push(node.path);
+        leafDeps.set(node.path, new Set());
+        siblingMap.set(node.name, {node, leafPaths: [node.path]});
+      } else {
+        const subLeaves = collectLeaves(node.components);
+        siblingMap.set(node.name, {node, leafPaths: subLeaves});
+      }
+    }
+
+    for (const {node, leafPaths} of siblingMap.values()) {
+      for (const depSiblingName of node.dependsOn) {
+        const target = siblingMap.get(depSiblingName);
+        if (!target) {
+          throw new SyntaxError(
+            `Common Lisp DEFSYSTEM ${systemName} component ${node.name} depends on unknown component ${depSiblingName}`,
+          );
+        }
+        for (const myLeaf of leafPaths) {
+          const depSet = leafDeps.get(myLeaf);
+          for (const targetLeaf of target.leafPaths) {
+            if (myLeaf === targetLeaf) {
+              throw new SyntaxError(`cyclic Common Lisp component dependency in system ${systemName}: ${myLeaf}`);
+            }
+            depSet.add(targetLeaf);
+          }
+        }
+      }
+    }
+
+    const allLeaves = [];
+    for (const {leafPaths} of siblingMap.values()) {
+      allLeaves.push(...leafPaths);
+    }
+    return allLeaves;
+  }
+
+  collectLeaves(componentTree);
+
+  const sorted = [];
+  const state = new Map(); // 0 = unvisited, 1 = visiting, 2 = visited
+
+  function visit(path, stack = []) {
+    const st = state.get(path) ?? 0;
+    if (st === 2) return;
+    if (st === 1) {
+      const cycle = [...stack, path].join(' -> ');
+      throw new SyntaxError(`cyclic Common Lisp component dependency in system ${systemName}: ${cycle}`);
+    }
+    state.set(path, 1);
+    const deps = leafDeps.get(path) ?? new Set();
+    for (const depPath of deps) {
+      visit(depPath, [...stack, path]);
+    }
+    state.set(path, 2);
+    sorted.push(path);
+  }
+
+  for (const path of leafOrder) {
+    visit(path, []);
+  }
+
+  return Object.freeze(sorted);
+}
+
+function parseSingleDefsystemForm(form) {
+  if (form?.kind !== 'list' || form.elements.length < 2 || form.elements[0]?.kind !== 'symbol') {
+    return null;
+  }
+  const headBare = stripPackagePrefix(form.elements[0].name);
+  if (headBare !== 'DEFSYSTEM') {
+    return null;
+  }
+  const {spelling, name: systemName} = designatorSpellingAndName(form.elements[1]);
+  let description = null;
+  let version = null;
+  let serial = false;
+  const dependsOn = [];
+  let componentsForm = NIL_NODE;
+
+  const plist = form.elements.slice(2);
+  for (let i = 0; i + 1 < plist.length; i += 2) {
+    const optKeyNode = plist[i];
+    const optValNode = plist[i + 1];
+    if (optKeyNode?.kind !== 'symbol') continue;
+    const k = optKeyNode.name.startsWith(':')
+      ? optKeyNode.name
+      : `:${stripPackagePrefix(optKeyNode.name)}`;
+    if (k === ':DESCRIPTION' && optValNode?.kind === 'string') {
+      description = optValNode.value;
+    } else if (k === ':VERSION' && optValNode?.kind === 'string') {
+      version = optValNode.value;
+    } else if (k === ':SERIAL') {
+      serial = !isNilSymbol(optValNode);
+    } else if (k === ':DEPENDS-ON') {
+      const depItems = isNilSymbol(optValNode)
+        ? []
+        : optValNode?.kind === 'list'
+          ? optValNode.elements
+          : null;
+      if (!depItems) {
+        throw new SyntaxError(`Common Lisp DEFSYSTEM ${systemName} :depends-on must be a list`);
+      }
+      for (const d of depItems) {
+        dependsOn.push(designatorName(d));
+      }
+    } else if (k === ':COMPONENTS') {
+      componentsForm = optValNode;
+    }
+  }
+
+  const components = parseDefsystemComponentTree(componentsForm, {
+    systemName,
+    parentPath: '',
+    serial,
+  });
+  const loadOrder = resolveSystemComponentLoadOrder(systemName, components);
+
+  return Object.freeze({
+    name: systemName,
+    spelling,
+    description,
+    version,
+    serial,
+    dependsOn: Object.freeze(dependsOn),
+    components,
+    loadOrder,
+  });
+}
+
+function parseCommonLispDefsystem(source, {systemName = null} = {}) {
+  const forms = typeof source === 'string'
+    ? readCommonLispSource(source)
+    : Array.isArray(source)
+      ? source
+      : [source];
+  const parsedSystems = [];
+  for (const form of forms) {
+    const sys = parseSingleDefsystemForm(form);
+    if (sys) parsedSystems.push(sys);
+  }
+  if (parsedSystems.length === 0) {
+    throw new SyntaxError('no Common Lisp DEFSYSTEM form found in source');
+  }
+  if (systemName !== null) {
+    const target = String(systemName).toUpperCase();
+    const match = parsedSystems.find((s) => s.name === target);
+    if (!match) {
+      throw new SyntaxError(`Common Lisp DEFSYSTEM ${target} not found in source`);
+    }
+    return match;
+  }
+  return parsedSystems[0];
+}
+
+function lookupComponentFileSource(files, componentPath) {
+  if (!files || typeof files !== 'object') return null;
+  const getEntry = (k) => (files instanceof Map ? files.get(k) : Object.hasOwn(files, k) ? files[k] : undefined);
+  const candidates = [
+    componentPath,
+    `${componentPath}.lisp`,
+    `${componentPath}.cl`,
+    componentPath.toLowerCase(),
+    `${componentPath.toLowerCase()}.lisp`,
+    `${componentPath.toLowerCase()}.cl`,
+  ];
+  for (const c of candidates) {
+    const found = getEntry(c);
+    if (typeof found === 'string' || Array.isArray(found)) return found;
+  }
+  const normalizedTarget = componentPath.replace(/\.(lisp|cl)$/i, '').toLowerCase();
+  const entries = files instanceof Map ? [...files.entries()] : Object.entries(files);
+  for (const [k, v] of entries) {
+    const normalizedKey = String(k).replace(/^\.\//, '').replace(/\.(lisp|cl)$/i, '').toLowerCase();
+    if (normalizedKey === normalizedTarget && (typeof v === 'string' || Array.isArray(v))) {
+      return v;
+    }
+  }
+  return null;
+}
+
+function lookupDependencySystemSpec(systems, depSysName) {
+  if (!systems || typeof systems !== 'object') return null;
+  const entries = systems instanceof Map ? [...systems.entries()] : Object.entries(systems);
+  const target = String(depSysName).toUpperCase();
+  for (const [k, v] of entries) {
+    const cleanKey = String(k).replace(/^:/, '').replace(/\.asd$/i, '').toUpperCase();
+    if (cleanKey === target) return v;
+  }
+  return null;
+}
+
+async function installCommonLispSystem({
+  images,
+  compilation = null,
+  runtime = null,
+  imageId,
+  asdSource,
+  files = {},
+  systems = {},
+  systemName = null,
+  lane = 'neutral',
+  _visiting = new Set(),
+  _installed = new Map(),
+} = {}) {
+  const effectiveImages = images ?? runtime?.images;
+  const effectiveCompilation = resolveCompilation(effectiveImages, compilation ?? runtime?.compilation ?? null);
+  requiredText(imageId, 'image id');
+  assertMethodLane(lane);
+
+  await installCommonLispRuntime({
+    images: effectiveImages,
+    compilation: effectiveCompilation,
+    imageId,
+    lane,
+  });
+
+  const sysDef = parseCommonLispDefsystem(asdSource, {systemName});
+  if (_installed.has(sysDef.name)) {
+    return _installed.get(sysDef.name);
+  }
+  if (_visiting.has(sysDef.name)) {
+    throw new SyntaxError(`cyclic Common Lisp system dependency involving ${sysDef.name}`);
+  }
+  _visiting.add(sysDef.name);
+
+  const dependentSystems = {};
+  for (const depName of sysDef.dependsOn) {
+    if (_visiting.has(depName)) {
+      throw new SyntaxError(`cyclic Common Lisp system dependency involving ${depName}`);
+    }
+    if (_installed.has(depName)) {
+      dependentSystems[depName] = _installed.get(depName);
+      continue;
+    }
+    const depSpec = lookupDependencySystemSpec(systems, depName);
+    if (depSpec) {
+      const depAsdSource = typeof depSpec === 'string' || Array.isArray(depSpec)
+        ? depSpec
+        : depSpec.asdSource ?? depSpec.source;
+      const depFiles = (typeof depSpec === 'object' && !Array.isArray(depSpec) && depSpec.files)
+        ? depSpec.files
+        : files;
+      const depResult = await installCommonLispSystem({
+        images: effectiveImages,
+        compilation: effectiveCompilation,
+        runtime,
+        imageId,
+        asdSource: depAsdSource,
+        files: depFiles,
+        systems,
+        systemName: depName,
+        lane,
+        _visiting,
+        _installed,
+      });
+      dependentSystems[depName] = depResult;
+      continue;
+    }
+    const existingInImage = await readCommonLispSystemDefinition({
+      images: effectiveImages,
+      imageId,
+      name: depName,
+    });
+    if (!existingInImage) {
+      throw new SyntaxError(`Common Lisp system ${sysDef.name} depends on unknown system ${depName}`);
+    }
+    dependentSystems[depName] = existingInImage;
+  }
+
+  const programs = {};
+  for (const componentPath of sysDef.loadOrder) {
+    const fileSource = lookupComponentFileSource(files, componentPath);
+    if (fileSource === null) {
+      throw new SyntaxError(`Common Lisp system ${sysDef.name} missing source file for component ${componentPath}`);
+    }
+    const progResult = await installCommonLispProgram({
+      images: effectiveImages,
+      compilation: effectiveCompilation,
+      runtime,
+      imageId,
+      source: fileSource,
+      lane,
+      skipRuntimeEnsure: true,
+    });
+    if (progResult.expressions.length > 0 && runtime?.invocations && runtime?.executor) {
+      const exprBlock = await installCommonLispBlock({
+        images: effectiveImages,
+        compilation: effectiveCompilation,
+        imageId,
+        source: progResult.expressions,
+        lane,
+        compileContext: progResult.compileContext,
+      });
+      const activation = await runtime.invocations.invokeBlock(
+        objectRef(imageId, exprBlock.block.id),
+        [],
+      );
+      await runtime.executor.execute(activation);
+    }
+    programs[componentPath] = progResult;
+  }
+
+  const serialized = JSON.stringify(sysDef);
+  const artifact = await ensureCodeArtifact(effectiveImages, imageId, {
+    id: commonLispSystemArtifactId(sysDef.name, serialized),
+    languageId: COMMON_LISP_ID,
+    representation: COMMON_LISP_SYSTEM_V0,
+    content: textValue(serialized),
+    metadata: {commonLisp: 'defsystem', systemName: sysDef.name},
+  });
+  const bindingRef = await ensureGlobalBindingInNamespace({
+    images: effectiveImages,
+    imageId,
+    namespaceId: COMMON_LISP_NAMESPACE_ID,
+    name: `%SYSTEM:${sysDef.name}`,
+    bindingId: commonLispSystemBindingId(sysDef.name),
+    value: textValue(serialized),
+  });
+
+  _visiting.delete(sysDef.name);
+  const result = Object.freeze({
+    system: sysDef,
+    artifact: objectRef(imageId, artifact.id),
+    bindingRef,
+    loadOrder: sysDef.loadOrder,
+    programs: Object.freeze(programs),
+    dependentSystems: Object.freeze(dependentSystems),
+  });
+  _installed.set(sysDef.name, result);
+  return result;
+}
+
+async function readCommonLispSystemDefinition({
+  images,
+  imageId,
+  name,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+} = {}) {
+  requiredText(imageId, 'image id');
+  requiredText(namespaceId, 'Common Lisp namespace id');
+  const canonical = requiredText(name, 'Common Lisp system name').replace(/^:/, '').toUpperCase();
+  const ns = await findNamespace({images, imageId, namespaceId});
+  if (!ns) throw new TypeError(`image ${imageId} has no Common Lisp namespace: ${namespaceId}`);
+  const bindingRef = ns.entries.get(`%SYSTEM:${canonical}`);
+  if (!bindingRef || !bindingRef.objectId.startsWith('common-lisp/system-binding/')) return null;
+
+  const record = await images.getObject(bindingRef.imageId, bindingRef.objectId);
+  const val = record?.slots?.['global-binding-value'];
+  if (val?.kind !== VALUE_KIND.TEXT) {
+    throw new TypeError(
+      `Common Lisp namespace ${imageId}/${namespaceId} has a malformed system binding for ${canonical}`,
+    );
+  }
+  const parsed = JSON.parse(val.value);
+  return Object.freeze({
+    name: canonical,
+    description: parsed.description ?? null,
+    version: parsed.version ?? null,
+    serial: Boolean(parsed.serial),
+    dependsOn: Object.freeze([...(parsed.dependsOn ?? [])]),
+    components: Object.freeze([...(parsed.components ?? [])]),
+    loadOrder: Object.freeze([...(parsed.loadOrder ?? [])]),
+  });
+}
+
 export {
   BLOCK_CLOSURE_CLASS_NAME,
   BLOCK_EXIT_CLASS_NAME,
@@ -9044,6 +9852,7 @@ export {
   COMMON_LISP_SOURCE_V0,
   COMMON_LISP_STRUCT_V0,
   COMMON_LISP_SYNTAX_V0,
+  COMMON_LISP_SYSTEM_V0,
   CONS_CLASS_NAME,
   CONS_SHAPE_ID,
   RUNTIME_BLOCK_IDS,
@@ -9062,6 +9871,8 @@ export {
   commonLispPackageNamespaceId,
   commonLispStructArtifactId,
   commonLispStructBindingId,
+  commonLispSystemArtifactId,
+  commonLispSystemBindingId,
   commonLispVariableBindingId,
   compileCommonLispBlock,
   compileCommonLispSemanticProgram,
@@ -9071,15 +9882,18 @@ export {
   installCommonLispBlock,
   installCommonLispProgram,
   installCommonLispRuntime,
+  installCommonLispSystem,
   listCommonLispNamespaceBindings,
   macroexpand1CommonLispForm,
   macroexpandCommonLispForm,
+  parseCommonLispDefsystem,
   readCommonLispClassDefinition,
   readCommonLispFunctionDefinition,
   readCommonLispGenericDefinition,
   readCommonLispMacroDefinition,
   readCommonLispSource,
   readCommonLispStructDefinition,
+  readCommonLispSystemDefinition,
   readCommonLispVariableDefinition,
   tokenizeCommonLispSource,
 };

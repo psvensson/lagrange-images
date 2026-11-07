@@ -14,10 +14,13 @@ import {
   evaluateSymmetricSmalltalkBlock,
   installCommonLispProgram,
   installCommonLispRuntime,
+  installCommonLispSystem,
   integerValue,
   objectRef,
+  parseCommonLispDefsystem,
   publishSmalltalkClassGlobals,
   readCommonLispSource,
+  readCommonLispSystemDefinition,
   symbolObjectId,
   textValue,
 } from '../src/runtime.js';
@@ -1070,6 +1073,238 @@ for (const lane of ['neutral', 'wasm']) {
           textValue('(1 two THREE)'),
           textValue('(1 "two" :THREE)'),
         ],
+      );
+    });
+  });
+
+  test(`[${lane}] Common Lisp Phase 4: dynamic special-variable binding (let/let*, declare special, non-local unwind, defvar vs defparameter) and declarative .asd system importer`, async () => {
+    await withRuntime(async (runtime) => {
+      const evalCL = (source) =>
+        evaluateCommonLispSource({
+          runtime,
+          imageId: 'app',
+          source,
+          lane,
+        });
+      const toArray = (value) => commonLispListToArray({images: runtime.images, imageId: 'app', value});
+
+      // 1. Dynamic special-variable binding via let & let*, cross-function visibility, and non-local exit restoration
+      await evalCL(`
+        (defvar *multiplier* 2)
+        (defparameter *offset* 5)
+        (defun compute-dynamic (x)
+          (+ (* x *multiplier*) *offset*))
+        (defun bump-offset (delta)
+          (setq *offset* (+ *offset* delta)))
+      `);
+
+      // defvar preserves existing value on re-evaluation, while defparameter overwrites it
+      await evalCL(`
+        (defvar *multiplier* 999)
+        (defparameter *offset* 10)
+      `);
+
+      assert.deepEqual(
+        await toArray(await evalCL(`
+          (mapcar #'prin1-to-string
+            (list
+              ;; defvar preserved 2, defparameter updated to 10: 7*2 + 10 = 24
+              (compute-dynamic 7)
+              ;; dynamic let binding of *multiplier* and *offset* visible to called functions
+              (let ((*multiplier* 10)
+                    (*offset* 1))
+                (let ((first (compute-dynamic 7)))
+                  (bump-offset 4)
+                  (list first (compute-dynamic 7))))
+              ;; after let exits, *multiplier* and *offset* are restored to 2 and 10
+              (compute-dynamic 7)
+              ;; let* sequential dynamic binding: second init-form calls (compute-dynamic 3) seeing *multiplier* = 100
+              (let* ((*multiplier* 100)
+                     (*offset* (compute-dynamic 3)))
+                (compute-dynamic 1))
+              ;; after let* exits, restored to 2 and 10
+              (list *multiplier* *offset*)))
+        `)),
+        [
+          textValue('24'),
+          textValue('(71 75)'),
+          textValue('24'),
+          textValue('410'),
+          textValue('(2 10)'),
+        ],
+      );
+
+      // Non-local exit via return-from and error/handler-case restores dynamic special bindings
+      assert.deepEqual(
+        await toArray(await evalCL(`
+          (mapcar #'prin1-to-string
+            (list
+              (block escape
+                (let ((*multiplier* 50)
+                      (*offset* 500))
+                  (when (> (compute-dynamic 2) 100)
+                    (return-from escape (compute-dynamic 2)))
+                  -1))
+              ;; restored after return-from
+              (list *multiplier* *offset*)
+              (handler-case
+                  (let ((*multiplier* 77)
+                        (*offset* 88))
+                    (error "boom"))
+                (error (c)
+                  ;; inside handler-case handler, the let around (error "boom") has already unwound!
+                  (list *multiplier* *offset*)))
+              ;; local (declare (special ...)) on a variable not previously declared with defvar
+              (let ((local-dyn 42))
+                (declare (special local-dyn))
+                local-dyn)))
+        `)),
+        [
+          textValue('600'),
+          textValue('(2 10)'),
+          textValue('(2 10)'),
+          textValue('42'),
+        ],
+      );
+
+      // 2. Declarative .asd / defsystem parser and multi-file system installer (with :depends-on systems and nested :module)
+      const baseAsd = `
+        (asdf:defsystem :cl-math-base
+          :description "Base math utilities"
+          :version "1.0.0"
+          :serial t
+          :components
+          ((:file "packages")
+           (:file "ops")))
+      `;
+      const appAsd = `
+        (defsystem "cl-geometry-app"
+          :description "Geometry system built on cl-math-base"
+          :version "2.1.0"
+          :depends-on (:cl-math-base)
+          :components
+          ((:file "pkg")
+           (:module "shapes"
+            :depends-on ("pkg")
+            :serial t
+            :components
+            ((:file "base")
+             (:file "metrics")))
+           (:file "report" :depends-on ("shapes"))))
+      `;
+
+      const parsedApp = parseCommonLispDefsystem(appAsd);
+      assert.equal(parsedApp.name, 'CL-GEOMETRY-APP');
+      assert.equal(parsedApp.version, '2.1.0');
+      assert.deepEqual(parsedApp.dependsOn, ['CL-MATH-BASE']);
+      assert.deepEqual(parsedApp.loadOrder, ['pkg', 'shapes/base', 'shapes/metrics', 'report']);
+
+      const installedSys = await installCommonLispSystem({
+        runtime,
+        imageId: 'app',
+        asdSource: appAsd,
+        lane,
+        systems: {
+          'cl-math-base': {
+            asdSource: baseAsd,
+            files: {
+              'packages.lisp': `
+                (defpackage :cl-math-base
+                  (:use :cl)
+                  (:export #:sq #:scale-factor #:*unit-scale*))
+              `,
+              'ops.lisp': `
+                (in-package :cl-math-base)
+                (defvar *unit-scale* 1)
+                (defun sq (n) (* n n))
+                (defun scale-factor (n) (* n *unit-scale*))
+              `,
+            },
+          },
+        },
+        files: {
+          'pkg.lisp': `
+            (defpackage :cl-geometry-app
+              (:use :cl :cl-math-base)
+              (:export #:rect #:make-rect #:area #:describe-rect))
+          `,
+          'shapes/base.lisp': `
+            (in-package :cl-geometry-app)
+            (defclass rect ()
+              ((w :initarg :w :reader rect-w)
+               (h :initarg :h :reader rect-h)))
+            (defun make-rect (w h)
+              (make-instance 'rect :w w :h h))
+          `,
+          'shapes/metrics.lisp': `
+            (in-package :cl-geometry-app)
+            (defgeneric area (shape))
+            (defmethod area ((r rect))
+              (scale-factor (* (rect-w r) (rect-h r))))
+          `,
+          'report.lisp': `
+            (in-package :cl-geometry-app)
+            (defun describe-rect (w h scale)
+              (let ((*unit-scale* scale))
+                (let ((r (make-rect w h)))
+                  (format nil "~Dx~D@~D=>~D" w h scale (area r)))))
+          `,
+        },
+      });
+
+      assert.deepEqual(installedSys.loadOrder, ['pkg', 'shapes/base', 'shapes/metrics', 'report']);
+      assert.ok(installedSys.dependentSystems['CL-MATH-BASE']);
+
+      const sysMeta = await readCommonLispSystemDefinition({
+        images: runtime.images,
+        imageId: 'app',
+        name: 'cl-geometry-app',
+      });
+      assert.equal(sysMeta.name, 'CL-GEOMETRY-APP');
+      assert.equal(sysMeta.version, '2.1.0');
+      assert.deepEqual(sysMeta.dependsOn, ['CL-MATH-BASE']);
+      assert.deepEqual(sysMeta.loadOrder, ['pkg', 'shapes/base', 'shapes/metrics', 'report']);
+
+      assert.deepEqual(
+        await evalCL('(cl-geometry-app:describe-rect 3 4 10)'),
+        textValue('3x4@10=>120'),
+      );
+      // Verify *unit-scale* was restored to 1 after describe-rect's dynamic let
+      assert.deepEqual(
+        await evalCL('(cl-geometry-app:area (cl-geometry-app:make-rect 3 4))'),
+        integerValue(12n),
+      );
+
+      // Verify cycle detection and missing file/component errors
+      assert.throws(
+        () =>
+          parseCommonLispDefsystem(`
+            (defsystem :cyclic-sys
+              :components
+              ((:file "a" :depends-on ("b"))
+               (:file "b" :depends-on ("a"))))
+          `),
+        /cyclic Common Lisp component dependency/i,
+      );
+      assert.throws(
+        () =>
+          parseCommonLispDefsystem(`
+            (defsystem :missing-dep-sys
+              :components
+              ((:file "a" :depends-on ("no-such-file"))))
+          `),
+        /depends on unknown component NO-SUCH-FILE/i,
+      );
+      await assert.rejects(
+        () =>
+          installCommonLispSystem({
+            runtime,
+            imageId: 'app',
+            asdSource: '(defsystem :incomplete-sys :components ((:file "missing")))',
+            files: {},
+            lane,
+          }),
+        /missing source file for component missing/i,
       );
     });
   });
