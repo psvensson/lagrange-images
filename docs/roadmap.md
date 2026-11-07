@@ -393,7 +393,7 @@ Inspecting, editing and navigating imported structures belongs to Lagrange Objec
 Keep generic work only when it directly supports the native-import application closure or another shipping path:
 
 - [ ] package/archive importer conventions with explicit immutable dependency artifacts;
-- [ ] git/private-registry dependency import conventions;
+- [x] git/private-registry dependency import conventions (`GIT_DEPENDENCY_SPEC_V1`, `normalizeGitDependencySpec`, `normalizeGitDependencyList`, and `exportProjectFileProjection` / `importProjectFileProjection` in `src/project/file-projection.js`, proven in `test/project-file-projection.test.js`);
 - [ ] indexed durable lookup for derivation keys;
 - [x] cross-install content-addressed reuse with truthful installation provenance (`PROJECT_INSTALLATION_PROVENANCE_V1`, `upgradeManagedProjectRelease`, `authorizedUpgradeManagedProjectRelease`, `installManagedProjectRelease({reuseExistingInstallations: true})`, `readManagedProjectInstallationState`, and `listManagedProjectInstallations` in `src/project/managed-installation.js` and `src/project/installation-state.js`, proven in `test/managed-project-upgrade.test.js`).
 
@@ -486,7 +486,7 @@ Project remains image-level because it is useful without a graphical environment
 - [x] branch/working-frontier semantics (`src/graph/branches.js` and `src/project/branches.js`: `createBranch`, `advanceBranch`, `forkImageFromBranch`, `diffBranches`, `mergeBranches`, `diffProjectBranches`, `mergeProjectBranches`, and authorized branch seams, proven in `test/branches-working-frontier.test.js`);
 - [x] object/Project diff representation (`src/graph/diff.js` and `src/project/diff.js`: `diffImageRecords`, `diffGraphBundles`, `diffProjectDescriptors`, `diffProjectReleases`, `authorizedDiffProjects`, and `diffProjectAtFrontiers`, proven in `test/image-project-diff.test.js`);
 - [x] merge semantics and conflict data model (`src/graph/merge.js` and `src/project/merge.js`: `mergeImageRecords`, `mergeImageFrontiers`, `applyImageMerge`, `mergeProjectDescriptors`, `mergeProjectReleases`, `mergeProjectAtFrontiers`, and `authorizedMergeProjects`, proven in `test/image-project-merge.test.js`);
-- [ ] Git/file import/export as projection rather than canonical storage;
+- [x] Git/file import/export as projection rather than canonical storage (`PROJECT_FILE_PROJECTION_V1`, `PROJECT_FILE_PROJECTION_MANIFEST_V1`, `PROJECT_FILE_PROJECTION_DIFF_V1`, `exportProjectFileProjection`, `importProjectFileProjection`, `diffProjectFileProjection`, `diffProjectAgainstFileProjection`, `writeProjectFileProjectionToDirectory`, `readProjectFileProjectionFromDirectory`, `authorizedExportProjectFileProjection`, and `authorizedImportProjectFileProjection` in `src/project/file-projection.js`, proven in `test/project-file-projection.test.js`);
 - [x] multi-author conflict API/data, without prescribing UI (`MERGE_CONFLICT_KINDS`, `PROJECT_MERGE_CONFLICT_KINDS`, `MergeConflictError`, and structured conflict resolution in `src/graph/merge.js` and `src/project/merge.js`);
 
 Project membership remains organization, not authority.

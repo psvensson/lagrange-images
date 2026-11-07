@@ -8,3 +8,4 @@ export * from './managed-installation.js';
 export * from './diff.js';
 export * from './merge.js';
 export * from './branches.js';
+export * from './file-projection.js';
