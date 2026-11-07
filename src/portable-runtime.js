@@ -110,8 +110,33 @@ import {defineMethodsFromSource} from './language/smalltalk-instance-variables.j
 import {installSymmetricSmalltalkStandardImage} from './language/smalltalk-standard-image.js';
 import {resolveGlobal} from './language/smalltalk-globals.js';
 import {importCuisNativePackage} from './language/cuis-native-import.js';
-import {installManagedProjectRelease} from './project/managed-installation.js';
-import {readManagedProjectInstallation} from './project/installation-state.js';
+import {
+  installManagedProjectRelease,
+  PROJECT_INSTALLATION_PROVENANCE_V1,
+  upgradeManagedProjectRelease,
+  authorizedUpgradeManagedProjectRelease,
+} from './project/managed-installation.js';
+import {
+  installationHeadObjectId,
+  readManagedProjectInstallation,
+  readManagedProjectInstallationState,
+  listManagedProjectInstallations,
+} from './project/installation-state.js';
+import {
+  createDeploymentProfile,
+  createProjectReleaseManifest,
+  planProjectUpgrade,
+  selectProjectMembers,
+} from './project/model.js';
+import {
+  createProjectReleaseMaterial,
+  materializeProjectGraphRelease,
+} from './project/graph-release-materialization.js';
+import {
+  contentIdentityForBundle,
+  exportGraphBundle,
+  importGraphBundle,
+} from './graph/bundle.js';
 import {
   authorizedDescribeSmalltalkClass,
   authorizedDescribeSmalltalkMethod,
@@ -125,16 +150,34 @@ import {
   authorizedReplaceSmalltalkMethod,
 } from './language/smalltalk-authorized-method-replacement.js';
 import {authorizedImportCuisPackage} from './language/smalltalk-authorized-import.js';
-import {createDefaultLanguagePlatform} from './language/index.js';
+import {
+  createDefaultLanguagePlatform,
+  installSymmetricSmalltalkBlock,
+} from './language/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './language/symmetric-smalltalk.js';
 import {createSymmetricSmalltalkDispatcher} from './language/symmetric-smalltalk-dispatcher.js';
 import {MethodDictionaryValidationCache} from './language/smalltalk-lookup.js';
 import {installCallableInterfaceV2} from './callable/interface-v2-artifacts.js';
 import {packCompositeValue, unpackCompositeValue} from './callable/composite-codec.js';
 import {normalizeTypeDeclarations} from './callable/type-grammar.js';
-import {objectRef, referencesOfValue, textValue} from './value/scalars.js';
+import {
+  booleanValue,
+  bytesValue,
+  integerValue,
+  objectRef,
+  referencesOfValue,
+  textValue,
+} from './value/scalars.js';
 import {objectResource, parseObjectResource} from './authority/object-resource.js';
 import {objectVersionToken} from './object/version-token.js';
+import {
+  IMAGE_SHAPE_MIGRATION_PLAN_V1,
+  IMAGE_SHAPE_MIGRATION_RECEIPT_V1,
+  buildShapeSlotMigrationPlan,
+  migrateImageObjectsToShape,
+  migrateObjectRecordToShape,
+  planImageShapeMigration,
+} from './object/migration.js';
 import {
   addProjectMember,
   authorizedReadProject,
@@ -150,11 +193,109 @@ import {
   reconstructImageRecordsAtFrontier,
 } from './graph/diff.js';
 import {
+  IMAGE_RECORD_MERGE_V1,
+  MERGE_CONFLICT_KINDS,
+  MergeConflictError,
+  applyImageMerge,
+  mergeImageFrontiers,
+  mergeImageRecords,
+  rehomeRecordToImage,
+} from './graph/merge.js';
+import {
+  BRANCH_HEAD_SHAPE_ID,
+  BranchConflictError,
+  IMAGE_BRANCH_DESCRIPTOR_V1,
+  advanceBranch,
+  branchObjectId,
+  createBranch,
+  deleteBranch,
+  diffBranches,
+  forkImageFromBranch,
+  forkImageFromFrontier,
+  getBranch,
+  isBranchHeadRecord,
+  listBranches,
+  mergeBranches,
+} from './graph/branches.js';
+import {
+  IMAGE_GC_PLAN_V1,
+  IMAGE_GC_RECEIPT_V1,
+  IMAGE_GRAPH_INDEX_V1,
+  IMAGE_REACHABILITY_CLOSURE_V1,
+  buildImageGraphIndex,
+  collectUnreachableImageRecords,
+  computeReachableImageClosure,
+  discoverDefaultImageRoots,
+  findArtifactDependents,
+  findArtifactSources,
+  findArtifactsByLogicalPath,
+  findDerivedArtifacts,
+  findIncomingReferences,
+  findOutgoingReferences,
+  planImageGarbageCollection,
+} from './graph/reachability.js';
+import {
   authorizedDiffProjects,
   diffProjectAtFrontiers,
   diffProjectDescriptors,
   diffProjectReleases,
 } from './project/diff.js';
+import {
+  PROJECT_DESCRIPTOR_MERGE_V1,
+  PROJECT_MERGE_CONFLICT_KINDS,
+  PROJECT_RELEASE_MERGE_V1,
+  authorizedMergeProjects,
+  mergeProjectAtFrontiers,
+  mergeProjectDescriptors,
+  mergeProjectReleases,
+} from './project/merge.js';
+import {
+  authorizedAdvanceBranch,
+  authorizedCreateBranch,
+  authorizedDiffBranches,
+  authorizedDiffProjectBranches,
+  authorizedMergeBranches,
+  authorizedReadBranch,
+  diffProjectBranches,
+  mergeProjectBranches,
+} from './project/branches.js';
+import {
+  PROJECT_GRAPH_V1,
+  PROJECT_MEMBER_ROLES,
+  PROJECT_NOTE_SHAPE_ID,
+  PROJECT_TEST_CASE_SHAPE_ID,
+  PROJECT_TEST_REPORT_V1,
+  PROJECT_WORK_ITEM_SHAPE_ID,
+  WORK_ITEM_STATUSES,
+  addProjectNamespaceMember,
+  addRelatedProjectMember,
+  addSubprojectMember,
+  authorizedResolveNestedProjectGraph,
+  authorizedRunProjectTests,
+  classifyProjectMembers,
+  createProjectNote,
+  createProjectTestCase,
+  createProjectWorkItem,
+  listProjectWorkItems,
+  projectNoteObjectId,
+  projectTestCaseObjectId,
+  projectWorkItemObjectId,
+  readProjectNote,
+  readProjectWorkItem,
+  resolveNestedProjectGraph,
+  runProjectTests,
+  updateProjectWorkItem,
+} from './project/conventions.js';
+import {
+  LAGRANGE_PACKAGE_ARCHIVE_V1,
+  PACKAGE_ARCHIVE_IMPORT_RECEIPT_V1,
+  PRECOMPILED_WASM_REUSE_RECEIPT_V1,
+  createPackageArchiveManifest,
+  importPackageArchive,
+  parsePackageArchiveArtifact,
+  putPackageArchiveArtifact,
+  reusePrecompiledWasmArtifact,
+} from './code/package-archive.js';
 
 // The portable code-executor registry: neutral expression + the image lanes +
 // (via composition) the Smalltalk kernel primitive. It deliberately omits the
@@ -356,19 +497,44 @@ export {
   defineMethodsFromSource,
   importCuisNativePackage,
   installManagedProjectRelease,
+  PROJECT_INSTALLATION_PROVENANCE_V1,
+  upgradeManagedProjectRelease,
+  authorizedUpgradeManagedProjectRelease,
+  installationHeadObjectId,
   readManagedProjectInstallation,
+  readManagedProjectInstallationState,
+  listManagedProjectInstallations,
+  createDeploymentProfile,
+  createProjectReleaseManifest,
+  planProjectUpgrade,
+  selectProjectMembers,
+  createProjectReleaseMaterial,
+  materializeProjectGraphRelease,
+  contentIdentityForBundle,
+  exportGraphBundle,
+  importGraphBundle,
   resolveGlobal,
+  installSymmetricSmalltalkBlock,
   installCallableInterfaceV2,
   installImageCreationBinding,
   installImageMutationBinding,
   installImageObjectReadBinding,
   installImageObservationBinding,
+  booleanValue,
+  bytesValue,
+  integerValue,
   objectRef,
   textValue,
   referencesOfValue,
   objectResource,
   parseObjectResource,
   objectVersionToken,
+  IMAGE_SHAPE_MIGRATION_PLAN_V1,
+  IMAGE_SHAPE_MIGRATION_RECEIPT_V1,
+  buildShapeSlotMigrationPlan,
+  migrateImageObjectsToShape,
+  migrateObjectRecordToShape,
+  planImageShapeMigration,
   SMALLTALK_METHOD_READ_OPERATION,
   smalltalkMethodPositionResource,
   packCompositeValue,
@@ -407,4 +573,90 @@ export {
   diffProjectReleases,
   authorizedDiffProjects,
   diffProjectAtFrontiers,
+  // Collaborative branch, merge, reachability/GC, Project conventions, and package-archive owners
+  // (bead lagrange-images-1ebw).
+  IMAGE_RECORD_MERGE_V1,
+  MERGE_CONFLICT_KINDS,
+  MergeConflictError,
+  applyImageMerge,
+  mergeImageFrontiers,
+  mergeImageRecords,
+  rehomeRecordToImage,
+  BRANCH_HEAD_SHAPE_ID,
+  BranchConflictError,
+  IMAGE_BRANCH_DESCRIPTOR_V1,
+  advanceBranch,
+  branchObjectId,
+  createBranch,
+  deleteBranch,
+  diffBranches,
+  forkImageFromBranch,
+  forkImageFromFrontier,
+  getBranch,
+  isBranchHeadRecord,
+  listBranches,
+  mergeBranches,
+  IMAGE_GC_PLAN_V1,
+  IMAGE_GC_RECEIPT_V1,
+  IMAGE_GRAPH_INDEX_V1,
+  IMAGE_REACHABILITY_CLOSURE_V1,
+  buildImageGraphIndex,
+  collectUnreachableImageRecords,
+  computeReachableImageClosure,
+  discoverDefaultImageRoots,
+  findArtifactDependents,
+  findArtifactSources,
+  findArtifactsByLogicalPath,
+  findDerivedArtifacts,
+  findIncomingReferences,
+  findOutgoingReferences,
+  planImageGarbageCollection,
+  PROJECT_DESCRIPTOR_MERGE_V1,
+  PROJECT_MERGE_CONFLICT_KINDS,
+  PROJECT_RELEASE_MERGE_V1,
+  authorizedMergeProjects,
+  mergeProjectAtFrontiers,
+  mergeProjectDescriptors,
+  mergeProjectReleases,
+  authorizedAdvanceBranch,
+  authorizedCreateBranch,
+  authorizedDiffBranches,
+  authorizedDiffProjectBranches,
+  authorizedMergeBranches,
+  authorizedReadBranch,
+  diffProjectBranches,
+  mergeProjectBranches,
+  PROJECT_GRAPH_V1,
+  PROJECT_MEMBER_ROLES,
+  PROJECT_NOTE_SHAPE_ID,
+  PROJECT_TEST_CASE_SHAPE_ID,
+  PROJECT_TEST_REPORT_V1,
+  PROJECT_WORK_ITEM_SHAPE_ID,
+  WORK_ITEM_STATUSES,
+  addProjectNamespaceMember,
+  addRelatedProjectMember,
+  addSubprojectMember,
+  authorizedResolveNestedProjectGraph,
+  authorizedRunProjectTests,
+  classifyProjectMembers,
+  createProjectNote,
+  createProjectTestCase,
+  createProjectWorkItem,
+  listProjectWorkItems,
+  projectNoteObjectId,
+  projectTestCaseObjectId,
+  projectWorkItemObjectId,
+  readProjectNote,
+  readProjectWorkItem,
+  resolveNestedProjectGraph,
+  runProjectTests,
+  updateProjectWorkItem,
+  LAGRANGE_PACKAGE_ARCHIVE_V1,
+  PACKAGE_ARCHIVE_IMPORT_RECEIPT_V1,
+  PRECOMPILED_WASM_REUSE_RECEIPT_V1,
+  createPackageArchiveManifest,
+  importPackageArchive,
+  parsePackageArchiveArtifact,
+  putPackageArchiveArtifact,
+  reusePrecompiledWasmArtifact,
 };
