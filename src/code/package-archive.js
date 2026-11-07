@@ -1,5 +1,12 @@
 import {getDefaultCryptoProvider} from '../support/default-crypto.js';
 import {
+  base64Decode,
+  base64Encode,
+  bytesEqual,
+  bytesToHex,
+  utf8Encode,
+} from '../support/portable-bytes.js';
+import {
   VALUE_KIND,
   bytesValue,
   canonicalizeValue,
@@ -32,12 +39,14 @@ function deepFreeze(value) {
 }
 
 function sha256HexText(text) {
-  return getDefaultCryptoProvider().sha256Hex(new TextEncoder().encode(text));
+  return bytesToHex(getDefaultCryptoProvider().sha256(utf8Encode(text)));
 }
 
 function sha256HexBytes(bytes) {
-  return getDefaultCryptoProvider().sha256Hex(
-    bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+  return bytesToHex(
+    getDefaultCryptoProvider().sha256(
+      bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+    ),
   );
 }
 
@@ -64,16 +73,16 @@ function normalizeArchiveFileEntry(entry, index) {
   } else if (entry.bytes instanceof Uint8Array || ArrayBuffer.isView(entry.bytes)) {
     const u8 = new Uint8Array(entry.bytes.buffer, entry.bytes.byteOffset, entry.bytes.byteLength);
     contentKind = 'bytes-base64';
-    encodedContent = Buffer.from(u8).toString('base64');
+    encodedContent = base64Encode(u8);
     contentDigest = sha256HexBytes(u8);
   } else if (entry.content?.kind === VALUE_KIND.TEXT) {
     contentKind = 'text';
     encodedContent = entry.content.value;
     contentDigest = sha256HexText(entry.content.value);
   } else if (entry.content?.kind === VALUE_KIND.BYTES) {
-    const u8 = entry.content.value;
+    const u8 = base64Decode(entry.content.base64);
     contentKind = 'bytes-base64';
-    encodedContent = Buffer.from(u8).toString('base64');
+    encodedContent = entry.content.base64;
     contentDigest = sha256HexBytes(u8);
   } else if (
     (entry.contentKind === 'text' || entry.contentKind === 'bytes-base64')
@@ -84,7 +93,7 @@ function normalizeArchiveFileEntry(entry, index) {
     contentDigest = entry.contentDigest
       ?? (contentKind === 'text'
         ? sha256HexText(encodedContent)
-        : sha256HexBytes(Buffer.from(encodedContent, 'base64')));
+        : sha256HexBytes(base64Decode(encodedContent)));
   } else {
     throw new TypeError(`package archive file ${index} requires text, bytes, or Value content`);
   }
@@ -119,14 +128,14 @@ function normalizePrecompiledEntry(entry, index) {
   if (entry.bytes instanceof Uint8Array || ArrayBuffer.isView(entry.bytes)) {
     bytes = new Uint8Array(entry.bytes.buffer, entry.bytes.byteOffset, entry.bytes.byteLength);
   } else if (entry.content?.kind === VALUE_KIND.BYTES) {
-    bytes = entry.content.value;
+    bytes = base64Decode(entry.content.base64);
   } else if (typeof entry.encodedBytesBase64 === 'string') {
-    bytes = new Uint8Array(Buffer.from(entry.encodedBytesBase64, 'base64'));
+    bytes = base64Decode(entry.encodedBytesBase64);
   } else {
     throw new TypeError(`precompiledArtifact ${index} requires bytes or bytes Value content`);
   }
 
-  const encodedBytesBase64 = Buffer.from(bytes).toString('base64');
+  const encodedBytesBase64 = base64Encode(bytes);
   const contentDigest = sha256HexBytes(bytes);
 
   return deepFreeze({
@@ -294,15 +303,6 @@ async function putPackageArchiveArtifact({
   });
 }
 
-function bytesEqual(left, right) {
-  if (!(left instanceof Uint8Array) || !(right instanceof Uint8Array)) return false;
-  if (left.byteLength !== right.byteLength) return false;
-  for (let i = 0; i < left.byteLength; i += 1) {
-    if (left[i] !== right[i]) return false;
-  }
-  return true;
-}
-
 async function reusePrecompiledWasmArtifact({
   images,
   imageId,
@@ -320,7 +320,7 @@ async function reusePrecompiledWasmArtifact({
   if (content instanceof Uint8Array || ArrayBuffer.isView(content)) {
     rawBytes = new Uint8Array(content.buffer, content.byteOffset, content.byteLength);
   } else if (content?.kind === VALUE_KIND.BYTES) {
-    rawBytes = content.value;
+    rawBytes = base64Decode(content.base64);
   } else {
     throw new TypeError('precompiled WASM content must be bytes or a bytes Value');
   }
@@ -334,7 +334,7 @@ async function reusePrecompiledWasmArtifact({
     direct
     && direct.representation === representation
     && direct.content?.kind === VALUE_KIND.BYTES
-    && bytesEqual(direct.content.value, rawBytes)
+    && bytesEqual(base64Decode(direct.content.base64), rawBytes)
   ) {
     return deepFreeze({
       format: PRECOMPILED_WASM_REUSE_RECEIPT_V1,
@@ -355,7 +355,7 @@ async function reusePrecompiledWasmArtifact({
         candidate.representation === representation
         && (candidate.logicalPath ?? null) === (logicalPath ?? null)
         && candidate.content?.kind === VALUE_KIND.BYTES
-        && bytesEqual(candidate.content.value, rawBytes)
+        && bytesEqual(base64Decode(candidate.content.base64), rawBytes)
       ) {
         return deepFreeze({
           format: PRECOMPILED_WASM_REUSE_RECEIPT_V1,
@@ -424,7 +424,7 @@ async function importPackageArchive({
     if (!fileArtifact) {
       const contentValue = file.contentKind === 'text'
         ? textValue(file.encodedContent)
-        : bytesValue(new Uint8Array(Buffer.from(file.encodedContent, 'base64')));
+        : bytesValue(base64Decode(file.encodedContent));
       // eslint-disable-next-line no-await-in-loop
       fileArtifact = await images.putCodeArtifact(imageId, {
         id: fileArtifactId,
@@ -457,7 +457,7 @@ async function importPackageArchive({
   }
 
   for (const precompiled of manifest.precompiledArtifacts) {
-    const rawBytes = new Uint8Array(Buffer.from(precompiled.encodedBytesBase64, 'base64'));
+    const rawBytes = base64Decode(precompiled.encodedBytesBase64);
     let precompiledArtifact;
     let reused = false;
     if (reusePrecompiledWasm) {

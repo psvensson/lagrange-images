@@ -25,7 +25,7 @@ import {
 const MINIMAL_WASM_BYTES = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
 
 test('ToolchainService persists durable derivation-key index objects and reuses cached outputs in O(1) without listCodeArtifacts', async () => {
-  const runtime = await createRuntime();
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
   try {
     const image = await runtime.images.createImage({id: 'img-derivation-idx', name: 'DerivationIdx'});
 
@@ -138,7 +138,7 @@ test('ToolchainService persists durable derivation-key index objects and reuses 
 });
 
 test('rebuildToolchainDerivationIndex indexes pre-existing unindexed toolchain artifacts for O(1) lookup', async () => {
-  const runtime = await createRuntime();
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
   try {
     const image = await runtime.images.createImage({id: 'img-rebuild-idx', name: 'RebuildIdx'});
     const source = await runtime.images.putCodeArtifact(image.id, {
@@ -231,7 +231,7 @@ test('rebuildToolchainDerivationIndex indexes pre-existing unindexed toolchain a
 });
 
 test('Package/archive importer materializes immutable dependency artifacts and reuses precompiled WASM binaries across imports', async () => {
-  const runtime = await createRuntime();
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
   try {
     const image = await runtime.images.createImage({id: 'img-pkg-archive', name: 'PkgArchive'});
 
