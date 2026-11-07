@@ -223,6 +223,7 @@ export * from './foreign-runtime/index.js';
 export {
   ObjectLocator,
   PER_OBJECT_RESIDENCY,
+  RELOCATED_RECORD_KIND,
   SWEPT_RECORD_KIND,
   WHOLE_IMAGE_RESIDENCY,
   backendForResidency,

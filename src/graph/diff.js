@@ -208,7 +208,9 @@ function replayHistoryEventsToFrontier(events, frontier) {
         if (event.block?.id) byId.set(event.block.id, structuredClone(event.block));
         break;
       case 'object.relocated':
+      case 'record.relocated':
         if (event.objectId) byId.delete(event.objectId);
+        if (event.recordId) byId.delete(event.recordId);
         break;
       case 'record.swept':
         if (event.recordId) byId.delete(event.recordId);
