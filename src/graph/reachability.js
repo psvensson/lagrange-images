@@ -116,9 +116,10 @@ function isIntrinsicRootRecord(record, {imageRootObjectId = null, preserveSystem
     return true;
   }
 
-  // Project working-state roots, sentinel, and installation heads.
+  // Project working-state roots, sentinel, installation heads, and named branch heads.
   if (
     id === 'lagrange-project/none/v1' ||
+    id.startsWith('lagrange-branch/head/') ||
     (id.startsWith('lagrange-project-installation/') && id.endsWith('/head'))
   ) {
     return true;
@@ -127,7 +128,9 @@ function isIntrinsicRootRecord(record, {imageRootObjectId = null, preserveSystem
     record.kind === 'object' &&
     (record.shape?.objectId === 'lagrange-project/project/v1' ||
       record.shape?.objectId === 'lagrange-project-installation/head-shape/v1' ||
-      record.metadata?.project === 'working-state')
+      record.shape?.objectId === 'lagrange-branch/head-shape/v1' ||
+      record.metadata?.project === 'working-state' ||
+      record.metadata?.branch === 'head')
   ) {
     return true;
   }
@@ -607,6 +610,7 @@ async function planImageGarbageCollection({
   pinnedFrontiers = [],
   includeDefaultRoots = true,
   preserveSystemShapes = true,
+  preserveNamedBranches = true,
   includeDerivedArtifacts = false,
 } = {}) {
   if (
@@ -632,17 +636,31 @@ async function planImageGarbageCollection({
   const currentRecords = await images.listRecords(imageId);
   const currentIndex = buildImageGraphIndex(currentRecords, {imageId});
 
-  const sortedPinnedFrontiers = [...new Set(pinnedFrontiers)].sort((a, b) => a - b);
+  const rawFronts = pinnedFrontiers.map((f) =>
+    f && typeof f === 'object' && Object.hasOwn(f, 'revision') ? Number(f.revision) : Number(f),
+  );
+  if (preserveNamedBranches) {
+    for (const rec of currentRecords) {
+      if (rec?.kind === 'object' && rec.shape?.objectId === 'lagrange-branch/head-shape/v1') {
+        const revSlot = rec.slots?.['branch-revision'];
+        if (revSlot?.kind === 'integer') {
+          rawFronts.push(Number(revSlot.value));
+        }
+      }
+    }
+  }
+
+  const sortedPinnedFrontiers = [...new Set(rawFronts)].sort((a, b) => a - b);
   const pinnedFrontierIdSet = new Set();
 
   for (const frontier of sortedPinnedFrontiers) {
-    const historicalRecords = await reconstructImageRecordsAtFrontier({
+    const historicalSnapshot = await reconstructImageRecordsAtFrontier({
       images,
       imageId,
       frontier,
     });
     const historicalClosure = computeReachableImageClosure({
-      records: historicalRecords,
+      records: Array.isArray(historicalSnapshot) ? historicalSnapshot : historicalSnapshot.records,
       imageId,
       imageRootObjectId: image.rootObjectId ?? null,
       roots,
