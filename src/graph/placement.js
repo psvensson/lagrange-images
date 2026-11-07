@@ -1,7 +1,12 @@
 import {assertBackend, assertBackendTransaction} from '../backend/backend-contract.js';
 import {IMAGE_COLLECTION, history, records} from '../image/storage-layout.js';
 import {isObjectRef, textValue} from '../value/scalars.js';
-import {PER_OBJECT_RESIDENCY, RELOCATED_RECORD_KIND, WHOLE_IMAGE_RESIDENCY} from './locator.js';
+import {
+  PER_OBJECT_RESIDENCY,
+  RELOCATED_RECORD_KIND,
+  SWEPT_RECORD_KIND,
+  WHOLE_IMAGE_RESIDENCY,
+} from './locator.js';
 
 function assertNodeId(nodeId, label = 'nodeId') {
   if (typeof nodeId !== 'string' || nodeId.length === 0) {
@@ -113,7 +118,7 @@ class PlacementPolicy {
     const liveMatches = [];
     for (const [nodeId, {backend}] of this.#nodes.entries()) {
       const record = await backend.get(records(ref.imageId), ref.objectId);
-      if (record && record.kind !== RELOCATED_RECORD_KIND) {
+      if (record && record.kind !== RELOCATED_RECORD_KIND && record.kind !== SWEPT_RECORD_KIND) {
         liveMatches.push({nodeId, backend, record});
       }
     }
@@ -148,7 +153,7 @@ class PlacementPolicy {
     if (!target) throw new TypeError(`unknown target node: ${toNode}`);
 
     const current = await source.backend.get(records(ref.imageId), ref.objectId);
-    if (!current || current.kind === RELOCATED_RECORD_KIND) {
+    if (!current || current.kind === RELOCATED_RECORD_KIND || current.kind === SWEPT_RECORD_KIND) {
       throw new TypeError(`object not resident on ${fromNode}: ${ref.imageId}/${ref.objectId}`);
     }
     if (current.kind !== 'object') {
@@ -158,7 +163,11 @@ class PlacementPolicy {
     }
 
     const existingTarget = await target.backend.get(records(ref.imageId), ref.objectId);
-    if (existingTarget && existingTarget.kind !== RELOCATED_RECORD_KIND) {
+    if (
+      existingTarget &&
+      existingTarget.kind !== RELOCATED_RECORD_KIND &&
+      existingTarget.kind !== SWEPT_RECORD_KIND
+    ) {
       throw new TypeError(`object already resident on ${toNode}: ${ref.imageId}/${ref.objectId}`);
     }
 

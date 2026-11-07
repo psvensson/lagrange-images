@@ -1,6 +1,6 @@
 import {uuid as randomUUID} from '../support/default-crypto.js';
 import {assertBackend, assertBackendTransaction} from '../backend/backend-contract.js';
-import {ObjectLocator, RELOCATED_RECORD_KIND} from '../graph/locator.js';
+import {ObjectLocator, RELOCATED_RECORD_KIND, SWEPT_RECORD_KIND} from '../graph/locator.js';
 import {RemoteRecordResolver} from '../graph/remote-resolution.js';
 import {assertObjectMatchesShape, createObjectRecord, createShapeRecord, normalizeMetadata} from '../object/index.js';
 import {
@@ -334,6 +334,9 @@ class ImageService {
     const entries = await this.backend.scan(records(imageId));
     const results = [];
     for (const {value} of entries) {
+      if (value?.kind === SWEPT_RECORD_KIND) {
+        continue;
+      }
       if (value?.kind === RELOCATED_RECORD_KIND) {
         const resolved = await this.getRecord(imageId, value.id);
         if (resolved) results.push(resolved);
@@ -342,6 +345,67 @@ class ImageService {
       }
     }
     return results;
+  }
+
+  async sweepRecords(imageId, recordIds, {reason = 'unreachable'} = {}) {
+    const image = await this.getImage(imageId);
+    if (!Array.isArray(recordIds)) {
+      throw new TypeError('sweepRecords recordIds must be an array');
+    }
+    if (typeof reason !== 'string' || reason.length === 0) {
+      throw new TypeError('sweepRecords reason must be a non-empty string');
+    }
+    const uniqueIds = [...new Set(recordIds)];
+    for (const id of uniqueIds) {
+      if (typeof id !== 'string' || id.length === 0) {
+        throw new TypeError('sweepRecords recordIds must contain non-empty strings');
+      }
+      if (image.rootObjectId && id === image.rootObjectId) {
+        throw new TypeError(`cannot sweep image rootObjectId: ${imageId}/${id}`);
+      }
+    }
+    uniqueIds.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+    if (uniqueIds.length === 0) return Object.freeze([]);
+
+    const at = this.now();
+    const swept = await this.backend.transaction(async (candidate) => {
+      const transaction = assertBackendTransaction(candidate);
+      const receipts = [];
+      for (const id of uniqueIds) {
+        const current = await transaction.get(records(imageId), id);
+        if (!current || current.kind === RELOCATED_RECORD_KIND || current.kind === SWEPT_RECORD_KIND) {
+          throw new TypeError(`record not found for sweep: ${imageId}/${id}`);
+        }
+        const tombstone = {
+          kind: SWEPT_RECORD_KIND,
+          id,
+          imageId,
+          previousKind: current.kind,
+          previousVersion: current._version,
+          reason,
+          sweptAt: at,
+        };
+        const saved = await transaction.put(records(imageId), id, tombstone, {
+          expectedVersion: current._version,
+        });
+        await transaction.append(history(imageId), {
+          type: 'record.swept',
+          at,
+          recordId: id,
+          recordKind: current.kind,
+          previousVersion: current._version,
+          sweepVersion: saved._version,
+          reason,
+        });
+        receipts.push(Object.freeze(saved));
+      }
+      return receipts;
+    });
+
+    for (const id of uniqueIds) {
+      this.locator.invalidate?.(objectRef(imageId, id));
+    }
+    return Object.freeze(swept);
   }
 
   async listShapes(imageId) {
