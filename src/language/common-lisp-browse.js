@@ -1,18 +1,28 @@
-import {OBJECT_READ_OPERATION, objectResource} from '../authority/object-resource.js';
+import {
+  OBJECT_READ_OPERATION,
+  OBJECT_WRITE_OPERATION,
+  objectResource,
+} from '../authority/object-resource.js';
 import {objectRef} from '../value/index.js';
 import {
   COMMON_LISP_NAMESPACE_ID,
+  installCommonLispProgram,
+  installCommonLispSystem,
   listCommonLispNamespaceBindings,
+  parseCommonLispDefsystem,
   readCommonLispClassDefinition,
   readCommonLispFunctionDefinition,
   readCommonLispGenericDefinition,
   readCommonLispMacroDefinition,
+  readCommonLispSource,
   readCommonLispStructDefinition,
+  readCommonLispSystemDefinition,
   readCommonLispVariableDefinition,
 } from './common-lisp.js';
 import {
   COMMON_LISP_DEFINITION_KIND,
   COMMON_LISP_DEFINITION_READ_OPERATION,
+  COMMON_LISP_DEFINITION_WRITE_OPERATION,
   assertCommonLispDefinitionKind,
   commonLispDefinitionResource,
 } from './common-lisp-definition-resource.js';
@@ -67,6 +77,11 @@ function assertRequire(require, label) {
 
 const readDemand = (imageId, objectId) => ({
   operation: OBJECT_READ_OPERATION,
+  resource: objectResource(imageId, objectId),
+});
+
+const writeDemand = (imageId, objectId) => ({
+  operation: OBJECT_WRITE_OPERATION,
   resource: objectResource(imageId, objectId),
 });
 
@@ -259,9 +274,255 @@ async function authorizedDescribeCommonLispDefinition({
         value: def.value,
       });
     }
+    case COMMON_LISP_DEFINITION_KIND.SYSTEM: {
+      const def = await readCommonLispSystemDefinition({
+        images,
+        imageId,
+        name: canonicalName,
+        namespaceId,
+      });
+      if (!def) {
+        throw new TypeError(
+          `Common Lisp namespace ${imageId}/${namespaceId} does not define system ${canonicalName}`,
+        );
+      }
+      return Object.freeze({
+        format: COMMON_LISP_DEFINITION_DESCRIPTION_V1,
+        namespace: namespaceRef,
+        kind: COMMON_LISP_DEFINITION_KIND.SYSTEM,
+        name: def.name,
+        description: def.description,
+        version: def.version,
+        serial: def.serial,
+        dependsOn: def.dependsOn,
+        loadOrder: def.loadOrder,
+      });
+    }
     default:
       throw new TypeError(`unsupported Common Lisp definition kind: ${validKind}`);
   }
+}
+
+function validateReplacementForm(forms, validKind, canonicalName) {
+  if (!Array.isArray(forms) || forms.length !== 1 || forms[0]?.kind !== 'list' || forms[0].elements.length < 2) {
+    throw new SyntaxError(
+      `authorizedReplaceCommonLispDefinition requires a single top-level ${validKind} definition form for ${canonicalName}`,
+    );
+  }
+  const form = forms[0];
+  const headSym = form.elements[0];
+  if (headSym?.kind !== 'symbol') {
+    throw new SyntaxError(`invalid Common Lisp definition form head for ${canonicalName}`);
+  }
+  const head = headSym.name;
+  let targetSym = form.elements[1];
+  if (validKind === COMMON_LISP_DEFINITION_KIND.STRUCT && targetSym?.kind === 'list') {
+    targetSym = targetSym.elements[0];
+  }
+  const expectedHeads = {
+    [COMMON_LISP_DEFINITION_KIND.FUNCTION]: ['DEFUN'],
+    [COMMON_LISP_DEFINITION_KIND.MACRO]: ['DEFMACRO'],
+    [COMMON_LISP_DEFINITION_KIND.STRUCT]: ['DEFSTRUCT'],
+    [COMMON_LISP_DEFINITION_KIND.CLASS]: ['DEFCLASS'],
+    [COMMON_LISP_DEFINITION_KIND.GENERIC]: ['DEFGENERIC', 'DEFMETHOD'],
+    [COMMON_LISP_DEFINITION_KIND.VARIABLE]: ['DEFPARAMETER', 'DEFVAR'],
+  }[validKind];
+  if (!expectedHeads || !expectedHeads.includes(head)) {
+    throw new SyntaxError(
+      `Common Lisp ${validKind} replacement for ${canonicalName} must use ${expectedHeads?.join(' or ') ?? validKind}, got ${head}`,
+    );
+  }
+  if (targetSym?.kind !== 'symbol') {
+    throw new SyntaxError(`Common Lisp ${validKind} replacement target must be a symbol`);
+  }
+  const formName = targetSym.name.toUpperCase();
+  const bareFormName = formName.includes('::') ? formName.split('::')[1] : formName;
+  const bareTarget = canonicalName.includes('::') ? canonicalName.split('::')[1] : canonicalName;
+  if (formName !== canonicalName && bareFormName !== bareTarget) {
+    throw new SyntaxError(
+      `Common Lisp ${validKind} replacement form defines ${formName}, expected ${canonicalName}`,
+    );
+  }
+}
+
+async function readExistingDefinitionByKind({images, imageId, namespaceId, kind, name}) {
+  switch (kind) {
+    case COMMON_LISP_DEFINITION_KIND.FUNCTION:
+      return await readCommonLispFunctionDefinition({images, imageId, name, namespaceId});
+    case COMMON_LISP_DEFINITION_KIND.MACRO:
+      return await readCommonLispMacroDefinition({images, imageId, name, namespaceId});
+    case COMMON_LISP_DEFINITION_KIND.STRUCT:
+      return await readCommonLispStructDefinition({images, imageId, name, namespaceId});
+    case COMMON_LISP_DEFINITION_KIND.CLASS:
+      return await readCommonLispClassDefinition({images, imageId, name, namespaceId});
+    case COMMON_LISP_DEFINITION_KIND.GENERIC:
+      return await readCommonLispGenericDefinition({images, imageId, name, namespaceId});
+    case COMMON_LISP_DEFINITION_KIND.VARIABLE:
+      return await readCommonLispVariableDefinition({images, imageId, name, namespaceId});
+    case COMMON_LISP_DEFINITION_KIND.SYSTEM:
+      return await readCommonLispSystemDefinition({images, imageId, name, namespaceId});
+    default:
+      return null;
+  }
+}
+
+async function authorizedInstallCommonLispProgram({
+  images,
+  compilation = null,
+  runtime = null,
+  imageId,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+  source,
+  lane = 'neutral',
+  require,
+} = {}) {
+  requiredText(imageId, 'imageId');
+  requiredText(namespaceId, 'namespaceId');
+  assertRequire(require, 'authorizedInstallCommonLispProgram');
+  const parsedForms = typeof source === 'string'
+    ? readCommonLispSource(requiredText(source, 'authorizedInstallCommonLispProgram source'))
+    : Array.isArray(source) && source.length > 0
+      ? source
+      : null;
+  if (!parsedForms || parsedForms.length === 0) {
+    throw new TypeError('authorizedInstallCommonLispProgram source must contain at least one Common Lisp form');
+  }
+
+  require(writeDemand(imageId, namespaceId));
+
+  const result = await installCommonLispProgram({
+    images: images ?? runtime?.images,
+    compilation: compilation ?? runtime?.compilation ?? null,
+    runtime,
+    imageId,
+    source: parsedForms,
+    lane,
+  });
+
+  return Object.freeze({
+    installed: true,
+    namespace: objectRef(imageId, namespaceId),
+    functions: Object.freeze(Object.keys(result.functions).sort((a, b) => a.localeCompare(b))),
+    variables: Object.freeze(Object.keys(result.variables).sort((a, b) => a.localeCompare(b))),
+    macros: Object.freeze(Object.keys(result.macros).sort((a, b) => a.localeCompare(b))),
+    structs: Object.freeze(Object.keys(result.structs).sort((a, b) => a.localeCompare(b))),
+    classes: Object.freeze(Object.keys(result.classes).sort((a, b) => a.localeCompare(b))),
+    generics: Object.freeze(Object.keys(result.generics).sort((a, b) => a.localeCompare(b))),
+    packages: Object.freeze(Object.keys(result.packages).sort((a, b) => a.localeCompare(b))),
+  });
+}
+
+async function authorizedInstallCommonLispSystem({
+  images,
+  compilation = null,
+  runtime = null,
+  imageId,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+  asdSource,
+  files = {},
+  systems = {},
+  systemName = null,
+  lane = 'neutral',
+  require,
+} = {}) {
+  requiredText(imageId, 'imageId');
+  requiredText(namespaceId, 'namespaceId');
+  requiredText(asdSource, 'authorizedInstallCommonLispSystem asdSource');
+  assertRequire(require, 'authorizedInstallCommonLispSystem');
+
+  const sysDef = parseCommonLispDefsystem(asdSource, {systemName});
+
+  require(writeDemand(imageId, namespaceId));
+  require({
+    operation: COMMON_LISP_DEFINITION_WRITE_OPERATION,
+    resource: commonLispDefinitionResource(imageId, COMMON_LISP_DEFINITION_KIND.SYSTEM, sysDef.name, {namespaceId}),
+  });
+
+  const installed = await installCommonLispSystem({
+    images: images ?? runtime?.images,
+    compilation: compilation ?? runtime?.compilation ?? null,
+    runtime,
+    imageId,
+    asdSource,
+    files,
+    systems,
+    systemName: sysDef.name,
+    lane,
+  });
+
+  return Object.freeze({
+    installed: true,
+    namespace: objectRef(imageId, namespaceId),
+    system: installed.system.name,
+    version: installed.system.version,
+    dependsOn: installed.system.dependsOn,
+    loadOrder: installed.loadOrder,
+  });
+}
+
+async function authorizedReplaceCommonLispDefinition({
+  images,
+  compilation = null,
+  runtime = null,
+  imageId,
+  namespaceId = COMMON_LISP_NAMESPACE_ID,
+  kind,
+  name,
+  source,
+  lane = 'neutral',
+  require,
+} = {}) {
+  requiredText(imageId, 'imageId');
+  requiredText(namespaceId, 'namespaceId');
+  const validKind = assertCommonLispDefinitionKind(
+    kind,
+    'authorizedReplaceCommonLispDefinition kind',
+  );
+  const canonicalName = requiredText(
+    name,
+    'authorizedReplaceCommonLispDefinition name',
+  ).toUpperCase();
+  const sourceText = requiredText(source, 'authorizedReplaceCommonLispDefinition source');
+  assertRequire(require, 'authorizedReplaceCommonLispDefinition');
+
+  const forms = readCommonLispSource(sourceText);
+  validateReplacementForm(forms, validKind, canonicalName);
+
+  require(writeDemand(imageId, namespaceId));
+  require({
+    operation: COMMON_LISP_DEFINITION_WRITE_OPERATION,
+    resource: commonLispDefinitionResource(imageId, validKind, canonicalName, {namespaceId}),
+  });
+
+  const effectiveImages = images ?? runtime?.images;
+  const existing = await readExistingDefinitionByKind({
+    images: effectiveImages,
+    imageId,
+    namespaceId,
+    kind: validKind,
+    name: canonicalName,
+  });
+  if (!existing) {
+    throw new TypeError(
+      `Common Lisp namespace ${imageId}/${namespaceId} does not define ${validKind} ${canonicalName}`,
+    );
+  }
+
+  await installCommonLispProgram({
+    images: effectiveImages,
+    compilation: compilation ?? runtime?.compilation ?? null,
+    runtime,
+    imageId,
+    source: forms,
+    lane,
+  });
+
+  return Object.freeze({
+    replaced: true,
+    namespace: objectRef(imageId, namespaceId),
+    kind: validKind,
+    name: canonicalName,
+  });
 }
 
 export {
@@ -269,4 +530,7 @@ export {
   COMMON_LISP_NAMESPACE_DESCRIPTION_V1,
   authorizedDescribeCommonLispDefinition,
   authorizedDescribeCommonLispNamespace,
+  authorizedInstallCommonLispProgram,
+  authorizedInstallCommonLispSystem,
+  authorizedReplaceCommonLispDefinition,
 };

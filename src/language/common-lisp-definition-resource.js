@@ -11,6 +11,7 @@ import {base64urlEncode, utf8Encode} from '../support/portable-bytes.js';
 // or symbol names (including Lisp-2 function vs variable bindings of the same symbol).
 const COMMON_LISP_DEFINITION_RESOURCE_V0 = 'common-lisp-definition-resource/v0';
 const COMMON_LISP_DEFINITION_READ_OPERATION = 'common-lisp-definition/read';
+const COMMON_LISP_DEFINITION_WRITE_OPERATION = 'common-lisp-definition/write';
 const COMMON_LISP_NAMESPACE_ID = 'common-lisp/namespace/v1';
 const PART_SEPARATOR = '.';
 
@@ -21,6 +22,7 @@ const COMMON_LISP_DEFINITION_KIND = Object.freeze({
   CLASS: 'class',
   GENERIC: 'generic',
   VARIABLE: 'variable',
+  SYSTEM: 'system',
 });
 
 const VALID_DEFINITION_KINDS = new Set(Object.values(COMMON_LISP_DEFINITION_KIND));
@@ -35,7 +37,7 @@ function requiredText(value, label) {
 function assertCommonLispDefinitionKind(kind, label = 'Common Lisp definition kind') {
   if (!VALID_DEFINITION_KINDS.has(kind)) {
     throw new TypeError(
-      `${label} must be one of function, macro, struct, class, generic, variable; got ${String(kind)}`,
+      `${label} must be one of function, macro, struct, class, generic, variable, system; got ${String(kind)}`,
     );
   }
   return kind;
@@ -67,6 +69,7 @@ export {
   COMMON_LISP_DEFINITION_KIND,
   COMMON_LISP_DEFINITION_READ_OPERATION,
   COMMON_LISP_DEFINITION_RESOURCE_V0,
+  COMMON_LISP_DEFINITION_WRITE_OPERATION,
   assertCommonLispDefinitionKind,
   commonLispDefinitionResource,
 };

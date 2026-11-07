@@ -6,14 +6,19 @@ import {
   COMMON_LISP_DEFINITION_DESCRIPTION_V1,
   COMMON_LISP_DEFINITION_KIND,
   COMMON_LISP_DEFINITION_READ_OPERATION,
+  COMMON_LISP_DEFINITION_WRITE_OPERATION,
   COMMON_LISP_NAMESPACE_DESCRIPTION_V1,
   COMMON_LISP_NAMESPACE_ID,
   LagrangeBackend,
   OBJECT_READ_OPERATION,
+  OBJECT_WRITE_OPERATION,
   SMALLTALK_CLASS_DESCRIPTION_V1,
   authorizedDescribeCommonLispDefinition,
   authorizedDescribeCommonLispNamespace,
   authorizedDescribeSmalltalkClass,
+  authorizedInstallCommonLispProgram,
+  authorizedInstallCommonLispSystem,
+  authorizedReplaceCommonLispDefinition,
   commonLispDefinitionResource,
   createRuntime,
   evaluateCommonLispSource,
@@ -21,6 +26,7 @@ import {
   integerValue,
   objectRef,
   objectResource,
+  textValue,
 } from '../src/runtime.js';
 import {createPortableRuntime} from '../src/portable-runtime.js';
 import {collectStaticModuleClosure} from '../src/portable-artifact/module-closure.js';
@@ -60,8 +66,18 @@ const namespaceReadGrant = (imageId, namespaceId = COMMON_LISP_NAMESPACE_ID) => 
   resource: objectResource(imageId, namespaceId),
 });
 
+const namespaceWriteGrant = (imageId, namespaceId = COMMON_LISP_NAMESPACE_ID) => ({
+  operation: OBJECT_WRITE_OPERATION,
+  resource: objectResource(imageId, namespaceId),
+});
+
 const definitionReadGrant = (imageId, kind, name, namespaceId = COMMON_LISP_NAMESPACE_ID) => ({
   operation: COMMON_LISP_DEFINITION_READ_OPERATION,
+  resource: commonLispDefinitionResource(imageId, kind, name, {namespaceId}),
+});
+
+const definitionWriteGrant = (imageId, kind, name, namespaceId = COMMON_LISP_NAMESPACE_ID) => ({
+  operation: COMMON_LISP_DEFINITION_WRITE_OPERATION,
   resource: commonLispDefinitionResource(imageId, kind, name, {namespaceId}),
 });
 
@@ -552,5 +568,189 @@ test('authorizedDescribeCommonLispDefinition describes CLOS classes and generic 
     assert.equal(pkgNsDesc.format, COMMON_LISP_NAMESPACE_DESCRIPTION_V1);
     assert.deepEqual(pkgNsDesc.functions, ['OPEN-ACCT']);
     assertNoStorageLayout(pkgNsDesc, 'package namespace description');
+  });
+});
+
+test('authorizedInstallCommonLispProgram, authorizedInstallCommonLispSystem, and authorizedReplaceCommonLispDefinition enforce write authority before existence and isolate Lisp-2 write grants', async () => {
+  await withCommonLispImage(async (runtime) => {
+    // 1. Denied program install performs zero backend reads (no existence oracle)
+    let backendReads = 0;
+    const origGet = runtime.backend.get.bind(runtime.backend);
+    runtime.backend.get = async (collection, key) => {
+      backendReads += 1;
+      return await origGet(collection, key);
+    };
+    try {
+      await assert.rejects(
+        authorizedInstallCommonLispProgram({
+          runtime,
+          imageId: 'app',
+          source: '(defun unauthorized-fn (x) x)',
+          require: requireFor(runtime, [namespaceReadGrant('app')]),
+        }),
+        {name: 'AuthorityError'},
+      );
+      assert.equal(backendReads, 0, 'denied program install must perform zero backend reads');
+
+      // 2. Denied definition replacement cannot distinguish existing SCORE from missing NO-SUCH-FN
+      const nsWriteOnly = requireFor(runtime, [namespaceWriteGrant('app')]);
+      await assert.rejects(
+        authorizedReplaceCommonLispDefinition({
+          runtime,
+          imageId: 'app',
+          kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+          name: 'score',
+          source: '(defun score (base) base)',
+          require: nsWriteOnly,
+        }),
+        {name: 'AuthorityError'},
+      );
+      await assert.rejects(
+        authorizedReplaceCommonLispDefinition({
+          runtime,
+          imageId: 'app',
+          kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+          name: 'no-such-fn',
+          source: '(defun no-such-fn (base) base)',
+          require: nsWriteOnly,
+        }),
+        {name: 'AuthorityError'},
+      );
+      assert.equal(backendReads, 0, 'denied definition replacement must perform zero backend reads');
+
+      // 3. Lisp-2 write isolation: variable write grant for *RISK-FLOOR* cannot replace function *RISK-FLOOR* (and vice versa)
+      const fnScoreWriteGrant = requireFor(runtime, [
+        namespaceWriteGrant('app'),
+        definitionWriteGrant('app', COMMON_LISP_DEFINITION_KIND.FUNCTION, '*risk-floor*'),
+      ]);
+      await assert.rejects(
+        authorizedReplaceCommonLispDefinition({
+          runtime,
+          imageId: 'app',
+          kind: COMMON_LISP_DEFINITION_KIND.VARIABLE,
+          name: '*risk-floor*',
+          source: '(defparameter *risk-floor* 999)',
+          require: fnScoreWriteGrant,
+        }),
+        {name: 'AuthorityError'},
+      );
+      assert.equal(backendReads, 0, 'Lisp-2 mismatched write grant must perform zero backend reads');
+    } finally {
+      runtime.backend.get = origGet;
+    }
+
+    // 4. Authorized program install succeeds and returns a storage-layout-free receipt
+    const installReceipt = await authorizedInstallCommonLispProgram({
+      runtime,
+      imageId: 'app',
+      source: `
+        (defparameter *bonus-scale* 3)
+        (defun apply-bonus (x) (* x *bonus-scale*))
+      `,
+      require: requireFor(runtime, [namespaceWriteGrant('app')]),
+    });
+    assert.equal(installReceipt.installed, true);
+    assert.deepEqual(installReceipt.functions, ['APPLY-BONUS']);
+    assert.deepEqual(installReceipt.variables, ['*BONUS-SCALE*']);
+    assertNoStorageLayout(installReceipt, 'install receipt');
+
+    // 5. Authorized replacement of an existing function and variable updates live execution
+    const replaceFnReceipt = await authorizedReplaceCommonLispDefinition({
+      runtime,
+      imageId: 'app',
+      kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+      name: 'apply-bonus',
+      source: '(defun apply-bonus (x) (+ (* x *bonus-scale*) 100))',
+      require: requireFor(runtime, [
+        namespaceWriteGrant('app'),
+        definitionWriteGrant('app', COMMON_LISP_DEFINITION_KIND.FUNCTION, 'apply-bonus'),
+      ]),
+    });
+    assert.deepEqual(replaceFnReceipt, {
+      replaced: true,
+      namespace: objectRef('app', COMMON_LISP_NAMESPACE_ID),
+      kind: 'function',
+      name: 'APPLY-BONUS',
+    });
+    assertNoStorageLayout(replaceFnReceipt, 'replace receipt');
+
+    assert.deepEqual(
+      await evaluateCommonLispSource({
+        runtime,
+        imageId: 'app',
+        source: '(apply-bonus 5)',
+      }),
+      integerValue(115n),
+    );
+
+    // Authorized replacement of a missing definition fails cleanly with TypeError
+    await assert.rejects(
+      authorizedReplaceCommonLispDefinition({
+        runtime,
+        imageId: 'app',
+        kind: COMMON_LISP_DEFINITION_KIND.FUNCTION,
+        name: 'missing-target',
+        source: '(defun missing-target (x) x)',
+        require: requireFor(runtime, [
+          namespaceWriteGrant('app'),
+          definitionWriteGrant('app', COMMON_LISP_DEFINITION_KIND.FUNCTION, 'missing-target'),
+        ]),
+      }),
+      /does not define function MISSING-TARGET/,
+    );
+
+    // 6. Authorized system install and authorized system definition browse
+    const sysReceipt = await authorizedInstallCommonLispSystem({
+      runtime,
+      imageId: 'app',
+      asdSource: `
+        (defsystem :mini-ledger
+          :description "Mini ledger system"
+          :version "0.4.0"
+          :serial t
+          :components
+          ((:file "entry")
+           (:file "summary")))
+      `,
+      files: {
+        'entry.lisp': '(defun make-entry (amt) (+ amt 1))',
+        'summary.lisp': '(defun summarize-entry (amt) (format nil "total=~D" (make-entry amt)))',
+      },
+      require: requireFor(runtime, [
+        namespaceWriteGrant('app'),
+        definitionWriteGrant('app', COMMON_LISP_DEFINITION_KIND.SYSTEM, 'mini-ledger'),
+      ]),
+    });
+    assert.equal(sysReceipt.installed, true);
+    assert.equal(sysReceipt.system, 'MINI-LEDGER');
+    assert.equal(sysReceipt.version, '0.4.0');
+    assert.deepEqual(sysReceipt.loadOrder, ['entry', 'summary']);
+    assertNoStorageLayout(sysReceipt, 'system install receipt');
+
+    const sysDesc = await authorizedDescribeCommonLispDefinition({
+      images: runtime.images,
+      imageId: 'app',
+      kind: COMMON_LISP_DEFINITION_KIND.SYSTEM,
+      name: 'mini-ledger',
+      require: requireFor(runtime, [
+        namespaceReadGrant('app'),
+        definitionReadGrant('app', COMMON_LISP_DEFINITION_KIND.SYSTEM, 'mini-ledger'),
+      ]),
+    });
+    assert.equal(sysDesc.format, COMMON_LISP_DEFINITION_DESCRIPTION_V1);
+    assert.equal(sysDesc.kind, 'system');
+    assert.equal(sysDesc.name, 'MINI-LEDGER');
+    assert.equal(sysDesc.version, '0.4.0');
+    assert.deepEqual(sysDesc.loadOrder, ['entry', 'summary']);
+    assertNoStorageLayout(sysDesc, 'system definition description');
+
+    assert.deepEqual(
+      await evaluateCommonLispSource({
+        runtime,
+        imageId: 'app',
+        source: '(summarize-entry 41)',
+      }),
+      textValue('total=42'),
+    );
   });
 });
