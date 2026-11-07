@@ -33,6 +33,8 @@ export {
   reconcileMethods,
   ensureBlock,
   ensureClassFromDeclaration,
+  evolveSmalltalkClassShape,
+  evolvedInstanceShapeId,
   ensureNamedClass,
   ensureSmalltalkShape,
   methodBindings,

@@ -467,7 +467,7 @@ The native-import path depends on the image graph becoming the authoritative app
 - [x] revision-aware reads (`reconstructImageRecordsAtFrontier` and `diffProjectAtFrontiers` in `src/graph/diff.js` and `src/project/diff.js`, proven in `test/image-project-diff.test.js`);
 - [x] indexed graph reachability and derivation lookup (`buildImageGraphIndex`, `computeReachableImageClosure`, `findOutgoingReferences`, `findIncomingReferences`, `findDerivedArtifacts`, `findArtifactSources`, `findArtifactDependents`, and `findArtifactsByLogicalPath` in `src/graph/reachability.js`, proven in `test/graph-reachability-gc.test.js`);
 - [x] garbage-collection rules respecting history and pinned refs (`discoverDefaultImageRoots`, `planImageGarbageCollection`, `collectUnreachableImageRecords`, and `ImageService.sweepRecords` in `src/graph/reachability.js` and `src/image/graph-image-service.js`, proven in `test/graph-reachability-gc.test.js`);
-- [ ] object migration between immutable Shapes when real imported class evolution requires it;
+- [x] object migration between immutable Shapes when real imported class evolution requires it (`src/object/migration.js`, `evolveSmalltalkClassShape` in `src/language/smalltalk-class-builder.js`, and Common Lisp `defstruct` / CLOS `defclass` shape evolution in `src/language/common-lisp.js`, proven in `test/shape-object-migration.test.js`);
 - [ ] measure partitioning/index choices on large application images.
 
 Already established: generic graph bundle export/import (ADR 0074), portable Project release materialization (ADR 0075) and durable managed Project installation/recovery (ADR 0076).
@@ -500,7 +500,7 @@ Project collaboration and imported-application evolution may expose generic prim
 - [x] graph/frontier diffs independent of one Project UI (`diffImageRecords`, `diffImageFrontiers`, and `diffGraphBundles` in `src/graph/diff.js`, proven in `test/image-project-diff.test.js`);
 - [ ] branch/working-frontier primitives useful to headless clients;
 - [x] merge/conflict primitives that stay language/UI neutral (`mergeImageRecords`, `mergeImageFrontiers`, `applyImageMerge`, and `MERGE_CONFLICT_KINDS` in `src/graph/merge.js`, proven in `test/image-project-merge.test.js`);
-- [ ] Shape/class evolution primitives only when a real imported application requires them.
+- [x] Shape/class evolution primitives only when a real imported application requires them (`buildShapeSlotMigrationPlan`, `migrateObjectRecordToShape`, `planImageShapeMigration`, `migrateImageObjectsToShape` in `src/object/migration.js` and `evolveSmalltalkClassShape` in `src/language/smalltalk-class-builder.js`, proven in `test/shape-object-migration.test.js`).
 
 Do not move semantic state into the UI merely because the first pressure came from a UI. Do not add a storage-level Project record kind merely because Project is image-level; ordinary objects/refs remain the default.
 

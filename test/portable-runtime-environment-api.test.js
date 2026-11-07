@@ -199,7 +199,11 @@ test('the bounded public seam does not broaden the portable static closure', () 
   // 147 after the language- and UI-neutral graph/frontier and Project structural diff owners
   // (src/graph/diff.js and src/project/diff.js, bead lagrange-images-oh35), composed only from
   // existing portable graph, project, authority and value owners with no node:* dependency.
-  assert.equal(modules.length, 147, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), the authorized Cuis native import seam, the in-image Common Lisp personality, the three M6.3 residency/locator/remote-resolution owners, the two Common Lisp browsing/definition-resource owners, and the two graph/Project structural diff owners');
+  // 148 after the language-neutral immutable Shape object migration owner (src/object/migration.js,
+  // bead lagrange-images-f0qq), composed only from existing portable object and value owners with
+  // no node:* dependency.
+  assert.equal(modules.length, 148, 'the reviewed owner modules: two Project owners, the wasm-module and wasm-function contract owners, the native browsing seam, the native WriteStream library owner, the method-position resource and token owners, the authorized method-replacement seam, the super-send facility, native Character semantics, the native Set, ReadStream and string equality owners, the four native Point/Array2D/Interval/TextModel value-model owners, the portable execution surface (WASM function lane, Cuis import adapter, managed release install/recovery), the authorized Cuis native import seam, the in-image Common Lisp personality, the three M6.3 residency/locator/remote-resolution owners, the two Common Lisp browsing/definition-resource owners, the two graph/Project structural diff owners, and the immutable Shape object migration owner');
+  assert.ok(paths.includes('src/object/migration.js'));
   assert.ok(paths.includes('src/graph/diff.js'));
   assert.ok(paths.includes('src/project/diff.js'));
   assert.ok(paths.includes('src/image/storage-layout.js'));
