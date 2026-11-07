@@ -24,30 +24,73 @@ const INTERVAL_SHAPE_ID = 'smalltalk/interval-instance-shape/v1';
 
 const INTERVAL_CLASS_METHODS = Object.freeze([
   // Measured Cuis computes the COUNT up front, never accumulating by adding the step.
-  {selector: 'from:to:by:', source: `[ :aStart :aStop :aStep | | interval |
-    interval := self new.
-    interval setStart: aStart stop: aStop count: (aStop - aStart) abs + 1.
-    ^ interval ]`},
+  {
+    selector: 'from:to:by:',
+    source: `[ :aStart :aStop :aStep | | interval c actualStop |
+      c := 0.
+      aStep > 0 ifTrue: [
+        aStop >= aStart ifTrue: [ c := ((aStop - aStart) // aStep) + 1 ] ].
+      aStep < 0 ifTrue: [
+        aStop <= aStart ifTrue: [ c := ((aStart - aStop) // (0 - aStep)) + 1 ] ].
+      actualStop := c > 0
+        ifTrue: [ aStart + ((c - 1) * aStep) ]
+        ifFalse: [ aStart ].
+      interval := self new.
+      interval setStart: aStart stop: actualStop count: c.
+      ^ interval ]`,
+  },
 ]);
 
 const INTERVAL_METHODS = Object.freeze([
   {selector: 'setStart:stop:count:', source: '[ :aStart :aStop :aCount | start := aStart. stop := aStop. count := aCount ]'},
+  {selector: 'step', source: '[ ^ count > 1 ifTrue: [ (stop - start) // (count - 1) ] ifFalse: [ 1 ] ]'},
+  {selector: 'size', source: '[ ^ count ]'},
+  {selector: 'isEmpty', source: '[ ^ count = 0 ]'},
+  {selector: 'first', source: '[ ^ start ]'},
+  {selector: 'last', source: '[ ^ stop ]'},
+  {selector: 'at:', source: '[ :anIndex | ^ start + ((anIndex - 1) * self step) ]'},
   {
     selector: 'do:',
-    source: `[ :aBlock | | i n |
+    source: `[ :aBlock | | i n s |
+      s := self step.
       i := start.
       n := 0.
-      [ n < count ] whileTrue: [ aBlock value: i. i := i + 1. n := n + 1 ].
+      [ n < count ] whileTrue: [ aBlock value: i. i := i + s. n := n + 1 ].
       ^ self ]`,
   },
 ]);
 
-// The measured constructor entry: Number>>to:. A separate composition stage, after Interval is
-// published through the namespace, because the body names the `Interval` global.
+// The measured constructor entry: Number>>to: and Number>>to:by:, plus collection enumeration
+// methods on Interval that name `OrderedCollection`. A separate composition stage, after Interval
+// is published through the namespace, because the bodies name globals.
 const INTEGER_TO_METHOD = Object.freeze({
   selector: 'to:',
   source: '[ :aStop | ^ Interval from: self to: aStop by: 1 ]',
 });
+
+const INTEGER_TO_BY_METHOD = Object.freeze({
+  selector: 'to:by:',
+  source: '[ :aStop :aStep | ^ Interval from: self to: aStop by: aStep ]',
+});
+
+const INTERVAL_COLLECTION_METHODS = Object.freeze([
+  {
+    selector: 'collect:',
+    source: `[ :aBlock | | result |
+      result := OrderedCollection new.
+      self do: [ :each | result add: (aBlock value: each) ].
+      ^ result asArray ]`,
+  },
+  {
+    selector: 'select:',
+    source: `[ :aBlock | | result |
+      result := OrderedCollection new.
+      self do: [ :each |
+        (aBlock value: each) ifTrue: [ result add: each ] ].
+      ^ result asArray ]`,
+  },
+  {selector: 'asArray', source: '[ ^ self collect: [ :each | each ] ]'},
+]);
 
 async function installSmalltalkIntervalProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   const instanceShapeRef = await ensureSmalltalkShape(images, imageId, {
@@ -65,8 +108,12 @@ async function installSmalltalkIntervalProtocol({images, compilation, imageId, l
 async function installSmalltalkIntervalConstructionProtocol({images, compilation, imageId, lane = 'neutral'} = {}) {
   await defineMethodsFromSource({
     images, compilation, imageId, lane, classRef: objectRef(imageId, 'smalltalk/class/Integer'),
-    methods: [INTEGER_TO_METHOD],
+    methods: [INTEGER_TO_METHOD, INTEGER_TO_BY_METHOD],
+  });
+  await defineMethodsFromSource({
+    images, compilation, imageId, lane, classRef: objectRef(imageId, 'smalltalk/class/Interval'),
+    methods: INTERVAL_COLLECTION_METHODS,
   });
 }
 
-export {INTERVAL_SHAPE_ID, INTERVAL_CLASS_METHODS, INTERVAL_METHODS, INTEGER_TO_METHOD, installSmalltalkIntervalProtocol, installSmalltalkIntervalConstructionProtocol};
+export {INTERVAL_SHAPE_ID, INTERVAL_CLASS_METHODS, INTERVAL_METHODS, INTEGER_TO_METHOD, INTEGER_TO_BY_METHOD, installSmalltalkIntervalProtocol, installSmalltalkIntervalConstructionProtocol};

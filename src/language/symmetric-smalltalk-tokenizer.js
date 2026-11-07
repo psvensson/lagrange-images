@@ -145,9 +145,9 @@ function tokenizeSymmetricSmalltalk(source) {
         continue;
       }
       if (next === '[') {
-        throw new SymmetricSmalltalkSyntaxError(
-          '#[ is byte-array literal syntax, which is not the #() literal-Array facility', start,
-        );
+        index += 1; // consume '['
+        push('byteArrayOpen', '[', start);
+        continue;
       }
       if (isIdentifierStart(next)) {
         // Unary or keyword symbol: read identifier chars, then optionally ':' sequences

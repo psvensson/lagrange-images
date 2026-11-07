@@ -1,4 +1,4 @@
-import {booleanValue, integerValue, textValue} from '../value/index.js';
+import {booleanValue, bytesValue, integerValue, textValue} from '../value/index.js';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
 import {LAGRANGE_CODE_V1} from '../code/lagrange-code-v1.js';
 import {parseSymmetricSmalltalkBlock} from './symmetric-smalltalk-parser.js';
@@ -74,6 +74,7 @@ function needsMutableLexicalState(syntax) {
     // supplied through intrinsics later, just as nil's is; that does not make the source stateful.
     case 'symbol':
     case 'character':
+    case 'byteArrayLiteral':
       return false;
     // A non-empty literal Array lowers to the cascade machinery's hidden temporaries, so it needs
     // the mutable-lexical-state (v1) grammar for exactly the same reason a cascade does. The empty
@@ -581,6 +582,11 @@ function compileExpression(syntax, scope, state) {
       return Object.freeze({op: 'literal', value: integerValue(syntax.value)});
     case 'string':
       return Object.freeze({op: 'literal', value: textValue(syntax.value)});
+    case 'byteArrayLiteral':
+      return Object.freeze({
+        op: 'literal',
+        value: bytesValue(Uint8Array.from(syntax.bytes)),
+      });
     case 'character':
       return Object.freeze({
         op: 'send',

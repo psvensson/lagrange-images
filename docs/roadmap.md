@@ -177,6 +177,13 @@ feature must be demanded by that consumer and repaired at its own owner
 - [x] **M3 acceptance behaviour green**: `Json render: <native integer>` from the pinned upstream
   Cuis JSON package executes entirely natively with Cuis absent and matches the recorded real-Cuis
   oracle for 3, 0, -3 and the 30-digit integer, asserted as result kind and value;
+- [x] add `#[...]` `ByteArray` literal syntax (`0..255` integer elements, including radix literals),
+  binary `ByteArray` `ReadStream`/`WriteStream` (`ByteArray class>>new` / `streamContents:`,
+  `readStream`, `writeStream`, `asByteArray`, `asArray`, `do:`, `collect:`), bulk/positionable
+  `ReadStream` methods (`peek`, `position`, `position:`, `reset`, `size`, `contents`, `next:`,
+  `upToEnd`, `upTo:`), and `Interval` positive/negative `by:`-step and collection protocol (`to:by:`,
+  `step`, `size`, `isEmpty`, `first`, `last`, `at:`, `collect:`, `select:`, `asArray`) across both
+  neutral and WASM lanes (`test/smalltalk-bytearray-streams-breadth.test.js`);
 - [ ] add missing native library/kernel semantics only for real imported consumers;
 - [ ] use real OpenSmalltalkVM/Cuis as a semantic oracle where differential proof is useful;
 - [ ] keep FFI or other deliberately non-native facilities behind explicit interfaces rather than heap mirroring.

@@ -204,9 +204,23 @@ const WRITE_STREAM_METHODS = [
               bytes add: (chunkBytes at: index).
               index := index + 1 ] ] ].
         ^ (ByteArray fromArray: bytes asArray) utf8Text ].
+      collection class == ByteArray ifTrue: [
+        bytes := OrderedCollection new.
+        written isNil ifFalse: [
+          written do: [ :entry | | chunkBytes index |
+            entry key ifTrue: [ bytes add: entry value ].
+            entry key ifFalse: [
+              chunkBytes := entry value.
+              index := 1.
+              [ index <= chunkBytes size ] whileTrue: [
+                bytes add: (chunkBytes at: index).
+                index := index + 1 ] ] ] ].
+        ^ ByteArray fromArray: bytes asArray ].
       result := collection species new.
       written isNil ifFalse: [
-        written do: [ :entry | entry value do: [ :each | result add: each ] ] ].
+        written do: [ :entry |
+          entry key ifTrue: [ result add: entry value ].
+          entry key ifFalse: [ entry value do: [ :each | result add: each ] ] ] ].
       ^ result ]`,
     captures: [WRITE_STREAM_SCALAR_CODEC_CAPTURE],
   },
