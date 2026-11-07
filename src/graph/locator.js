@@ -5,6 +5,7 @@ import {isObjectRef} from '../value/scalars.js';
 const WHOLE_IMAGE_RESIDENCY = 'whole-image/v1';
 const PER_OBJECT_RESIDENCY = 'per-object/v1';
 const RELOCATED_RECORD_KIND = 'relocated';
+const SWEPT_RECORD_KIND = 'swept';
 const backendByResidency = new WeakMap();
 const remoteByResidency = new WeakMap();
 
@@ -124,7 +125,7 @@ class ObjectLocator {
     if (cachedObject) return cachedObject;
 
     const localRecord = await this.backend.get(records(ref.imageId), ref.objectId);
-    if (localRecord) {
+    if (localRecord && localRecord.kind !== SWEPT_RECORD_KIND) {
       if (localRecord.kind === RELOCATED_RECORD_KIND) {
         let hopRecord = localRecord;
         let hops = 0;
@@ -133,7 +134,7 @@ class ObjectLocator {
           const peerBackend = this.#peers.get(hopRecord.node);
           if (!peerBackend) break;
           const peerRecord = await peerBackend.get(records(ref.imageId), ref.objectId);
-          if (!peerRecord) break;
+          if (!peerRecord || peerRecord.kind === SWEPT_RECORD_KIND) break;
           if (peerRecord.kind !== RELOCATED_RECORD_KIND) {
             const residency = new ObjectResidency({
               backend: peerBackend,
@@ -166,7 +167,7 @@ class ObjectLocator {
 
     for (const [, peerBackend] of this.#peers.entries()) {
       const peerRecord = await peerBackend.get(records(ref.imageId), ref.objectId);
-      if (peerRecord && peerRecord.kind !== RELOCATED_RECORD_KIND) {
+      if (peerRecord && peerRecord.kind !== RELOCATED_RECORD_KIND && peerRecord.kind !== SWEPT_RECORD_KIND) {
         const peerImage = await peerBackend.get(IMAGE_COLLECTION, ref.imageId);
         if (peerImage) {
           return await this.locateImage(ref.imageId);
@@ -191,6 +192,7 @@ export {
   ObjectLocator,
   PER_OBJECT_RESIDENCY,
   RELOCATED_RECORD_KIND,
+  SWEPT_RECORD_KIND,
   WHOLE_IMAGE_RESIDENCY,
   backendForResidency,
   isRemoteResidency,

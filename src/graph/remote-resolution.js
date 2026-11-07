@@ -4,6 +4,7 @@ import {isObjectRef} from '../value/scalars.js';
 import {
   PER_OBJECT_RESIDENCY,
   RELOCATED_RECORD_KIND,
+  SWEPT_RECORD_KIND,
   backendForResidency,
   isRemoteResidency,
 } from './locator.js';
@@ -70,7 +71,7 @@ class RemoteRecordResolver {
       this.#localRecordReads += 1;
     }
     const record = await backend.get(records(ref.imageId), ref.objectId);
-    if (record?.kind === RELOCATED_RECORD_KIND) return null;
+    if (record?.kind === RELOCATED_RECORD_KIND || record?.kind === SWEPT_RECORD_KIND) return null;
     return record;
   }
 

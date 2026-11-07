@@ -223,6 +223,7 @@ export * from './foreign-runtime/index.js';
 export {
   ObjectLocator,
   PER_OBJECT_RESIDENCY,
+  SWEPT_RECORD_KIND,
   WHOLE_IMAGE_RESIDENCY,
   backendForResidency,
 } from './graph/locator.js';
@@ -246,6 +247,23 @@ export {
   mergeImageRecords,
   rehomeRecordToImage,
 } from './graph/merge.js';
+export {
+  IMAGE_GC_PLAN_V1,
+  IMAGE_GC_RECEIPT_V1,
+  IMAGE_GRAPH_INDEX_V1,
+  IMAGE_REACHABILITY_CLOSURE_V1,
+  buildImageGraphIndex,
+  collectUnreachableImageRecords,
+  computeReachableImageClosure,
+  discoverDefaultImageRoots,
+  findArtifactDependents,
+  findArtifactSources,
+  findArtifactsByLogicalPath,
+  findDerivedArtifacts,
+  findIncomingReferences,
+  findOutgoingReferences,
+  planImageGarbageCollection,
+} from './graph/reachability.js';
 export {ImageService};
 export * from './execution/executor.js';
 export * from './execution/model.js';

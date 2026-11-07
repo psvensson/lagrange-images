@@ -1,4 +1,4 @@
-import {RELOCATED_RECORD_KIND} from './locator.js';
+import {RELOCATED_RECORD_KIND, SWEPT_RECORD_KIND} from './locator.js';
 import {normalizeRecordForDiff, reconstructImageRecordsAtFrontier} from './diff.js';
 import {isObjectRef, objectRef} from '../value/index.js';
 
@@ -85,7 +85,7 @@ function indexRecordsById(records, label, fromImageId, targetImageId) {
   }
   const map = new Map();
   for (const raw of records) {
-    if (raw?.kind === RELOCATED_RECORD_KIND) continue;
+    if (raw?.kind === RELOCATED_RECORD_KIND || raw?.kind === SWEPT_RECORD_KIND) continue;
     const normalized = rehomeRecordToImage(raw, fromImageId, targetImageId);
     if (map.has(normalized.id)) {
       throw new TypeError(`duplicate record id in ${label}: ${normalized.id}`);

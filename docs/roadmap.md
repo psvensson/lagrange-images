@@ -465,8 +465,8 @@ The native-import path depends on the image graph becoming the authoritative app
 - [ ] multi-node failure/recovery durability tests;
 - [ ] logical snapshot/revision frontiers beyond the first `GraphImageService.frontier()` seam;
 - [x] revision-aware reads (`reconstructImageRecordsAtFrontier` and `diffProjectAtFrontiers` in `src/graph/diff.js` and `src/project/diff.js`, proven in `test/image-project-diff.test.js`);
-- [ ] indexed graph reachability and derivation lookup;
-- [ ] garbage-collection rules respecting history and pinned refs;
+- [x] indexed graph reachability and derivation lookup (`buildImageGraphIndex`, `computeReachableImageClosure`, `findOutgoingReferences`, `findIncomingReferences`, `findDerivedArtifacts`, `findArtifactSources`, `findArtifactDependents`, and `findArtifactsByLogicalPath` in `src/graph/reachability.js`, proven in `test/graph-reachability-gc.test.js`);
+- [x] garbage-collection rules respecting history and pinned refs (`discoverDefaultImageRoots`, `planImageGarbageCollection`, `collectUnreachableImageRecords`, and `ImageService.sweepRecords` in `src/graph/reachability.js` and `src/image/graph-image-service.js`, proven in `test/graph-reachability-gc.test.js`);
 - [ ] object migration between immutable Shapes when real imported class evolution requires it;
 - [ ] measure partitioning/index choices on large application images.
 

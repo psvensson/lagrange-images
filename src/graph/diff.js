@@ -1,5 +1,5 @@
 import {assertGraphBundleV1, contentIdentityForBundle} from './bundle.js';
-import {RELOCATED_RECORD_KIND} from './locator.js';
+import {RELOCATED_RECORD_KIND, SWEPT_RECORD_KIND} from './locator.js';
 
 const IMAGE_RECORD_DIFF_V1 = 'lagrange-image-record-diff/v1';
 const GRAPH_BUNDLE_DIFF_V1 = 'lagrange-graph-bundle-diff/v1';
@@ -94,7 +94,7 @@ function diffImageRecords({
 
   const fromMap = new Map();
   for (const raw of fromRecords) {
-    if (raw?.kind === RELOCATED_RECORD_KIND) continue;
+    if (raw?.kind === RELOCATED_RECORD_KIND || raw?.kind === SWEPT_RECORD_KIND) continue;
     const normalized = normalizeRecordForDiff(raw);
     if (fromMap.has(normalized.id)) {
       throw new TypeError(`duplicate record id in fromRecords: ${normalized.id}`);
@@ -104,7 +104,7 @@ function diffImageRecords({
 
   const toMap = new Map();
   for (const raw of toRecords) {
-    if (raw?.kind === RELOCATED_RECORD_KIND) continue;
+    if (raw?.kind === RELOCATED_RECORD_KIND || raw?.kind === SWEPT_RECORD_KIND) continue;
     const normalized = normalizeRecordForDiff(raw);
     if (toMap.has(normalized.id)) {
       throw new TypeError(`duplicate record id in toRecords: ${normalized.id}`);
@@ -209,6 +209,9 @@ function replayHistoryEventsToFrontier(events, frontier) {
         break;
       case 'object.relocated':
         if (event.objectId) byId.delete(event.objectId);
+        break;
+      case 'record.swept':
+        if (event.recordId) byId.delete(event.recordId);
         break;
       default:
         break;
