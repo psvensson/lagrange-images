@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   COMMON_LISP_ID,
+  COMMON_LISP_READER_MACRO_V0,
+  COMMON_LISP_SETF_V0,
   CONS_SHAPE_ID,
   LAGRANGE_CODE_V2,
   SYMMETRIC_SMALLTALK_ID,
@@ -1351,6 +1353,320 @@ for (const lane of ['neutral', 'wasm']) {
             lane,
           }),
         /missing source file for component missing/i,
+      );
+    });
+  });
+
+  test(`[${lane}] Common Lisp Phase 5: custom reader macros, generalized setf expanders (defun setf / defsetf), and multiple values`, async () => {
+    await withRuntime(async (runtime) => {
+      const evalCL = (source) =>
+        evaluateCommonLispSource({
+          runtime,
+          imageId: 'app',
+          source,
+          lane,
+        });
+      const toArray = (value) =>
+        commonLispListToArray({
+          images: runtime.images,
+          imageId: 'app',
+          value,
+        });
+
+      // 1. Multiple values: values, values-list, multiple-value-bind, multiple-value-list,
+      //    multiple-value-call, nth-value, multiple-value-prog1, and gethash secondary values.
+      const mvResult = await evalCL(`
+        (defun divmod (n d)
+          (values (floor n d) (mod n d)))
+
+        (defun single-after-mv (n d)
+          (let ((q (divmod n d)))
+            (+ q 100)))
+
+        (let ((ht (make-hash-table)))
+          (setf (gethash :present ht) 42)
+          (setf (gethash :nil-val ht) nil)
+          (list
+            ;; 0 values in ordinary position yields NIL; in multiple-value-list yields ()
+            (null (values))
+            (null (multiple-value-list (values)))
+            ;; 3 values in ordinary position yields primary; multiple-value-bind binds extra to nil
+            (+ 5 (values 10 20 30))
+            (multiple-value-bind (a b c d) (values 10 20 30)
+              (list a b c (null d)))
+            ;; Cross-function multiple values and non-leaking single-value return
+            (multiple-value-bind (q r) (divmod 17 5)
+              (list q r))
+            (multiple-value-list (single-after-mv 17 5))
+            ;; nth-value and multiple-value-prog1
+            (nth-value 0 (divmod 23 5))
+            (nth-value 1 (divmod 23 5))
+            (nth-value 2 (divmod 23 5))
+            (let ((side 0))
+              (multiple-value-bind (q r)
+                  (multiple-value-prog1 (divmod 29 6)
+                    (setq side 99))
+                (list q r side)))
+            ;; values-list and multiple-value-call
+            (multiple-value-call #'+ (values 1 2) (values) (values-list '(10 20)) 100)
+            (multiple-value-call #'list (divmod 14 4) (values :done))
+            ;; gethash secondary value (present-p)
+            (multiple-value-list (gethash :present ht))
+            (multiple-value-list (gethash :nil-val ht))
+            (multiple-value-list (gethash :missing ht :fallback))))
+      `);
+      const mvItems = await toArray(mvResult);
+      assert.equal(mvItems.length, 15);
+      assert.deepEqual(mvItems[0], objectRef('app', symbolObjectId('T')));
+      assert.deepEqual(mvItems[1], objectRef('app', symbolObjectId('T')));
+      assert.deepEqual(mvItems[2], integerValue(15n));
+      assert.deepEqual(await toArray(mvItems[3]), [
+        integerValue(10n),
+        integerValue(20n),
+        integerValue(30n),
+        objectRef('app', symbolObjectId('T')),
+      ]);
+      assert.deepEqual(await toArray(mvItems[4]), [integerValue(3n), integerValue(2n)]);
+      assert.deepEqual(await toArray(mvItems[5]), [integerValue(103n)]);
+      assert.deepEqual(mvItems[6], integerValue(4n));
+      assert.deepEqual(mvItems[7], integerValue(3n));
+      assert.deepEqual(mvItems[8], objectRef('app', 'smalltalk/nil'));
+      assert.deepEqual(await toArray(mvItems[9]), [
+        integerValue(4n),
+        integerValue(5n),
+        integerValue(99n),
+      ]);
+      assert.deepEqual(mvItems[10], integerValue(133n));
+      assert.deepEqual(await toArray(mvItems[11]), [
+        integerValue(3n),
+        integerValue(2n),
+        objectRef('app', symbolObjectId(':DONE')),
+      ]);
+      assert.deepEqual(await toArray(mvItems[12]), [
+        integerValue(42n),
+        objectRef('app', symbolObjectId('T')),
+      ]);
+      assert.deepEqual(await toArray(mvItems[13]), [
+        objectRef('app', 'smalltalk/nil'),
+        objectRef('app', symbolObjectId('T')),
+      ]);
+      assert.deepEqual(await toArray(mvItems[14]), [
+        objectRef('app', symbolObjectId(':FALLBACK')),
+        objectRef('app', 'smalltalk/nil'),
+      ]);
+
+      // 2. Generalized-reference setf expanders: (defun (setf ...)), #'(setf ...),
+      //    local flet/labels (setf ...), and defsetf (short and long forms).
+      await evalCL(`
+        (defun make-box (v) (vector v 0))
+        (defun box-val (b) (aref b 0))
+        (defun box-writes (b) (aref b 1))
+        (defun (setf box-val) (new-val b)
+          (setf (aref b 1) (+ (aref b 1) 1))
+          (setf (aref b 0) new-val))
+
+        (defun scaled-slot (vec idx scale)
+          (* (aref vec idx) scale))
+        (defun (setf scaled-slot) (new-val vec idx scale)
+          (setf (aref vec idx) (floor new-val scale))
+          new-val)
+
+        (defun cell-first (c) (car c))
+        (defun set-cell-first (c v) (rplaca c v) v)
+        (defsetf cell-first set-cell-first)
+
+        (defun offset-aref (vec idx &optional (delta 0))
+          (aref vec (+ idx delta)))
+        (defsetf offset-aref (vec idx &optional (delta 0)) (store)
+          \`(setf (aref ,vec (+ ,idx ,delta)) ,store))
+      `);
+
+      // Verify persisted setf expanders work in subsequent evaluateCommonLispSource calls
+      const setfResult = await evalCL(`
+        (let* ((b (make-box 10))
+               (eval-count 0)
+               (get-box (lambda ()
+                          (setq eval-count (+ eval-count 1))
+                          b))
+               (r1 (setf (box-val (funcall get-box)) 25))
+               (r2 (incf (box-val (funcall get-box)) 5))
+               (setter #'(setf box-val))
+               (r3 (funcall setter 99 b))
+               ;; scaled-slot with multiple subforms evaluated left-to-right once
+               (order nil)
+               (v (vector 2 4 6))
+               (r4 (incf (scaled-slot (progn (push :vec order) v)
+                                      (progn (push :idx order) 1)
+                                      (progn (push :scale order) 10))
+                         30))
+               ;; short-form defsetf with push/pop/incf
+               (cell (cons '(10 20) :tail))
+               (cell-evals 0)
+               (_p (push 5 (cell-first (progn (incf cell-evals) cell))))
+               (popped (pop (cell-first (progn (incf cell-evals) cell))))
+               ;; long-form defsetf with optional arg and decf
+               (arr (vector 100 200 300))
+               (arr-evals 0)
+               (r5 (setf (offset-aref (progn (incf arr-evals) arr) 0 2) 350))
+               (r6 (decf (offset-aref (progn (incf arr-evals) arr) 1 1) 50))
+               ;; local flet (setf local-place)
+               (local-res
+                 (let ((pair (cons 7 8)))
+                   (flet ((local-place (p) (cdr p))
+                          ((setf local-place) (nv p) (rplacd p (* nv 2)) nv))
+                     (setf (local-place pair) 15)
+                     (list (local-place pair)
+                           (funcall #'(setf local-place) 20 pair)
+                           (cdr pair))))))
+          (list r1 r2 r3 (box-val b) (box-writes b) eval-count
+                r4 (aref v 1) (reverse order)
+                popped (car cell) cell-evals
+                r5 r6 (aref arr 2) arr-evals
+                local-res))
+      `);
+      const setfItems = await toArray(setfResult);
+      assert.deepEqual(setfItems[0], integerValue(25n));
+      assert.deepEqual(setfItems[1], integerValue(30n));
+      assert.deepEqual(setfItems[2], integerValue(99n));
+      assert.deepEqual(setfItems[3], integerValue(99n));
+      assert.deepEqual(setfItems[4], integerValue(3n));
+      assert.deepEqual(setfItems[5], integerValue(2n));
+      assert.deepEqual(setfItems[6], integerValue(70n));
+      assert.deepEqual(setfItems[7], integerValue(7n));
+      assert.deepEqual(await toArray(setfItems[8]), [
+        objectRef('app', symbolObjectId(':VEC')),
+        objectRef('app', symbolObjectId(':IDX')),
+        objectRef('app', symbolObjectId(':SCALE')),
+      ]);
+      assert.deepEqual(setfItems[9], integerValue(5n));
+      assert.deepEqual(await toArray(setfItems[10]), [integerValue(10n), integerValue(20n)]);
+      assert.deepEqual(setfItems[11], integerValue(2n));
+      assert.deepEqual(setfItems[12], integerValue(350n));
+      assert.deepEqual(setfItems[13], integerValue(300n));
+      assert.deepEqual(setfItems[14], integerValue(300n));
+      assert.deepEqual(setfItems[15], integerValue(2n));
+      assert.deepEqual(await toArray(setfItems[16]), [
+        integerValue(30n),
+        integerValue(20n),
+        integerValue(40n),
+      ]);
+
+      // 3. Custom reader macros: set-macro-character, get-macro-character,
+      //    set-dispatch-macro-character, get-dispatch-macro-character,
+      //    read-delimited-list, and stream reader primitives (read-char/peek-char/unread-char/read).
+      const sameUnitReaderResult = await evalCL(`
+        (defun read-colon-pair (stream ch)
+          (declare (ignore ch))
+          (let ((k (read stream t nil t)))
+            (let ((sep (peek-char t stream t nil t)))
+              (when (char= sep #\\:)
+                (read-char stream t nil t)))
+            (let ((first-v-char (read-char stream t nil t)))
+              (unread-char first-v-char stream))
+            (let ((v (read stream t nil t)))
+              (let ((close (peek-char t stream t nil t)))
+                (when (char= close #\\})
+                  (read-char stream t nil t)))
+              (list 'cons k v))))
+
+        ;; Terminating ']' and '}' macro characters using read-delimited-list
+        (set-macro-character #\\] (get-macro-character #\\)))
+        (set-macro-character #\\} (get-macro-character #\\)))
+        (set-macro-character #\\[
+          (lambda (stream ch)
+            (declare (ignore ch))
+            (cons 'vector (read-delimited-list #\\] stream t))))
+
+        ;; Non-terminating '!' macro character at token start vs inside symbol
+        (set-macro-character #\\!
+          (lambda (stream ch)
+            (declare (ignore ch))
+            (list 'not (read stream t nil t)))
+          t)
+
+        ;; Brace pair reader macro using top-level helper function
+        (set-macro-character #\\{ #'read-colon-pair)
+
+        ;; Dispatch macro '#?' with optional numeric infix argument
+        (set-dispatch-macro-character #\\# #\\?
+          (lambda (stream subchar arg)
+            (declare (ignore subchar))
+            (let ((form (read stream t nil t))
+                  (factor (if arg arg 2)))
+              (list '* factor form))))
+
+        ;; Dispatch macro '#;' S-expression comment returning (values)
+        (set-dispatch-macro-character #\\# #\\;
+          (lambda (stream subchar arg)
+            (declare (ignore subchar arg))
+            (read stream t nil t)
+            (values)))
+
+        (let ((v [10 #;(ignored 999) 20 #?15 #4?5])
+              (p {:alpha : #?21})
+              (b1 !nil)
+              (foo!bar 77))
+          (list (length v)
+                (aref v 0)
+                (aref v 1)
+                (aref v 2)
+                (aref v 3)
+                (car p)
+                (cdr p)
+                b1
+                foo!bar))
+      `);
+      assert.deepEqual(await toArray(sameUnitReaderResult), [
+        integerValue(4n),
+        integerValue(10n),
+        integerValue(20n),
+        integerValue(30n),
+        integerValue(20n),
+        objectRef('app', symbolObjectId(':ALPHA')),
+        integerValue(42n),
+        objectRef('app', symbolObjectId('T')),
+        integerValue(77n),
+      ]);
+
+      // Verify reader macros and get-macro-character / get-dispatch-macro-character
+      // persist across subsequent evaluateCommonLispSource calls in the image
+      const persistedReaderResult = await evalCL(`
+        (multiple-value-bind (fn1 non-term-1) (get-macro-character #\\[)
+          (multiple-value-bind (fn2 non-term-2) (get-macro-character #\\!)
+            (let ((dfn (get-dispatch-macro-character #\\# #\\?))
+                  (v [#3?7 [1 2]])
+                  (pair {:key : 123}))
+              (list (not (null fn1))
+                    (null non-term-1)
+                    (not (null fn2))
+                    non-term-2
+                    (not (null dfn))
+                    (aref v 0)
+                    (length (aref v 1))
+                    (car pair)
+                    (cdr pair)))))
+      `);
+      assert.deepEqual(await toArray(persistedReaderResult), [
+        objectRef('app', symbolObjectId('T')),
+        objectRef('app', symbolObjectId('T')),
+        objectRef('app', symbolObjectId('T')),
+        objectRef('app', symbolObjectId('T')),
+        objectRef('app', symbolObjectId('T')),
+        integerValue(21n),
+        integerValue(2n),
+        objectRef('app', symbolObjectId(':KEY')),
+        integerValue(123n),
+      ]);
+
+      // Verify CodeArtifact representations for setf expanders and reader macros exist in the image
+      const artifacts = await runtime.images.listCodeArtifacts('app');
+      assert.ok(
+        artifacts.some((a) => a.languageId === COMMON_LISP_ID && a.representation === COMMON_LISP_SETF_V0),
+        'Expected common-lisp/setf-v0 CodeArtifact in image',
+      );
+      assert.ok(
+        artifacts.some((a) => a.languageId === COMMON_LISP_ID && a.representation === COMMON_LISP_READER_MACRO_V0),
+        'Expected common-lisp/reader-macro-v0 CodeArtifact in image',
       );
     });
   });
