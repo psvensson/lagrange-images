@@ -56,6 +56,7 @@ import {installSmalltalkIndexedProtocol} from './smalltalk-indexed.js';
 import {
   defineMethodsFromSource,
   installSmalltalkInstanceVariableProtocol,
+  reconcileMethodsFromSource,
 } from './smalltalk-instance-variables.js';
 import {installSmalltalkIntegerProtocol} from './smalltalk-integer.js';
 import {
@@ -9877,12 +9878,62 @@ async function installCommonLispProgram({
       const superclassRef = defstruct.parentClassName
         ? objectRef(imageId, `smalltalk/class/${defstruct.parentClassName}`)
         : kernel.objectClass;
-      const {classRef} = await ensureClassFromDeclaration({
+      const structSlotDefaults = {};
+      for (const s of defstruct.localSlots) {
+        const df = s.defaultForm ?? NIL_NODE;
+        if (isNilSymbol(df)) {
+          structSlotDefaults[s.varName] = kernel.nil;
+        } else if (isTSymbol(df)) {
+          structSlotDefaults[s.varName] = await ensureInternedSymbol(effectiveImages, imageId, 'T');
+        } else if (df.kind === 'integer') {
+          structSlotDefaults[s.varName] = integerValue(BigInt(df.value));
+        } else if (df.kind === 'string') {
+          structSlotDefaults[s.varName] = textValue(df.value);
+        } else if (df.kind === 'symbol' && df.keyword) {
+          structSlotDefaults[s.varName] = await ensureInternedSymbol(
+            effectiveImages,
+            imageId,
+            df.spelling || df.name,
+          );
+        } else if (
+          df.kind === 'list'
+          && df.elements.length === 2
+          && df.elements[0]?.kind === 'symbol'
+          && df.elements[0].name === 'QUOTE'
+          && df.elements[1]?.kind === 'symbol'
+        ) {
+          structSlotDefaults[s.varName] = await ensureInternedSymbol(
+            effectiveImages,
+            imageId,
+            df.elements[1].spelling || df.elements[1].name,
+          );
+        } else if (runtime?.invocations && runtime?.executor) {
+          const initBlock = await installCommonLispBlock({
+            images: effectiveImages,
+            compilation: effectiveCompilation,
+            imageId,
+            source: [df],
+            lane,
+            compileContext,
+          });
+          const activation = await runtime.invocations.invokeBlock(
+            objectRef(imageId, initBlock.block.id),
+            [],
+          );
+          structSlotDefaults[s.varName] = await runtime.executor.execute(activation);
+        } else {
+          structSlotDefaults[s.varName] = kernel.nil;
+        }
+      }
+      const {classRef, migrationReceipt: structMigrationReceipt = null} = await ensureClassFromDeclaration({
         images: effectiveImages,
         imageId,
         name: defstruct.className,
         superclassRef,
         instanceVariables: defstruct.localSlots.map((s) => s.varName),
+        allowShapeEvolution: true,
+        defaultSlotValues: structSlotDefaults,
+        defaultSlotValue: kernel.nil,
       });
       await publishSmalltalkClassGlobals({
         images: effectiveImages,
@@ -9906,31 +9957,28 @@ async function installCommonLispProgram({
         selector: 'clTypeName',
         source: `[ ^ '${defstruct.name}' ]`,
       });
-      await defineMethodsFromSource({
+      await reconcileMethodsFromSource({
         images: effectiveImages,
         compilation: effectiveCompilation,
         imageId,
         lane,
         classRef,
-        allowRedefinition: true,
         methods: slotMethods,
       });
-      await defineMethodsFromSource({
+      await reconcileMethodsFromSource({
         images: effectiveImages,
         compilation: effectiveCompilation,
         imageId,
         lane,
         classRef: objectRef(imageId, `smalltalk/metaclass/${defstruct.className}`),
-        allowRedefinition: true,
         methods: [{selector: 'clClassName', source: `[ ^ '${defstruct.name}' ]`}],
       });
-      await defineMethodsFromSource({
+      await reconcileMethodsFromSource({
         images: effectiveImages,
         compilation: effectiveCompilation,
         imageId,
         lane,
         classRef: kernel.objectClass,
-        allowRedefinition: true,
         methods: [
           {selector: `isClStruct_${defstruct.name}`, source: '[ ^ nil ]'},
           {selector: `isClClass_${defstruct.name}`, source: '[ ^ nil ]'},
@@ -9972,7 +10020,7 @@ async function installCommonLispProgram({
           struct: defstruct,
         };
       }
-      structs[defstruct.name] = Object.freeze({...defstruct, classRef});
+      structs[defstruct.name] = Object.freeze({...defstruct, classRef, migrationReceipt: structMigrationReceipt});
       expandedTopForms.push(...buildDefstructProgramForms(defstruct));
       continue;
     }
@@ -9982,12 +10030,62 @@ async function installCommonLispProgram({
       const superclassRef = defclass.parentClassName
         ? objectRef(imageId, `smalltalk/class/${defclass.parentClassName}`)
         : kernel.objectClass;
-      const {classRef} = await ensureClassFromDeclaration({
+      const classSlotDefaults = {};
+      for (const s of defclass.backingLocalSlots) {
+        const df = s.initform ?? NIL_NODE;
+        if (isNilSymbol(df)) {
+          classSlotDefaults[s.varName] = kernel.nil;
+        } else if (isTSymbol(df)) {
+          classSlotDefaults[s.varName] = await ensureInternedSymbol(effectiveImages, imageId, 'T');
+        } else if (df.kind === 'integer') {
+          classSlotDefaults[s.varName] = integerValue(BigInt(df.value));
+        } else if (df.kind === 'string') {
+          classSlotDefaults[s.varName] = textValue(df.value);
+        } else if (df.kind === 'symbol' && df.keyword) {
+          classSlotDefaults[s.varName] = await ensureInternedSymbol(
+            effectiveImages,
+            imageId,
+            df.spelling || df.name,
+          );
+        } else if (
+          df.kind === 'list'
+          && df.elements.length === 2
+          && df.elements[0]?.kind === 'symbol'
+          && df.elements[0].name === 'QUOTE'
+          && df.elements[1]?.kind === 'symbol'
+        ) {
+          classSlotDefaults[s.varName] = await ensureInternedSymbol(
+            effectiveImages,
+            imageId,
+            df.elements[1].spelling || df.elements[1].name,
+          );
+        } else if (runtime?.invocations && runtime?.executor) {
+          const initBlock = await installCommonLispBlock({
+            images: effectiveImages,
+            compilation: effectiveCompilation,
+            imageId,
+            source: [df],
+            lane,
+            compileContext,
+          });
+          const activation = await runtime.invocations.invokeBlock(
+            objectRef(imageId, initBlock.block.id),
+            [],
+          );
+          classSlotDefaults[s.varName] = await runtime.executor.execute(activation);
+        } else {
+          classSlotDefaults[s.varName] = kernel.nil;
+        }
+      }
+      const {classRef, migrationReceipt: classMigrationReceipt = null} = await ensureClassFromDeclaration({
         images: effectiveImages,
         imageId,
         name: defclass.className,
         superclassRef,
         instanceVariables: defclass.backingLocalSlots.map((s) => s.varName),
+        allowShapeEvolution: true,
+        defaultSlotValues: classSlotDefaults,
+        defaultSlotValue: kernel.nil,
       });
       await publishSmalltalkClassGlobals({
         images: effectiveImages,
@@ -10021,31 +10119,28 @@ async function installCommonLispProgram({
         selector: 'clTypeName',
         source: `[ ^ '${defclass.name}' ]`,
       });
-      await defineMethodsFromSource({
+      await reconcileMethodsFromSource({
         images: effectiveImages,
         compilation: effectiveCompilation,
         imageId,
         lane,
         classRef,
-        allowRedefinition: true,
         methods: classMethods,
       });
-      await defineMethodsFromSource({
+      await reconcileMethodsFromSource({
         images: effectiveImages,
         compilation: effectiveCompilation,
         imageId,
         lane,
         classRef: objectRef(imageId, `smalltalk/metaclass/${defclass.className}`),
-        allowRedefinition: true,
         methods: [{selector: 'clClassName', source: `[ ^ '${defclass.name}' ]`}],
       });
-      await defineMethodsFromSource({
+      await reconcileMethodsFromSource({
         images: effectiveImages,
         compilation: effectiveCompilation,
         imageId,
         lane,
         classRef: kernel.objectClass,
-        allowRedefinition: true,
         methods: [{selector: `isClClass_${defclass.name}`, source: '[ ^ nil ]'}],
       });
 
@@ -10078,7 +10173,7 @@ async function installCommonLispProgram({
       }
       compileContext.classes[defclass.name] = defclass;
       compileContext.globals[defclass.className] = `smalltalk/global-binding/${defclass.className}`;
-      classes[defclass.name] = Object.freeze({...defclass, classRef});
+      classes[defclass.name] = Object.freeze({...defclass, classRef, migrationReceipt: classMigrationReceipt});
       classesModified = true;
       expandedTopForms.push(...buildDefclassProgramForms(defclass));
       continue;

@@ -2,6 +2,7 @@ import {base64urlEncode, utf8Encode} from '../support/portable-bytes.js';
 import {LAGRANGE_CODE_V0} from '../code/lagrange-code-v0.js';
 import {NEUTRAL_EXPRESSION_V0} from '../execution/neutral-expression-v0.js';
 import {SHAPE_INDEXED, shapeIndexedKind} from '../object/model.js';
+import {migrateImageObjectsToShape} from '../object/migration.js';
 import {
   assembleWasmFunctionArtifact,
   describeWasmFunctionArtifact,
@@ -1228,6 +1229,8 @@ async function ensureSmalltalkShape(images, imageId, desired) {
 const declaredInstanceShapeId = (classObjectId) => `${classObjectId}/instance-shape`;
 const declaredInstanceSlotId = (classObjectId, name) =>
   `${classObjectId}/instance-slot/${base64urlEncode(utf8Encode(name))}`;
+const evolvedInstanceShapeId = (classObjectId, slots, indexed = SHAPE_INDEXED.NONE) =>
+  `${classObjectId}/instance-shape/v/${base64urlEncode(utf8Encode(canonicalJson({slots, indexed})))}`;
 
 function normalizeLocalInstanceVariables(instanceVariables) {
   if (!Array.isArray(instanceVariables)) throw new TypeError('instanceVariables must be an array of names');
@@ -1237,6 +1240,76 @@ function normalizeLocalInstanceVariables(instanceVariables) {
     if (seen.has(name)) throw new TypeError(`duplicate local instance variable: ${name}`);
     seen.add(name);
     return name;
+  });
+}
+
+async function resolveDeclarationInstanceShapeRef({
+  images,
+  imageId,
+  classObjectId,
+  inherited,
+  localNames,
+  oldShape = null,
+  slotMapping = {},
+  preserveRenamedSlotIds = false,
+  allowShapeEvolution = false,
+}) {
+  if (localNames.length === 0) {
+    return inherited
+      ? objectRef(inherited.imageId, inherited.id)
+      : objectRef(imageId, EMPTY_SHAPE_ID);
+  }
+
+  const localSlotObjects = localNames.map((localName) => {
+    if (preserveRenamedSlotIds && oldShape && Object.hasOwn(slotMapping, localName)) {
+      const mappedKey = slotMapping[localName];
+      const oldSlot = oldShape.slots.find((s) => s.name === mappedKey || s.id === mappedKey);
+      if (oldSlot) {
+        return {id: oldSlot.id, name: localName};
+      }
+    }
+    if (oldShape) {
+      const existingLocal = oldShape.slots.find(
+        (s) => s.name === localName && s.id.startsWith(`${classObjectId}/instance-slot/`),
+      );
+      if (existingLocal) {
+        return {id: existingLocal.id, name: localName};
+      }
+    }
+    return {
+      id: declaredInstanceSlotId(classObjectId, localName),
+      name: localName,
+    };
+  });
+
+  const slots = [
+    ...(inherited?.slots ?? []),
+    ...localSlotObjects,
+  ];
+  const indexedKind =
+    (oldShape && shapeIndexedKind(oldShape) === SHAPE_INDEXED.VALUES)
+    || (inherited && shapeIndexedKind(inherited) === SHAPE_INDEXED.VALUES)
+      ? SHAPE_INDEXED.VALUES
+      : SHAPE_INDEXED.NONE;
+  const indexedProp = indexedKind === SHAPE_INDEXED.VALUES ? {indexed: SHAPE_INDEXED.VALUES} : {};
+
+  const baseId = declaredInstanceShapeId(classObjectId);
+  let targetShapeId = baseId;
+  if (allowShapeEvolution) {
+    const existingBase = await images.getShape(imageId, baseId);
+    if (existingBase) {
+      const sameSlots = canonicalJson(existingBase.slots) === canonicalJson(slots);
+      const sameIndexed = shapeIndexedKind(existingBase) === indexedKind;
+      if (!sameSlots || !sameIndexed) {
+        targetShapeId = evolvedInstanceShapeId(classObjectId, slots, indexedKind);
+      }
+    }
+  }
+
+  return await ensureSmalltalkShape(images, imageId, {
+    id: targetShapeId,
+    slots,
+    ...indexedProp,
   });
 }
 
@@ -1252,6 +1325,12 @@ async function ensureClassFromDeclaration({
   superclassRef = null,
   instanceVariables = [],
   classVariables = [],
+  allowShapeEvolution = false,
+  slotMapping = {},
+  defaultSlotValues = {},
+  defaultSlotValue = null,
+  preserveRenamedSlotIds = false,
+  cascadeSubclasses = true,
 } = {}) {
   requiredText(name, 'class name');
   requiredText(imageId, 'image id');
@@ -1265,6 +1344,26 @@ async function ensureClassFromDeclaration({
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const superclass = superclassRef ?? kernel.objectClass;
+  const classObjectId = `smalltalk/class/${name}`;
+
+  if (allowShapeEvolution) {
+    const existingClassRecord = await images.getObject(imageId, classObjectId);
+    if (existingClassRecord) {
+      return await evolveSmalltalkClassShape({
+        images,
+        imageId,
+        name,
+        superclassRef: superclass,
+        instanceVariables: localNames,
+        classVariables,
+        slotMapping,
+        defaultSlotValues,
+        defaultSlotValue,
+        preserveRenamedSlotIds,
+        cascadeSubclasses,
+      });
+    }
+  }
 
   // Match defineClass's pre-write checks before admitting a declaration Shape. A malformed direct
   // superclass or metaclass must not leave even unreferenced immutable material behind.
@@ -1293,33 +1392,203 @@ async function ensureClassFromDeclaration({
     }
   }
 
-  let instanceShapeRef;
-  if (localNames.length === 0) {
-    // No new layout means reuse the inherited Shape exactly. At the root, the kernel's explicit
-    // empty Shape makes a zero-slot declaration instantiable without minting a duplicate layout.
-    instanceShapeRef = inherited
-      ? objectRef(inherited.imageId, inherited.id)
-      : objectRef(imageId, EMPTY_SHAPE_ID);
-  } else {
-    const classObjectId = `smalltalk/class/${name}`;
-    const slots = [
-      ...(inherited?.slots ?? []),
-      ...localNames.map((localName) => ({
-        id: declaredInstanceSlotId(classObjectId, localName),
-        name: localName,
-      })),
-    ];
-    instanceShapeRef = await ensureSmalltalkShape(images, imageId, {
-      id: declaredInstanceShapeId(classObjectId),
-      slots,
-      ...(inherited && shapeIndexedKind(inherited) === SHAPE_INDEXED.VALUES
-        ? {indexed: SHAPE_INDEXED.VALUES}
-        : {}),
-    });
-  }
+  const instanceShapeRef = await resolveDeclarationInstanceShapeRef({
+    images,
+    imageId,
+    classObjectId,
+    inherited,
+    localNames,
+    allowShapeEvolution: false,
+  });
 
   return await ensureNamedClass({
     images, imageId, name, superclassRef: superclass, instanceShapeRef, classVariables,
+  });
+}
+
+// Evolve an existing native Smalltalk class's instance Shape when its declared instance variables
+// (or an ancestor's inherited layout) change, publish a new immutable Shape (ADR 0002), update the
+// Behavior's `behavior-instance-shape` slot, migrate all existing instances in `imageId` to the new
+// Shape while preserving surviving slots and initializing added slots (defaulting to kernel `nil`),
+// and optionally cascade the inherited layout update to subclasses.
+async function evolveSmalltalkClassShape({
+  images,
+  imageId,
+  name = null,
+  classRef: explicitClassRef = null,
+  superclassRef: explicitSuperclassRef = null,
+  instanceVariables,
+  classVariables = null,
+  slotMapping = {},
+  defaultSlotValues = {},
+  defaultSlotValue = null,
+  preserveRenamedSlotIds = false,
+  cascadeSubclasses = true,
+  _visitedClasses = new Set(),
+} = {}) {
+  requiredText(imageId, 'image id');
+  const kernel = await findSmalltalkKernel({images, imageId});
+  if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
+
+  let resolvedName = name;
+  let classRef = explicitClassRef;
+  if (!classRef) {
+    requiredText(resolvedName, 'class name');
+    classRef = objectRef(imageId, `smalltalk/class/${resolvedName}`);
+  } else if (!isObjectRef(classRef) || classRef.imageId !== imageId) {
+    throw new TypeError(`evolveSmalltalkClassShape classRef must be an unpinned object ref in ${imageId}`);
+  }
+
+  const behavior = await readBehavior(images, classRef);
+  resolvedName = behavior.name.value;
+  const classObjectId = classRef.objectId;
+  const metaclassRef = behavior.record.behavior;
+  const superclass = explicitSuperclassRef ?? behavior.superclass;
+
+  if (_visitedClasses.has(classObjectId)) {
+    return Object.freeze({
+      classRef,
+      metaclassRef,
+      previousShapeRef: behavior.instanceShape,
+      instanceShapeRef: behavior.instanceShape,
+      migrationReceipt: null,
+      subclassResults: Object.freeze([]),
+    });
+  }
+  _visitedClasses.add(classObjectId);
+
+  const localNames = normalizeLocalInstanceVariables(instanceVariables);
+  const superBehavior = await requireLocalBehavior(
+    images, imageId, superclass, 'evolveSmalltalkClassShape superclass',
+  );
+  await requireLocalBehavior(
+    images, imageId, superBehavior.behavior, 'evolveSmalltalkClassShape superclass metaclass',
+  );
+
+  const inherited = await nearestDeclaredInstanceShape({
+    images, superclassRef: superclass, nilRef: kernel.nil, name: resolvedName,
+  });
+  const inheritedNames = new Set();
+  for (const {name: inheritedName} of inherited?.slots ?? []) {
+    if (inheritedNames.has(inheritedName)) {
+      throw new TypeError(
+        `evolveSmalltalkClassShape ${resolvedName} inherited instance shape declares duplicate slot name: ${inheritedName}`,
+      );
+    }
+    inheritedNames.add(inheritedName);
+  }
+  for (const localName of localNames) {
+    if (inheritedNames.has(localName)) {
+      throw new TypeError(`class ${resolvedName} duplicates inherited instance variable: ${localName}`);
+    }
+  }
+
+  const oldShapeRef = behavior.instanceShape;
+  const oldShape = sameRef(oldShapeRef, kernel.nil)
+    ? null
+    : await images.getShape(oldShapeRef.imageId, oldShapeRef.objectId);
+
+  const newShapeRef = await resolveDeclarationInstanceShapeRef({
+    images,
+    imageId,
+    classObjectId,
+    inherited,
+    localNames,
+    oldShape,
+    slotMapping,
+    preserveRenamedSlotIds,
+    allowShapeEvolution: true,
+  });
+
+  const nextClassVariables = Array.isArray(classVariables)
+    ? classVariables
+    : Array.isArray(behavior.record.metadata?.classVariables)
+      ? behavior.record.metadata.classVariables
+      : [];
+  const nextMetadata = nextClassVariables.length > 0
+    ? {smalltalk: 'behavior', name: resolvedName, classVariables: [...nextClassVariables]}
+    : {smalltalk: 'behavior', name: resolvedName};
+
+  if (
+    !sameRef(oldShapeRef, newShapeRef)
+    || !sameRef(behavior.superclass, superclass)
+    || canonicalJson(behavior.record.metadata) !== canonicalJson(nextMetadata)
+  ) {
+    await images.putObject(imageId, {
+      id: behavior.record.id,
+      shape: behavior.record.shape,
+      behavior: behavior.record.behavior,
+      slots: {
+        ...behavior.record.slots,
+        'behavior-superclass': superclass,
+        'behavior-instance-shape': newShapeRef,
+      },
+      metadata: nextMetadata,
+    });
+  }
+
+  await maintainSubclassRegistries({
+    images,
+    imageId,
+    className: resolvedName,
+    classRef,
+    superclassRef: superclass,
+    nilRef: kernel.nil,
+  });
+
+  let migrationReceipt = null;
+  if (oldShape && !sameRef(oldShapeRef, newShapeRef) && !sameRef(newShapeRef, kernel.nil)) {
+    migrationReceipt = await migrateImageObjectsToShape({
+      images,
+      imageId,
+      fromShapeId: oldShape.id,
+      toShapeId: newShapeRef.objectId,
+      behaviorFilter: classRef,
+      slotMapping,
+      defaultSlotValues,
+      defaultSlotValue: defaultSlotValue ?? kernel.nil,
+    });
+  }
+
+  const subclassResults = [];
+  if (cascadeSubclasses) {
+    const oldSlotIds = new Set((oldShape?.slots ?? []).map((s) => s.id));
+    const subRegistry = await images.getObject(imageId, `smalltalk/subclasses/${resolvedName}`);
+    for (const subRef of subRegistry?.indexed ?? []) {
+      if (!isObjectRef(subRef) || subRef.imageId !== imageId) continue;
+      if (_visitedClasses.has(subRef.objectId)) continue;
+      const subBehavior = await readBehavior(images, subRef);
+      const subShape = sameRef(subBehavior.instanceShape, kernel.nil)
+        ? null
+        : await images.getShape(subBehavior.instanceShape.imageId, subBehavior.instanceShape.objectId);
+      const subLocalNames = (subShape?.slots ?? [])
+        .filter((s) => s.id.startsWith(`${subRef.objectId}/instance-slot/`) || !oldSlotIds.has(s.id))
+        .map((s) => s.name)
+        .filter((n) => !inheritedNames.has(n) && !localNames.includes(n));
+      const subRes = await evolveSmalltalkClassShape({
+        images,
+        imageId,
+        classRef: subRef,
+        superclassRef: classRef,
+        instanceVariables: subLocalNames,
+        slotMapping,
+        defaultSlotValues,
+        defaultSlotValue: defaultSlotValue ?? kernel.nil,
+        preserveRenamedSlotIds,
+        cascadeSubclasses: true,
+        _visitedClasses,
+      });
+      subclassResults.push(subRes);
+    }
+  }
+
+  return Object.freeze({
+    classRef,
+    metaclassRef,
+    previousShapeRef: oldShapeRef,
+    instanceShapeRef: newShapeRef,
+    migrationReceipt,
+    subclassResults: Object.freeze(subclassResults),
   });
 }
 
@@ -1751,6 +2020,8 @@ export {
   reconcileMethods,
   ensureBlock,
   ensureClassFromDeclaration,
+  evolveSmalltalkClassShape,
+  evolvedInstanceShapeId,
   ensureNamedClass,
   ensureSmalltalkShape,
   methodBindings,
