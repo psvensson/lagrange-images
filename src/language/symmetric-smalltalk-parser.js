@@ -283,8 +283,38 @@ class Parser {
       this.expect(')', 'expected ) to close a literal Array');
       return node('arrayLiteral', {elements: Object.freeze(elements)});
     }
+    if (this.match('byteArrayOpen')) {
+      return this.parseByteArrayLiteralAfterOpen();
+    }
     if (this.match('[')) return this.parseBlockAfterOpen(token.start);
     throw new SymmetricSmalltalkSyntaxError('expected expression', token.start);
+  }
+
+  parseByteArrayLiteralAfterOpen() {
+    const bytes = [];
+    while (this.current().type !== ']') {
+      const token = this.current();
+      if (token.type === 'eof') {
+        throw new SymmetricSmalltalkSyntaxError('expected ] to close a literal ByteArray', token.start);
+      }
+      if (token.type !== 'integer') {
+        throw new SymmetricSmalltalkSyntaxError(
+          'byte-array literal elements must be integers in 0..255',
+          token.start,
+        );
+      }
+      const parsed = BigInt(token.value);
+      if (parsed < 0n || parsed > 255n) {
+        throw new SymmetricSmalltalkSyntaxError(
+          'byte-array literal elements must be integers in 0..255',
+          token.start,
+        );
+      }
+      this.advance();
+      bytes.push(Number(parsed));
+    }
+    this.expect(']', 'expected ] to close a literal ByteArray');
+    return node('byteArrayLiteral', {bytes: Object.freeze(bytes)});
   }
 
   parseArrayLiteralElement() {
@@ -314,6 +344,10 @@ class Parser {
       }
       this.expect(')', 'expected ) to close a nested literal Array');
       return node('arrayLiteral', {elements: Object.freeze(elements)});
+    }
+    if (token.type === 'byteArrayOpen') {
+      this.advance();
+      return this.parseByteArrayLiteralAfterOpen();
     }
     throw new SymmetricSmalltalkSyntaxError(
       'literal Array elements must be literals: integers, Strings, Characters, symbols, '
@@ -379,6 +413,8 @@ function formatArrayLiteralElement(element) {
       return element.kind;
     case 'arrayLiteral':
       return `#(${element.elements.map(formatArrayLiteralElement).join(' ')})`;
+    case 'byteArrayLiteral':
+      return `#[${element.bytes.join(' ')}]`;
     default:
       throw new TypeError(`unexpected array literal element kind: ${element.kind}`);
   }
@@ -446,6 +482,8 @@ function formatAstExpression(node) {
       return node.name;
     case 'arrayLiteral':
       return `#(${node.elements.map(formatArrayLiteralElement).join(' ')})`;
+    case 'byteArrayLiteral':
+      return `#[${node.bytes.join(' ')}]`;
     case 'block': {
       if (node.parameters.length === 0 && node.body.kind === 'nil') return '[]';
       const params = node.parameters.length === 0

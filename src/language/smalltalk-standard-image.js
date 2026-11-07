@@ -14,7 +14,11 @@ import {installSmalltalkInstanceVariableProtocol} from './smalltalk-instance-var
 import {installSmalltalkIntegerPrintingProtocol, installSmalltalkIntegerProtocol} from './smalltalk-integer.js';
 import {findSmalltalkKernel, installSmalltalkKernel} from './smalltalk-kernel.js';
 import {installSmalltalkLibrary} from './smalltalk-library.js';
-import {installSmalltalkReadStreamProtocol, installSmalltalkTextReadStreamProtocol} from './smalltalk-read-stream.js';
+import {
+  installSmalltalkReadStreamProtocol,
+  installSmalltalkTextReadStreamProtocol,
+  installSmalltalkStreamBreadthProtocol,
+} from './smalltalk-read-stream.js';
 import {installSmalltalkSetProtocol, installSmalltalkArraySetConversion} from './smalltalk-set.js';
 import {installSmalltalkSubclassProtocol} from './smalltalk-subclasses.js';
 import {installSmalltalkSymbolProtocol} from './smalltalk-symbol.js';
@@ -190,6 +194,7 @@ async function installSymmetricSmalltalkStandardImage({
   const readStream = await installSmalltalkReadStreamProtocol(options);
   await publishSmalltalkClassGlobals({images, imageId, names: ['ReadStream']});
   await installSmalltalkTextReadStreamProtocol(options);
+  await installSmalltalkStreamBreadthProtocol(options);
 
   // Two native value-model classes required by real imported application code (M5, bead
   // lagrange-images-nfv1.3, classified by the frozen nfv1.1 measurement). `Array2D` because

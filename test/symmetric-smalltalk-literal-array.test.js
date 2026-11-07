@@ -87,7 +87,13 @@ test('literal Arrays accept literal elements and never evaluate expression synta
   for (const expression of ['[ #( ]', '[ #(1', '[ #( [1] ) ]', '[ #(x := 1) ]', '[ #(1 + 2) ]']) {
     assert.throws(() => parseSymmetricSmalltalkBlock(expression), /literal Array elements must be literals/);
   }
-  assert.throws(() => parseSymmetricSmalltalkBlock('[ #[1 2] ]'), /byte-array literal syntax/);
+  assert.deepEqual(
+    parseSymmetricSmalltalkBlock('[ #[1 2 16rFF] ]').body,
+    {kind: 'byteArrayLiteral', bytes: [1, 2, 255]},
+  );
+  for (const invalid of ['[ #[256] ]', '[ #[-1] ]', "[ #['a'] ]"]) {
+    assert.throws(() => parseSymmetricSmalltalkBlock(invalid), /byte-array literal elements must be integers in 0\.\.255/);
+  }
 });
 
 test('nonempty literal Arrays use existing v1 operations with distinct temporary identities', () => {
