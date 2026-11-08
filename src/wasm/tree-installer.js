@@ -23,6 +23,10 @@ import {
   compileResumableWasmModuleEntries,
   isWasmTailEffectRestrictionError,
 } from './resumable-compiler.js';
+import {
+  optimizeNonEscapingClosures,
+  partitionCompilationGroupByBudget,
+} from './group-optimizations.js';
 
 function normalizeObjectRef(value, label) {
   const ref = canonicalizeValue(value);
@@ -188,6 +192,7 @@ function descriptorForMember(moduleArtifact, memberIndex) {
 async function installExecutableTree({
   images,
   moduleArtifact,
+  shardPlacement = null,
   groupPlans,
   rootPlan,
   rootId,
@@ -196,7 +201,6 @@ async function installExecutableTree({
 }) {
   const memberIndex = new Map(groupPlans.map((plan, index) => [plan, index]));
   const nodes = [];
-  const moduleRef = objectRef(moduleArtifact.imageId, moduleArtifact.id);
 
   const install = async (plan) => {
     const blockPrototypes = {};
@@ -205,14 +209,27 @@ async function installExecutableTree({
       blockPrototypes[childPlan.semanticBlockId] = objectRef(child.block.imageId, child.block.id);
     }
 
-    const descriptor = descriptorForMember(moduleArtifact, memberIndex.get(plan));
+    const placement = shardPlacement?.get(plan) ?? {
+      moduleArtifact,
+      shardMemberIndex: memberIndex.get(plan),
+    };
+    const planModuleArtifact = placement.moduleArtifact;
+    const moduleRef = objectRef(planModuleArtifact.imageId, planModuleArtifact.id);
+    const moduleDescriptor = readModuleDescriptor(planModuleArtifact);
+    const descriptor = moduleFunctionOf(moduleDescriptor, {memberIndex: placement.shardMemberIndex});
+    const activeClosureBlockIds = new Set(
+      descriptor.closureSiteIndices.map((siteIdx) => moduleDescriptor.closureSites[siteIdx]?.blockId),
+    );
+    const activeBlockPrototypes = Object.fromEntries(
+      Object.entries(blockPrototypes).filter(([blockId]) => activeClosureBlockIds.has(blockId)),
+    );
     const {functionArtifact} = await assembleWasmFunctionArtifact({
       images,
       semanticRef: plan.semanticRef,
       moduleRef,
       functionId: plan.ids.functionId,
       entry: descriptor.entry,
-      blockPrototypes,
+      blockPrototypes: activeBlockPrototypes,
     });
     const isRoot = plan === rootPlan;
     const block = await ensureBlock(images, plan.semanticRef.imageId, {
@@ -226,10 +243,10 @@ async function installExecutableTree({
     const node = Object.freeze({
       semanticBlockId: plan.semanticBlockId,
       semanticArtifact: plan.semanticArtifact,
-      moduleArtifact,
+      moduleArtifact: planModuleArtifact,
       functionArtifact,
       block,
-      blockPrototypes: Object.freeze({...blockPrototypes}),
+      blockPrototypes: Object.freeze({...activeBlockPrototypes}),
     });
     nodes.push(node);
     return node;
@@ -246,6 +263,9 @@ async function installWasmBlockTree({
   id = randomUUID(),
   environment = null,
   metadata = {},
+  optimizeClosures = false,
+  intraModuleDirectCalls = false,
+  moduleBudget = null,
 } = {}) {
   assertServices(images, compilation);
   if (typeof id !== 'string' || id.length === 0) throw new TypeError('WASM Block tree id must be non-empty text');
@@ -258,17 +278,129 @@ async function installWasmBlockTree({
   // implementation rather than a widening of this one: that decision was already made when the
   // semantic artifact was created, so there is no second "does this need mutable state?" analysis.
   if (semanticArtifact.representation === LAGRANGE_CODE_V1 || semanticArtifact.representation === LAGRANGE_CODE_V2) {
-    return await installWasmV1BlockTree({images, compilation, semanticRef, id, environment, metadata});
+    return await installWasmV1BlockTree({
+      images,
+      compilation,
+      semanticRef,
+      id,
+      environment,
+      metadata,
+      optimizeClosures,
+      intraModuleDirectCalls,
+      moduleBudget,
+    });
   }
   if (semanticArtifact.representation !== LAGRANGE_CODE_V0) {
     throw new TypeError(`root semantic code artifact must be ${LAGRANGE_CODE_V0} or ${LAGRANGE_CODE_V1}`);
   }
 
-  const program = validateTree(parseLagrangeCodeProgram(semanticArtifact));
+  const rawProgram = validateTree(parseLagrangeCodeProgram(semanticArtifact));
+  const closureOptimization = optimizeClosures
+    ? optimizeNonEscapingClosures(rawProgram)
+    : {program: rawProgram, inlinedBlockIds: [], eliminatedClosureSites: 0, eliminatedApplySites: 0};
+  const program = closureOptimization.program;
   const rootPlan = planTree(program, id);
   const groupPlans = flattenPlans(rootPlan);
   preflightSharedModule(groupPlans);
-  await persistSemanticTree({images, rootRef, rootArtifact: semanticArtifact, rootPlan, rootId: id});
+
+  let effectiveRootRef = rootRef;
+  let effectiveRootArtifact = semanticArtifact;
+  if (closureOptimization.inlinedBlockIds.length > 0) {
+    effectiveRootArtifact = await ensureCodeArtifact(images, rootRef.imageId, {
+      id: `${id}:wasm:semantic:root`,
+      languageId: semanticArtifact.languageId,
+      representation: LAGRANGE_CODE_V0,
+      content: textValue(JSON.stringify(program)),
+      derivedFrom: [rootRef],
+      metadata: {wasmTreeRootId: id, inlinedBlockIds: closureOptimization.inlinedBlockIds},
+    });
+    effectiveRootRef = objectRef(effectiveRootArtifact.imageId, effectiveRootArtifact.id);
+  }
+  await persistSemanticTree({
+    images,
+    rootRef: effectiveRootRef,
+    rootArtifact: effectiveRootArtifact,
+    rootPlan,
+    rootId: id,
+  });
+
+  if (moduleBudget && typeof moduleBudget === 'object') {
+    const planEntries = groupPlans.map((plan, memberIndex) => ({
+      entry: `run_${memberIndex}`,
+      memberIndex,
+      program: plan.program,
+      plan,
+    }));
+    const split = partitionCompilationGroupByBudget({
+      entries: planEntries,
+      maxMembersPerModule: moduleBudget.maxMembersPerModule ?? Infinity,
+      maxByteBudget: moduleBudget.maxByteBudget ?? Infinity,
+      strictSingleMemberBudget: moduleBudget.strictSingleMemberBudget === true,
+      compileEntries: (shardEntries) => preflightEntries(shardEntries.map((e, idx) => ({
+        entry: `run_${idx}`,
+        memberIndex: idx,
+        program: e.program,
+      }))),
+    });
+    const shardPlacement = new Map();
+    const moduleArtifacts = [];
+    const groups = [];
+    const shardSummaries = [];
+
+    for (const shard of split.shards) {
+      const shardModuleId = shard.shardIndex === 0
+        ? nodeIds(id).moduleId
+        : `${nodeIds(id).moduleId}:shard:${shard.shardIndex}`;
+      const shardGroup = createCompilationGroup({
+        policyId: WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
+        targetRepresentation: WASM_MODULE_V2,
+        members: shard.entries.map((e) => e.plan.semanticRef),
+        options: {physicalLayout: 'shared-module'},
+      });
+      const shardModuleArtifact = await compilation.compileGroup(shardGroup, {id: shardModuleId});
+      moduleArtifacts.push(shardModuleArtifact);
+      groups.push(shardGroup);
+      shard.entries.forEach((e, shardMemberIndex) => {
+        shardPlacement.set(e.plan, {moduleArtifact: shardModuleArtifact, shardMemberIndex});
+      });
+      shardSummaries.push(Object.freeze({
+        shardIndex: shard.shardIndex,
+        moduleId: shardModuleArtifact.id,
+        memberIndices: shard.memberIndices,
+        byteLength: shard.byteLength,
+      }));
+    }
+
+    const installed = await installExecutableTree({
+      images,
+      moduleArtifact: moduleArtifacts[0],
+      shardPlacement,
+      groupPlans,
+      rootPlan,
+      rootId: id,
+      rootEnvironment,
+      rootMetadata,
+    });
+
+    return Object.freeze({
+      ...installed.root,
+      nodes: installed.nodes,
+      group: groups[0],
+      groups: Object.freeze(groups),
+      moduleArtifacts: Object.freeze(moduleArtifacts),
+      budgetSplit: Object.freeze({
+        shardCount: split.shardCount,
+        maxMembersPerModule: split.maxMembersPerModule,
+        maxByteBudget: split.maxByteBudget,
+        shards: Object.freeze(shardSummaries),
+      }),
+      closureOptimization: Object.freeze({
+        inlinedBlockIds: closureOptimization.inlinedBlockIds,
+        eliminatedClosureSites: closureOptimization.eliminatedClosureSites,
+        eliminatedApplySites: closureOptimization.eliminatedApplySites,
+      }),
+    });
+  }
 
   const group = createCompilationGroup({
     policyId: WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0,
@@ -291,6 +423,11 @@ async function installWasmBlockTree({
     ...installed.root,
     nodes: installed.nodes,
     group,
+    closureOptimization: Object.freeze({
+      inlinedBlockIds: closureOptimization.inlinedBlockIds,
+      eliminatedClosureSites: closureOptimization.eliminatedClosureSites,
+      eliminatedApplySites: closureOptimization.eliminatedApplySites,
+    }),
   });
 }
 

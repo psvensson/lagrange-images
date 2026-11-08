@@ -7,6 +7,10 @@ import {
 import {canonicalizeValue, isReference} from '../value/index.js';
 import {WASM_ENTRY_V0, WASM_IMPORT_MODULE, WASM_VALUE_HANDLE_ABI_V1} from './abi.js';
 import {
+  optimizeNonEscapingClosures,
+  planIntraModuleDirectCalls,
+} from './group-optimizations.js';
+import {
   I32,
   functionExport,
   functionImport,
@@ -163,14 +167,49 @@ function analyzeEffects(expression, state, {tail = false, allowApply = false} = 
       for (const argument of expression.arguments) analyzeEffects(argument, state, {allowApply});
       collectSendSite(state, expression);
       return;
-    case 'apply':
+    case 'apply': {
       if (!allowApply) throw new TypeError(`WASM backend v1 does not support semantic op: ${expression.op}`);
-      if (!tail) throw new WasmV1TailEffectRestrictionError('callable applications');
       if (!Array.isArray(expression.arguments)) throw new TypeError('WASM apply arguments must be an array');
+      if (state.directCalls) {
+        let directTarget = null;
+        let captureExprs = [];
+        if (expression.callee?.op === 'binding' && state.directCalls.bindingTargets.has(expression.callee.id)) {
+          const target = state.directCalls.bindingTargets.get(expression.callee.id);
+          if (target.directCallable && target.parameterCount === expression.arguments.length) {
+            directTarget = target;
+            captureExprs = target.captureExpressions ?? [];
+          }
+        } else if (expression.callee?.op === 'block' && state.directCalls.bySemanticBlockId.has(expression.callee.blockId)) {
+          const target = state.directCalls.bySemanticBlockId.get(expression.callee.blockId);
+          if (target.directCallable && target.parameterCount === expression.arguments.length) {
+            directTarget = target;
+            captureExprs = (expression.callee.captures ?? [])
+              .filter(({mode}) => mode === 'snapshot')
+              .map(({value}) => value);
+          }
+        }
+        if (directTarget) {
+          for (const argument of expression.arguments) analyzeEffects(argument, state, {allowApply});
+          for (const capExpr of captureExprs) analyzeEffects(capExpr, state, {allowApply});
+          state.directCallSites.set(expression, Object.freeze({
+            ...directTarget,
+            captureExpressions: Object.freeze(captureExprs),
+          }));
+          state.intraModuleDirectCalls.push(Object.freeze({
+            callerEntry: state.currentEntryName ?? null,
+            targetEntry: directTarget.entry,
+            targetMemberIndex: directTarget.memberIndex,
+            arity: expression.arguments.length,
+          }));
+          return;
+        }
+      }
+      if (!tail) throw new WasmV1TailEffectRestrictionError('callable applications');
       analyzeEffects(expression.callee, state, {allowApply});
       for (const argument of expression.arguments) analyzeEffects(argument, state, {allowApply});
       collectApplySite(state, expression);
       return;
+    }
     case 'make-block':
     case 'block': {
       if (!tail) throw new WasmV1TailEffectRestrictionError('nested Block creation');
@@ -261,12 +300,23 @@ function compileExpression(expression, context) {
         ...expression.arguments.flatMap((argument) => compileExpression(argument, context)),
         0x10, ...u32(BASE_IMPORT_COUNT_V1 + context.effectIndex.get(expression)),
       ];
-    case 'apply':
+    case 'apply': {
+      const directTarget = context.directCallSites?.get(expression);
+      if (directTarget) {
+        const targetFuncIdx = context.firstFunctionIndex + directTarget.functionOffset;
+        return [
+          0x41, ...s32(0),
+          ...expression.arguments.flatMap((argument) => compileExpression(argument, context)),
+          ...(directTarget.captureExpressions ?? []).flatMap((cap) => compileExpression(cap, context)),
+          0x10, ...u32(targetFuncIdx),
+        ];
+      }
       return [
         ...compileExpression(expression.callee, context),
         ...expression.arguments.flatMap((argument) => compileExpression(argument, context)),
         0x10, ...u32(BASE_IMPORT_COUNT_V1 + context.effectIndex.get(expression)),
       ];
+    }
     case 'make-block':
     case 'block':
       return [
@@ -315,10 +365,18 @@ function normalizeModuleEntry(value, index) {
     memberIndex: value.memberIndex,
     program: value.program,
     allowApply: value.allowApply === true,
+    semanticBlockId: typeof value.semanticBlockId === 'string' && value.semanticBlockId.length > 0
+      ? value.semanticBlockId
+      : null,
   });
 }
 
-function compileWasmV1ModuleEntries(entries, {allowApply = false} = {}) {
+function compileWasmV1ModuleEntries(entries, {
+  allowApply = false,
+  optimizeClosures = false,
+  intraModuleDirectCalls = false,
+  intraModuleCallTargets = null,
+} = {}) {
   if (!Array.isArray(entries) || entries.length === 0) throw new TypeError('WASM module entries must be a non-empty array');
   const normalizedEntries = entries.map(normalizeModuleEntry);
   const entryNames = new Set();
@@ -330,17 +388,37 @@ function compileWasmV1ModuleEntries(entries, {allowApply = false} = {}) {
     memberIndices.add(entry.memberIndex);
   }
 
+  const effectiveEntries = optimizeClosures
+    ? normalizedEntries.map((entry) => ({
+      ...entry,
+      program: optimizeNonEscapingClosures(entry.program).program,
+    }))
+    : normalizedEntries;
+  const directCalls = (intraModuleDirectCalls || intraModuleCallTargets)
+    ? planIntraModuleDirectCalls(effectiveEntries, {intraModuleCallTargets})
+    : null;
+
   const literals = {values: [], keys: new Map()};
-  const state = {sendSites: [], closureSites: [], effects: [], effectIndex: new WeakMap()};
+  const state = {
+    sendSites: [],
+    closureSites: [],
+    effects: [],
+    effectIndex: new WeakMap(),
+    directCalls,
+    directCallSites: new WeakMap(),
+    intraModuleDirectCalls: [],
+    currentEntryName: null,
+  };
   const plans = [];
 
-  for (const entry of normalizedEntries) {
+  for (const entry of effectiveEntries) {
     const program = entry.program;
     if (!program || !Array.isArray(program.parameters) || !Array.isArray(program.captures) || !Array.isArray(program.temporaries)) {
       throw new TypeError(`WASM module entry ${entry.entry} program must contain parameters, temporaries and captures arrays`);
     }
     const sendStart = state.sendSites.length;
     const closureStart = state.closureSites.length;
+    state.currentEntryName = entry.entry;
     analyzeEffects(program.body, state, {tail: true, allowApply: allowApply || entry.allowApply});
     // Only snapshot captures become entry parameters. A cell capture is reached through the host
     // cell table, so it has no handle position anywhere in the ABI.
@@ -361,8 +439,10 @@ function compileWasmV1ModuleEntries(entries, {allowApply = false} = {}) {
     });
   }
 
+  const firstFunctionIndex = BASE_IMPORT_COUNT_V1 + state.effects.length;
   const bodies = plans.map((plan) => compileExpression(plan.program.body, {
     ...state,
+    firstFunctionIndex,
     parameterCount: plan.parameterCount,
     captureIndex: plan.captureIndex,
     cellSlots: plan.cellSlots,
@@ -397,7 +477,6 @@ function compileWasmV1ModuleEntries(entries, {allowApply = false} = {}) {
   ]);
   const firstFunctionTypeIndex = 2 + state.effects.length;
   const functions = vector(plans.map((_, index) => [...u32(firstFunctionTypeIndex + index)]));
-  const firstFunctionIndex = BASE_IMPORT_COUNT_V1 + state.effects.length;
   const exports = vector(plans.map((plan, index) => functionExport(plan.entry, firstFunctionIndex + index)));
   const code = vector(bodies.map((bodyExpression) => {
     const functionBody = [0x00, ...bodyExpression, 0x0b];
@@ -428,11 +507,12 @@ function compileWasmV1ModuleEntries(entries, {allowApply = false} = {}) {
     sendSites: Object.freeze(state.sendSites),
     closureSites: Object.freeze(state.closureSites),
     functions: functionDescriptors,
+    intraModuleDirectCalls: Object.freeze([...state.intraModuleDirectCalls]),
   });
 }
 
-function compileWasmV1Module(program) {
-  const compiled = compileWasmV1ModuleEntries([{entry: WASM_ENTRY_V0, memberIndex: 0, program}]);
+function compileWasmV1Module(program, options = {}) {
+  const compiled = compileWasmV1ModuleEntries([{entry: WASM_ENTRY_V0, memberIndex: 0, program}], options);
   const descriptor = compiled.functions[0];
   return Object.freeze({
     ...compiled,
@@ -442,10 +522,10 @@ function compileWasmV1Module(program) {
   });
 }
 
-function compileWasmV2Module(program) {
+function compileWasmV2Module(program, options = {}) {
   const compiled = compileWasmV1ModuleEntries(
     [{entry: WASM_ENTRY_V0, memberIndex: 0, program, allowApply: true}],
-    {allowApply: true},
+    {...options, allowApply: true},
   );
   const descriptor = compiled.functions[0];
   return Object.freeze({
@@ -515,15 +595,22 @@ const lagrangeCodeV1GroupToWasmModuleCompiler = Object.freeze({
       const isV2 = source.representation === LAGRANGE_CODE_V2;
       return {
         entry: `run_${memberIndex}`,
-        memberIndex,
+        memberIndex: Number.isInteger(group.options?.memberIndices?.[memberIndex])
+          ? group.options.memberIndices[memberIndex]
+          : memberIndex,
         program: isV2 ? parseLagrangeCodeV2Program(source) : parseLagrangeCodeV1Program(source),
         allowApply: isV2,
+        semanticBlockId: source.metadata?.semanticBlockId ?? null,
       };
     });
     const semanticRepresentation = members.some((source) => source.representation === LAGRANGE_CODE_V2)
       ? LAGRANGE_CODE_V2
       : LAGRANGE_CODE_V1;
-    const compiled = compileWasmV1ModuleEntries(entries);
+    const compiled = compileWasmV1ModuleEntries(entries, {
+      optimizeClosures: group.options?.optimizeClosures === true,
+      intraModuleDirectCalls: group.options?.intraModuleDirectCalls === true,
+      intraModuleCallTargets: group.options?.intraModuleCallTargets ?? null,
+    });
     return Object.freeze({
       bytes: compiled.bytes,
       contract: {
@@ -538,6 +625,9 @@ const lagrangeCodeV1GroupToWasmModuleCompiler = Object.freeze({
         semanticRepresentation,
         groupPolicyId: group.policyId,
         physicalLayout: 'shared-module',
+        ...(compiled.intraModuleDirectCalls.length > 0
+          ? {intraModuleDirectCalls: compiled.intraModuleDirectCalls}
+          : {}),
       },
     });
   },

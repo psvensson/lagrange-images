@@ -105,6 +105,15 @@ import {
 import {WASM_FUNCTION_V1, WASM_FUNCTION_V2} from './code/wasm-artifacts.js';
 import {createWasmFunctionV1Executor} from './wasm/function-executor.js';
 import {
+  WasmModuleBudgetExceededError,
+  analyzeClosureEscape,
+  analyzeLivePlanVariables,
+  collectFreePlanVariables,
+  optimizeNonEscapingClosures,
+  partitionCompilationGroupByBudget,
+  planIntraModuleDirectCalls,
+} from './wasm/group-optimizations.js';
+import {
   createSmalltalkTemporaryInitializer,
   findSmalltalkKernel,
   installSmalltalkKernel,
@@ -675,4 +684,11 @@ export {
   captureConditionAndStackReport,
   invokeCapturedRestart,
   listAvailableRestarts,
+  WasmModuleBudgetExceededError,
+  analyzeClosureEscape,
+  analyzeLivePlanVariables,
+  collectFreePlanVariables,
+  optimizeNonEscapingClosures,
+  partitionCompilationGroupByBudget,
+  planIntraModuleDirectCalls,
 };
