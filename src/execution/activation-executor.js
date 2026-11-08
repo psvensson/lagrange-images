@@ -1,7 +1,7 @@
 import {canonicalizeValue, isObjectRef, objectRef} from '../value/index.js';
 import {arenaImagesView} from './lexical-cells.js';
 import {promoteClosure} from './closure-promotion.js';
-import {NonLocalReturnTransfer} from './conditions.js';
+import {ActivationCancelledError, NonLocalReturnTransfer} from './conditions.js';
 import {CodeExecutorRegistry} from './executor-registry.js';
 import {
   EscapingMutableClosureError,
@@ -250,9 +250,13 @@ class ActivationExecutor {
     invocationFrame = null,
     inheritedFrame = null,
     conditionRuntime = null,
+    signal = null,
   } = {}) {
     if (!Number.isInteger(depth) || depth < 0) throw new TypeError('activation depth must be a non-negative integer');
     if (depth > MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
+    if (signal !== null && signal !== undefined && typeof signal?.aborted !== 'boolean') {
+      throw new TypeError('signal must be an AbortSignal or null');
+    }
     assertActivationRequest(activation);
 
     // The root execution owns the arena; nested sends share it. That is a lifetime relationship and
@@ -377,12 +381,36 @@ class ActivationExecutor {
       metadata: activeFrame?.metadata ?? block.metadata ?? {},
     }) ?? null;
 
+    const checkCancelled = () => {
+      if (signal && signal.aborted) {
+        const frames = conditions.snapshotActivationFrames?.() ?? Object.freeze([]);
+        conditions.recordSignalSnapshot?.({
+          condition: null,
+          description: 'activation cancelled',
+          handled: false,
+          handlerScopeId: null,
+          frames,
+          scopes: conditions.snapshotScopes?.() ?? Object.freeze([]),
+          restarts: conditions.snapshotRestarts?.() ?? Object.freeze([]),
+        });
+        throw new ActivationCancelledError(signal.reason ?? null, {frames});
+      }
+    };
+
     try {
       if (ownsFrame) this.#markHomeActivation(activeFrame, 'live', homeSelector);
+      checkCancelled();
       const result = await executor.execute(
       {activation, code},
       {
         images: view,
+        signal: signal ?? null,
+        checkCancelled: whileActive('checkCancelled', checkCancelled),
+        recordWasmState: whileActive('recordWasmState', (patch) => {
+          if (activationFrameId !== null) {
+            conditions.updateActivationFrameWasmState?.(activationFrameId, patch);
+          }
+        }),
         // ADR 0054. Primitives reach the condition runtime through this facade and never through
         // an authority context: `establish` hands back a scope id, and the *invoker* it stores
         // closes over the authority in force here. A handler therefore runs with its establisher's
@@ -410,7 +438,7 @@ class ActivationExecutor {
           // owner; it never sees the registry, and a frame is only ever a key in it.
           homeActivationState: whileActive('homeActivationState', (frame) => this.homeActivationState(frame)),
           homeActivationSelector: whileActive('homeActivationSelector', (frame) => this.homeActivationSelector(frame)),
-          invoke: whileActive('invoke', async (token, blockRef, args = []) => {
+          invoke: whileActive('invoke', async (token, blockRef, args = [], {uninterruptible = false} = {}) => {
             if (!CAPTURED_AUTHORITY.has(token)) throw new TypeError('unknown captured authority token');
             if (depth >= MAX_ACTIVATION_DEPTH) throw new TypeError('activation depth limit exceeded');
             const activation = await this.invocations.prepareActivation({
@@ -422,6 +450,7 @@ class ActivationExecutor {
               cellArena: arena,
               conditionRuntime: conditions,
               dispatchImage: normalizeObjectRef(blockRef, 'condition block').imageId,
+              signal: uninterruptible ? null : signal,
             });
           }),
         }),
@@ -518,6 +547,7 @@ class ActivationExecutor {
             cellArena: arena,
             conditionRuntime: conditions,
             dispatchImage: nestedActivation.block.imageId,
+            signal,
           });
         }),
         // ADR 0089. The activation half of a language-resolved send, and the only reason a
@@ -545,6 +575,7 @@ class ActivationExecutor {
             cellArena: arena,
             conditionRuntime: conditions,
             dispatchImage: nextDispatchImage,
+            signal,
           });
         }),
         // A nested send inherits the current authority. An executor may ask for a narrower
@@ -579,6 +610,7 @@ class ActivationExecutor {
             // ordinary Block send inherits nothing, so a method cannot lend its identity to a Block
             // it merely invoked.
             inheritedFrame: dispatched.inheritsFrame ? activeFrame : null,
+            signal,
           });
         }),
       },
@@ -614,6 +646,7 @@ class ActivationExecutor {
 }
 
 export {
+  ActivationCancelledError,
   ActivationExecutor,
   ExpiredExecutionContextError,
   MAX_ACTIVATION_DEPTH,

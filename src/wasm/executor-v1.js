@@ -395,6 +395,13 @@ function createWasmFunctionV1CellExecutor({
       let result;
       let tailEffect = null;
       try {
+        context.checkCancelled?.();
+        context.recordWasmState?.({
+          wasmState: 'running',
+          suspensionCount: 0,
+          resumedCount: 0,
+          lastSuspension: null,
+        });
         lease.slot.host.bind({
           arena,
           descriptor,
@@ -417,9 +424,13 @@ function createWasmFunctionV1CellExecutor({
 
         lease.slot.host.unbind();
         bound = false;
+        context.recordWasmState?.({wasmState: 'completed'});
         lease.release();
         released = true;
       } catch (error) {
+        try {
+          context.recordWasmState?.({wasmState: 'retired', event: 'retire'});
+        } catch {}
         if (bound) {
           try { lease.slot.host.unbind(); } catch {}
           bound = false;

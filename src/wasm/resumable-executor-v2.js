@@ -281,6 +281,7 @@ function createRebindableHostEnvironment(literals, sendSites, closureSites, effe
       if (site.kind === 'apply') {
         return recordPending(state.pending, {
           kind: 'apply',
+          siteIndex,
           request: Object.freeze({
             callee: state.arena.get(requestHandles[0], `WASM apply site ${siteIndex} callee handle`),
             arguments: Object.freeze(requestHandles.slice(1).map((handle, argumentIndex) =>
@@ -293,6 +294,7 @@ function createRebindableHostEnvironment(literals, sendSites, closureSites, effe
       }
       return recordPending(state.pending, {
         kind: 'send',
+        siteIndex,
         request: Object.freeze({
           languageId: site.languageId,
           receiver: state.arena.get(requestHandles[0], `WASM send site ${siteIndex} receiver handle`),
@@ -323,6 +325,7 @@ function createRebindableHostEnvironment(literals, sendSites, closureSites, effe
       if (!prototype) throw new TypeError(`WASM closure prototype missing at execution: ${site.blockId}`);
       return recordPending(state.pending, {
         kind: 'closure',
+        siteIndex,
         request: Object.freeze({
           prototype,
           // Request handles cover snapshot captures only; saved continuation handles follow them
@@ -507,8 +510,16 @@ function createResumableWasmFunctionV2Executor({
       let currentHandles = [receiverHandle, ...argumentHandles, ...captureHandles];
       let resumptions = 0;
 
+      context.recordWasmState?.({
+        wasmState: 'running',
+        suspensionCount: 0,
+        resumedCount: 0,
+        lastSuspension: null,
+      });
+
       try {
         while (true) {
+          context.checkCancelled?.();
           pending.effect = null;
           lease.slot.host.bind({
             arena,
@@ -540,15 +551,45 @@ function createResumableWasmFunctionV2Executor({
           resumptions += 1;
           if (resumptions > MAX_WASM_RESUMPTIONS) throw new TypeError('WASM resumable effect limit exceeded');
 
+          const suspensionMeta = Object.freeze({
+            abi: contract.abi,
+            entry: fn.entry,
+            currentEntry,
+            effectKind: effect.kind,
+            siteIndex: effect.siteIndex ?? null,
+            resumeEntry: effect.resume.entry,
+            savedHandleCount: effect.resume.handles.length,
+            step: resumptions,
+          });
+          context.recordWasmState?.({
+            wasmState: 'suspended',
+            suspensionCount: resumptions,
+            resumedCount: resumptions - 1,
+            lastSuspension: suspensionMeta,
+            event: 'suspend',
+          });
+
           const resumedValue = await performHostEffect(effect, context);
+          context.checkCancelled?.();
+          context.recordWasmState?.({
+            wasmState: 'running',
+            suspensionCount: resumptions,
+            resumedCount: resumptions,
+            lastSuspension: suspensionMeta,
+            event: 'resume',
+          });
           const resultValueHandle = arena.put(resumedValue);
           currentEntry = effect.resume.entry;
           currentHandles = [...effect.resume.handles, resultValueHandle];
         }
 
+        context.recordWasmState?.({wasmState: 'completed'});
         lease.release();
         released = true;
       } catch (error) {
+        try {
+          context.recordWasmState?.({wasmState: 'retired', event: 'retire'});
+        } catch {}
         if (bound) {
           try { lease.slot.host.unbind(); } catch {}
           bound = false;

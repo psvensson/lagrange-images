@@ -93,10 +93,10 @@ The hybrid tail/resumable execution model is established. Optimize only under me
 - [ ] tighter live-Value-handle analysis at suspension points;
 - [ ] module-size/budget splitting of logical compilation groups;
 - [ ] direct optimized calls between entries in one shared module;
-- [ ] condition/exception unwinding across suspension points;
-- [ ] debugger activation/resumption metadata;
+- [x] condition/exception unwinding across suspension points (`runUnwindProtection` in `src/execution/conditions.js` running `ensure:`/`ifCurtailed:`/`unwind-protect` cleanups uninterruptibly across WASM suspension and cancellation unwinds, proven in `test/conditions.test.js` and `test/activation-cancellation-resumption.test.js`);
+- [x] debugger activation/resumption metadata (`updateActivationFrameWasmState`, `snapshotWasmResumptions`, and `executionLane`/`wasmState`/`suspensionCount`/`resumedCount`/`lastSuspension` in `src/execution/conditions.js` and `src/execution/debug-inspect.js`, proven in `test/activation-cancellation-resumption.test.js`);
 - [ ] optimized/non-materialized closure representations;
-- [ ] explicit cancellation semantics for suspended activations.
+- [x] explicit cancellation semantics for suspended activations (`ActivationCancelledError` and `AbortSignal` propagation across `ActivationExecutor.execute`, neutral-expression evaluation, Smalltalk loops, and WASM suspension/resumption loops with clean WASM instance retirement, proven in `test/activation-cancellation-resumption.test.js`).
 
 Do not conflate compiler-generated resumption with durable continuation state, retry or distributed recovery.
 
