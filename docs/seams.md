@@ -104,6 +104,29 @@ representation: v0 keeps the original installer untouched, v1 uses a sibling pla
 `wasm-nested-block-tree/v1` group policy. There is no second "does this need mutable state?"
 analysis at install time — the representation is the source of truth.
 
+## Public Smalltalk tokenization
+
+`tokenizeSymmetricSmalltalk(source)` is the same function through the Node root,
+`./language`, and the portable artifact entry `src/portable-runtime.js`. The portable
+root re-exports the existing lexical owner; it adds no parser, dialect or rendering rule.
+Tokenization needs no runtime composition or crypto provider.
+
+The frozen token array contains frozen `{type, value, start, end}` records and an `eof`
+token. Spans index the original input string in UTF-16 code units, with an exclusive
+`end`. Whitespace and comments are omitted; values may be cooked (for example radix
+integers and escaped strings), so preserve original spelling with `source.slice(start,
+end)`, not `token.value`. `assign` and `caret` distinguish `:=` and `^` from text inside
+strings, comments or Character literals. `legacyAssign` remains a distinct Cuis token
+that the native parser rejects. Tokens alone do not establish grammatical validity.
+
+Nontext input throws `TypeError`. A lexical defect throws the existing
+`SymmetricSmalltalkSyntaxError` with its UTF-16 `position`; the call returns no partial
+stream. The portable entry does not export a new error class. Source displays and
+clipboard behavior remain the Object Environment's responsibility; Unicode arrows are
+not added to the accepted source syntax. Public identity/span/error and artifact-entry
+proofs live in `test/portable-smalltalk-tokenizer.test.js` and the existing portable
+artifact differential acceptance tests.
+
 ## Generic object layout
 
 A Shape may declare `indexed: none | values`. Absence is the pre-ADR-0047 form and means `none`;
