@@ -397,6 +397,6 @@ if (phase === 'populate') {
   } finally {
     await runtime.close();
   }
-} else {
+} else if (phase !== undefined) {
   throw new Error(`Unknown worker phase: ${phase}`);
 }
