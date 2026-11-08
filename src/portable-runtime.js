@@ -66,7 +66,9 @@ import {
   IMAGE_MUTATION_BINDING_V1,
   createImageMutationBindingV1Executor,
   installImageMutationBinding,
+  parseImageMutationBindingArtifact,
 } from './callable/image-mutation-binding.js';
+import {resolveCallableInterface} from './callable/binding-artifacts.js';
 import {
   IMAGE_CREATION_BINDING_V1,
   createImageCreationBindingV1Executor,
@@ -126,8 +128,12 @@ import {
   methodProvenance,
   methodSource,
   polyglotMethodBridgeDescriptor,
+  smalltalkClassObjectId,
 } from './language/smalltalk-class-builder.js';
-import {defineMethodsFromSource} from './language/smalltalk-instance-variables.js';
+import {
+  defineMethodsFromSource,
+  instanceVariableBindings,
+} from './language/smalltalk-instance-variables.js';
 import {installSymmetricSmalltalkStandardImage} from './language/smalltalk-standard-image.js';
 import {resolveGlobal} from './language/smalltalk-globals.js';
 import {importCuisNativePackage} from './language/cuis-native-import.js';
@@ -180,7 +186,10 @@ import {createSymmetricSmalltalkDispatcher} from './language/symmetric-smalltalk
 import {MethodDictionaryValidationCache} from './language/smalltalk-lookup.js';
 import {installCallableInterfaceV2} from './callable/interface-v2-artifacts.js';
 import {packCompositeValue, unpackCompositeValue} from './callable/composite-codec.js';
-import {normalizeTypeDeclarations} from './callable/type-grammar.js';
+import {
+  normalizeTypeDeclarations,
+  resolveDeclaredType,
+} from './callable/type-grammar.js';
 import {
   booleanValue,
   bytesValue,
@@ -511,6 +520,7 @@ export {
   methodProvenance,
   methodSource,
   polyglotMethodBridgeDescriptor,
+  smalltalkClassObjectId,
   // The install/import owners a portable host needs to bring an application INTO an image and
   // run it (bead lagrange-images-hygu; the Object Environment's E4-E6 vertical): the standard
   // image, native class declaration and from-source method definition, the Cuis native-import
@@ -519,6 +529,7 @@ export {
   installSymmetricSmalltalkStandardImage,
   ensureClassFromDeclaration,
   defineMethodsFromSource,
+  instanceVariableBindings,
   importCuisNativePackage,
   installManagedProjectRelease,
   PROJECT_INSTALLATION_PROVENANCE_V1,
@@ -542,6 +553,8 @@ export {
   installCallableInterfaceV2,
   installImageCreationBinding,
   installImageMutationBinding,
+  parseImageMutationBindingArtifact,
+  resolveCallableInterface,
   installImageObjectReadBinding,
   installImageObservationBinding,
   booleanValue,
@@ -564,6 +577,7 @@ export {
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
+  resolveDeclaredType,
   // The authorized Project reads (version-aware and descriptor-only) and the
   // authorized Project rename are the Object Environment's production seams.
   // The other three bindings are bounded host/control-plane setup helpers used

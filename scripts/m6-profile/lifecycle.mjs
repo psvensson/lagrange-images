@@ -6,16 +6,16 @@ function alive(pid) {
   catch (error) { if (error.code === 'ESRCH') return false; throw error; }
 }
 export async function runOwnedChild({argv, cwd, env, maxMs, maxLogBytes, graceMs = 5000, reapMs = 2000,
-  signal, spawnChild = (args, options) => spawn(process.execPath, args, options),
+  thermalIntervalMs = 1000, signal, spawnChild = (args, options) => spawn(process.execPath, args, options),
   killGroup = (pid, action) => process.kill(-pid, action), groupAlive = alive,
   onChunk = () => {}, onStarted = () => {}, thermalCheck = () => false}) {
   const startedAt = new Date().toISOString();
   let child;
   try { child = spawnChild(argv, {cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe']}); }
-  catch (error) { return {pid: null, pgid: null, startedAt, terminalAt: new Date().toISOString(), code: 127, signal: null, reason: 'spawn-failed', spawnError: {name: error.name, code: error.code}, reaped: true, groupGone: true, keptLogBytes: 0, observedLogBytes: 0}; }
+  catch (error) { return {pid: null, pgid: null, startedAt, terminalAt: new Date().toISOString(), code: 127, signal: null, reason: 'spawn-failed', spawnError: {name: error.name, code: error.code}, thermalCause: null, reaped: true, groupGone: true, keptLogBytes: 0, observedLogBytes: 0}; }
   const pid = child.pid ?? null;
   let reason = null; let bytes = 0; let keptBytes = 0; let killTimer; let closeTimer; let fallbackTimer; let finishWait;
-  let cleanupError = null;
+  let cleanupError = null; let thermalCause = null;
   const observedAlive = () => { try { return pid ? groupAlive(pid) : false; } catch (error) { cleanupError = {name: error.name, code: error.code}; return true; } };
   let reaped = false; let code = null; let exitSignal = null; let spawnError = null;
   const safelyKill = (action) => {
@@ -46,8 +46,28 @@ export async function runOwnedChild({argv, cwd, env, maxMs, maxLogBytes, graceMs
   signal?.addEventListener('abort', onAbort, {once: true});
   if (signal?.aborted) onAbort();
   const thermalTimer = setInterval(() => {
-    try { if (thermalCheck()) stop('thermal-hold'); } catch { stop('thermal-observation-failed'); }
-  }, 1000);
+    try {
+      const checkResult = thermalCheck();
+      if (checkResult === true) {
+        thermalCause ||= {kind: 'hold', reading: true};
+        stop('thermal-hold');
+      } else if (checkResult && typeof checkResult === 'object') {
+        if (checkResult.hold === true || (typeof checkResult.state === 'string' && !['ok', 'unmeasurable'].includes(checkResult.state))) {
+          thermalCause ||= {kind: 'hold', reading: checkResult};
+          stop('thermal-hold');
+        }
+      }
+    } catch (error) {
+      thermalCause ||= {
+        kind: 'error',
+        name: error?.name ?? 'Error',
+        message: error?.message ?? String(error),
+        code: error?.code ?? null,
+        ...(error?.reading !== undefined ? {reading: error.reading} : {}),
+      };
+      stop('thermal-observation-failed');
+    }
+  }, thermalIntervalMs);
   try {
     if (pid) { try { onStarted({pid, pgid: pid, startedAt}); } catch { stop('start-ledger-failed'); } }
     await close;
@@ -67,5 +87,5 @@ export async function runOwnedChild({argv, cwd, env, maxMs, maxLogBytes, graceMs
   }
   return {pid, pgid: pid, startedAt, terminalAt: new Date().toISOString(), code,
     signal: exitSignal, reason, observedLogBytes: bytes, keptLogBytes: keptBytes,
-    truncated: bytes > keptBytes, spawnError, cleanupError, reaped, groupGone: !pid || !observedAlive()};
+    truncated: bytes > keptBytes, spawnError, cleanupError, thermalCause, reaped, groupGone: !pid || !observedAlive()};
 }

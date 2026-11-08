@@ -190,6 +190,8 @@ jobs:
       - run: npm install --ignore-scripts
       - name: Download pinned OpenSmalltalkVM, Cuis image and JSON package
         run: scripts/integration-setup.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Run real OpenSmalltalkVM + Cuis runtime and toolchain proofs
         shell: bash
         run: |

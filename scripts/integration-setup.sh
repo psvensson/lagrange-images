@@ -99,9 +99,14 @@ fetch() {
 
 # The VM archive is content-addressed by sha256; the Cuis files are pinned to a Git commit
 # and verified by Git blob hash, which is what upstream publishes them as.
+GH_AUTH_HEADER=()
+if [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+  GH_AUTH_HEADER=(-H "Authorization: Bearer ${GH_TOKEN:-${GITHUB_TOKEN}}")
+fi
 fetch "https://api.github.com/repos/OpenSmalltalk/opensmalltalk-vm/releases/assets/$VM_ASSET_ID" \
   .integration/opensmalltalk-vm/vm.tar.gz \
-  -H "Accept: application/octet-stream"
+  -H "Accept: application/octet-stream" \
+  "${GH_AUTH_HEADER[@]}"
 echo "$VM_ARCHIVE_SHA256  .integration/opensmalltalk-vm/vm.tar.gz" | sha256sum --check --strict
 tar -xzf .integration/opensmalltalk-vm/vm.tar.gz -C .integration/opensmalltalk-vm
 
