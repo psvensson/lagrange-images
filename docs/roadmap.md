@@ -468,7 +468,7 @@ Authority remains transient execution context. Project structure must not imply 
 
 The native-import path depends on the image graph becoming the authoritative application store:
 
-- [ ] real Lagrange process-restart durability proof;
+- [x] real Lagrange process-restart durability proof (multi-process OS restart proof across separate child processes over an on-disk SQLite-backed `LagrangeBackend`, recovering polyglot Smalltalk/Common Lisp classes, Shape-migrated objects, named branches, historical frontier reconstruction, history-safe GC tombstones, and managed Project installations without recompilation, proven in `test/lagrange-process-restart-durability.test.js`);
 - [x] multi-node failure/recovery durability tests (`PLACEMENT_RECOVERY_REPORT_V1` and `reconcileInterruptedRelocations` in `src/graph/placement.js`, healing interrupted relocations and split-brain state across peer backends, proven in `test/distributed-recovery-idempotency-wasm.test.js`);
 - [x] logical snapshot/revision frontiers beyond the first `GraphImageService.frontier()` seam (`createBranch`, `getBranch`, `listBranches`, `advanceBranch`, `deleteBranch`, `forkImageFromFrontier`, `forkImageFromBranch`, `diffBranches`, and `mergeBranches` in `src/graph/branches.js`, proven in `test/branches-working-frontier.test.js`);
 - [x] revision-aware reads (`reconstructImageRecordsAtFrontier` and `diffProjectAtFrontiers` in `src/graph/diff.js` and `src/project/diff.js`, proven in `test/image-project-diff.test.js`);
