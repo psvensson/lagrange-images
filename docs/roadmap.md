@@ -77,10 +77,10 @@ The first of those is delivered: `authorizedDescribeSmalltalkClass` / `authorize
 
 The structured foreign/component boundary is functionally closed for current needs. Keep only refinements with concrete application pressure:
 
-- [ ] per-call resource reads once async-capable host imports work;
-- [ ] async foreign callbacks/effects only through explicit contracts, including delegated/attenuated authority semantics;
-- [ ] reusable foreign Component instance/reset contracts only if measurements justify them;
-- [ ] per-call authority transport for long-lived foreign runtimes when an explicit foreign service requires it.
+- [x] per-call resource reads once async-capable host imports work (`snapshotAsync()`, `refresh()`, and `perCallRead: true` on `createPreboundImageResourceProvider` in `src/callable/image-resource-provider.js`, performing a live `require(demand)` check and fresh `images.getObject` read per call while preserving synchronous `snapshot()` compatibility, proven in `test/callable-authority-refinements.test.js`);
+- [x] async foreign callbacks/effects only through explicit contracts, including delegated/attenuated authority semantics (`allowedOperations`, `allowedResources`, `attenuateDemand`, `asyncEffects`, and `UndeclaredAsyncHostEffectError` in `src/callable/host-import-registry.js` and `hostImportPolicies` in `src/callable/wasm-component-binding.js`, narrowing `require` per declared host import specifier while keeping `provider` input strictly `{require}`, proven in `test/callable-authority-refinements.test.js`);
+- [x] reusable foreign Component instance/reset contracts only if measurements justify them (`WASM_COMPONENT_INSTANCE_REUSE_NONE`, `WASM_COMPONENT_INSTANCE_REUSE_RESET_V1 = 'stateless-reset-v1'`, `ComponentInstanceResetContractError`, and `poolStats` in `src/wasm/jco-component-runtime.js` and `src/callable/wasm-component-binding.js`, rebinding host imports per activation via an ephemeral proxy holder, enforcing an explicit `lagrange-reset`/`reset` export, and evicting on trap or missing reset, proven in `test/callable-authority-refinements.test.js`);
+- [x] per-call authority transport for long-lived foreign runtimes when an explicit foreign service requires it (`FOREIGN_RUNTIME_CALL_OPERATION`, `FOREIGN_RUNTIME_RESOURCE_V0`, `foreignRuntimeCallResource`, and `parseForeignRuntimeCallResource` in `src/authority/object-resource.js`, `ExpiredForeignRuntimeCallAuthorityError` and call-scoped `context.require` in `src/foreign-runtime/service.js`, and `requireCallAuthority`/`transportCallAuthority` in `src/callable/foreign-runtime-binding.js` and `src/foreign-runtime/callable-executor.js`, proven in `test/callable-authority-refinements.test.js`).
 
 The portable graphics capability boundary remains an Object Environment concern as recorded in ADR 0063 and the environment repository. Images stays renderer-agnostic.
 

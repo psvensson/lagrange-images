@@ -15,6 +15,19 @@
 // still reports a clear error; it just cannot execute.
 
 const TRANSPILE_OPTIONS = Object.freeze({instantiation: 'async'});
+const WASM_COMPONENT_INSTANCE_REUSE_NONE = 'fresh-per-activation';
+const WASM_COMPONENT_INSTANCE_REUSE_RESET_V1 = 'stateless-reset-v1';
+const WASM_COMPONENT_INSTANCE_REUSE_MODES = Object.freeze([
+  WASM_COMPONENT_INSTANCE_REUSE_NONE,
+  WASM_COMPONENT_INSTANCE_REUSE_RESET_V1,
+]);
+
+class ComponentInstanceResetContractError extends TypeError {
+  constructor(message) {
+    super(message);
+    this.name = 'ComponentInstanceResetContractError';
+  }
+}
 
 function componentBytes(component) {
   if (component?.content?.kind !== 'bytes') {
@@ -77,9 +90,72 @@ async function prepareComponent(component) {
   });
 }
 
-function createJcoComponentRuntime({moduleCache = true} = {}) {
+function createImportProxyHolder(requiredSpecifiers = [], initialImports = {}) {
+  const holder = {currentImports: null};
+  const namespaceProxy = (specifier) => new Proxy({}, {
+    get(_target, prop) {
+      if (typeof prop === 'symbol') return undefined;
+      const active = holder.currentImports?.[specifier];
+      if (!active) {
+        throw new TypeError(`WASM Component host import ${specifier}.${String(prop)} accessed outside an active invocation`);
+      }
+      const value = active[prop];
+      if (typeof value === 'function' && !/^class\s/.test(Function.prototype.toString.call(value))) {
+        return (...args) => {
+          const current = holder.currentImports?.[specifier];
+          if (!current || typeof current[prop] !== 'function') {
+            throw new TypeError(`WASM Component host import ${specifier}.${String(prop)} accessed outside an active invocation`);
+          }
+          return current[prop](...args);
+        };
+      }
+      return value;
+    },
+  });
+  const specifiers = new Set([...requiredSpecifiers, ...Object.keys(initialImports)]);
+  const rootTarget = {};
+  for (const specifier of specifiers) {
+    rootTarget[specifier] = namespaceProxy(specifier);
+  }
+  const proxy = new Proxy(rootTarget, {
+    get(target, prop) {
+      if (typeof prop === 'symbol') return target[prop];
+      if (!Object.hasOwn(target, prop)) {
+        target[prop] = namespaceProxy(String(prop));
+      }
+      return target[prop];
+    },
+  });
+  return {holder, proxy};
+}
+
+function normalizeReuseMode(mode, label = 'WASM Component instanceReuse') {
+  if (mode === false || mode === null || mode === undefined) return WASM_COMPONENT_INSTANCE_REUSE_NONE;
+  if (!WASM_COMPONENT_INSTANCE_REUSE_MODES.includes(mode)) {
+    throw new TypeError(`${label} must be one of ${WASM_COMPONENT_INSTANCE_REUSE_MODES.join(', ')}`);
+  }
+  return mode;
+}
+
+function createJcoComponentRuntime({
+  moduleCache = true,
+  instanceReuse = WASM_COMPONENT_INSTANCE_REUSE_NONE,
+  resetExport = 'lagrange-reset',
+} = {}) {
+  const defaultReuseMode = normalizeReuseMode(instanceReuse);
   // Keyed by immutable artifact identity, runtime-local, never persisted.
   const prepared = moduleCache ? new Map() : null;
+  const idlePools = new Map();
+  const statsByComponent = new Map();
+
+  function statsFor(key) {
+    let record = statsByComponent.get(key);
+    if (!record) {
+      record = {instantiations: 0, reuses: 0, resets: 0, evictions: 0};
+      statsByComponent.set(key, record);
+    }
+    return record;
+  }
 
   async function preparedComponent(component) {
     if (!prepared) return await prepareComponent(component);
@@ -106,32 +182,116 @@ function createJcoComponentRuntime({moduleCache = true} = {}) {
       return (await preparedComponent(component)).requiredImports;
     },
 
-    async invoke(component, functionName, args, imports = {}) {
+    poolStats(component) {
+      if (!component || component.kind !== 'code-artifact') {
+        throw new TypeError('jco Component runtime requires a code-artifact Component');
+      }
+      const key = componentCacheKey(component);
+      const record = statsFor(key);
+      const pool = idlePools.get(key) ?? [];
+      return Object.freeze({
+        instantiations: record.instantiations,
+        reuses: record.reuses,
+        resets: record.resets,
+        evictions: record.evictions,
+        idleCount: pool.length,
+      });
+    },
+
+    async invoke(component, functionName, args, imports = {}, options = {}) {
       if (!component || component.kind !== 'code-artifact') {
         throw new TypeError('jco Component runtime requires a code-artifact Component');
       }
       if (!imports || typeof imports !== 'object') throw new TypeError('Component imports must be an object');
-      const {generated, cores} = await preparedComponent(component);
-
-      // Fresh instance per activation, per ADR 0036, now with whatever host implementations
-      // the binding executor assembled. This runtime is deliberately authority-agnostic: it
-      // sees import functions, never grants, contexts or principals.
-      const instance = await generated.instantiate(
-        async (path) => {
-          const module = cores.get(path);
-          if (!module) throw new TypeError(`jco requested an unknown core module: ${path}`);
-          return module;
-        },
-        imports,
+      const reuseMode = normalizeReuseMode(
+        options?.instanceReuse !== undefined ? options.instanceReuse : defaultReuseMode,
       );
+      const key = componentCacheKey(component);
+      const stats = statsFor(key);
+      const {generated, cores, requiredImports} = await preparedComponent(component);
+      const resolveCoreModule = async (path) => {
+        const module = cores.get(path);
+        if (!module) throw new TypeError(`jco requested an unknown core module: ${path}`);
+        return module;
+      };
+
+      if (reuseMode === WASM_COMPONENT_INSTANCE_REUSE_NONE) {
+        // Fresh instance per activation, per ADR 0036, now with whatever host implementations
+        // the binding executor assembled. This runtime is deliberately authority-agnostic: it
+        // sees import functions, never grants, contexts or principals.
+        stats.instantiations += 1;
+        const instance = await generated.instantiate(resolveCoreModule, imports);
+        const exported = componentExport(instance, functionName);
+        if (typeof exported !== 'function') {
+          throw new TypeError(`WASM Component does not export a function named ${functionName}`);
+        }
+        return await exported(...args);
+      }
+
+      // Reusable Component instance under explicit stateless-reset-v1 contract.
+      let pool = idlePools.get(key);
+      if (!pool) {
+        pool = [];
+        idlePools.set(key, pool);
+      }
+      let entry = pool.pop() ?? null;
+      if (entry) {
+        stats.reuses += 1;
+      } else {
+        const {holder, proxy} = createImportProxyHolder(requiredImports, imports);
+        holder.currentImports = imports;
+        let instance;
+        try {
+          stats.instantiations += 1;
+          instance = await generated.instantiate(resolveCoreModule, proxy);
+        } finally {
+          holder.currentImports = null;
+        }
+        entry = {instance, holder};
+      }
+
+      const {instance, holder} = entry;
+      const effectiveResetExport = options?.resetExport ?? resetExport;
+      const resetFn = componentExport(instance, effectiveResetExport) ?? componentExport(instance, 'reset');
+      if (typeof resetFn !== 'function') {
+        stats.evictions += 1;
+        holder.currentImports = null;
+        throw new ComponentInstanceResetContractError(
+          `WASM Component opted into ${WASM_COMPONENT_INSTANCE_REUSE_RESET_V1} must export a reset function (${effectiveResetExport} or reset)`,
+        );
+      }
 
       const exported = componentExport(instance, functionName);
       if (typeof exported !== 'function') {
+        stats.evictions += 1;
+        holder.currentImports = null;
         throw new TypeError(`WASM Component does not export a function named ${functionName}`);
       }
-      return exported(...args);
+
+      holder.currentImports = imports;
+      let succeeded = false;
+      try {
+        const callResult = await exported(...args);
+        await resetFn();
+        stats.resets += 1;
+        succeeded = true;
+        return callResult;
+      } finally {
+        holder.currentImports = null;
+        if (succeeded) {
+          pool.push(entry);
+        } else {
+          stats.evictions += 1;
+        }
+      }
     },
   });
 }
 
-export {createJcoComponentRuntime};
+export {
+  ComponentInstanceResetContractError,
+  WASM_COMPONENT_INSTANCE_REUSE_MODES,
+  WASM_COMPONENT_INSTANCE_REUSE_NONE,
+  WASM_COMPONENT_INSTANCE_REUSE_RESET_V1,
+  createJcoComponentRuntime,
+};

@@ -221,7 +221,14 @@ async function installWasmComponentBindingV2({
 // known until it calls, and precomputing authorization would snapshot it at instantiation and
 // silently defeat revocation. Declaration decides which interfaces are *wired*; every concrete
 // operation calls require() at use time, so the effective intersection happens per call.
-async function assembleHostImports({componentRuntime, hostImports, implementation, declared, require}) {
+async function assembleHostImports({
+  componentRuntime,
+  hostImports,
+  implementation,
+  declared,
+  require,
+  hostImportPolicies = null,
+}) {
   const required = typeof componentRuntime.requiredImports === 'function'
     ? await componentRuntime.requiredImports(implementation)
     : [];
@@ -233,12 +240,19 @@ async function assembleHostImports({componentRuntime, hostImports, implementatio
     // Undeclared is a property of the durable binding contract, not of this execution, so it
     // is a linking failure rather than an authorization failure. undeclared != unauthorized.
     if (!declaredSet.has(specifier)) throw new UndeclaredHostImportError(specifier);
-    assembled[specifier] = await hostImports.create(specifier, {require});
+    const callPolicy = hostImportPolicies && typeof hostImportPolicies === 'object'
+      ? (hostImportPolicies instanceof Map ? hostImportPolicies.get(specifier) : hostImportPolicies[specifier])
+      : null;
+    assembled[specifier] = await hostImports.create(specifier, {require, ...(callPolicy ?? {})});
   }
   return assembled;
 }
 
-function createWasmComponentBindingV1Executor({componentRuntime = null, hostImports = null} = {}) {
+function createWasmComponentBindingV1Executor({
+  componentRuntime = null,
+  hostImports = null,
+  hostImportPolicies = null,
+} = {}) {
   if (componentRuntime !== null && (typeof componentRuntime !== 'object' || typeof componentRuntime.invoke !== 'function')) {
     throw new TypeError('WASM Component binding executor componentRuntime must implement invoke(component, function, args)');
   }
@@ -281,8 +295,18 @@ function createWasmComponentBindingV1Executor({componentRuntime = null, hostImpo
         implementation,
         declared: binding.hostImports,
         require,
+        hostImportPolicies,
       });
-      const raw = await componentRuntime.invoke(implementation, descriptor.function, lowered, imports);
+      const invokeOptions = {};
+      if (code.metadata?.instanceReuse !== undefined) {
+        invokeOptions.instanceReuse = code.metadata.instanceReuse;
+      }
+      if (code.metadata?.resetExport !== undefined) {
+        invokeOptions.resetExport = code.metadata.resetExport;
+      }
+      const raw = Object.keys(invokeOptions).length > 0
+        ? await componentRuntime.invoke(implementation, descriptor.function, lowered, imports, invokeOptions)
+        : await componentRuntime.invoke(implementation, descriptor.function, lowered, imports);
       if (isCompositeType(descriptor.result)) {
         return packCompositeValue(raw, descriptor.result, types, `${descriptor.function} result`);
       }
