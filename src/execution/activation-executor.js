@@ -363,6 +363,20 @@ class ActivationExecutor {
       return implementation(...args);
     };
 
+    const activationFrameId = conditions.enterActivationFrame?.({
+      depth,
+      block: activation.block,
+      code: activation.code,
+      languageId: code.languageId ?? null,
+      representation: code.representation,
+      receiver: activation.receiver,
+      selector: activation.dispatch?.message?.value ?? null,
+      definingBehavior: activeFrame?.definingBehavior ?? null,
+      ownsFrame,
+      argumentCount: activation.arguments.length,
+      metadata: activeFrame?.metadata ?? block.metadata ?? {},
+    }) ?? null;
+
     try {
       if (ownsFrame) this.#markHomeActivation(activeFrame, 'live', homeSelector);
       const result = await executor.execute(
@@ -589,6 +603,7 @@ class ActivationExecutor {
     } finally {
       // Also on the exceptional path: a trapping guest must not leave a live context behind.
       lifetime.active = false;
+      if (activationFrameId !== null) conditions.leaveActivationFrame?.(activationFrameId);
       // Dead from here on. Retained rather than deleted: while the frame is still reachable, a
       // `^` naming it must be told the method returned rather than that it has no home.
       // Marked dead rather than deleted: while the frame is still reachable, a `^` naming it must
