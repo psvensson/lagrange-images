@@ -64,7 +64,7 @@ Next pressures:
 
 - [ ] primitive-backed methods only where M1-M5 imported code requires them;
 - [ ] broaden the standard image only from real imported library/application pressure;
-- [ ] debugger-grade activation/resumption metadata without putting debugger UI here;
+- [x] debugger-grade activation/resumption metadata without putting debugger UI here (`ACTIVATION_STACK_REPORT_V1`, `CONDITION_INSPECTION_REPORT_V1`, `captureActivationStackReport`, `captureConditionAndStackReport`, `listAvailableRestarts`, `invokeCapturedRestart`, and `authorizedInspectExecutionCondition` in `src/execution/debug-inspect.js`, proven across Symmetric Smalltalk and in-image Common Lisp in `test/polyglot-debug-inspect.test.js`);
 - [ ] preserve the current owner boundaries for classes, Shapes, method dictionaries, instance/class state, namespaces and object residency as native import begins using them.
 
 Already established foundations include cascades, collection/species conventions, nested namespaces (ADR 0061) and transient-to-durable object residency/promotion (ADR 0060).

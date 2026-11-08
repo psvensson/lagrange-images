@@ -156,6 +156,7 @@ function createDefaultCodeExecutorRegistry({
 export {ActivationExecutor, ExpiredExecutionContextError, createDefaultCodeExecutorRegistry};
 export * from './block-application.js';
 export * from './conditions.js';
+export * from './debug-inspect.js';
 export * from './executor-registry.js';
 export * from './neutral-expression-v0.js';
 export {

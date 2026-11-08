@@ -41,6 +41,15 @@ import {ImageService} from './image/graph-image-service.js';
 import {createAuthorityService} from './authority/authority-service.js';
 import {DispatchRegistry, InvocationService} from './dispatch/invocation-service.js';
 import {ActivationExecutor} from './execution/activation-executor.js';
+import {
+  ACTIVATION_STACK_REPORT_V1,
+  CONDITION_INSPECTION_REPORT_V1,
+  authorizedInspectExecutionCondition,
+  captureActivationStackReport,
+  captureConditionAndStackReport,
+  invokeCapturedRestart,
+  listAvailableRestarts,
+} from './execution/debug-inspect.js';
 import {CodeExecutorRegistry} from './execution/executor-registry.js';
 import {NEUTRAL_EXPRESSION_V0, neutralExpressionV0Executor} from './execution/neutral-expression-v0.js';
 import {
@@ -659,4 +668,11 @@ export {
   parsePackageArchiveArtifact,
   putPackageArchiveArtifact,
   reusePrecompiledWasmArtifact,
+  ACTIVATION_STACK_REPORT_V1,
+  CONDITION_INSPECTION_REPORT_V1,
+  authorizedInspectExecutionCondition,
+  captureActivationStackReport,
+  captureConditionAndStackReport,
+  invokeCapturedRestart,
+  listAvailableRestarts,
 };

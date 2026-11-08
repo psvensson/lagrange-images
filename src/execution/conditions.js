@@ -62,6 +62,9 @@ class NoActiveOccurrenceError extends TypeError {
 class ConditionRuntime {
   #scopes = [];
   #occurrences = [];
+  #activationFrames = [];
+  #restarts = [];
+  #lastSignalSnapshot = null;
   #nextId = 0;
 
   // `authorityToken` is an opaque handle to the authority in force at establishment. The runtime
@@ -78,6 +81,95 @@ class ConditionRuntime {
     const scopeId = (this.#nextId += 1);
     this.#scopes.push({scopeId, kind, block, authorityToken, active: true});
     return scopeId;
+  }
+
+  enterRestart({name, block, description = null, authorityToken = null}) {
+    const restartId = (this.#nextId += 1);
+    this.#restarts.push({
+      restartId,
+      name: String(name),
+      block,
+      description: description === null ? null : String(description),
+      authorityToken,
+      active: true,
+    });
+    return restartId;
+  }
+
+  leaveRestart(restartId) {
+    const index = this.#restarts.findIndex((entry) => entry.restartId === restartId);
+    if (index >= 0) this.#restarts.length = index;
+  }
+
+  enterActivationFrame(descriptor = {}) {
+    const frameId = (this.#nextId += 1);
+    const entry = Object.freeze({
+      frameId,
+      depth: Number.isInteger(descriptor.depth) ? descriptor.depth : this.#activationFrames.length,
+      block: descriptor.block ?? null,
+      code: descriptor.code ?? null,
+      languageId: descriptor.languageId ?? null,
+      representation: descriptor.representation ?? null,
+      receiver: descriptor.receiver ?? null,
+      selector: descriptor.selector ?? null,
+      definingBehavior: descriptor.definingBehavior ?? null,
+      ownsFrame: Boolean(descriptor.ownsFrame),
+      argumentCount: Number.isInteger(descriptor.argumentCount) ? descriptor.argumentCount : 0,
+      metadata: Object.freeze({...(descriptor.metadata ?? {})}),
+    });
+    this.#activationFrames.push(entry);
+    return frameId;
+  }
+
+  leaveActivationFrame(frameId) {
+    const index = this.#activationFrames.findIndex((entry) => entry.frameId === frameId);
+    if (index >= 0) this.#activationFrames.length = index;
+  }
+
+  snapshotActivationFrames() {
+    return Object.freeze([...this.#activationFrames]);
+  }
+
+  snapshotScopes() {
+    return Object.freeze(this.#scopes.map((scope) => Object.freeze({
+      scopeId: scope.scopeId,
+      kind: scope.kind,
+      conditionClass: scope.conditionClass ?? null,
+      block: scope.block ?? null,
+      active: Boolean(scope.active),
+    })));
+  }
+
+  snapshotOccurrences() {
+    return Object.freeze(this.#occurrences.map((entry) => Object.freeze({
+      occurrenceId: entry.occurrenceId,
+      condition: entry.condition,
+      handlerScopeId: entry.handlerScopeId,
+      active: Boolean(entry.active),
+    })));
+  }
+
+  snapshotRestarts() {
+    return Object.freeze(
+      this.#restarts
+        .filter((entry) => entry.active)
+        .map((entry) => Object.freeze({
+          restartId: entry.restartId,
+          name: entry.name,
+          block: entry.block,
+          description: entry.description,
+          active: true,
+        })),
+    );
+  }
+
+  recordSignalSnapshot(snapshot) {
+    this.#lastSignalSnapshot = Object.freeze({...snapshot});
+    return this.#lastSignalSnapshot;
+  }
+
+  lastSignalSnapshot() {
+    return this.#lastSignalSnapshot;
   }
 
   // Truncates rather than pops: an unwind may have skipped scopes established inside this one, and
@@ -226,11 +318,38 @@ async function signalConditionOccurrence({
 }) {
   const normalizedCondition = canonicalizeValue(condition);
   const scope = await facade.runtime.findHandler(matches);
+  const descriptionText = describeCondition();
+  const signalFrames = facade.runtime.snapshotActivationFrames?.() ?? Object.freeze([]);
+  const signalScopes = facade.runtime.snapshotScopes?.() ?? Object.freeze([]);
+  const signalRestarts = facade.runtime.snapshotRestarts?.() ?? Object.freeze([]);
   if (!scope) {
-    throw createUnhandledError(describeCondition());
+    const unhandledSnapshot = facade.runtime.recordSignalSnapshot?.({
+      condition: normalizedCondition,
+      description: descriptionText,
+      handled: false,
+      handlerScopeId: null,
+      frames: signalFrames,
+      scopes: signalScopes,
+      restarts: signalRestarts,
+    }) ?? null;
+    const unhandledError = createUnhandledError(descriptionText);
+    if (unhandledError && typeof unhandledError === 'object' && unhandledSnapshot) {
+      unhandledError.conditionSnapshot = unhandledSnapshot;
+    }
+    throw unhandledError;
   }
 
   const occurrence = facade.runtime.beginOccurrence(normalizedCondition, scope.scopeId);
+  facade.runtime.recordSignalSnapshot?.({
+    condition: normalizedCondition,
+    description: descriptionText,
+    handled: true,
+    handlerScopeId: scope.scopeId,
+    occurrenceId: occurrence,
+    frames: signalFrames,
+    scopes: signalScopes,
+    restarts: signalRestarts,
+  });
   try {
     const answer = await facade.runtime.withDisabled(
       scope,
