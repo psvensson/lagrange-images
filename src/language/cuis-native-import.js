@@ -771,9 +771,12 @@ function importPlan(manifest, scope, {postLoadInitializers: optionInitializers =
   const byClassName = new Map();
   const nativeNames = new Set();
   for (const item of manifest.classes) {
+    const classKeys = item?.category !== undefined
+      ? ['identity', 'package', 'name', 'superclassName', 'superclass', 'instanceVariables', 'classVariables', 'category']
+      : ['identity', 'package', 'name', 'superclassName', 'superclass', 'instanceVariables', 'classVariables'];
     exactKeys(
       item,
-      ['identity', 'package', 'name', 'superclassName', 'superclass', 'instanceVariables', 'classVariables'],
+      classKeys,
       'class declaration',
     );
     const packageName = text(item.package, 'class package');
@@ -808,7 +811,16 @@ function importPlan(manifest, scope, {postLoadInitializers: optionInitializers =
     if (new Set(classVariables).size !== classVariables.length) {
       fail(`class ${identity} declares duplicate class variable names`, identity);
     }
-    const normalized = Object.freeze({identity, package: packageName, name, superclass, instanceVariables, classVariables});
+    const category = item.category !== undefined ? text(item.category, `class ${identity} category`) : null;
+    const normalized = Object.freeze({
+      identity,
+      package: packageName,
+      name,
+      superclass,
+      instanceVariables,
+      classVariables,
+      category,
+    });
     classes.push(normalized);
     byIdentity.set(identity, normalized);
     byClassName.set(name, normalized);
@@ -876,7 +888,10 @@ function importPlan(manifest, scope, {postLoadInitializers: optionInitializers =
   const methodIdentities = new Set();
   const nativeBindings = new Set();
   for (const item of manifest.methods) {
-    exactKeys(item, ['identity', 'package', 'class', 'side', 'selector', 'source'], 'method declaration');
+    const methodKeys = item?.category !== undefined
+      ? ['identity', 'package', 'class', 'side', 'selector', 'source', 'category']
+      : ['identity', 'package', 'class', 'side', 'selector', 'source'];
+    exactKeys(item, methodKeys, 'method declaration');
     const packageName = text(item.package, 'method package');
     if (!packageNames.has(packageName)) fail(`method names undeclared package ${packageName}`);
     const classIdentity = text(item.class, 'method target class semantic identity');
@@ -897,6 +912,7 @@ function importPlan(manifest, scope, {postLoadInitializers: optionInitializers =
     }
     nativeBindings.add(binding);
     const source = text(item.source, `method ${identity} source`);
+    const category = item.category !== undefined ? text(item.category, `method ${identity} category`) : null;
     if (requested && !requested.methods.has(identity)) continue;
     if (isMappedCuisClassAt(classIdentity, CUIS_NATIVE_MAPPING_POSITION.METHOD_TARGET)) {
       // An extension method on a class the package does not define is ordinary Smalltalk. The
@@ -918,6 +934,8 @@ function importPlan(manifest, scope, {postLoadInitializers: optionInitializers =
     const header = parseCuisMethodHeader({identity, selector, source});
     methods.push(Object.freeze({
       identity,
+      package: packageName,
+      category,
       classIdentity,
       side: item.side,
       selector,
@@ -1016,12 +1034,14 @@ async function importCuisNativePackage({
   postLoadInitializers = null,
   targetNamespaceId = null,
   retainSource = false,
+  retainProvenance = false,
   signal = null,
   onProgress = null,
 } = {}) {
   text(imageId, 'image id');
   if (!images || typeof images !== 'object') fail('images must be an image service');
   if (typeof retainSource !== 'boolean') fail('retainSource must be a boolean');
+  if (typeof retainProvenance !== 'boolean') fail('retainProvenance must be a boolean');
   if (targetNamespaceId !== null) text(targetNamespaceId, 'targetNamespaceId');
   assertProgressOptions(signal, onProgress);
   const plan = importPlan(manifest, scope, {postLoadInitializers});
@@ -1076,6 +1096,14 @@ async function importCuisNativePackage({
       superclassRef: superclass.classRef,
       instanceVariables: declaration.instanceVariables,
       classVariables: declaration.classVariables,
+      ...(retainProvenance
+        ? {
+          provenance: {
+            package: declaration.package,
+            ...(declaration.category !== null ? {category: declaration.category} : {}),
+          },
+        }
+        : {}),
     }));
     // The declared NAMES became definition metadata at creation; the executable shared state is
     // the ClassVariableBinding object each name denotes, created here at its deterministic id so
@@ -1135,6 +1163,14 @@ async function importCuisNativePackage({
     const loweredMethods = methods.map((method) => ({
       selector: method.selector,
       source: lowerCuisMethodToNativeSource(method),
+      ...(retainProvenance
+        ? {
+          provenance: {
+            package: method.package,
+            ...(method.category !== null ? {category: method.category} : {}),
+          },
+        }
+        : {}),
     }));
     await reconcileMethodsFromSource({
       images,

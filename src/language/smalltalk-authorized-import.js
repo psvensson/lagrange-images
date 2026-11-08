@@ -126,11 +126,22 @@ function importDemandsFor({imageId, plan}) {
 }
 
 async function authorizedImportCuisPackage({
-  images, compilation, imageId, manifest, scope = null, require, signal = null, onProgress = null,
+  images,
+  compilation,
+  imageId,
+  manifest,
+  scope = null,
+  retainSource = false,
+  retainProvenance = false,
+  require,
+  signal = null,
+  onProgress = null,
 } = {}) {
   // 1. Caller-owned input, then the pure plan (the adapter's own preflight; no graph read).
   assertServices(images, compilation, require);
   requiredText(imageId, 'imageId');
+  if (typeof retainSource !== 'boolean') throw new SmalltalkImportInputError('retainSource must be a boolean');
+  if (typeof retainProvenance !== 'boolean') throw new SmalltalkImportInputError('retainProvenance must be a boolean');
   assertProgressOptions(signal, onProgress);
   if (!manifest || typeof manifest !== 'object') throw new SmalltalkImportInputError('manifest must be a canonical Cuis semantic export manifest');
   const plan = planCuisNativeImport(manifest, scope);
@@ -154,7 +165,17 @@ async function authorizedImportCuisPackage({
   // 4. The import itself, at its owner; 5. the public outcome.
   let imported;
   try {
-    imported = await importCuisNativePackage({images, compilation, imageId, manifest, scope, signal, onProgress: tracker});
+    imported = await importCuisNativePackage({
+      images,
+      compilation,
+      imageId,
+      manifest,
+      scope,
+      retainSource,
+      retainProvenance,
+      signal,
+      onProgress: tracker,
+    });
   } catch (error) {
     if (error?.name === 'CuisNativeImportError' || error?.name === 'CuisNativeImportAbortedError') throw error;
     throw new SmalltalkImportRefusedError({

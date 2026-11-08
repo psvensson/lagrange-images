@@ -285,13 +285,41 @@ async function installedMethodLane({images, classRef, selector, block}) {
 // bindings. It is deliberately NOT Cuis source and not a probabilistic digest. Canonical JSON plus
 // base64url is injective for these normalized Values, so concurrent equal revisions select the same
 // create-once records while different revisions cannot alias.
-function methodRevisionId(classObjectId, selector, program, captures, lane, source = null) {
+function normalizeProvenance(provenance, label = 'provenance') {
+  if (provenance === null || provenance === undefined) return null;
+  if (typeof provenance !== 'object' || Array.isArray(provenance)) {
+    throw new TypeError(`${label} must be a non-array object or null`);
+  }
+  const entries = Object.keys(provenance).sort().map((key) => {
+    requiredText(key, `${label} key`);
+    const value = provenance[key];
+    if (value === null || value === undefined) return null;
+    return [key, requiredText(value, `${label}.${key}`)];
+  }).filter((entry) => entry !== null);
+  if (entries.length === 0) return null;
+  return Object.freeze(Object.fromEntries(entries));
+}
+
+function normalizeMethodProvenance({selector, category = null, provenance = null} = {}) {
+  const normalizedCategory = category === null || category === undefined
+    ? null
+    : requiredText(category, `method ${selector} category`);
+  const normalizedProvenance = normalizeProvenance(provenance, `method ${selector} provenance`);
+  if (normalizedCategory === null && normalizedProvenance === null) return null;
+  return normalizeProvenance({
+    ...(normalizedProvenance ?? {}),
+    ...(normalizedCategory === null ? {} : {category: normalizedCategory}),
+  }, `method ${selector} provenance`);
+}
+
+function methodRevisionId(classObjectId, selector, program, captures, lane, source = null, provenance = null) {
   const material = canonicalJson({
     captures,
     lane,
     representation: methodRepresentation(program),
     semanticContent: JSON.stringify(program),
     ...(source === null || source === undefined ? {} : {source}),
+    ...(provenance === null || provenance === undefined ? {} : {provenance}),
   });
   return `${methodId(classObjectId, selector)}/revision/${base64urlEncode(utf8Encode(material))}`;
 }
@@ -492,14 +520,17 @@ async function ensureWasmFunction({images, compilation, imageId, id, semanticRef
 // Both are native-owner identities, and the complete Block/semantic/environment contract must
 // still agree. Merely finding equal source or an arbitrary Block with equal-looking content is not
 // convergence.
-async function isSameInstalledMethod({images, imageId, classRef, selector, program, captures, lane, source = null, installed}) {
+async function isSameInstalledMethod({
+  images, imageId, classRef, selector, program, captures, lane, source = null, provenance = null, installed,
+}) {
   const baseId = methodId(classRef.objectId, selector);
-  const revisionId = methodRevisionId(classRef.objectId, selector, program, captures, lane, source);
+  const revisionId = methodRevisionId(classRef.objectId, selector, program, captures, lane, source, provenance);
   if (!isObjectRef(installed) || installed.imageId !== imageId
     || (installed.objectId !== baseId && installed.objectId !== revisionId)) return false;
   const id = installed.objectId;
   const block = await images.getBlock(imageId, id);
   if (!block || block.metadata?.lane !== lane) return false;
+  if (canonicalJson(block.metadata?.provenance ?? null) !== canonicalJson(provenance ?? null)) return false;
   const existingSource = await images.getCodeArtifact(imageId, `${id}:source`);
   if (source === null || source === undefined) {
     if (existingSource) return false;
@@ -762,7 +793,7 @@ function assertExpectedCurrentBindings({classRef, expected, bindings}) {
 // A write that supplied an expected current binding does NOT come here: it has a per-position
 // precondition rather than a whole-dictionary one, so it rebases instead (`commitMethodDictionary`).
 async function classifyLostMethodDictionaryCas({
-  images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, lane,
+  images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, provenancesBySelector, lane,
 }) {
   const {dictionaryRef: currentRef, existing: current, merged} =
     await readMethodDictionaryForUpdate({images, imageId, classRef});
@@ -780,6 +811,7 @@ async function classifyLostMethodDictionaryCas({
       program,
       captures: capturesBySelector.get(selector),
       source: sourcesBySelector.get(selector),
+      provenance: provenancesBySelector.get(selector),
       lane,
       installed,
     })) {
@@ -890,7 +922,7 @@ const MAX_UNRELATED_REBASE_ATTEMPTS = 4;
 // publication property and this slice adds no rollback or transaction to hide it. The load-bearing
 // invariant is narrower and exact: a failed or stale replacement never makes its revision CURRENT.
 async function commitMethodDictionary({
-  images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, lane, expected, installedRefs, read,
+  images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, provenancesBySelector, lane, expected, installedRefs, read,
 }) {
   let attempt = read;
   for (let rebases = MAX_UNRELATED_REBASE_ATTEMPTS; ; rebases -= 1) {
@@ -903,7 +935,7 @@ async function commitMethodDictionary({
       if (error?.name !== 'VersionConflictError') throw error;
       if (expected.size === 0) {
         return await classifyLostMethodDictionaryCas({
-          images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, lane,
+          images, imageId, classRef, methods, capturesBySelector, sourcesBySelector, provenancesBySelector, lane,
         });
       }
       // EVERY boundary re-asserts the expectation, INCLUDING THE LAST one. Checking the budget
@@ -969,7 +1001,8 @@ async function installMethods({
   const alreadyInstalled = new Set();
   const capturesBySelector = new Map();
   const sourcesBySelector = new Map();
-  for (const {selector, program, captures = [], source = null} of methods) {
+  const provenancesBySelector = new Map();
+  for (const {selector, program, captures = [], source = null, category = null, provenance = null} of methods) {
     requiredText(selector, 'selector');
     if (incoming.has(selector)) {
       throw new TypeError(`${operation} declares ${selector} twice in one call`);
@@ -978,7 +1011,9 @@ async function installMethods({
     const normalizedSource = source === null || source === undefined
       ? null
       : requiredText(source, `method ${selector} source`);
+    const normalizedProvenance = normalizeMethodProvenance({selector, category, provenance});
     sourcesBySelector.set(selector, normalizedSource);
+    provenancesBySelector.set(selector, normalizedProvenance);
     capturesBySelector.set(selector, normalizeMethodCaptures(selector, program, captures));
     // BEFORE the exact-replay branch below, deliberately. A guarded caller that observed A and asks
     // for C must be refused when someone else has already moved the position to B — INCLUDING when
@@ -997,6 +1032,7 @@ async function installMethods({
         images, imageId, classRef, selector, program,
         captures: capturesBySelector.get(selector),
         source: normalizedSource,
+        provenance: normalizedProvenance,
         lane, installed: merged.get(selector),
       })) {
         alreadyInstalled.add(selector);
@@ -1031,8 +1067,9 @@ async function installMethods({
     if (alreadyInstalled.has(selector)) continue;
     const captures = capturesBySelector.get(selector);
     const source = sourcesBySelector.get(selector);
+    const provenance = provenancesBySelector.get(selector);
     const id = merged.has(selector)
-      ? methodRevisionId(classRef.objectId, selector, program, captures, lane, source)
+      ? methodRevisionId(classRef.objectId, selector, program, captures, lane, source, provenance)
       : methodId(classRef.objectId, selector);
     const sourceArtifact = source === null
       ? null
@@ -1064,6 +1101,12 @@ async function installMethods({
     const representation = methodRepresentation(program);
     const semanticRef = objectRef(imageId, semantic.id);
     const nested = directNestedBlocks(program.body).length > 0;
+    const blockMetadata = {
+      smalltalk: 'method',
+      selector,
+      lane,
+      ...(provenance === null ? {} : {provenance}),
+    };
 
     // A method with nested Block literals goes through the same publication the standalone Block
     // installer uses: one recursive implementation, deterministic ids derived from this method's own
@@ -1081,7 +1124,7 @@ async function installMethods({
         semanticRef,
         id,
         environment: environmentRef,
-        metadata: {smalltalk: 'method', selector, lane},
+        metadata: blockMetadata,
       })).block;
     } else {
       const blockPrototypes = nested
@@ -1110,7 +1153,7 @@ async function installMethods({
       id,
       code: codeRef,
       environment: environmentRef,
-      metadata: {smalltalk: 'method', selector, lane},
+      metadata: blockMetadata,
     });
     // What this operation wants bound, kept separately from the planning snapshot. A rebase after a
     // lost CAS lays exactly these over FRESHLY read bindings; replaying the whole snapshot instead
@@ -1126,6 +1169,7 @@ async function installMethods({
     methods,
     capturesBySelector,
     sourcesBySelector,
+    provenancesBySelector,
     lane,
     expected,
     installedRefs,
@@ -1325,6 +1369,7 @@ async function ensureClassFromDeclaration({
   superclassRef = null,
   instanceVariables = [],
   classVariables = [],
+  provenance = null,
   allowShapeEvolution = false,
   slotMapping = {},
   defaultSlotValues = {},
@@ -1341,6 +1386,7 @@ async function ensureClassFromDeclaration({
   if (new Set(classVariables).size !== classVariables.length) {
     throw new TypeError('classVariables must not contain duplicate names');
   }
+  const normalizedProvenance = normalizeProvenance(provenance, 'class provenance');
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const superclass = superclassRef ?? kernel.objectClass;
@@ -1356,6 +1402,7 @@ async function ensureClassFromDeclaration({
         superclassRef: superclass,
         instanceVariables: localNames,
         classVariables,
+        ...(provenance !== null ? {provenance: normalizedProvenance} : {}),
         slotMapping,
         defaultSlotValues,
         defaultSlotValue,
@@ -1402,7 +1449,13 @@ async function ensureClassFromDeclaration({
   });
 
   return await ensureNamedClass({
-    images, imageId, name, superclassRef: superclass, instanceShapeRef, classVariables,
+    images,
+    imageId,
+    name,
+    superclassRef: superclass,
+    instanceShapeRef,
+    classVariables,
+    provenance: normalizedProvenance,
   });
 }
 
@@ -1419,6 +1472,7 @@ async function evolveSmalltalkClassShape({
   superclassRef: explicitSuperclassRef = null,
   instanceVariables,
   classVariables = null,
+  provenance = undefined,
   slotMapping = {},
   defaultSlotValues = {},
   defaultSlotValue = null,
@@ -1505,9 +1559,15 @@ async function evolveSmalltalkClassShape({
     : Array.isArray(behavior.record.metadata?.classVariables)
       ? behavior.record.metadata.classVariables
       : [];
-  const nextMetadata = nextClassVariables.length > 0
-    ? {smalltalk: 'behavior', name: resolvedName, classVariables: [...nextClassVariables]}
-    : {smalltalk: 'behavior', name: resolvedName};
+  const nextProvenance = provenance !== undefined
+    ? normalizeProvenance(provenance, 'class provenance')
+    : normalizeProvenance(behavior.record.metadata?.provenance ?? null, 'class provenance');
+  const nextMetadata = {
+    smalltalk: 'behavior',
+    name: resolvedName,
+    ...(nextClassVariables.length > 0 ? {classVariables: [...nextClassVariables]} : {}),
+    ...(nextProvenance !== null ? {provenance: nextProvenance} : {}),
+  };
 
   if (
     !sameRef(oldShapeRef, newShapeRef)
@@ -1525,6 +1585,23 @@ async function evolveSmalltalkClassShape({
       },
       metadata: nextMetadata,
     });
+  }
+  if (provenance !== undefined) {
+    const metaclass = await readBehavior(images, metaclassRef);
+    const nextMetaclassMetadata = {
+      smalltalk: 'behavior',
+      name: `${resolvedName} class`,
+      ...(nextProvenance !== null ? {provenance: nextProvenance} : {}),
+    };
+    if (canonicalJson(metaclass.record.metadata) !== canonicalJson(nextMetaclassMetadata)) {
+      await images.putObject(imageId, {
+        id: metaclass.record.id,
+        shape: metaclass.record.shape,
+        behavior: metaclass.record.behavior,
+        slots: metaclass.record.slots,
+        metadata: nextMetaclassMetadata,
+      });
+    }
   }
 
   await maintainSubclassRegistries({
@@ -1599,7 +1676,7 @@ async function evolveSmalltalkClassShape({
 // change — names, the class/metaclass behavior edges, superclass, both instance Shapes — and
 // deliberately excludes the method dictionary, which is the mutable part with its own retry-safe
 // installer. Carrying the right instance Shape is not the same as being this class.
-async function ensureNamedClass({images, imageId, name, superclassRef = null, instanceShapeRef = null, metaclassInstanceShapeRef = null, classVariables = []} = {}) {
+async function ensureNamedClass({images, imageId, name, superclassRef = null, instanceShapeRef = null, metaclassInstanceShapeRef = null, classVariables = [], provenance = null} = {}) {
   requiredText(name, 'class name');
   if (!Array.isArray(classVariables) || classVariables.some((v) => typeof v !== 'string' || v.length === 0)) {
     throw new TypeError('classVariables must be an array of non-empty names');
@@ -1607,6 +1684,7 @@ async function ensureNamedClass({images, imageId, name, superclassRef = null, in
   if (new Set(classVariables).size !== classVariables.length) {
     throw new TypeError('classVariables must not contain duplicate names');
   }
+  const normalizedProvenance = normalizeProvenance(provenance, 'class provenance');
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
   const classRef = objectRef(imageId, `smalltalk/class/${name}`);
@@ -1614,15 +1692,33 @@ async function ensureNamedClass({images, imageId, name, superclassRef = null, in
   const superclass = superclassRef ?? kernel.objectClass;
   const instanceShape = instanceShapeRef ?? kernel.nil;
   const metaclassInstanceShape = metaclassInstanceShapeRef ?? kernel.nil;
-  // The desired metadata, exactly what defineClass writes: declared class-variable NAMES are part
-  // of the definition, so rediscovery demands them and replaying the same definition converges.
-  const desiredMetadata = classVariables.length > 0
-    ? {smalltalk: 'behavior', name, classVariables: [...classVariables]}
-    : {smalltalk: 'behavior', name};
+  // The desired metadata, exactly what defineClass writes: declared class-variable NAMES and
+  // optional retained provenance are part of the definition, so rediscovery demands them and
+  // replaying the same definition converges.
+  const desiredMetadata = {
+    smalltalk: 'behavior',
+    name,
+    ...(classVariables.length > 0 ? {classVariables: [...classVariables]} : {}),
+    ...(normalizedProvenance !== null ? {provenance: normalizedProvenance} : {}),
+  };
+  const desiredMetaclassMetadata = {
+    smalltalk: 'behavior',
+    name: `${name} class`,
+    ...(normalizedProvenance !== null ? {provenance: normalizedProvenance} : {}),
+  };
 
   const existing = await images.getObject(imageId, classRef.objectId);
   if (!existing) {
-    const defined = await defineClass({images, imageId, name, superclassRef: superclass, instanceShapeRef, metaclassInstanceShapeRef, classVariables});
+    const defined = await defineClass({
+      images,
+      imageId,
+      name,
+      superclassRef: superclass,
+      instanceShapeRef,
+      metaclassInstanceShapeRef,
+      classVariables,
+      provenance: normalizedProvenance,
+    });
     return Object.freeze({classRef: defined.classRef, metaclassRef: defined.metaclassRef});
   }
 
@@ -1638,9 +1734,9 @@ async function ensureNamedClass({images, imageId, name, superclassRef = null, in
   if (behavior.name.value !== name || metaclass.name.value !== `${name} class`) throw conflict();
   // `defineClass` writes this deterministically, so it is part of what "the same class" means. The
   // method dictionary is excluded above because it has a legitimate lifecycle of its own; metadata
-  // beyond the definition's own class-variable declaration has none.
+  // beyond the definition's own class-variable and provenance declarations has none.
   if (canonicalJson(behavior.record.metadata) !== canonicalJson(desiredMetadata)) throw conflict();
-  if (canonicalJson(metaclass.record.metadata) !== canonicalJson({smalltalk: 'behavior', name: `${name} class`})) {
+  if (canonicalJson(metaclass.record.metadata) !== canonicalJson(desiredMetaclassMetadata)) {
     throw conflict();
   }
   if (!sameRef(behavior.record.behavior, metaclassRef)) throw conflict();
@@ -1786,7 +1882,7 @@ async function requireInstanceShape({images, imageId, instanceShapeRef, supercla
   return instanceShapeRef;
 }
 
-async function defineClass({images, imageId, name, superclassRef = null, instanceShapeRef = null, metaclassInstanceShapeRef = null, classVariables = []} = {}) {
+async function defineClass({images, imageId, name, superclassRef = null, instanceShapeRef = null, metaclassInstanceShapeRef = null, classVariables = [], provenance = null} = {}) {
   requiredText(name, 'class name');
   requiredText(imageId, 'image id');
   if (!Array.isArray(classVariables) || classVariables.some((v) => typeof v !== 'string' || v.length === 0)) {
@@ -1795,6 +1891,7 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
   if (new Set(classVariables).size !== classVariables.length) {
     throw new TypeError('classVariables must not contain duplicate names');
   }
+  const normalizedProvenance = normalizeProvenance(provenance, 'class provenance');
   for (const method of ['getRecord', 'createRecords']) {
     if (typeof images?.[method] !== 'function') throw new TypeError(`defineClass requires images.${method}`);
   }
@@ -1854,9 +1951,12 @@ async function defineClass({images, imageId, name, superclassRef = null, instanc
           'behavior-methods': ref(methodsId(id)),
           'behavior-instance-shape': shapeRef,
         },
-        metadata: isClass && classVariables.length > 0
-          ? {smalltalk: 'behavior', name: behaviorName, classVariables: [...classVariables]}
-          : {smalltalk: 'behavior', name: behaviorName},
+        metadata: {
+          smalltalk: 'behavior',
+          name: behaviorName,
+          ...(isClass && classVariables.length > 0 ? {classVariables: [...classVariables]} : {}),
+          ...(normalizedProvenance !== null ? {provenance: normalizedProvenance} : {}),
+        },
       },
     });
   }
@@ -1988,13 +2088,37 @@ async function definePolyglotMethodBridge({
   });
 }
 
-async function methodSource({images, imageId, blockRef} = {}) {
+async function classProvenance({images, imageId, classRef, behavior = null} = {}) {
+  requiredText(imageId, 'imageId');
+  if (!isObjectRef(classRef) || classRef.imageId !== imageId) {
+    throw new TypeError(`classProvenance classRef must be an unpinned object ref in ${imageId}`);
+  }
+  const record = behavior?.record ?? await images.getObject(imageId, classRef.objectId);
+  if (!record || record.metadata?.smalltalk !== 'behavior') return null;
+  const prov = record.metadata?.provenance;
+  if (!prov || typeof prov !== 'object' || Array.isArray(prov)) return null;
+  return normalizeProvenance(prov, 'class provenance');
+}
+
+async function methodProvenance({images, imageId, blockRef, block = null} = {}) {
+  requiredText(imageId, 'imageId');
+  if (!isObjectRef(blockRef) || blockRef.imageId !== imageId) {
+    throw new TypeError(`methodProvenance blockRef must be an unpinned object ref in ${imageId}`);
+  }
+  const resolvedBlock = block ?? await images.getBlock(imageId, blockRef.objectId);
+  if (!resolvedBlock || resolvedBlock.metadata?.smalltalk !== 'method') return null;
+  const prov = resolvedBlock.metadata?.provenance;
+  if (!prov || typeof prov !== 'object' || Array.isArray(prov)) return null;
+  return normalizeProvenance(prov, 'method provenance');
+}
+
+async function methodSource({images, imageId, blockRef, block = null} = {}) {
   requiredText(imageId, 'imageId');
   if (!isObjectRef(blockRef) || blockRef.imageId !== imageId) {
     throw new TypeError(`methodSource blockRef must be an unpinned object ref in ${imageId}`);
   }
-  const block = await images.getBlock(imageId, blockRef.objectId);
-  if (!block || block.metadata?.smalltalk !== 'method') return null;
+  const resolvedBlock = block ?? await images.getBlock(imageId, blockRef.objectId);
+  if (!resolvedBlock || resolvedBlock.metadata?.smalltalk !== 'method') return null;
   const artifact = await images.getCodeArtifact(imageId, `${blockRef.objectId}:source`);
   if (!artifact || artifact.representation !== SYMMETRIC_SMALLTALK_SOURCE_V0 || artifact.content?.kind !== 'text') {
     return null;
@@ -2012,6 +2136,7 @@ export {
   SmalltalkMethodRedefinitionError,
   SmalltalkSealedMethodDictionaryError,
   SmalltalkStaleMethodPositionError,
+  classProvenance,
   currentSelectorBindings,
   defineClass,
   defineMethods,
@@ -2026,6 +2151,7 @@ export {
   ensureSmalltalkShape,
   methodBindings,
   methodBlockRef,
+  methodProvenance,
   methodSource,
   ensureCodeArtifact,
 };

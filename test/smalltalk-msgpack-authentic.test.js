@@ -3,13 +3,20 @@ import assert from 'node:assert/strict';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {
+  OBJECT_READ_OPERATION,
+  SMALLTALK_METHOD_READ_OPERATION,
+  authorizedDescribeSmalltalkClass,
+  authorizedDescribeSmalltalkMethod,
   createRuntime,
   installSymmetricSmalltalkStandardImage,
   installSymmetricSmalltalkBlock,
   integerValue,
   booleanValue,
+  bytesValue,
   textValue,
   objectRef,
+  objectResource,
+  smalltalkMethodPositionResource,
 } from '../src/runtime.js';
 import {
   installMessagePackFromFixture,
@@ -443,4 +450,232 @@ test('the empty map round-trips decode(encode) to an empty Dictionary', async ()
       booleanValue(true),
     );
   });
+});
+
+// Binary (ByteArray bin8/bin16/bin32, readFixRaw:, and external ReadStream/WriteStream entry points).
+test('upstream binary and external stream methods are compiled and installed from the fixture', async () => {
+  await withMessagePack(async ({runtime, imageId}) => {
+    for (const [className, side, selector] of [
+      ['MpEncoder', 'instance', 'writeBinBytes:'],
+      ['MpEncoder', 'instance', 'writeBinBytesSize:'],
+      ['MpEncoder', 'instance', 'writeRawBytes:'],
+      ['MpEncoder', 'instance', 'nextPutAll:'],
+      ['MpEncoder', 'class', 'on:'],
+      ['MpEncoder', 'class', 'onBytes:'],
+      ['MpEncoder', 'class', 'encode:on:'],
+      ['MpEncoder', 'class', 'encode:on:setting:'],
+      ['MpDecoder', 'instance', 'readBin8'],
+      ['MpDecoder', 'instance', 'readBin16'],
+      ['MpDecoder', 'instance', 'readBin32'],
+      ['MpDecoder', 'instance', 'readFixRaw:'],
+      ['MpDecoder', 'instance', 'readRaw16'],
+      ['MpDecoder', 'instance', 'readRaw32'],
+      ['MpDecoder', 'instance', 'decodeFrom:'],
+      ['MpDecoder', 'instance', 'decodeFrom:setting:'],
+      ['MpDecoder', 'class', 'on:'],
+      ['MpDecoder', 'class', 'onBytes:'],
+      ['MpDecoder', 'class', 'decodeFrom:'],
+      ['MpDecoder', 'class', 'decodeFrom:setting:'],
+      ['MpEncodeTypeMapper', 'instance', 'bytesAsRaw'],
+      ['MpDecodeTypeMapper', 'instance', 'bytesAsRaw'],
+    ]) {
+      await assertMessagePackMethodInstalled({images: runtime.images, imageId, className, side, selector});
+    }
+  });
+});
+
+test('ByteArray values encode to spec bin8/bin16 and round-trip through MpMessagePack pack:/unpack:', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    // Empty ByteArray #[] -> bin8 header 0xC4 (196), size 0
+    assert.deepEqual(
+      await evaluate('bin-empty-h', '[ (MpMessagePack pack: #[]) at: 1 ]'),
+      integerValue(196),
+    );
+    assert.deepEqual(
+      await evaluate('bin-empty-len', '[ (MpMessagePack pack: #[]) at: 2 ]'),
+      integerValue(0),
+    );
+    assert.deepEqual(
+      await evaluate('bin-empty-rt', '[ MpMessagePack unpack: (MpMessagePack pack: #[]) ]'),
+      bytesValue(new Uint8Array([])),
+    );
+
+    // 4-byte ByteArray #[0 42 128 255] -> bin8 (0xC4, 4, 0, 42, 128, 255)
+    assert.deepEqual(
+      await evaluate('bin8-h', '[ (MpMessagePack pack: #[0 42 128 255]) at: 1 ]'),
+      integerValue(196),
+    );
+    assert.deepEqual(
+      await evaluate('bin8-sz', '[ (MpMessagePack pack: #[0 42 128 255]) at: 2 ]'),
+      integerValue(4),
+    );
+    assert.deepEqual(
+      await evaluate('bin8-rt', '[ MpMessagePack unpack: (MpMessagePack pack: #[0 42 128 255]) ]'),
+      bytesValue(new Uint8Array([0, 42, 128, 255])),
+    );
+
+    // 20-byte ByteArray -> upstream writeBinBytesSize: selects bin16 (0xC5 = 197, 0x00, 0x14) for size >= 16
+    assert.deepEqual(
+      await evaluate(
+        'bin16-rt',
+        `[ | raw packed unpacked |
+          raw := #[1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20].
+          packed := MpMessagePack pack: raw.
+          unpacked := MpMessagePack unpack: packed.
+          ((packed at: 1) = 197) and: [ ((packed at: 2) = 0) and: [ ((packed at: 3) = 20) and: [ unpacked = raw ] ] ] ]`,
+      ),
+      booleanValue(true),
+    );
+
+    // Decode bin32 header (0xC6 = 198, 0, 0, 0, 3, 9, 8, 7) -> #[9 8 7]
+    assert.deepEqual(
+      await evaluate('bin32-dec', '[ MpMessagePack unpack: #[198 0 0 0 3 9 8 7] ]'),
+      bytesValue(new Uint8Array([9, 8, 7])),
+    );
+
+    // Nested ByteArray inside Dictionary and Array round-trips cleanly
+    assert.deepEqual(
+      await evaluate(
+        'bin-nested',
+        `[ | d r |
+          d := Dictionary new.
+          d at: 'payload' put: #[10 20 30].
+          r := MpMessagePack unpack: (MpMessagePack pack: d).
+          r at: 'payload' ]`,
+      ),
+      bytesValue(new Uint8Array([10, 20, 30])),
+    );
+  });
+});
+
+test('readFixRaw: and external WriteStream/ReadStream entry points round-trip over standard-image streams', async () => {
+  await withMessagePack(async ({evaluate}) => {
+    // External stream entry points: MpEncoder encode:on: (WriteStream on: #[]) and MpDecoder decodeFrom: (ReadStream on: bytes)
+    assert.deepEqual(
+      await evaluate(
+        'ext-stream-rt',
+        `[ | ws bytes decoded |
+          ws := WriteStream on: #[].
+          MpEncoder encode: #[7 8 9] on: ws.
+          bytes := ws contents.
+          decoded := MpDecoder decodeFrom: (ReadStream on: bytes).
+          decoded ]`,
+      ),
+      bytesValue(new Uint8Array([7, 8, 9])),
+    );
+
+    // MpEncoder class>>onBytes: and MpDecoder class>>onBytes:
+    assert.deepEqual(
+      await evaluate(
+        'ext-onbytes-rt',
+        `[ | enc encoded dec |
+          enc := MpEncoder onBytes: #[].
+          enc writeObject: 'hello'.
+          encoded := enc contents.
+          dec := MpDecoder onBytes: encoded.
+          dec decode ]`,
+      ),
+      textValue('hello'),
+    );
+
+    // readFixRaw: and 2008 legacy bytesAsRaw / readRaw16 mode:
+    // 0xA0 (160) is empty fixraw -> returns #[] via the verbatim `#[]` literal in MpDecoder>>readFixRaw:
+    assert.deepEqual(
+      await evaluate(
+        'fixraw-empty',
+        `[ (MpDecoder onBytes: #[]) readFixRaw: 160 ]`,
+      ),
+      bytesValue(new Uint8Array([])),
+    );
+    assert.deepEqual(
+      await evaluate(
+        'fixraw-nonempty',
+        `[ (MpDecoder onBytes: #[65 66 67]) readFixRaw: 163 ]`,
+      ),
+      bytesValue(new Uint8Array([65, 66, 67])),
+    );
+    // 2008 formatVersion triggers buildTypeMapper: -> bytesAsRaw -> readRaw16 (0xDA = 218, 0, 3, 65, 66, 67)
+    assert.deepEqual(
+      await evaluate(
+        'raw16-setting',
+        `[ MpDecoder decodeFrom: (ReadStream on: #[218 0 3 65 66 67]) setting: [ :s | s at: #formatVersion put: 2008 ] ]`,
+      ),
+      bytesValue(new Uint8Array([65, 66, 67])),
+    );
+  });
+});
+
+test('installMessagePackFromFixture with retainSource and retainProvenance persists browsable FileTree category and package metadata', async () => {
+  const runtime = await createRuntime({backend: {mode: 'mock'}});
+  try {
+    const imageId = 'mp-prov';
+    await runtime.images.createImage({id: imageId});
+    await installSymmetricSmalltalkStandardImage({images: runtime.images, compilation: runtime.compilation, imageId});
+    await installMessagePackFromFixture({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId,
+      fixtureRoot: FIXTURE_ROOT,
+      retainSource: true,
+      retainProvenance: true,
+    });
+
+    const encoderClassRef = objectRef(imageId, 'smalltalk/class/MpEncoder');
+    const decoderClassRef = objectRef(imageId, 'smalltalk/class/MpDecoder');
+    const grants = [
+      {operation: OBJECT_READ_OPERATION, resource: objectResource(imageId, encoderClassRef.objectId)},
+      {operation: OBJECT_READ_OPERATION, resource: objectResource(imageId, decoderClassRef.objectId)},
+      {
+        operation: SMALLTALK_METHOD_READ_OPERATION,
+        resource: smalltalkMethodPositionResource(imageId, encoderClassRef, 'writeBinBytes:'),
+      },
+      {
+        operation: SMALLTALK_METHOD_READ_OPERATION,
+        resource: smalltalkMethodPositionResource(imageId, decoderClassRef, 'readFixRaw:'),
+      },
+    ];
+    const context = runtime.authority.issue({principal: 'inspector', grants});
+    const require = (demand) => runtime.authority.require(context, demand);
+
+    const encoderClassDesc = await authorizedDescribeSmalltalkClass({
+      images: runtime.images,
+      imageId,
+      classRef: encoderClassRef,
+      require,
+    });
+    assert.deepEqual(encoderClassDesc.provenance, {
+      package: 'MessagePack-Core',
+      category: 'MessagePack-Core',
+    });
+
+    const writeBinMethodDesc = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId,
+      classRef: encoderClassRef,
+      selector: 'writeBinBytes:',
+      require,
+    });
+    assert.deepEqual(writeBinMethodDesc.provenance, {
+      package: 'MessagePack-Core',
+      category: 'writing',
+      file: 'MpEncoder.class/instance/writeBinBytes..st',
+    });
+    assert.ok(writeBinMethodDesc.source.includes('self writeBinBytesSize: size'));
+
+    const readFixRawDesc = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId,
+      classRef: decoderClassRef,
+      selector: 'readFixRaw:',
+      require,
+    });
+    assert.deepEqual(readFixRawDesc.provenance, {
+      package: 'MessagePack-Core',
+      category: 'reading',
+      file: 'MpDecoder.class/instance/readFixRaw..st',
+    });
+    assert.ok(readFixRawDesc.source.includes('#[]'));
+  } finally {
+    await runtime.close();
+  }
 });

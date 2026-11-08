@@ -26,6 +26,7 @@ export {
   SmalltalkMethodRedefinitionError,
   SmalltalkSealedMethodDictionaryError,
   SmalltalkStaleMethodPositionError,
+  classProvenance,
   defineClass,
   defineMethods,
   definePolyglotMethodBridge,
@@ -39,6 +40,7 @@ export {
   ensureSmalltalkShape,
   methodBindings,
   methodBlockRef,
+  methodProvenance,
   methodSource,
   ensureCodeArtifact,
 } from './smalltalk-class-builder.js';
