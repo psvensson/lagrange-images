@@ -409,7 +409,7 @@ Keep generic work only when it directly supports the native-import application c
 Rust remains the mature existing-compiler -> WASM path:
 
 - [x] standard package importer built on explicit artifact/dependency semantics when a real Project needs it (`importPackageArchive` in `src/code/package-archive.js`, proven in `test/toolchain-durable-derivation-package-archive.test.js`);
-- [ ] Lagrange Rust SDK/crate for explicit host calls under concrete pressure;
+- [x] Lagrange Rust SDK/crate for explicit host calls under concrete pressure (`LAGRANGE_RUST_SDK_V1`, `LAGRANGE_RUST_HOST_IMPORTS`, `generateLagrangeRustSdkCrate`, `materializeLagrangeRustSdkArtifacts`, `createLagrangeRustHostBindings`, and `installLagrangeRustComponentWithHostSdk` in `src/toolchain/rust-sdk.js`, proven in `test/rust-host-sdk.test.js`);
 - [x] portable precompiled WASM/Component dependency reuse (`PRECOMPILED_WASM_REUSE_RECEIPT_V1` and `reusePrecompiledWasmArtifact` in `src/code/package-archive.js`, proven in `test/toolchain-durable-derivation-package-archive.test.js`).
 
 ### Common Lisp

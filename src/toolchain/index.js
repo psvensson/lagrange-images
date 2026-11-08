@@ -44,4 +44,5 @@ export {WASM_BINARY_V1} from '../wasm/foreign-artifacts.js';
 export * from './derivation-cache.js';
 export * from './oci-cli-runner.js';
 export * from './provider-registry.js';
+export * from './rust-sdk.js';
 export * from './toolchain-service.js';
