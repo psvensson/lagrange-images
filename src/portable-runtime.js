@@ -182,6 +182,7 @@ import {
   installSymmetricSmalltalkBlock,
 } from './language/index.js';
 import {SYMMETRIC_SMALLTALK_ID} from './language/symmetric-smalltalk.js';
+import {tokenizeSymmetricSmalltalk} from './language/symmetric-smalltalk-tokenizer.js';
 import {createSymmetricSmalltalkDispatcher} from './language/symmetric-smalltalk-dispatcher.js';
 import {MethodDictionaryValidationCache} from './language/smalltalk-lookup.js';
 import {installCallableInterfaceV2} from './callable/interface-v2-artifacts.js';
@@ -521,6 +522,8 @@ export {
   methodSource,
   polyglotMethodBridgeDescriptor,
   smalltalkClassObjectId,
+  // Exact lexical owner: spans refer to the original source, never cooked values.
+  tokenizeSymmetricSmalltalk,
   // The install/import owners a portable host needs to bring an application INTO an image and
   // run it (bead lagrange-images-hygu; the Object Environment's E4-E6 vertical): the standard
   // image, native class declaration and from-source method definition, the Cuis native-import

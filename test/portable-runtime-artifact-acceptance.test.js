@@ -20,14 +20,29 @@ import {
 //   artifact loader  -- a lagrange-images-portable-runtime/v1 artifact, linked in-process
 //
 // The assertions themselves live in `portable-artifact-acceptance-assertions.mjs` and are
-// NOT touched by this slice: if packaging had absorbed semantics, they would have had to
-// change, so their being shared and unchanged is itself the proof.
+// shared by both loaders. Original B1b assertions stay intact; additional public
+// capabilities extend the same helper without changing either loading boundary.
 
 const execFileAsync = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..');
 const CHILD = join(HERE, 'portable-artifact-differential-child.mjs');
 const NONEXISTENT_CHECKOUT = join(tmpdir(), 'lagrange-images-does-not-exist-b2-proof');
+
+function assertPublicTokenizer(results) {
+  assert.deepEqual(results.smalltalkTokens, [
+    {"type": "character", "value": "😀", "start": 0, "end": 3},
+    {"type": "identifier", "value": "x", "start": 4, "end": 5},
+    {"type": "assign", "value": ":=", "start": 5, "end": 7},
+    {"type": "integer", "value": "255", "start": 7, "end": 12},
+    {"type": ".", "value": ".", "start": 12, "end": 13},
+    {"type": "caret", "value": "^", "start": 14, "end": 15},
+    {"type": "identifier", "value": "x", "start": 15, "end": 16},
+    {"type": "eof", "value": "", "start": 16, "end": 16}
+  ]);
+  assert.deepEqual(results.smalltalkLexicalError,
+    {name: 'SymmetricSmalltalkSyntaxError', position: 9});
+}
 
 function buildArtifact(options = {}) {
   return buildPortableRuntimeArtifact({readSource: createNodeSourceReader(REPO), ...options});
@@ -98,6 +113,7 @@ test('B2 DIFFERENTIAL: checkout loader and artifact loader produce identical acc
       'shaFalsifierDiscriminates']) {
       assert.equal(fromArtifact.results[key], true, `${key} must hold under the artifact loader`);
     }
+    assertPublicTokenizer(fromArtifact.results);
     assert.equal(fromArtifact.results.cursorMintResume, 1, 'cursor mint/resume saw the one mutation');
     assert.equal(fromArtifact.results.rereadAfterObserve, 'a-v2');
     assert.equal(fromArtifact.results.typeFingerprintBytes, 32, 'real 32-byte SHA fingerprint');
@@ -155,6 +171,7 @@ test('B2 stx: the acceptance runs with NO Images checkout, and the no-checkout c
 
   // The artifact path works with no Images source tree anywhere.
   assert.ok(fromArtifact.ok, `artifact loader must work with no checkout: ${fromArtifact.error}`);
+  assertPublicTokenizer(fromArtifact.results);
   assert.equal(fromArtifact.results.composed, true);
   assert.equal(fromArtifact.results.cursorMintResume, 1);
 

@@ -4,8 +4,8 @@
 // This file is the differential proof's whole point: BOTH the checkout loader and the
 // artifact loader run THIS code, unchanged. The single parameter is `load(logicalPath)`,
 // which returns a module namespace. If proving B2 ever required changing an assertion
-// here, that would mean packaging had absorbed semantics — so the assertions are frozen
-// and only the loader differs.
+// here, that would mean packaging had absorbed semantics. Those original assertions
+// remain intact; later public capabilities append their own assertions for both loaders.
 //
 // The crypto provider is built HERE from node:crypto, the way a native host supplies its
 // own provider. It is deliberately NOT Images' `node-crypto-provider.js`: that module is
@@ -95,6 +95,19 @@ async function runPortableAcceptance(load) {
     'entry must expose the authorized Project descriptor read seam');
   assert(results.hasCreateProject && results.hasAddProjectMember && results.hasProjectObjectId,
     'entry must expose the bounded Project acceptance/control-plane setup helpers');
+
+  // Additional public capability (znj5), before any provider/runtime composition.
+  assert(typeof portable.tokenizeSymmetricSmalltalk === 'function',
+    'entry must expose the existing Smalltalk tokenizer');
+  results.smalltalkTokens = portable.tokenizeSymmetricSmalltalk('$😀 x:=16rFF. ^x');
+  let lexicalError = null;
+  try {
+    portable.tokenizeSymmetricSmalltalk("$😀 x := 'unterminated");
+  } catch (error) {
+    lexicalError = {name: error.name, position: error.position};
+  }
+  assert(lexicalError !== null, 'malformed source must not return a partial token stream');
+  results.smalltalkLexicalError = lexicalError;
 
   // (1) no provider installed yet -> the existing explicit refusal.
   let refusal = null;
