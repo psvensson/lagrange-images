@@ -207,15 +207,9 @@ function adaptMethod({className, side, method, adaptations}) {
     return null;
   }
 
-  // Adaptation 6: the empty literal array `#()` is now a general facility (it lowers to
-  // `Array new: 0`), so `createArray:` — the one `#(...)` use in the pinned closure, and the
-  // empty form the RED demands — runs unchanged. The byte-array literal `#[]` is a separate,
-  // still-absent facility; `readFixRaw:` (out of the supported round-trip) is dropped until
-  // `#[ ]` is classified and added.
-  if (className === 'MpDecoder' && selector.startsWith('readFixRaw:')) {
-    record('drop-method', 'dropped method using #[] byte-array literals (separate facility, out of round-trip)');
-    return null;
-  }
+  // Adaptation 6: the empty literal array `#()` and byte-array literal `#[...]` are general
+  // Symmetric Smalltalk facilities, so both `createArray:` (`#()`) and `readFixRaw:` (`#[]`)
+  // compile unchanged from the vendored upstream source.
 
   // Adaptation 7: upstream instantiates `IdentityDictionary` in three places.
   // This image provides the general `Dictionary` only, so the dialect adapter
@@ -273,57 +267,29 @@ function adaptMethod({className, side, method, adaptations}) {
     return {file, category, selector, source: source.replaceAll(/\bString\b/g, 'Text')};
   }
 
-  // Adaptation 9a: the byte-sink hook `createWriteStream` and the byte-source
-  // hook `decodeFrom:` ARE on the scalar round-trip. Upstream writes them in
-  // terms of `WriteStream`/`readStream`, which this image does not have. The
-  // dialect seam supplies an in-memory byte buffer, so the bodies are adapted
-  // to reach it through `MpPortableUtil default` — the same dialect object
-  // upstream already consults for `useFastBulkWrite`. The algorithm (lazy
-  // create-write-stream, decode-from-bytes) is unchanged.
+  // Adaptation 9a: the default byte-sink hook `createWriteStream` and the convenience
+  // byte-source hook `decode:` reach the dialect byte-stream factories on `MpPortableUtil default`
+  // so `MpMessagePack pack:` / `unpack:` continue to work over both Array and ByteArray byte buffers,
+  // while the external stream entry points (`on:`, `onBytes:`, `encode:on:`, `decodeFrom:`, ...)
+  // compile verbatim from the vendored source over `WriteStream` and `ReadStream`.
   if (className === 'MpEncoder' && side === 'instance' && selector === 'createWriteStream') {
     record('replace-body', 'WriteStream -> dialect byte buffer via MpPortableUtil default newByteWriteStream');
     return {file, category, selector, source: '[ ^ MpPortableUtil default newByteWriteStream ]'};
   }
-  if (className === 'MpDecoder' && side === 'instance' && selector === 'decodeFrom:') {
-    record('replace-body', 'kept verbatim structure; sets dialect read stream then decode');
-    return {file, category, selector, source: '[ :aStream | self readStream: aStream. ^ self decode ]'};
-  }
-  // `MpDecoder>>decode:` is the entry that names `byteArray readStream`, which
-  // this image has no ByteArray `readStream` for. Route the bytes through the
-  // dialect read-stream factory, preserving upstream's decodeFrom:/decode split.
   if (className === 'MpDecoder' && side === 'instance' && selector === 'decode:') {
     record('replace-body', 'byteArray readStream -> dialect byte buffer via MpPortableUtil default readStreamOn:');
     return {file, category, selector, source: '[ :byteArray | ^ self decodeFrom: (MpPortableUtil default readStreamOn: byteArray) ]'};
   }
 
-  // Adaptation 9b: the *external* stream entry points (`on:`, `onBytes:`,
-  // `encode:on:`, ...) hand the coder a caller-supplied WriteStream/ReadStream
-  // the image does not have, and the compound str/bin/array/map write-read
-  // paths need bulk stream machinery deferred to the stream library follow-up.
-  // Dropped and recorded; restored with the stream library.
+  // Adaptation 9b: wide-string, OrderedCollection-as-array, and extension/timestamp
+  // types (`MpExtValue`, `MpFixextValue`, `DateAndTime`) are outside the pinned
+  // closure and remain explicitly dropped and recorded.
   if (
-    (className === 'MpEncoder' && ['nextPutAll:'].includes(selector))
-    // External stream entry points; the scalar path uses encode:/decode:.
-    || (className === 'MpEncoder' && side === 'class' && ['on:', 'onBytes:', 'encode:on:', 'encode:on:setting:'].includes(selector))
-    || (className === 'MpDecoder' && side === 'class' && ['on:', 'onBytes:', 'decodeFrom:setting:'].includes(selector))
-    || (className === 'MpEncoder' && side === 'instance' && selector === 'encode:on:setting:')
-    || (className === 'MpDecoder' && side === 'instance' && selector === 'decodeFrom:setting:')
-    || selector.startsWith('writeBinBytes')
-    || selector.startsWith('writeRawBytes')
-    || selector.startsWith('writeWideString')
-    // NOTE: `readStream`/`readStream:` are the decoder's stream accessors and
-    // must survive; the compound read paths below are matched by their full
-    // prefixed forms, never the bare `readStr`/`readStream` accessors.
-    || selector.startsWith('readBin8')
-    || selector.startsWith('readBin16')
-    || selector.startsWith('readBin32')
-    || selector.startsWith('readRaw16')
-    || selector.startsWith('readRaw32')
-    || selector === 'bytesAsRaw'
+    selector.startsWith('writeWideString')
     || selector === 'stringAsError'
     || selector === 'createOrderedCollection:'
     // Extension/timestamp types (`MpExtValue`, `MpFixextValue`, `DateAndTime`)
-    // are outside the pinned closure and the scalar round-trip.
+    // are outside the pinned closure.
     || selector.startsWith('writeExt')
     || selector.startsWith('writeFixext')
     || selector.startsWith('writeTimestamp')
@@ -332,19 +298,16 @@ function adaptMethod({className, side, method, adaptations}) {
     // Both `defineExtsActionsTo:` overrides are dropped: the encode side
     // references `MpExtValue`/`MpFixextValue`/`defineTimestampActionTo:`, and the
     // ext readers the decode side maps (`readFixext:as:`, `readExtSized:as:`)
-    // reference `MpExtValue`/`MpFixextValue` and `ByteArray with:`/`next:` — all
-    // outside the pinned scalar closure. With both overrides dropped, the base
-    // `MpTypeMapper class>>defineExtsActionsTo:` no-op (`"override"` -> nil) is
-    // inherited, and `createActionMap` runs unchanged. Ext/timestamp decode then
-    // signals a normal unmapped-type error rather than reaching a half-bound
-    // method.
+    // reference `MpExtValue`/`MpFixextValue` — all outside the pinned closure.
+    // With both overrides dropped, the base `MpTypeMapper class>>defineExtsActionsTo:`
+    // no-op (`"override"` -> nil) is inherited, and `createActionMap` runs unchanged.
     || (className !== 'MpTypeMapper' && selector.startsWith('defineExtsActionsTo:'))
     || selector.startsWith('readFixext')
     || selector.startsWith('readExt')
     || selector.startsWith('timestampFromSeconds')
     || selector.startsWith('unixSecondsWithNanosecondsFrom')
   ) {
-    record('drop-method', 'dropped stream/compound method (needs WriteStream/ByteArray new:/next: machinery)');
+    record('drop-method', 'dropped wide-string/OrderedCollection/ext/timestamp method outside pinned closure');
     return null;
   }
 
@@ -376,9 +339,19 @@ async function installClassInstanceState({images, imageId, name, classinstvars, 
 // Install the pinned MessagePack source closure into an image that already has
 // the Symmetric Smalltalk standard-image machinery available. Returns the class
 // refs, the dialect adapter, and the reviewable adaptation log.
-async function installMessagePackFromFixture({images, compilation, imageId, fixtureRoot, lane = 'neutral'} = {}) {
+async function installMessagePackFromFixture({
+  images,
+  compilation,
+  imageId,
+  fixtureRoot,
+  lane = 'neutral',
+  retainSource = false,
+  retainProvenance = false,
+} = {}) {
   requiredText(imageId, 'image id');
   requiredText(fixtureRoot, 'fixture root');
+  if (typeof retainSource !== 'boolean') throw new TypeError('retainSource must be a boolean');
+  if (typeof retainProvenance !== 'boolean') throw new TypeError('retainProvenance must be a boolean');
   if (!await stat(fixtureRoot).catch(() => null)) throw new TypeError(`fixture root not found: ${fixtureRoot}`);
   const kernel = await findSmalltalkKernel({images, imageId});
   if (!kernel) throw new TypeError(`image ${imageId} has no Smalltalk kernel`);
@@ -440,6 +413,16 @@ async function installMessagePackFromFixture({images, compilation, imageId, fixt
       superclassRef: superclassRefFor(spec.superclass),
       instanceShapeRef,
       metaclassInstanceShapeRef,
+      ...(retainProvenance
+        ? {
+          provenance: {
+            package: 'MessagePack-Core',
+            ...(typeof properties.category === 'string' && properties.category.length > 0
+              ? {category: properties.category}
+              : {}),
+          },
+        }
+        : {}),
     });
     classes[spec.name] = {classRef, metaclassRef, instvars};
 
@@ -587,8 +570,25 @@ async function installMessagePackFromFixture({images, compilation, imageId, fixt
       if (adapted.length === 0) continue;
       try {
         await defineMethodsFromSource({
-          images, compilation, imageId, classRef: classRef2, lane,
-          methods: adapted.map(({selector, source}) => ({selector, source})),
+          images,
+          compilation,
+          imageId,
+          classRef: classRef2,
+          lane,
+          retainSource,
+          methods: adapted.map(({file, category, selector, source}) => ({
+            selector,
+            source,
+            ...(retainProvenance
+              ? {
+                provenance: {
+                  package: 'MessagePack-Core',
+                  ...(typeof category === 'string' && category.length > 0 ? {category} : {}),
+                  ...(typeof file === 'string' && file.length > 0 ? {file: `${spec.name}.class/${file}`} : {}),
+                },
+              }
+              : {}),
+          })),
         });
       } catch (error) {
         const detail = adapted.map(({file, selector, source}) => `  ${file}  ${selector}\n    ${JSON.stringify(source)}`).join('\n');
@@ -613,8 +613,25 @@ async function installMessagePackFromFixture({images, compilation, imageId, fixt
       .filter((m) => m !== null);
     if (adapted.length === 0) continue;
     await defineMethodsFromSource({
-      images, compilation, imageId, classRef: targetRef, lane,
-      methods: adapted.map(({selector, source}) => ({selector, source})),
+      images,
+      compilation,
+      imageId,
+      classRef: targetRef,
+      lane,
+      retainSource,
+      methods: adapted.map(({file, category, selector, source}) => ({
+        selector,
+        source,
+        ...(retainProvenance
+          ? {
+            provenance: {
+              package: 'MessagePack-Core',
+              ...(typeof category === 'string' && category.length > 0 ? {category} : {}),
+              ...(typeof file === 'string' && file.length > 0 ? {file: `${extName}.extension/${file}`} : {}),
+            },
+          }
+          : {}),
+      })),
     });
   }
 

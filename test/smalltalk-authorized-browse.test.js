@@ -965,3 +965,228 @@ test('authorized class and method browsing each perform a single kernel read, an
     assert.equal(methodDesc.selector, 'childFirst');
   });
 });
+
+test('retained native and Cuis-imported class/method provenance and category are durable, revision-bound, and never disclosed without authority', async () => {
+  await withImage(async (runtime) => {
+    const declared = await ensureClassFromDeclaration({
+      images: runtime.images,
+      imageId: 'app',
+      name: 'ProvenancedCounter',
+      instanceVariables: ['count'],
+      provenance: {package: 'Core-Counters', category: 'Counters-Model'},
+    });
+    await defineMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef: declared.classRef,
+      retainSource: true,
+      methods: [
+        {
+          selector: 'count',
+          source: '[ ^count ]',
+          category: 'accessing',
+          provenance: {package: 'Core-Counters'},
+        },
+      ],
+    });
+
+    const classGrants = [
+      readGrant('app', declared.classRef.objectId),
+      readGrant('app', declared.metaclassRef.objectId),
+    ];
+    const methodGrants = [
+      ...classGrants,
+      methodPositionGrant('app', declared.classRef, 'count'),
+    ];
+
+    const classDesc = await authorizedDescribeSmalltalkClass({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: declared.classRef,
+      require: requireFor(runtime, classGrants),
+    });
+    assert.deepEqual(classDesc.provenance, {
+      package: 'Core-Counters',
+      category: 'Counters-Model',
+    });
+
+    const metaclassDesc = await authorizedDescribeSmalltalkClass({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: declared.metaclassRef,
+      require: requireFor(runtime, classGrants),
+    });
+    assert.deepEqual(metaclassDesc.provenance, {
+      package: 'Core-Counters',
+      category: 'Counters-Model',
+    });
+
+    // Denied method-position browse (having only class object/read) discloses neither source nor provenance.
+    await assert.rejects(
+      authorizedDescribeSmalltalkMethod({
+        images: runtime.images,
+        imageId: 'app',
+        classRef: declared.classRef,
+        selector: 'count',
+        require: requireFor(runtime, classGrants),
+      }),
+      {name: 'AuthorityError'},
+    );
+
+    const methodDesc = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: declared.classRef,
+      selector: 'count',
+      require: requireFor(runtime, methodGrants),
+    });
+    assert.equal(methodDesc.source, '[ ^count ]');
+    assert.deepEqual(methodDesc.provenance, {
+      package: 'Core-Counters',
+      category: 'accessing',
+    });
+
+    // Replacing the method with a new category/provenance updates the durable provenance on the new revision.
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef: declared.classRef,
+      retainSource: true,
+      methods: [
+        {
+          selector: 'count',
+          source: '[ ^count + 1 ]',
+          category: 'computing',
+          provenance: {package: 'Core-Counters', file: 'ProvenancedCounter>>count'},
+          expectedCurrent: methodDesc.method,
+        },
+      ],
+    });
+    const updatedMethodDesc = await authorizedReadSmalltalkMethodForUpdate({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: declared.classRef,
+      selector: 'count',
+      require: requireFor(runtime, methodGrants),
+    });
+    assert.notDeepEqual(updatedMethodDesc.descriptor.method, methodDesc.method);
+    assert.deepEqual(updatedMethodDesc.descriptor.provenance, {
+      package: 'Core-Counters',
+      category: 'computing',
+      file: 'ProvenancedCounter>>count',
+    });
+
+    // Replacing the method without category/provenance resets provenance to null (never stale).
+    await reconcileMethodsFromSource({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      classRef: declared.classRef,
+      methods: [
+        {
+          selector: 'count',
+          source: '[ ^0 ]',
+          expectedCurrent: updatedMethodDesc.descriptor.method,
+        },
+      ],
+    });
+    const clearedMethodDesc = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: declared.classRef,
+      selector: 'count',
+      require: requireFor(runtime, methodGrants),
+    });
+    assert.equal(clearedMethodDesc.provenance, null);
+    assert.equal(clearedMethodDesc.source, null);
+
+    // Cuis import with retainProvenance: true retains durable package and category provenance on classes and methods.
+    const manifestWithCategories = {
+      format: CUIS_SEMANTIC_EXPORT_V2,
+      packages: [{name: 'ProvenancePkg', requires: []}],
+      classes: [
+        {
+          identity: 'cuis-class/ProvenancePkg/ProvWidget',
+          package: 'ProvenancePkg',
+          name: 'ProvWidget',
+          superclassName: 'Object',
+          superclass: CUIS_NATIVE_ROOT_OBJECT_IDENTITY,
+          instanceVariables: ['label'],
+          classVariables: [],
+          category: 'ProvenancePkg-Widgets',
+        },
+      ],
+      methods: [
+        {
+          identity: 'cuis-method/ProvenancePkg/ProvWidget/instance/label',
+          package: 'ProvenancePkg',
+          class: 'cuis-class/ProvenancePkg/ProvWidget',
+          side: 'instance',
+          selector: 'label',
+          category: 'accessing',
+          source: 'label\n\t^ label',
+        },
+        {
+          identity: 'cuis-method/ProvenancePkg/ProvWidget/class/defaultLabel',
+          package: 'ProvenancePkg',
+          class: 'cuis-class/ProvenancePkg/ProvWidget',
+          side: 'class',
+          selector: 'defaultLabel',
+          category: 'defaults',
+          source: 'defaultLabel\n\t^ 42',
+        },
+      ],
+    };
+    const imported = await importCuisNativePackage({
+      images: runtime.images,
+      compilation: runtime.compilation,
+      imageId: 'app',
+      manifest: manifestWithCategories,
+      retainSource: true,
+      retainProvenance: true,
+    });
+    const widgetClassRef = imported.classes[0].classRef;
+    const widgetMetaclassRef = imported.classes[0].metaclassRef;
+    const widgetGrants = [
+      readGrant('app', widgetClassRef.objectId),
+      readGrant('app', widgetMetaclassRef.objectId),
+      methodPositionGrant('app', widgetClassRef, 'label'),
+      methodPositionGrant('app', widgetMetaclassRef, 'defaultLabel'),
+    ];
+    const browsedWidgetClass = await authorizedDescribeSmalltalkClass({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: widgetClassRef,
+      require: requireFor(runtime, widgetGrants),
+    });
+    assert.deepEqual(browsedWidgetClass.provenance, {
+      package: 'ProvenancePkg',
+      category: 'ProvenancePkg-Widgets',
+    });
+    const browsedWidgetMethod = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: widgetClassRef,
+      selector: 'label',
+      require: requireFor(runtime, widgetGrants),
+    });
+    assert.deepEqual(browsedWidgetMethod.provenance, {
+      package: 'ProvenancePkg',
+      category: 'accessing',
+    });
+    assert.equal(browsedWidgetMethod.source, '[\n^ label.\nself\n]');
+    const browsedWidgetClassMethod = await authorizedDescribeSmalltalkMethod({
+      images: runtime.images,
+      imageId: 'app',
+      classRef: widgetMetaclassRef,
+      selector: 'defaultLabel',
+      require: requireFor(runtime, widgetGrants),
+    });
+    assert.deepEqual(browsedWidgetClassMethod.provenance, {
+      package: 'ProvenancePkg',
+      category: 'defaults',
+    });
+  });
+});

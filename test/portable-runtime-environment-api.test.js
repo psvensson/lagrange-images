@@ -5,7 +5,13 @@ import {fileURLToPath} from 'node:url';
 
 import * as portable from '../src/portable-runtime.js';
 import {installSmalltalkKernel, findSmalltalkKernel} from '../src/language/smalltalk-kernel.js';
-import {defineClass, ensureClassFromDeclaration} from '../src/language/smalltalk-class-builder.js';
+import {
+  classProvenance,
+  defineClass,
+  ensureClassFromDeclaration,
+  methodProvenance,
+  methodSource,
+} from '../src/language/smalltalk-class-builder.js';
 import {defineMethodsFromSource} from '../src/language/smalltalk-instance-variables.js';
 import {installSymmetricSmalltalkStandardImage} from '../src/language/smalltalk-standard-image.js';
 import {resolveGlobal} from '../src/language/smalltalk-globals.js';
@@ -53,7 +59,10 @@ import {createNodeSourceReader} from '../src/portable-artifact/node-source-reade
 const owned = Object.freeze({
   installSmalltalkKernel,
   findSmalltalkKernel,
+  classProvenance,
   defineClass,
+  methodProvenance,
+  methodSource,
   installCallableInterfaceV2,
   installImageCreationBinding,
   installImageMutationBinding,

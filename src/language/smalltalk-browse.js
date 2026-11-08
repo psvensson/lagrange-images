@@ -2,7 +2,13 @@ import {OBJECT_READ_OPERATION, objectResource} from '../authority/object-resourc
 import {shapeIndexedKind} from '../object/model.js';
 import {isObjectRef} from '../value/index.js';
 import {findSmalltalkKernel, readBehavior} from './smalltalk-kernel.js';
-import {methodBindings, methodBlockRef, methodSource} from './smalltalk-class-builder.js';
+import {
+  classProvenance,
+  methodBindings,
+  methodBlockRef,
+  methodProvenance,
+  methodSource,
+} from './smalltalk-class-builder.js';
 import {sameRef} from './smalltalk-lookup.js';
 import {
   SMALLTALK_METHOD_READ_OPERATION,
@@ -179,8 +185,9 @@ async function describeBehavior({images, imageId, classRef, behavior, kernel}) {
     // selector is the declaring class's fact, and reporting it here would let one grant speak for
     // objects the caller was never authorized to read.
     selectors: Object.freeze((await methodBindings({images, imageId, classRef, behavior, kernel})).map(({selector}) => selector)),
-    // Optional metadata; see the module header. Images owns no durable Cuis association today.
-    provenance: null,
+    // Delegated to the class builder's `classProvenance` owner: returns the normalized durable
+    // provenance metadata when retained on the Class/Metaclass record, or `null` when absent.
+    provenance: await classProvenance({images, imageId, classRef, behavior}),
   });
 }
 
@@ -258,7 +265,8 @@ async function authorizedMethodPosition({images, imageId, classRef, selector, re
     );
   }
 
-  const source = await methodSource({images, imageId, blockRef: binding.method});
+  const source = await methodSource({images, imageId, blockRef: binding.method, block});
+  const provenance = await methodProvenance({images, imageId, blockRef: binding.method, block});
 
   return Object.freeze({
     binding,
@@ -276,7 +284,7 @@ async function authorizedMethodPosition({images, imageId, classRef, selector, re
       // `<blockId>:source` (`symmetric-smalltalk/source-v0`) text when retained for this revision,
       // or `null` when absent. The browse seam never walks `CodeArtifact.derivedFrom` itself.
       source,
-      provenance: null,
+      provenance,
     }),
   });
 }

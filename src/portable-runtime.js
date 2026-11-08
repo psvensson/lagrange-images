@@ -119,9 +119,12 @@ import {
   installSmalltalkKernel,
 } from './language/smalltalk-kernel.js';
 import {
+  classProvenance,
   defineClass,
   definePolyglotMethodBridge,
   ensureClassFromDeclaration,
+  methodProvenance,
+  methodSource,
   polyglotMethodBridgeDescriptor,
 } from './language/smalltalk-class-builder.js';
 import {defineMethodsFromSource} from './language/smalltalk-instance-variables.js';
@@ -502,8 +505,11 @@ export {
   // into this composition root.
   installSmalltalkKernel,
   findSmalltalkKernel,
+  classProvenance,
   defineClass,
   definePolyglotMethodBridge,
+  methodProvenance,
+  methodSource,
   polyglotMethodBridgeDescriptor,
   // The install/import owners a portable host needs to bring an application INTO an image and
   // run it (bead lagrange-images-hygu; the Object Environment's E4-E6 vertical): the standard

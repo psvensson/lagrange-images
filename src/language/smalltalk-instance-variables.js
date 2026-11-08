@@ -247,7 +247,7 @@ async function methodsFromSource({
   // namespace the batch compiles in, defaulting to the root.
   const globals = await globalDeclarations({images, imageId, namespaceId});
   const compiled = [];
-  for (const {selector, source, captures, expectedCurrent, retainSource: entryRetainSource} of methods) {
+  for (const {selector, source, captures, expectedCurrent, retainSource: entryRetainSource, category, provenance} of methods) {
     if (entryRetainSource !== undefined && typeof entryRetainSource !== 'boolean') {
       throw new TypeError(`method ${selector} retainSource must be a boolean`);
     }
@@ -297,6 +297,8 @@ async function methodsFromSource({
       program: method.program,
       captures: bound,
       ...(shouldRetainSource ? {source} : {}),
+      ...(category !== undefined ? {category} : {}),
+      ...(provenance !== undefined ? {provenance} : {}),
       ...(expectedCurrent === undefined ? {} : {expectedCurrent}),
     });
   }
