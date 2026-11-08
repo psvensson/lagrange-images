@@ -90,6 +90,7 @@ async function evaluate(expression, frame, context, depth = 0, {
   if (!expression || typeof expression !== 'object' || Array.isArray(expression)) {
     throw new TypeError('neutral expression must be an object');
   }
+  context?.checkCancelled?.();
 
   switch (expression.op) {
     case 'literal':

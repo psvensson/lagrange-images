@@ -1,7 +1,7 @@
 import {OBJECT_READ_OPERATION, objectResource} from '../authority/object-resource.js';
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
 import {assertActivationRequest} from './activation-executor.js';
-import {ConditionRuntime, UnhandledConditionError} from './conditions.js';
+import {ActivationCancelledError, ConditionRuntime, UnhandledConditionError} from './conditions.js';
 
 const ACTIVATION_STACK_REPORT_V1 = 'lagrange-activation-stack-report/v1';
 const CONDITION_INSPECTION_REPORT_V1 = 'lagrange-condition-inspection-report/v1';
@@ -16,28 +16,37 @@ function resolveConditionRuntime(source) {
 }
 
 function normalizeFrameEntry(entry, index) {
+  const representation = entry?.representation ?? null;
+  const executionLane = entry?.executionLane
+    ?? (typeof representation === 'string' && representation.startsWith('wasm-function/') ? 'wasm' : 'neutral');
   return Object.freeze({
     frameId: Number.isInteger(entry?.frameId) ? entry.frameId : index + 1,
     depth: Number.isInteger(entry?.depth) ? entry.depth : index,
     block: entry?.block ?? null,
     code: entry?.code ?? null,
     languageId: entry?.languageId ?? null,
-    representation: entry?.representation ?? null,
+    representation,
+    executionLane,
     receiver: entry?.receiver ?? null,
     selector: entry?.selector ?? null,
     definingBehavior: entry?.definingBehavior ?? null,
     ownsFrame: Boolean(entry?.ownsFrame),
     argumentCount: Number.isInteger(entry?.argumentCount) ? entry.argumentCount : 0,
     metadata: Object.freeze({...(entry?.metadata ?? {})}),
+    wasmState: entry?.wasmState ?? null,
+    suspensionCount: Number.isInteger(entry?.suspensionCount) ? entry.suspensionCount : 0,
+    resumedCount: Number.isInteger(entry?.resumedCount) ? entry.resumedCount : 0,
+    lastSuspension: entry?.lastSuspension ? Object.freeze({...entry.lastSuspension}) : null,
   });
 }
 
 function captureActivationStackReport(source = null) {
   let rawFrames = [];
+  let runtime = null;
   if (Array.isArray(source)) {
     rawFrames = source;
   } else {
-    const runtime = resolveConditionRuntime(source);
+    runtime = resolveConditionRuntime(source);
     if (runtime) {
       const current = runtime.snapshotActivationFrames?.() ?? [];
       rawFrames = current.length > 0
@@ -45,6 +54,8 @@ function captureActivationStackReport(source = null) {
         : (runtime.lastSignalSnapshot?.()?.frames ?? []);
     } else if (source?.conditionSnapshot?.frames) {
       rawFrames = source.conditionSnapshot.frames;
+    } else if (Array.isArray(source?.frames)) {
+      rawFrames = source.frames;
     }
   }
 
@@ -53,12 +64,18 @@ function captureActivationStackReport(source = null) {
     [...new Set(frames.map((frame) => frame.languageId).filter((lang) => typeof lang === 'string' && lang.length > 0))]
       .sort(),
   );
+  const suspendedFrameCount = frames.filter((frame) => frame.wasmState === 'suspended').length;
+  const totalSuspensions = frames.reduce((sum, frame) => sum + frame.suspensionCount, 0);
+  const wasmResumptions = Object.freeze(runtime?.snapshotWasmResumptions?.() ?? []);
 
   return Object.freeze({
     schema: ACTIVATION_STACK_REPORT_V1,
     depth: frames.length,
     frames,
     languages,
+    suspendedFrameCount,
+    totalSuspensions,
+    wasmResumptions,
   });
 }
 
@@ -295,6 +312,7 @@ async function authorizedInspectExecutionCondition({
   activation,
   authority = null,
   restartBindingRef = null,
+  signal = null,
   require,
 } = {}) {
   if (typeof require !== 'function') {
@@ -331,6 +349,7 @@ async function authorizedInspectExecutionCondition({
     const value = await executor.execute(activation, {
       authority,
       conditionRuntime,
+      signal,
     });
     const lastSnapshot = conditionRuntime.lastSignalSnapshot();
     const conditionReport = lastSnapshot
@@ -350,6 +369,17 @@ async function authorizedInspectExecutionCondition({
       invocations,
     });
   } catch (error) {
+    if (error instanceof ActivationCancelledError) {
+      return Object.freeze({
+        status: 'cancelled',
+        value: null,
+        errorName: 'ActivationCancelledError',
+        description: error.message,
+        stackReport: captureActivationStackReport(error.frames?.length ? error.frames : conditionRuntime),
+        conditionReport: null,
+        invocations,
+      });
+    }
     if (error instanceof UnhandledConditionError || error?.conditionSnapshot) {
       const conditionReport = await captureConditionAndStackReport({
         conditionRuntime,

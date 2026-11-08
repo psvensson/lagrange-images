@@ -217,6 +217,7 @@ function createRebindableHostEnvironment(literals, sendSites, closureSites, effe
       const savedHandles = Object.freeze(handles.slice(effect.requestArity));
       return recordPending(state.pending, {
         kind: 'send',
+        siteIndex,
         request: Object.freeze({
           languageId: site.languageId,
           receiver: state.arena.get(requestHandles[0], `WASM send site ${siteIndex} receiver handle`),
@@ -247,6 +248,7 @@ function createRebindableHostEnvironment(literals, sendSites, closureSites, effe
       if (!prototype) throw new TypeError(`WASM closure prototype missing at execution: ${site.blockId}`);
       return recordPending(state.pending, {
         kind: 'closure',
+        siteIndex,
         request: Object.freeze({
           prototype,
           captures: Object.freeze(site.captures.map((capture, captureIndex) => Object.freeze({
@@ -397,8 +399,16 @@ function createResumableWasmFunctionV1Executor({
       let currentHandles = [receiverHandle, ...argumentHandles, ...captureHandles];
       let resumptions = 0;
 
+      context.recordWasmState?.({
+        wasmState: 'running',
+        suspensionCount: 0,
+        resumedCount: 0,
+        lastSuspension: null,
+      });
+
       try {
         while (true) {
+          context.checkCancelled?.();
           pending.effect = null;
           lease.slot.host.bind({arena, descriptor, closurePrototypes, pending});
           bound = true;
@@ -423,15 +433,45 @@ function createResumableWasmFunctionV1Executor({
           resumptions += 1;
           if (resumptions > MAX_WASM_RESUMPTIONS) throw new TypeError('WASM resumable effect limit exceeded');
 
+          const suspensionMeta = Object.freeze({
+            abi: contract.abi,
+            entry: fn.entry,
+            currentEntry,
+            effectKind: effect.kind,
+            siteIndex: effect.siteIndex ?? null,
+            resumeEntry: effect.resume.entry,
+            savedHandleCount: effect.resume.handles.length,
+            step: resumptions,
+          });
+          context.recordWasmState?.({
+            wasmState: 'suspended',
+            suspensionCount: resumptions,
+            resumedCount: resumptions - 1,
+            lastSuspension: suspensionMeta,
+            event: 'suspend',
+          });
+
           const resumedValue = await performHostEffect(effect, context);
+          context.checkCancelled?.();
+          context.recordWasmState?.({
+            wasmState: 'running',
+            suspensionCount: resumptions,
+            resumedCount: resumptions,
+            lastSuspension: suspensionMeta,
+            event: 'resume',
+          });
           const resultValueHandle = arena.put(resumedValue);
           currentEntry = effect.resume.entry;
           currentHandles = [...effect.resume.handles, resultValueHandle];
         }
 
+        context.recordWasmState?.({wasmState: 'completed'});
         lease.release();
         released = true;
       } catch (error) {
+        try {
+          context.recordWasmState?.({wasmState: 'retired', event: 'retire'});
+        } catch {}
         if (bound) {
           try { lease.slot.host.unbind(); } catch {}
           bound = false;

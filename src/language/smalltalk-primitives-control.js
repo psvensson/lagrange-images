@@ -200,6 +200,7 @@ async function blockWhile({images, activation, context, primitive, wanted}) {
   }
 
   for (;;) {
+    context?.checkCancelled?.();
     const verdict = canonicalizeValue(await sendMessage({
       languageId: SYMMETRIC_SMALLTALK_ID,
       receiver: condition,

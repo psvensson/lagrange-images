@@ -59,11 +59,31 @@ class NoActiveOccurrenceError extends TypeError {
   }
 }
 
+class ActivationCancelledError extends Error {
+  constructor(reason = null, {frames = null, message = null} = {}) {
+    const detail = typeof reason === 'string' && reason.length > 0
+      ? `: ${reason}`
+      : (reason instanceof Error && reason.message ? `: ${reason.message}` : '');
+    super(message ?? `activation cancelled${detail}`);
+    this.name = 'ActivationCancelledError';
+    this.reason = reason;
+    this.frames = frames ? Object.freeze([...frames]) : Object.freeze([]);
+  }
+}
+
+function defaultExecutionLane(representation) {
+  if (typeof representation === 'string' && representation.startsWith('wasm-function/')) {
+    return 'wasm';
+  }
+  return 'neutral';
+}
+
 class ConditionRuntime {
   #scopes = [];
   #occurrences = [];
   #activationFrames = [];
   #restarts = [];
+  #wasmResumptions = [];
   #lastSignalSnapshot = null;
   #nextId = 0;
 
@@ -103,22 +123,64 @@ class ConditionRuntime {
 
   enterActivationFrame(descriptor = {}) {
     const frameId = (this.#nextId += 1);
+    const representation = descriptor.representation ?? null;
     const entry = Object.freeze({
       frameId,
       depth: Number.isInteger(descriptor.depth) ? descriptor.depth : this.#activationFrames.length,
       block: descriptor.block ?? null,
       code: descriptor.code ?? null,
       languageId: descriptor.languageId ?? null,
-      representation: descriptor.representation ?? null,
+      representation,
+      executionLane: descriptor.executionLane ?? defaultExecutionLane(representation),
       receiver: descriptor.receiver ?? null,
       selector: descriptor.selector ?? null,
       definingBehavior: descriptor.definingBehavior ?? null,
       ownsFrame: Boolean(descriptor.ownsFrame),
       argumentCount: Number.isInteger(descriptor.argumentCount) ? descriptor.argumentCount : 0,
       metadata: Object.freeze({...(descriptor.metadata ?? {})}),
+      wasmState: descriptor.wasmState ?? null,
+      suspensionCount: Number.isInteger(descriptor.suspensionCount) ? descriptor.suspensionCount : 0,
+      resumedCount: Number.isInteger(descriptor.resumedCount) ? descriptor.resumedCount : 0,
+      lastSuspension: descriptor.lastSuspension ? Object.freeze({...descriptor.lastSuspension}) : null,
     });
     this.#activationFrames.push(entry);
     return frameId;
+  }
+
+  updateActivationFrameWasmState(frameId, patch = {}) {
+    const index = this.#activationFrames.findIndex((entry) => entry.frameId === frameId);
+    if (index < 0) return null;
+    const current = this.#activationFrames[index];
+    const nextLastSuspension = Object.hasOwn(patch, 'lastSuspension')
+      ? (patch.lastSuspension ? Object.freeze({...patch.lastSuspension}) : null)
+      : current.lastSuspension;
+    const updated = Object.freeze({
+      ...current,
+      wasmState: patch.wasmState ?? current.wasmState,
+      suspensionCount: Number.isInteger(patch.suspensionCount) ? patch.suspensionCount : current.suspensionCount,
+      resumedCount: Number.isInteger(patch.resumedCount) ? patch.resumedCount : current.resumedCount,
+      lastSuspension: nextLastSuspension,
+    });
+    this.#activationFrames[index] = updated;
+    if (patch.event === 'suspend' || patch.event === 'resume' || patch.event === 'retire') {
+      this.#wasmResumptions.push(Object.freeze({
+        frameId,
+        depth: updated.depth,
+        block: updated.block,
+        code: updated.code,
+        selector: updated.selector,
+        event: patch.event,
+        wasmState: updated.wasmState,
+        suspensionCount: updated.suspensionCount,
+        resumedCount: updated.resumedCount,
+        suspension: nextLastSuspension,
+      }));
+    }
+    return updated;
+  }
+
+  snapshotWasmResumptions() {
+    return Object.freeze([...this.#wasmResumptions]);
   }
 
   leaveActivationFrame(frameId) {
@@ -297,7 +359,7 @@ async function runUnwindProtection({
 
   if (primary !== null || !onlyWhenCurtailed) {
     try {
-      await facade.invoke(authorityToken, cleanupBlock, []);
+      await facade.invoke(authorityToken, cleanupBlock, [], {uninterruptible: true});
     } catch (secondary) {
       if (primary !== null && secondary && typeof secondary === 'object' && !secondary.duringUnwind) {
         secondary.duringUnwind = primary;
@@ -384,6 +446,7 @@ function transferConditionOccurrence({
 }
 
 export {
+  ActivationCancelledError,
   ConditionRuntime,
   ConditionTransfer,
   NoActiveOccurrenceError,
