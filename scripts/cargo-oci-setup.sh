@@ -25,6 +25,7 @@ cd "$(dirname "$0")/.."
 # To move the pin: change the tag, re-resolve the digest with
 #   docker manifest inspect --verbose cosmwasm/optimizer:<tag>
 # and update both lines together. A digest without the tag it came from cannot be audited later.
+CARGO_OCI_IMAGE_REGISTRY="${CARGO_OCI_IMAGE_REGISTRY:-mirror.gcr.io}"
 CARGO_OCI_IMAGE_TAG=cosmwasm/optimizer:0.17.0
 CARGO_OCI_IMAGE_DIGEST=sha256:7e0b9229c1a4118d0c9a2af2e7f5d95a91f264c26a2ce5681c779926e74d7f85
 
@@ -32,25 +33,40 @@ OCI_CLI="${LAGRANGE_OCI_CLI:-docker}"
 # `%` (shortest suffix), not `%%`: a registry-qualified or port-bearing pin such as
 # registry.example:5000/rust/tc:1.90 contains more than one colon, and `%%` would strip from the
 # first one and pull a different repository entirely.
-IMAGE="${CARGO_OCI_IMAGE_TAG%:*}@${CARGO_OCI_IMAGE_DIGEST}"
+DIRECT_IMAGE="${CARGO_OCI_IMAGE_TAG%:*}@${CARGO_OCI_IMAGE_DIGEST}"
+if [ -n "$CARGO_OCI_IMAGE_REGISTRY" ]; then
+  IMAGE="${CARGO_OCI_IMAGE_REGISTRY%/}/${DIRECT_IMAGE}"
+else
+  IMAGE="$DIRECT_IMAGE"
+fi
 
 if ! command -v "$OCI_CLI" >/dev/null 2>&1; then
   echo "no OCI CLI on PATH: $OCI_CLI (set LAGRANGE_OCI_CLI=podman to use Podman)" >&2
   exit 1
 fi
 
-# Registries rate limit anonymous pulls, and this lane is required, so a single transient 429 must
-# not fail the build. Layers already pulled are not re-fetched by a retry.
-attempt=1
-until "$OCI_CLI" pull "$IMAGE"; do
-  if [ "$attempt" -ge 4 ]; then
-    echo "could not pull $IMAGE after $attempt attempts" >&2
+pull_with_retries() {
+  local target="$1" attempt=1
+  until "$OCI_CLI" pull "$target"; do
+    if [ "$attempt" -ge 4 ]; then
+      return 1
+    fi
+    echo "pull failed for $target, retrying ($attempt)" >&2
+    sleep $((attempt * 5))
+    attempt=$((attempt + 1))
+  done
+}
+
+# Acquire through the pull-through mirror first to avoid Docker Hub anonymous per-IP rate limits
+# (bead lagrange-images-gjn), falling back to the direct digest-pinned reference if needed.
+if ! pull_with_retries "$IMAGE"; then
+  if [ "$IMAGE" != "$DIRECT_IMAGE" ] && pull_with_retries "$DIRECT_IMAGE"; then
+    IMAGE="$DIRECT_IMAGE"
+  else
+    echo "could not pull $IMAGE" >&2
     exit 1
   fi
-  echo "pull failed, retrying ($attempt)" >&2
-  sleep $((attempt * 5))
-  attempt=$((attempt + 1))
-done
+fi
 
 # Pulling by digest already guarantees the content, but the toolchain the proof claims to have used
 # is worth stating out loud in the log next to the digest that produced it.

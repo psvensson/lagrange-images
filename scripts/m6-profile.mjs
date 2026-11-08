@@ -57,7 +57,7 @@ export async function main(args) {
       maxMs: options.maxMs, maxLogBytes: options.maxLogBytes, signal: controller.signal,
       onChunk: (chunk) => writeFileSync(log, chunk),
       onStarted: (value) => save('started.json', {...MARKERS, ...value}),
-      thermalCheck: () => { readThermal(); return false; },
+      thermalCheck: () => thermal.readThermalHeadroom(),
     });
   } finally {
     closeSync(log); process.removeListener('SIGTERM', term); process.removeListener('SIGINT', interrupt);
@@ -71,6 +71,7 @@ export async function main(args) {
   } catch { inputChange = 'source-input-unavailable'; }
   const outcome = classifyOutcome({...child, metrics, reason: inputChange || child.reason});
   const receipt = {schema: 'm6-profile-terminal/1', ...outcome, child, cancellationSignal,
+    thermalCause: child.thermalCause ?? null,
     sources, driver: plan.driver, workerFacts: facts, initialThermal,
     log: {path: logPath, sha256: digest(logPath), bytes: child.keptLogBytes},
     metricsFile, observedChildRuntime: metrics?.runtimeFacts ?? null, metricMeaning: plan.observations};

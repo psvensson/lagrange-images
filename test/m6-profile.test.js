@@ -429,3 +429,54 @@ test('overflow or outstanding observations cannot become a completed diagnostic'
     assert.equal(result.acceptance, false);
   }
 });
+
+test('thermal hold and thrown thermal reader preserve distinguishable triggering cause and reap child', async () => {
+  const holdReading = {state: 'hold', maxCelsius: 81.5, sensor: 'pkg-temp-0'};
+  const makeChild = (pid) => {
+    const child = new EventEmitter();
+    child.pid = pid;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    return child;
+  };
+
+  let holdLive = true;
+  const heldChild = makeChild(9101);
+  const heldResult = await runOwnedChild({
+    argv: [], cwd: '/', env: {}, maxMs: 1000, maxLogBytes: 100, graceMs: 5, thermalIntervalMs: 5,
+    spawnChild: () => heldChild,
+    thermalCheck: () => holdReading,
+    groupAlive: () => holdLive,
+    killGroup(pid, signal) {
+      assert.equal(pid, 9101);
+      if (signal === 'SIGTERM') setImmediate(() => { holdLive = false; heldChild.emit('close', null, 'SIGTERM'); });
+    },
+  });
+  assert.equal(heldResult.reason, 'thermal-hold');
+  assert.equal(heldResult.reaped, true);
+  assert.equal(heldResult.groupGone, true);
+  assert.deepEqual(heldResult.thermalCause, {kind: 'hold', reading: holdReading});
+
+  let errorLive = true;
+  const errorChild = makeChild(9102);
+  const readerFailure = Object.assign(new Error('hwmon sensor read EIO'), {code: 'EIO'});
+  const errorResult = await runOwnedChild({
+    argv: [], cwd: '/', env: {}, maxMs: 1000, maxLogBytes: 100, graceMs: 5, thermalIntervalMs: 5,
+    spawnChild: () => errorChild,
+    thermalCheck: () => { throw readerFailure; },
+    groupAlive: () => errorLive,
+    killGroup(pid, signal) {
+      assert.equal(pid, 9102);
+      if (signal === 'SIGTERM') setImmediate(() => { errorLive = false; errorChild.emit('close', null, 'SIGTERM'); });
+    },
+  });
+  assert.equal(errorResult.reason, 'thermal-observation-failed');
+  assert.equal(errorResult.reaped, true);
+  assert.equal(errorResult.groupGone, true);
+  assert.deepEqual(errorResult.thermalCause, {
+    kind: 'error',
+    name: 'Error',
+    message: 'hwmon sensor read EIO',
+    code: 'EIO',
+  });
+});

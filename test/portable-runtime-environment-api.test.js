@@ -11,8 +11,12 @@ import {
   ensureClassFromDeclaration,
   methodProvenance,
   methodSource,
+  smalltalkClassObjectId,
 } from '../src/language/smalltalk-class-builder.js';
-import {defineMethodsFromSource} from '../src/language/smalltalk-instance-variables.js';
+import {
+  defineMethodsFromSource,
+  instanceVariableBindings,
+} from '../src/language/smalltalk-instance-variables.js';
 import {installSymmetricSmalltalkStandardImage} from '../src/language/smalltalk-standard-image.js';
 import {resolveGlobal} from '../src/language/smalltalk-globals.js';
 import {importCuisNativePackage} from '../src/language/cuis-native-import.js';
@@ -20,12 +24,19 @@ import {installManagedProjectRelease} from '../src/project/managed-installation.
 import {readManagedProjectInstallation} from '../src/project/installation-state.js';
 import {authorizedImportCuisPackage} from '../src/language/smalltalk-authorized-import.js';
 import {installCallableInterfaceV2} from '../src/callable/interface-v2-artifacts.js';
+import {resolveCallableInterface} from '../src/callable/binding-artifacts.js';
 import {installImageCreationBinding} from '../src/callable/image-creation-binding.js';
-import {installImageMutationBinding} from '../src/callable/image-mutation-binding.js';
+import {
+  installImageMutationBinding,
+  parseImageMutationBindingArtifact,
+} from '../src/callable/image-mutation-binding.js';
 import {installImageObjectReadBinding} from '../src/callable/image-object-read-binding.js';
 import {installImageObservationBinding} from '../src/callable/image-observation-binding.js';
 import {packCompositeValue, unpackCompositeValue} from '../src/callable/composite-codec.js';
-import {normalizeTypeDeclarations} from '../src/callable/type-grammar.js';
+import {
+  normalizeTypeDeclarations,
+  resolveDeclaredType,
+} from '../src/callable/type-grammar.js';
 import {objectRef, referencesOfValue, textValue} from '../src/value/scalars.js';
 import {objectResource, parseObjectResource} from '../src/authority/object-resource.js';
 import {objectVersionToken} from '../src/object/version-token.js';
@@ -63,9 +74,12 @@ const owned = Object.freeze({
   defineClass,
   methodProvenance,
   methodSource,
+  smalltalkClassObjectId,
   installCallableInterfaceV2,
+  resolveCallableInterface,
   installImageCreationBinding,
   installImageMutationBinding,
+  parseImageMutationBindingArtifact,
   installImageObjectReadBinding,
   installImageObservationBinding,
   objectRef,
@@ -78,6 +92,7 @@ const owned = Object.freeze({
   packCompositeValue,
   unpackCompositeValue,
   normalizeTypeDeclarations,
+  resolveDeclaredType,
   authorizedReadProject,
   authorizedReadProjectDescriptor,
   authorizedRenameProject,
@@ -92,6 +107,7 @@ const owned = Object.freeze({
   installSymmetricSmalltalkStandardImage,
   ensureClassFromDeclaration,
   defineMethodsFromSource,
+  instanceVariableBindings,
   importCuisNativePackage,
   installManagedProjectRelease,
   readManagedProjectInstallation,
