@@ -90,12 +90,12 @@ Do not put principals, grants or cached authorization decisions into durable art
 
 The hybrid tail/resumable execution model is established. Optimize only under measured native-application pressure:
 
-- [ ] tighter live-Value-handle analysis at suspension points;
-- [ ] module-size/budget splitting of logical compilation groups;
-- [ ] direct optimized calls between entries in one shared module;
+- [x] tighter live-Value-handle analysis at suspension points (`collectFreePlanVariables` and `analyzeLivePlanVariables` in `src/wasm/group-optimizations.js`, wired into `src/wasm/resumable-compiler.js` and `src/wasm/resumable-compiler-v2.js` to eliminate dead Value handles from `savedValues` at each suspension point, proven in `test/wasm-group-optimizations.test.js`);
+- [x] module-size/budget splitting of logical compilation groups (`partitionCompilationGroupByBudget` and `WasmModuleBudgetExceededError` in `src/wasm/group-optimizations.js`, wired into `installWasmBlockTree` and `installWasmV1BlockTree` via `moduleBudget: {maxMembersPerModule, maxByteBudget}` to split large compilation groups into bounded `wasm-module/v2` shards, proven in `test/wasm-group-optimizations.test.js`);
+- [x] direct optimized calls between entries in one shared module (`planIntraModuleDirectCalls` in `src/wasm/group-optimizations.js` and native WebAssembly `call` `0x10 <funcIdx>` emission in `src/wasm/compiler-v1.js` and `src/wasm/resumable-compiler-v2.js` for intra-module sibling calls, proven in `test/wasm-group-optimizations.test.js`);
 - [x] condition/exception unwinding across suspension points (`runUnwindProtection` in `src/execution/conditions.js` running `ensure:`/`ifCurtailed:`/`unwind-protect` cleanups uninterruptibly across WASM suspension and cancellation unwinds, proven in `test/conditions.test.js` and `test/activation-cancellation-resumption.test.js`);
 - [x] debugger activation/resumption metadata (`updateActivationFrameWasmState`, `snapshotWasmResumptions`, and `executionLane`/`wasmState`/`suspensionCount`/`resumedCount`/`lastSuspension` in `src/execution/conditions.js` and `src/execution/debug-inspect.js`, proven in `test/activation-cancellation-resumption.test.js`);
-- [ ] optimized/non-materialized closure representations;
+- [x] optimized/non-materialized closure representations (`analyzeClosureEscape` and `optimizeNonEscapingClosures` in `src/wasm/group-optimizations.js`, inlining non-escaping inline Block applications and single-assignment local Block bindings to eliminate closure materialization and host apply round-trips, proven in `test/wasm-group-optimizations.test.js`);
 - [x] explicit cancellation semantics for suspended activations (`ActivationCancelledError` and `AbortSignal` propagation across `ActivationExecutor.execute`, neutral-expression evaluation, Smalltalk loops, and WASM suspension/resumption loops with clean WASM instance retirement, proven in `test/activation-cancellation-resumption.test.js`).
 
 Do not conflate compiler-generated resumption with durable continuation state, retry or distributed recovery.

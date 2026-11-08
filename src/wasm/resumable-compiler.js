@@ -15,6 +15,7 @@ import {
   WASM_IMPORT_MODULE,
 } from './abi.js';
 import {WASM_RESUMABLE_VALUE_HANDLE_ABI_V1} from './resumable-abi.js';
+import {analyzeLivePlanVariables} from './group-optimizations.js';
 
 const BASE_IMPORT_COUNT = 4;
 const WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V0 = 'wasm-nested-block-tree/v0';
@@ -225,7 +226,17 @@ function splitPlan(plan, available, state, rootEntry, segments) {
         };
       }
 
-      const savedValues = [...available];
+      const liveness = state.optimizeLiveHandles
+        ? analyzeLivePlanVariables(plan.next, available)
+        : {savedValues: [...available], eliminatedValues: []};
+      const savedValues = [...liveness.savedValues];
+      state.liveHandleSites.push(Object.freeze({
+        effectIndex: plan.effectIndex,
+        savedCount: savedValues.length,
+        eliminatedCount: liveness.eliminatedValues.length,
+        savedVariables: Object.freeze([...savedValues]),
+        eliminatedVariables: Object.freeze([...liveness.eliminatedValues]),
+      }));
       const resumeEntry = `${rootEntry}$resume_${plan.effectIndex}`;
       if (state.exportNames.has(resumeEntry)) throw new TypeError(`duplicate WASM resume export entry: ${resumeEntry}`);
       state.exportNames.add(resumeEntry);
@@ -353,7 +364,7 @@ function prepareEntries(entries) {
   return {normalizedEntries, entryNames};
 }
 
-function compileResumableWasmModuleEntries(entries) {
+function compileResumableWasmModuleEntries(entries, {optimizeLiveHandles = true} = {}) {
   const {normalizedEntries, entryNames} = prepareEntries(entries);
   const state = {
     sendSites: [],
@@ -361,6 +372,8 @@ function compileResumableWasmModuleEntries(entries) {
     effects: [],
     nextTemp: 0,
     exportNames: new Set(entryNames),
+    optimizeLiveHandles: Boolean(optimizeLiveHandles),
+    liveHandleSites: [],
   };
   const segments = [];
   const functionDescriptors = [];
@@ -475,11 +488,17 @@ function compileResumableWasmModuleEntries(entries) {
     effectSites,
     continuations,
     functions: Object.freeze(functionDescriptors),
+    liveHandleOptimization: Object.freeze({
+      enabled: state.optimizeLiveHandles,
+      totalSavedHandles: state.liveHandleSites.reduce((sum, s) => sum + s.savedCount, 0),
+      eliminatedHandleCount: state.liveHandleSites.reduce((sum, s) => sum + s.eliminatedCount, 0),
+      sites: Object.freeze([...state.liveHandleSites]),
+    }),
   });
 }
 
-function compileResumableWasmModule(program) {
-  const compiled = compileResumableWasmModuleEntries([{entry: WASM_ENTRY_V0, memberIndex: 0, program}]);
+function compileResumableWasmModule(program, options = {}) {
+  const compiled = compileResumableWasmModuleEntries([{entry: WASM_ENTRY_V0, memberIndex: 0, program}], options);
   const descriptor = compiled.functions[0];
   return Object.freeze({
     ...compiled,

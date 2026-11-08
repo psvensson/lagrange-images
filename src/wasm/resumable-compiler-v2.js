@@ -18,6 +18,11 @@ import {canonicalizeValue, isReference} from '../value/index.js';
 import {WASM_ENTRY_V0, WASM_IMPORT_MODULE} from './abi.js';
 import {WASM_NESTED_BLOCK_TREE_GROUP_POLICY_V1} from './compiler-v1.js';
 import {WASM_RESUMABLE_VALUE_HANDLE_ABI_V2} from './resumable-abi.js';
+import {
+  analyzeLivePlanVariables,
+  optimizeNonEscapingClosures,
+  planIntraModuleDirectCalls,
+} from './group-optimizations.js';
 
 // lagrange-value-handle-resumable/v2: the resumable lane for lagrange-code/v1.
 //
@@ -63,6 +68,9 @@ function normalizeModuleEntry(value, index) {
     memberIndex: value.memberIndex,
     program: value.program,
     allowApply: value.allowApply === true,
+    semanticBlockId: typeof value.semanticBlockId === 'string' && value.semanticBlockId.length > 0
+      ? value.semanticBlockId
+      : null,
   });
 }
 
@@ -251,9 +259,48 @@ function lowerExpression(expression, state, context, continuation) {
             next: continuation(resultId),
           };
         }));
-    case 'apply':
+    case 'apply': {
       if (!context.allowApply) throw new TypeError(`WASM resumable backend v2 does not support semantic op: ${expression.op}`);
       if (!Array.isArray(expression.arguments)) throw new TypeError('WASM apply arguments must be an array');
+      if (context.directCalls) {
+        let directTarget = null;
+        let captureExprs = [];
+        if (expression.callee?.op === 'binding' && context.directCalls.bindingTargets.has(expression.callee.id)) {
+          const target = context.directCalls.bindingTargets.get(expression.callee.id);
+          if (target.directCallable && target.parameterCount === expression.arguments.length) {
+            directTarget = target;
+            captureExprs = target.captureExpressions ?? [];
+          }
+        } else if (expression.callee?.op === 'block' && context.directCalls.bySemanticBlockId.has(expression.callee.blockId)) {
+          const target = context.directCalls.bySemanticBlockId.get(expression.callee.blockId);
+          if (target.directCallable && target.parameterCount === expression.arguments.length) {
+            directTarget = target;
+            captureExprs = (expression.callee.captures ?? [])
+              .filter(({mode}) => mode === 'snapshot')
+              .map(({value}) => value);
+          }
+        }
+        if (directTarget) {
+          state.intraModuleDirectCalls.push(Object.freeze({
+            callerEntry: context.entryName,
+            targetEntry: directTarget.entry,
+            targetMemberIndex: directTarget.memberIndex,
+            arity: expression.arguments.length,
+          }));
+          return lowerSequenceValues([...expression.arguments, ...captureExprs], state, context, 0, [], (callValues) => {
+            const resultId = newTemp(state);
+            return {
+              kind: 'let',
+              id: resultId,
+              op: 'direct-call',
+              targetEntry: directTarget.entry,
+              targetMemberIndex: directTarget.memberIndex,
+              callValues,
+              next: continuation(resultId),
+            };
+          });
+        }
+      }
       return lowerExpression(expression.callee, state, context, (callee) =>
         lowerSequenceValues(expression.arguments, state, context, 0, [], (args) => {
           const resultId = newTemp(state);
@@ -265,6 +312,7 @@ function lowerExpression(expression, state, context, continuation) {
             next: continuation(resultId),
           };
         }));
+    }
     case 'make-block':
     case 'block': {
       if (!Array.isArray(expression.captures)) throw new TypeError('WASM nested Block captures must be an array');
@@ -322,7 +370,17 @@ function splitPlan(plan, available, state, rootEntry, segments) {
         };
       }
 
-      const savedValues = [...available];
+      const liveness = state.optimizeLiveHandles
+        ? analyzeLivePlanVariables(plan.next, available)
+        : {savedValues: [...available], eliminatedValues: []};
+      const savedValues = [...liveness.savedValues];
+      state.liveHandleSites.push(Object.freeze({
+        effectIndex: plan.effectIndex,
+        savedCount: savedValues.length,
+        eliminatedCount: liveness.eliminatedValues.length,
+        savedVariables: Object.freeze([...savedValues]),
+        eliminatedVariables: Object.freeze([...liveness.eliminatedValues]),
+      }));
       const resumeEntry = `${rootEntry}$resume_${plan.effectIndex}`;
       if (state.exportNames.has(resumeEntry)) throw new TypeError(`duplicate WASM resume export entry: ${resumeEntry}`);
       state.exportNames.add(resumeEntry);
@@ -388,6 +446,16 @@ function compilePlan(plan, context) {
         valueCode = [0x41, ...s32(plan.slot), 0x10, ...u32(CELL_GET_IMPORT)];
       } else if (plan.op === 'cell-set') {
         valueCode = [0x41, ...s32(plan.slot), ...localGet(plan.value), 0x10, ...u32(CELL_SET_IMPORT)];
+      } else if (plan.op === 'direct-call') {
+        const targetFuncIdx = context.rootFunctionIndices?.get(plan.targetEntry);
+        if (targetFuncIdx === undefined) {
+          throw new TypeError(`WASM intra-module direct call target not found: ${plan.targetEntry}`);
+        }
+        valueCode = [
+          0x41, ...s32(0),
+          ...plan.callValues.flatMap(localGet),
+          0x10, ...u32(targetFuncIdx),
+        ];
       } else {
         throw new TypeError(`unknown resumable pure op: ${plan.op}`);
       }
@@ -418,13 +486,14 @@ function compilePlan(plan, context) {
   }
 }
 
-function compileSegment(segment, literals) {
+function compileSegment(segment, literals, rootFunctionIndices = new Map()) {
   const env = new Map(segment.parameterVars.map((name, index) => [name, index]));
   const context = {
     env,
     parameterCount: segment.parameterVars.length,
     localCount: 0,
     literals,
+    rootFunctionIndices,
   };
   const instructions = compilePlan(segment.plan, context);
   const localDeclarations = context.localCount === 0
@@ -471,19 +540,37 @@ function cellBindingsOf(program) {
   return {bindings: Object.freeze(bindings), slots};
 }
 
-function compileResumableWasmV2ModuleEntries(entries, {allowApply = false} = {}) {
+function compileResumableWasmV2ModuleEntries(entries, {
+  allowApply = false,
+  optimizeLiveHandles = true,
+  optimizeClosures = false,
+  intraModuleDirectCalls = false,
+  intraModuleCallTargets = null,
+} = {}) {
   const {normalizedEntries, entryNames} = prepareEntries(entries);
+  const effectiveEntries = optimizeClosures
+    ? normalizedEntries.map((entry) => ({
+      ...entry,
+      program: optimizeNonEscapingClosures(entry.program).program,
+    }))
+    : normalizedEntries;
+  const directCalls = (intraModuleDirectCalls || intraModuleCallTargets)
+    ? planIntraModuleDirectCalls(effectiveEntries, {intraModuleCallTargets})
+    : null;
   const state = {
     sendSites: [],
     closureSites: [],
     effects: [],
     nextTemp: 0,
     exportNames: new Set(entryNames),
+    optimizeLiveHandles: Boolean(optimizeLiveHandles),
+    liveHandleSites: [],
+    intraModuleDirectCalls: [],
   };
   const segments = [];
   const functionDescriptors = [];
 
-  for (const entry of normalizedEntries) {
+  for (const entry of effectiveEntries) {
     const program = entry.program;
     if (!program || !Array.isArray(program.parameters) || !Array.isArray(program.captures) || !Array.isArray(program.temporaries)) {
       throw new TypeError(`WASM module entry ${entry.entry} program must contain parameters, temporaries and captures arrays`);
@@ -496,10 +583,12 @@ function compileResumableWasmV2ModuleEntries(entries, {allowApply = false} = {})
     if (new Set(captureIds).size !== captureIds.length) throw new TypeError(`WASM module entry ${entry.entry} has duplicate capture ids`);
     const {bindings: cellBindings, slots: cellSlots} = cellBindingsOf(program);
     const context = {
+      entryName: entry.entry,
       parameterCount: program.parameters.length,
       captureIds: new Set(captureIds),
       cellSlots,
       allowApply: allowApply || entry.allowApply,
+      directCalls,
     };
 
     const sendStart = state.sendSites.length;
@@ -538,7 +627,12 @@ function compileResumableWasmV2ModuleEntries(entries, {allowApply = false} = {})
   }
 
   const literals = {values: [], keys: new Map()};
-  const compiledSegments = segments.map((segment) => compileSegment(segment, literals));
+  const firstFunctionIndex = BASE_IMPORT_COUNT_V2 + state.effects.length;
+  const rootFunctionIndices = new Map();
+  segments.forEach((segment, index) => {
+    if (segment.root) rootFunctionIndices.set(segment.entry, firstFunctionIndex + index);
+  });
+  const compiledSegments = segments.map((segment) => compileSegment(segment, literals, rootFunctionIndices));
   const effectSites = Object.freeze(state.effects.map((effect) => Object.freeze({
     kind: effect.kind,
     siteIndex: effect.siteIndex,
@@ -583,7 +677,6 @@ function compileResumableWasmV2ModuleEntries(entries, {allowApply = false} = {})
 
   const firstSegmentTypeIndex = 2 + effectSites.length;
   const functions = vector(compiledSegments.map((_, index) => [...u32(firstSegmentTypeIndex + index)]));
-  const firstFunctionIndex = BASE_IMPORT_COUNT_V2 + effectSites.length;
   const exports = vector(compiledSegments.map(({entry}, index) => functionExport(entry, firstFunctionIndex + index)));
   const code = vector(compiledSegments.map(({body}) => body));
 
@@ -603,11 +696,18 @@ function compileResumableWasmV2ModuleEntries(entries, {allowApply = false} = {})
     effectSites,
     continuations,
     functions: Object.freeze(functionDescriptors),
+    liveHandleOptimization: Object.freeze({
+      enabled: state.optimizeLiveHandles,
+      totalSavedHandles: state.liveHandleSites.reduce((sum, s) => sum + s.savedCount, 0),
+      eliminatedHandleCount: state.liveHandleSites.reduce((sum, s) => sum + s.eliminatedCount, 0),
+      sites: Object.freeze([...state.liveHandleSites]),
+    }),
+    intraModuleDirectCalls: Object.freeze([...state.intraModuleDirectCalls]),
   });
 }
 
-function compileResumableWasmV2Module(program) {
-  const compiled = compileResumableWasmV2ModuleEntries([{entry: WASM_ENTRY_V0, memberIndex: 0, program}]);
+function compileResumableWasmV2Module(program, options = {}) {
+  const compiled = compileResumableWasmV2ModuleEntries([{entry: WASM_ENTRY_V0, memberIndex: 0, program}], options);
   const descriptor = compiled.functions[0];
   return Object.freeze({
     ...compiled,
@@ -617,10 +717,10 @@ function compileResumableWasmV2Module(program) {
   });
 }
 
-function compileResumableWasmV2ModuleForV2(program) {
+function compileResumableWasmV2ModuleForV2(program, options = {}) {
   const compiled = compileResumableWasmV2ModuleEntries(
     [{entry: WASM_ENTRY_V0, memberIndex: 0, program, allowApply: true}],
-    {allowApply: true},
+    {...options, allowApply: true},
   );
   const descriptor = compiled.functions[0];
   return Object.freeze({
@@ -692,15 +792,23 @@ const lagrangeCodeV1GroupToResumableWasmModuleCompiler = Object.freeze({
       const isV2 = source.representation === LAGRANGE_CODE_V2;
       return {
         entry: `run_${memberIndex}`,
-        memberIndex,
+        memberIndex: Number.isInteger(group.options?.memberIndices?.[memberIndex])
+          ? group.options.memberIndices[memberIndex]
+          : memberIndex,
         program: isV2 ? parseLagrangeCodeV2Program(source) : parseLagrangeCodeV1Program(source),
         allowApply: isV2,
+        semanticBlockId: source.metadata?.semanticBlockId ?? null,
       };
     });
     const semanticRepresentation = members.some((source) => source.representation === LAGRANGE_CODE_V2)
       ? LAGRANGE_CODE_V2
       : LAGRANGE_CODE_V1;
-    const compiled = compileResumableWasmV2ModuleEntries(entries);
+    const compiled = compileResumableWasmV2ModuleEntries(entries, {
+      optimizeLiveHandles: group.options?.optimizeLiveHandles !== false,
+      optimizeClosures: group.options?.optimizeClosures === true,
+      intraModuleDirectCalls: group.options?.intraModuleDirectCalls === true,
+      intraModuleCallTargets: group.options?.intraModuleCallTargets ?? null,
+    });
     return Object.freeze({
       bytes: compiled.bytes,
       contract: {
@@ -716,6 +824,9 @@ const lagrangeCodeV1GroupToResumableWasmModuleCompiler = Object.freeze({
         semanticRepresentation,
         groupPolicyId: group.policyId,
         physicalLayout: 'shared-module',
+        ...(compiled.intraModuleDirectCalls.length > 0
+          ? {intraModuleDirectCalls: compiled.intraModuleDirectCalls}
+          : {}),
       },
     });
   },
