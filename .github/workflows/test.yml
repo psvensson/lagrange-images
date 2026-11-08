@@ -29,7 +29,20 @@ jobs:
           node-version: '22'
       - run: npm install --ignore-scripts
       - name: Install Beads native binary
-        run: CI= node node_modules/@beads/bd/scripts/postinstall.js
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BD_VERSION="$(node -p "require('./node_modules/@beads/bd/package.json').version")"
+          BD_BIN_DIR="node_modules/@beads/bd/bin"
+          mkdir -p "$BD_BIN_DIR"
+          ASSET_URL="$(gh api "repos/gastownhall/beads/releases/tags/v${BD_VERSION}" --jq '.assets[] | select(.name == "beads_'"${BD_VERSION}"'_linux_amd64.tar.gz") | .url')"
+          curl -fsSL --retry 5 --retry-all-errors \
+            -H "Accept: application/octet-stream" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "$ASSET_URL" | tar -xzf - -C "$BD_BIN_DIR"
+          chmod +x "$BD_BIN_DIR/bd"
+          "$BD_BIN_DIR/bd" version
       - name: Resolve prior native proof
         id: proof
         run: node scripts/ci-proof.mjs decide node-test

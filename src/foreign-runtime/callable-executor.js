@@ -1,4 +1,8 @@
 import {TupleMap} from '../support/tuple-map.js';
+import {
+  FOREIGN_RUNTIME_CALL_OPERATION,
+  foreignRuntimeCallResource,
+} from '../authority/object-resource.js';
 import {assertBlockApplicationReceiver} from '../execution/block-application.js';
 import {canonicalizeValue, isObjectRef} from '../value/index.js';
 import {
@@ -85,6 +89,8 @@ function createForeignRuntimeCallableInterfaceV1Executor({
   runtimes,
   bindings,
   instanceCache = null,
+  requireCallAuthority = false,
+  transportCallAuthority = false,
 } = {}) {
   const runtimeService = assertRuntimes(runtimes);
   const cache = instanceCache ?? new ForeignRuntimeDefinitionInstanceCache({definitions, bindings});
@@ -94,7 +100,7 @@ function createForeignRuntimeCallableInterfaceV1Executor({
 
   return Object.freeze({
     instanceCache: cache,
-    async execute({activation, code}, {images, promote = null}) {
+    async execute({activation, code}, {images, promote = null, require = null}) {
       if (!code || code.representation !== FOREIGN_RUNTIME_CALLABLE_INTERFACE_V1) {
         throw new TypeError(`foreign runtime callable executor requires ${FOREIGN_RUNTIME_CALLABLE_INTERFACE_V1}`);
       }
@@ -119,6 +125,22 @@ function createForeignRuntimeCallableInterfaceV1Executor({
         );
       }
 
+      const enforceCallAuthority = Boolean(
+        requireCallAuthority
+        || code.metadata?.requireCallAuthority === true
+        || typeof code.metadata?.requiredOperation === 'string',
+      );
+      if (enforceCallAuthority) {
+        if (typeof require !== 'function') {
+          throw new TypeError('foreign runtime callable with requireCallAuthority requires a require(demand) function');
+        }
+        const operation = typeof code.metadata?.requiredOperation === 'string' && code.metadata.requiredOperation.length > 0
+          ? code.metadata.requiredOperation
+          : FOREIGN_RUNTIME_CALL_OPERATION;
+        const resource = foreignRuntimeCallResource(runtimeDefinition.imageId, runtimeDefinition.objectId, descriptor.interface);
+        require({operation, resource});
+      }
+
       const instance = await cache.get({definition: runtimeDefinition, artifact: definitionArtifact});
       // ADR 0060 decision 2. Arguments cross a foreign-runtime/host boundary here, so a transient
       // object passed out becomes durable before the runtime sees it — otherwise a ref the foreign
@@ -127,10 +149,16 @@ function createForeignRuntimeCallableInterfaceV1Executor({
       const args = typeof promote === 'function'
         ? await Promise.all(activation.arguments.map((value) => promote(value)))
         : activation.arguments;
+      const forwardAuthority = Boolean(
+        enforceCallAuthority
+        || transportCallAuthority
+        || code.metadata?.transportCallAuthority === true,
+      );
       return await runtimeService.call({
         runtimeId: instance.runtimeId,
         interface: descriptor.interface,
         arguments: args,
+        ...(forwardAuthority && typeof require === 'function' ? {require} : {}),
       });
     },
   });

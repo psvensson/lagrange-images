@@ -24,6 +24,13 @@ class ForeignRuntimeInstanceNotActiveError extends Error {
   }
 }
 
+class ExpiredForeignRuntimeCallAuthorityError extends TypeError {
+  constructor() {
+    super('foreign runtime call authority was invoked after the call completed; authority does not outlive the individual call');
+    this.name = 'ExpiredForeignRuntimeCallAuthorityError';
+  }
+}
+
 function requiredText(value, label) {
   if (typeof value !== 'string' || value.length === 0) {
     throw new TypeError(`${label} must be a non-empty string`);
@@ -106,8 +113,14 @@ function instanceDescriptor(state) {
   });
 }
 
-function providerContext() {
-  return Object.freeze({protocol: FOREIGN_RUNTIME_PROVIDER_PROTOCOL_V0});
+function providerContext(callRequire = null) {
+  if (callRequire === null || callRequire === undefined) {
+    return Object.freeze({protocol: FOREIGN_RUNTIME_PROVIDER_PROTOCOL_V0});
+  }
+  return Object.freeze({
+    protocol: FOREIGN_RUNTIME_PROVIDER_PROTOCOL_V0,
+    require: callRequire,
+  });
 }
 
 function stopRequest({providerId, providerIdentity, runtimeId}) {
@@ -197,8 +210,11 @@ class ForeignRuntimeService {
       .map(instanceDescriptor);
   }
 
-  async call({runtimeId, interface: callableInterface, arguments: args = []} = {}) {
+  async call({runtimeId, interface: callableInterface, arguments: args = [], require = null} = {}) {
     const id = requiredText(runtimeId, 'foreign runtime id');
+    if (require !== null && require !== undefined && typeof require !== 'function') {
+      throw new TypeError('foreign runtime call require must be a function or null');
+    }
     const state = this.instances.get(id);
     if (!state) throw new ForeignRuntimeInstanceNotFoundError(id);
     if (state.status !== 'active') throw new ForeignRuntimeInstanceNotActiveError(id, state.status);
@@ -213,14 +229,23 @@ class ForeignRuntimeService {
       arguments: normalizedArguments,
     });
 
+    const callLifetime = {active: true};
+    const callRequire = typeof require === 'function'
+      ? (demand) => {
+        if (!callLifetime.active) throw new ExpiredForeignRuntimeCallAuthorityError();
+        return require(demand);
+      }
+      : null;
+
     let pending;
     pending = Promise.resolve()
-      .then(() => state.provider.call(state.handle, request, providerContext()))
+      .then(() => state.provider.call(state.handle, request, providerContext(callRequire)))
       .then((value) => canonicalizeValue(value));
     state.calls.add(pending);
     try {
       return await pending;
     } finally {
+      callLifetime.active = false;
       state.calls.delete(pending);
     }
   }
@@ -266,6 +291,7 @@ class ForeignRuntimeService {
 }
 
 export {
+  ExpiredForeignRuntimeCallAuthorityError,
   FOREIGN_RUNTIME_PROVIDER_PROTOCOL_V0,
   ForeignRuntimeInstanceNotActiveError,
   ForeignRuntimeInstanceNotFoundError,

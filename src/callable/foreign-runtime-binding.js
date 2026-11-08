@@ -1,5 +1,9 @@
 import {uuid as randomUUID} from '../support/default-crypto.js';
 import {objectRef, textValue} from '../value/index.js';
+import {
+  FOREIGN_RUNTIME_CALL_OPERATION,
+  foreignRuntimeCallResource,
+} from '../authority/object-resource.js';
 import {assertBlockApplicationReceiver} from '../execution/block-application.js';
 import {FOREIGN_RUNTIME_DEFINITION_DEPENDENCY_ROLE} from '../foreign-runtime/callable-artifacts.js';
 import {ForeignRuntimeDefinitionInstanceCache} from '../foreign-runtime/callable-executor.js';
@@ -119,6 +123,8 @@ function createForeignRuntimeBindingV1Executor({
   runtimes,
   bindings,
   instanceCache = null,
+  requireCallAuthority = false,
+  transportCallAuthority = false,
 } = {}) {
   if (!runtimes || typeof runtimes.call !== 'function') {
     throw new TypeError('foreign runtime binding executor requires runtimes.call');
@@ -130,7 +136,7 @@ function createForeignRuntimeBindingV1Executor({
 
   return Object.freeze({
     instanceCache: cache,
-    async execute({activation, code}, {images}) {
+    async execute({activation, code}, {images, require = null}) {
       if (!code || code.representation !== FOREIGN_RUNTIME_BINDING_V1) {
         throw new TypeError(`foreign runtime binding executor requires ${FOREIGN_RUNTIME_BINDING_V1}`);
       }
@@ -153,6 +159,22 @@ function createForeignRuntimeBindingV1Executor({
         FOREIGN_RUNTIME_BINDING_V1,
       );
 
+      const enforceCallAuthority = Boolean(
+        requireCallAuthority
+        || code.metadata?.requireCallAuthority === true
+        || typeof code.metadata?.requiredOperation === 'string',
+      );
+      if (enforceCallAuthority) {
+        if (typeof require !== 'function') {
+          throw new TypeError('foreign runtime binding with requireCallAuthority requires a require(demand) function');
+        }
+        const operation = typeof code.metadata?.requiredOperation === 'string' && code.metadata.requiredOperation.length > 0
+          ? code.metadata.requiredOperation
+          : FOREIGN_RUNTIME_CALL_OPERATION;
+        const resource = foreignRuntimeCallResource(definitionRef.imageId, definitionRef.objectId, target);
+        require({operation, resource});
+      }
+
       const types = descriptor.types ?? {};
       // Composites travel this lane as the bare payload. The envelope header is the Block
       // edge's concern, and stripping it here means the runtime never needs to produce a
@@ -162,10 +184,16 @@ function createForeignRuntimeBindingV1Executor({
         : args[index]));
 
       const instance = await cache.get({definition: definitionRef, artifact: definitionArtifact});
+      const forwardAuthority = Boolean(
+        enforceCallAuthority
+        || transportCallAuthority
+        || code.metadata?.transportCallAuthority === true,
+      );
       const result = await runtimes.call({
         runtimeId: instance.runtimeId,
         interface: target,
         arguments: wireArguments,
+        ...(forwardAuthority && typeof require === 'function' ? {require} : {}),
       });
       if (isCompositeType(descriptor.result)) {
         return compositeEnvelopeOf(result, descriptor.result, types, `${descriptor.function} result`);

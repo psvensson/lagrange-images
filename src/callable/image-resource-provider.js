@@ -54,9 +54,12 @@ async function resolvePrebinding(images, projectionRef) {
 // Returns a host import provider suitable for ComponentHostImportRegistry. The runtime, not the
 // durable graph, decides which object a prebound resource is bound to: how a guest might
 // instead *discover* image identity is deliberately a later decision.
-function createPreboundImageResourceProvider({images, projection, objectId} = {}) {
+function createPreboundImageResourceProvider({images, projection, objectId, perCallRead = false} = {}) {
   if (!images || typeof images.getObject !== 'function') {
     throw new TypeError('image resource provider requires an images service');
+  }
+  if (typeof perCallRead !== 'boolean') {
+    throw new TypeError('image resource provider perCallRead must be a boolean');
   }
   const projectionRef = normalizeObjectRef(projection, 'image resource projection binding');
   const boundObjectId = requiredText(objectId, 'image resource objectId');
@@ -65,7 +68,7 @@ function createPreboundImageResourceProvider({images, projection, objectId} = {}
     if (typeof require !== 'function') throw new TypeError('image resource provider requires a require(demand) function');
     const {record, mapped, types, imageId} = await resolvePrebinding(images, projectionRef);
     const demand = {operation: OBJECT_READ_OPERATION, resource: objectResource(imageId, boundObjectId)};
-    const object = await images.getObject(imageId, boundObjectId);
+    let currentObject = perCallRead ? null : await images.getObject(imageId, boundObjectId);
 
     class Item {
       #dropped = false;
@@ -74,10 +77,28 @@ function createPreboundImageResourceProvider({images, projection, objectId} = {}
         // Dropped-ness is independent of authority: a dropped handle is unusable even while
         // the caller's grants remain perfectly valid.
         if (this.#dropped) throw new DroppedResourceHandleError();
+        if (perCallRead) return this.snapshotAsync();
         // Live per call: this is where revocation, and activation expiry, both surface.
         require(demand);
-        if (!object) throw new TypeError(`projected object not found: ${imageId}/${boundObjectId}`);
-        return projectObjectSlots({object, record, mapped, types, imageId, objectId: boundObjectId});
+        if (!currentObject) throw new TypeError(`projected object not found: ${imageId}/${boundObjectId}`);
+        return projectObjectSlots({object: currentObject, record, mapped, types, imageId, objectId: boundObjectId});
+      }
+
+      async snapshotAsync() {
+        if (this.#dropped) throw new DroppedResourceHandleError();
+        require(demand);
+        const freshObject = await images.getObject(imageId, boundObjectId);
+        if (!freshObject) throw new TypeError(`projected object not found: ${imageId}/${boundObjectId}`);
+        currentObject = freshObject;
+        return projectObjectSlots({object: freshObject, record, mapped, types, imageId, objectId: boundObjectId});
+      }
+
+      async refresh() {
+        if (this.#dropped) throw new DroppedResourceHandleError();
+        require(demand);
+        const freshObject = await images.getObject(imageId, boundObjectId);
+        if (!freshObject) throw new TypeError(`projected object not found: ${imageId}/${boundObjectId}`);
+        currentObject = freshObject;
       }
 
       // Releases this handle and nothing else. Never deletes the object, revokes authority or
