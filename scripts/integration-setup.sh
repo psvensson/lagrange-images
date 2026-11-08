@@ -14,6 +14,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VM_RELEASE=202606270913
+VM_ASSET_ID=459469432
 VM_ARCHIVE_SHA256=dff5dd4217820e971828e9459f235d0ab3a07aa02aea9004d0e4318391eb09ba
 CUIS_COMMIT=6bcee3f38ce037c9714b997ccd3b5b3ff62965c8
 CUIS_IMAGE_BLOB=523dc5e74b5b550922b56ff2406415c19700ee8e
@@ -66,6 +67,7 @@ mkdir -p .integration/opensmalltalk-vm .integration/cuis
 
 fetch() {
   local url="$1" output="$2" tmp="$2.part"
+  shift 2
   if [ -f "$output" ]; then
     echo "have $output"
     return 0
@@ -83,6 +85,7 @@ fetch() {
     --retry 5 \
     --retry-all-errors \
     --retry-delay 2 \
+    "$@" \
     --output "$tmp" \
     "$url"; then
     rm -f "$tmp"
@@ -96,8 +99,9 @@ fetch() {
 
 # The VM archive is content-addressed by sha256; the Cuis files are pinned to a Git commit
 # and verified by Git blob hash, which is what upstream publishes them as.
-fetch "https://github.com/OpenSmalltalk/opensmalltalk-vm/releases/download/$VM_RELEASE/squeak.cog.spur_linux64x64.tar.gz" \
-  .integration/opensmalltalk-vm/vm.tar.gz
+fetch "https://api.github.com/repos/OpenSmalltalk/opensmalltalk-vm/releases/assets/$VM_ASSET_ID" \
+  .integration/opensmalltalk-vm/vm.tar.gz \
+  -H "Accept: application/octet-stream"
 echo "$VM_ARCHIVE_SHA256  .integration/opensmalltalk-vm/vm.tar.gz" | sha256sum --check --strict
 tar -xzf .integration/opensmalltalk-vm/vm.tar.gz -C .integration/opensmalltalk-vm
 
